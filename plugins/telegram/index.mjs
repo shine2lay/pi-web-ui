@@ -1017,9 +1017,31 @@ function questionHtml(question, max = 1000) {
 	return [bold(toTelegramHtml(lead, { outer: ["b"] })), restHtml].filter(Boolean).join(sep);
 }
 
+/** owner-card-brief (Ops #682): how many lines a card's brief has at most, and how long each may be. */
+const BRIEF_LINES_MAX = 10;
+const BRIEF_LABEL_MAX = 40;
+const BRIEF_TEXT_MAX = 2000;
+
 /**
- * The whole message for a waiting question: { text, reply_markup }. A one-line head, then the
- * body, the question and its detail with a blank line between them; when a choice has a
+ * owner-card-brief (Ops #682): a queue card's plain brief as Telegram HTML, a bold label on each line. Always
+ * whole: the server keeps it short, and nothing here cuts it. A broken shape is left out rather than shown half.
+ */
+export function renderBrief(ask) {
+	const lines = ask?.kind === "stuck" && Array.isArray(ask.brief) ? ask.brief : [];
+	if (!lines.length || lines.length > BRIEF_LINES_MAX) return "";
+	const out = [];
+	for (const line of lines) {
+		const label = typeof line?.label === "string" ? line.label.replace(/\s+/g, " ").trim() : "";
+		const text = typeof line?.text === "string" ? line.text.replace(/\s+/g, " ").trim() : "";
+		if (!label || !text || label.length > BRIEF_LABEL_MAX || text.length > BRIEF_TEXT_MAX) return "";
+		out.push(`<b>${escapeHtml(label)}:</b> ${escapeHtml(text)}`);
+	}
+	return out.join("\n");
+}
+
+/**
+ * The whole message for a waiting question: { text, reply_markup }. A one-line head, then a queue
+ * card's plain brief (whole), the body, the question and its detail with a blank line between them; when a choice has a
  * description, a "CHOICES" line and every choice numbered like its button, each with its
  * description under it; then a line, and a footer with the folder and a link to the chat.
  * st = { ref, step, answers, ticks, sending, link }. extra = { warning, note }.
@@ -1074,9 +1096,10 @@ export function renderAsk(ask, st, extra = {}) {
 	// The footer sits under a line, right after the last part.
 	const end = footer ? `\n${RULE}\n${footer}` : "";
 
+	const brief = renderBrief(ask);
 	const body = (raw) => (!raw ? "" : approval ? codeBlock(raw) : toTelegramHtml(raw));
 	const build = (bodyRaw, note = "") =>
-		[head, body(bodyRaw), note ? `<i>${escapeHtml(note)}</i>` : "", done.join("\n"), ...parts, ...tail]
+		[head, brief, body(bodyRaw), note ? `<i>${escapeHtml(note)}</i>` : "", done.join("\n"), ...parts, ...tail]
 			.filter(Boolean)
 			.join("\n\n") + end;
 
@@ -1097,7 +1120,8 @@ export function renderAsk(ask, st, extra = {}) {
 		// Still too long (a huge question): the short form, and when even that is too long (formatting
 		// can make a text longer: a table's columns), the question as it was written.
 		const question = f ? questionOf(ask, f) || f.header || "" : "";
-		const short = (q) => [head, q, `<i>${escapeHtml(CUT_NOTE)}</i>`, ...tail].filter(Boolean).join("\n\n") + end;
+		const short = (q) =>
+			[head, brief, q, `<i>${escapeHtml(CUT_NOTE)}</i>`, ...tail].filter(Boolean).join("\n\n") + end;
 		text = short(questionHtml(question, 1500));
 		if (visibleLength(text) > TEXT_BUDGET) text = short(escapeHtml(cut(question, 1500)));
 	}

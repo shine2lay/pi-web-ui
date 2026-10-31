@@ -1,5 +1,5 @@
 /** roles-answer: a closed, complete plain-text form. No truncation and no arbitrary DTO reaches the dialog. */
-import { object, UNSAFE, type NeedsYou, type NeedsYouItem } from "./roles-useful-model";
+import { briefLines, object, UNSAFE, type NeedsYou, type NeedsYouItem } from "./roles-useful-model";
 import type { UiRoleAskAnswer, UiRoleAskField, UiRoleAskOption, UiRoleAskView } from "./types";
 
 const CHAT_PATH = /(?:\/|[a-z]:\\)[^\n\r]*?\.jsonl\b/i;
@@ -116,6 +116,8 @@ export function projectRoleAsk(value: unknown): UiRoleAskView | null {
 		if (!t || typeof t.id !== "number" || !Number.isSafeInteger(t.id) || t.id <= 0 || !text(t.title, 500)) return null;
 		task = { id: t.id, title: t.title };
 	}
+	// owner-card-brief (Ops #682): a stuck card's plain brief, whole and plain, or left out (never refuses the form).
+	const brief = a.kind === "stuck" ? briefLines(a.brief) : undefined;
 	const view: UiRoleAskView = {
 		id: a.id,
 		revision: a.revision,
@@ -124,6 +126,7 @@ export function projectRoleAsk(value: unknown): UiRoleAskView | null {
 		fields,
 		...(typeof a.body === "string" ? { body: a.body } : {}),
 		...(task ? { task } : {}),
+		...(brief ? { brief } : {}),
 	};
 	return JSON.stringify(view).length <= 256_100 ? view : null;
 }

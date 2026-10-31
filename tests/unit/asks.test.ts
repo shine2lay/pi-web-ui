@@ -284,4 +284,27 @@ describe("stuck queued tasks", () => {
 			expect("detail" in (bare.fields[0] ?? {})).toBe(false);
 		}
 	});
+
+	it("owner-card-brief: the card carries its plain brief; none when it has none; refreshBrief swaps it in place", () => {
+		const brief = [{ label: "This task", text: "Ship it." }];
+		const input = { taskId: 3, taskTitle: "Ship it", question: "Which branch?", choices: ["main"] };
+		expect(stuckAsk("stuck:/s/t.jsonl#3", { ...input, brief }, meta).brief).toEqual(brief);
+		for (const none of [undefined, []]) {
+			expect("brief" in stuckAsk("stuck:/s/t.jsonl#3", { ...input, brief: none }, meta)).toBe(false);
+		}
+		const hub = new AskHub();
+		const seen = vi.fn();
+		hub.on(seen);
+		hub.add(stuckAsk("stuck:/s/t.jsonl#3", { ...input, brief }, meta), () => ({ ok: true }));
+		seen.mockClear();
+		const next = [{ label: "Waiting on it", text: "Nothing else waits on it." }];
+		hub.refreshBrief("stuck:/s/t.jsonl#3", next);
+		expect(hub.get("stuck:/s/t.jsonl#3")?.brief).toEqual(next);
+		// A refresh isn't a new card: nobody is told (Telegram keeps the one it sent).
+		expect(seen).not.toHaveBeenCalled();
+		// No brief this round keeps the last one; an unknown id is a no-op.
+		hub.refreshBrief("stuck:/s/t.jsonl#3", undefined);
+		expect(hub.get("stuck:/s/t.jsonl#3")?.brief).toEqual(next);
+		expect(() => hub.refreshBrief("nope", next)).not.toThrow();
+	});
 });

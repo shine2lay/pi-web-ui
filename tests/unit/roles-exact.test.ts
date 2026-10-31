@@ -393,6 +393,38 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(list(view.values().inbox)).toHaveLength(3);
 	});
 
+	it("owner-card-brief: a queue card opens with its plain brief, before its question, in Your decisions and the role's panel", () => {
+		const brief = [
+			{ label: "The project", text: "Not part of a project." },
+			{ label: "Why you, now", text: "Its run was stopped while it was working." },
+			{ label: "Your answers", text: "\u201CCarry on\u201D: it picks up where it stopped." },
+		];
+		const stuck = ask(1, { kind: "task", focus: "task:7", askId: "stuck:x#1", brief });
+		const { view } = fixture(projectExactRoles(state([role()], [stuck, ask(2)]), "open", NOW), true);
+		const inbox = list(view.values().inbox).map(object);
+		expect(inbox.map((item) => item.hasBrief)).toEqual([true, false]);
+		expect(list(inbox[0].brief).map(object)).toEqual(brief);
+		expect(list(inbox[1].brief)).toEqual([]);
+		view.openRole("ops", document.body);
+		vi.runAllTimers();
+		const lists = [...document.querySelectorAll("[data-owner-card-brief]")];
+		expect(lists).toHaveLength(1);
+		const card = lists[0].parentElement;
+		expect(lists[0].textContent).toBe(
+			"The project: Not part of a project.Why you, now: Its run was stopped while it was working.Your answers: \u201CCarry on\u201D: it picks up where it stopped.",
+		);
+		// First in the card after its header line, before the question it explains.
+		expect(lists[0].previousElementSibling?.textContent).toContain("Waiting on you");
+		expect(lists[0].nextElementSibling?.textContent).toBe("Question 1");
+		expect([...(card?.querySelectorAll("dt") ?? [])].map((dt) => dt.textContent)).toEqual([
+			"The project:",
+			"Why you, now:",
+			"Your answers:",
+		]);
+		// The other card has no brief, and none is drawn for it.
+		expect(document.querySelector('[role="region"]')?.textContent).toContain("Question 2");
+	});
+
 	it("the full-queue link goes to the role's home queue, not the first task's chat", () => {
 		const { view, actions } = fixture();
 		view.openRole("ops");

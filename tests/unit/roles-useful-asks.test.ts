@@ -202,6 +202,38 @@ describe("Needs you follows the real reader", () => {
 		append(home, [q({ op: "hold", why: "Fixture owner pause" }, T0 + 100)]);
 		expect(page(await r.read()).items).toEqual([]);
 	});
+	it("owner-card-brief: a stuck card's plain brief reaches its Needs-you row whole; a broken one is left out", async () => {
+		const chat = transcript("task-brief", []);
+		const home = transcript("home-brief", [
+			q({ op: "add", id: 1, plan: { title: "Task" } }, T0),
+			q({ op: "start", id: 1, lane: true }, T0 + 1),
+			q({ op: "chat", id: 1, file: chat, title: "Task chat" }, T0 + 2),
+			q({ op: "stuck", id: 1, question: "Which?" }, T0 + 3),
+		]);
+		const r = reader([role("ops", home)]);
+		const brief = [
+			{ label: "This task", text: "\u201CTask\u201D." },
+			{ label: "Waiting on it", text: "Nothing else waits on it." },
+		];
+		const ask = (b: unknown): Ask =>
+			({
+				id: "brief-ask",
+				kind: "stuck",
+				title: "Task",
+				fields: [],
+				createdAt: T0,
+				task: { id: 1, title: "Task" },
+				sessionFile: chat,
+				brief: b,
+			}) as Ask;
+		liveAsks = [ask(brief)];
+		expect(page(await r.read()).items[0]).toMatchObject({ text: "Which?", brief });
+		for (const bad of [[{ label: "This task", text: "a\u202eb" }], [{ label: "x".repeat(41), text: "t" }], "text"]) {
+			liveAsks = [ask(bad)];
+			now += 1000;
+			expect("brief" in page(await r.read()).items[0]!).toBe(false);
+		}
+	});
 	it("a stuck task's question shows; once its queue is paused the server lists none and the page can still tell", async () => {
 		const taskChat = transcript("ops-task-1", []);
 		const home = transcript("ops-home", [

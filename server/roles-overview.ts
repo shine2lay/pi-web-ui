@@ -51,6 +51,7 @@ import { readRoleInstructions } from "./roles-instructions.js";
 import { roleSettingsOf, type RoleSettings } from "./roles-config-history.js";
 import { roleAnswerKindAllowed, sortAsks } from "./roles-asks.js";
 import { linkOf, taskOf } from "./roles-task-next.js";
+import { briefOfAsk } from "./owner-card-brief.js";
 import { taskQueueFromEntries, taskQueueHeld, taskQueueLaneUse } from "./task-queue.js";
 import { WorkRecordsFile } from "./work-records.js";
 import {
@@ -530,6 +531,8 @@ export class RolesOverviewReader {
 				chat: { file: homeRef.file, where: t.id },
 				focus: `task:${t.id}`,
 				...(live ? { askId: live.id } : {}),
+				// owner-card-brief (Ops #682): the card's plain brief, shown before its question.
+				...briefOfAsk(live),
 			});
 		}
 		for (const a of liveAsks) {

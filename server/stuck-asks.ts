@@ -43,6 +43,10 @@ export interface StuckWanted {
 	detail?: string;
 	meta: AskMeta;
 	binding?: QuestionBinding;
+	/** owner-card-brief (Ops #682): the task as its queue holds it, and that queue's chat (where other tasks name
+	 *  it), for the card's plain brief; never part of the signature. */
+	task?: UiTaskQueueTask;
+	queueFile?: string;
 }
 
 export const stuckKey = (target: string, taskId: number): string => `${target}#${taskId}`;
@@ -113,6 +117,8 @@ export function wantedStuckAsks(sources: StuckSource[]): {
 				...(t.detail ? { detail: t.detail } : {}),
 				...(s.questionBinding ? { binding: s.questionBinding(t.id) } : {}),
 				meta,
+				task: t,
+				queueFile: s.queue.from?.file ?? s.file,
 			});
 		}
 	}

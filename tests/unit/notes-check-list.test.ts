@@ -19,6 +19,8 @@ const NAMES_ONLY: Record<string, string> = {
 	"tool-approval.test.ts": "asks the approval rules about a docs path; nothing is read",
 	"work-page.test.ts": "a docs path is only a proof string in its fixtures",
 	"notes-check-list.test.ts": "this guard: it names notes only to look for them",
+	"owner-card-brief.test.ts":
+		"a docs path is only text in a fixture project's outcome, to prove the brief never shows one",
 };
 
 /** scripts/check.sh: its notes_tests list (repo paths) and the body of its --notes branch. */

@@ -434,6 +434,11 @@ export interface UiTaskQueueTask {
 	 *  progress, decided, why only the owner can decide, every related open question, what each answer
 	 *  authorizes, the recommendation), never clipped; a notice instead when it can't be shown whole. */
 	detail?: string;
+	/** owner-card-brief (Ops #682): stuck: the kind of card pi-queue saved with it (stopped, failed, stalled,
+	 *  climbed, block, owner-only, passed-on); not there on cards saved before it wrote one. */
+	card?: string;
+	/** owner-card-brief: stuck: pi-queue's one plain sentence on the card (its `in_short`), when it wrote one. */
+	inShort?: string;
 	/** task-question decisions (rule 21): asking: the question is with Ops (its coordinator chat), not the main chat. */
 	askOps?: boolean;
 	/** question-lead (owner 2026-10-17): with askOps, the role whose lead has it when that isn't Ops: its queue's
@@ -576,6 +581,15 @@ export interface UiTaskQueueAnswerBinding {
 	question: string;
 	choices: string[];
 	detail?: string;
+	/** owner-card-brief (Ops #682): the card's plain brief, shown first; never part of the answer's match. */
+	brief?: UiOwnerCardBriefLine[];
+}
+
+/** owner-card-brief (Ops #682): one line of the plain brief every queue card to the owner opens with,
+ *  e.g. { label: "Why you, now", text: "Its run failed with an error." }. Plain words, no ids or paths. */
+export interface UiOwnerCardBriefLine {
+	label: string;
+	text: string;
 }
 
 export interface UiTaskQueue {
@@ -2205,6 +2219,8 @@ export interface UiRoleAsk {
 	focus: string;
 	/** roles-answer: the live ask behind it (the server's list of asks), when the page can answer it there. */
 	askId?: string;
+	/** owner-card-brief (Ops #682): a queue card's plain brief (the live ask's), shown before its question. */
+	brief?: UiOwnerCardBriefLine[];
 }
 
 /** roles-answer: one choice of an ask's question, as the Roles page shows it. */
@@ -2238,6 +2254,9 @@ export interface UiRoleAskView {
 	body?: string;
 	fields: UiRoleAskField[];
 	task?: { id: number; title: string };
+	/** owner-card-brief (Ops #682): a queue card's plain brief, shown first; outside the revision, so a fresher
+	 *  count of waiting tasks never refuses an open form. */
+	brief?: UiOwnerCardBriefLine[];
 }
 
 /** roles-answer: the answer to one question: the chosen values and/or typed words. */

@@ -3430,6 +3430,23 @@ button.rolemsg-fold:focus-visible {
 	outline: 2px solid var(--accent, var(--amber-fg));
 	outline-offset: 1px;
 }
+/* owner-card-brief (Ops #682): the plain brief a queue card for the owner opens with, before its question: a
+   bold label on each line, then its words. The Queue tab, the Roles page's Needs-you rows and its answer dialog. */
+.owner-card-brief {
+	margin: 4px 0 6px;
+}
+.owner-card-brief-line {
+	margin: 0 0 2px;
+	overflow-wrap: anywhere;
+}
+.owner-card-brief dt {
+	display: inline;
+	font-weight: 600;
+}
+.owner-card-brief dd {
+	display: inline;
+	margin: 0;
+}
 /* queue-blocked: a blocked task: the theme's cyan edge and badge (not Needs you's amber, not the blue of the
    main chat's answers), and one line saying what it waits on. */
 .task-queue-task.blocked {

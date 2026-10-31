@@ -85,14 +85,32 @@ function mount(connected = true) {
 }
 const answers = () => sent.filter((s) => s.type === "roles_ask_answer");
 const sendButton = () => [...host.querySelectorAll("button")].find((b) => b.textContent === "Send answer")!;
-async function ready() {
+async function ready(ask: UiRoleAskView = view) {
 	mount();
 	const req = sent.find((s) => s.type === "roles_ask_open");
 	if (!req || req.type !== "roles_ask_open") throw new Error("no open request");
-	await act(async () => receiveRoleAnswer({ type: "roles_ask", reqId: req.reqId, ok: true, ask: view }));
+	await act(async () => receiveRoleAnswer({ type: "roles_ask", reqId: req.reqId, ok: true, ask }));
 }
 
 describe("the mounted answer form", () => {
+	it("owner-card-brief: a queue card opens with its plain brief, before its question and package", async () => {
+		const brief = [
+			{ label: "Why you, now", text: "Its run was stopped while it was working." },
+			{ label: "Your answers", text: "\u201CCarry on\u201D: it picks up where it stopped. <b>not bold</b>" },
+		];
+		await ready({ ...view, kind: "stuck", task: { id: 3, title: "Ship it" }, brief });
+		const dl = host.querySelector("dl.owner-card-brief")!;
+		expect([...dl.querySelectorAll("dt")].map((d) => d.textContent)).toEqual(["Why you, now:", "Your answers:"]);
+		expect(dl.textContent).toContain("<b>not bold</b>");
+		expect(dl.querySelector("b")).toBeNull();
+		const text = host.textContent!;
+		expect(text.indexOf("Why you, now:")).toBeLessThan(text.indexOf("Which one?"));
+		expect(text.indexOf("Why you, now:")).toBeLessThan(text.indexOf("Full explanation"));
+	});
+	it("owner-card-brief: a form without a brief shows none", async () => {
+		await ready();
+		expect(host.querySelector(".owner-card-brief")).toBeNull();
+	});
 	it("shows all text safely, has no default answer, and never puts the chat path in the DOM", async () => {
 		await ready();
 		for (const text of [view.body!, "Full explanation", "Costs $2", "<b>plain preview</b>"])

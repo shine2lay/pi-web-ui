@@ -124,6 +124,32 @@ describe("a complete bounded ask", () => {
 		expect(projectRoleAsk({ ...view, revision: "wrong" })).toBeNull();
 		expect(projectRoleAsk({ ...view, fields: [{ ...view.fields[0], detail: "a\u0000b" }] })).toBeNull();
 	});
+	it("owner-card-brief: a stuck card's brief rides along outside the revision; a broken one is left out", () => {
+		const stuck = (brief?: unknown) =>
+			fixture({ kind: "stuck", task: { id: 3, title: "Ship it" }, ...(brief ? { brief } : {}) } as Partial<Ask>);
+		const brief = [
+			{ label: "This task", text: "Ship it." },
+			{ label: "Waiting on it", text: "Nothing else waits on it." },
+		];
+		const view = askViewOf(stuck(brief))!;
+		expect(view.brief).toEqual(brief);
+		// A refreshed brief (a new waiting count) must not refuse a form the owner has open.
+		expect(view.revision).toBe(askViewOf(stuck())!.revision);
+		expect(askViewOf(stuck([{ label: "Waiting on it", text: "2 tasks wait." }]))!.revision).toBe(view.revision);
+		expect(projectRoleAsk(view)?.brief).toEqual(brief);
+		for (const bad of [
+			[{ label: "This task", text: "Read /private/chat.jsonl first" }],
+			[{ label: "This task", text: "a\u202eb" }],
+			[{ label: 3, text: "x" }],
+			Array.from({ length: 11 }, () => ({ label: "L", text: "t" })),
+		]) {
+			const v = askViewOf(stuck(bad));
+			expect(v).not.toBeNull();
+			expect("brief" in v!).toBe(false);
+		}
+		// Only a queue card has one.
+		expect("brief" in askViewOf(fixture({ brief } as Partial<Ask>))!).toBe(false);
+	});
 	it("binds revision to all wording, full package, choices and target, not unrelated metadata", () => {
 		const a = fixture();
 		const revision = askViewOf(a)!.revision;

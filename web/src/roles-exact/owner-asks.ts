@@ -48,6 +48,9 @@ export function askValues(item: NeedsYouItem, model: ExactRoles, view: ExactView
 		kindBg: "#2A2416",
 		role: item.roleLabel ?? "Unknown role",
 		age: exactAge(item.since, model.now),
+		// owner-card-brief (Ops #682): a queue card opens with its plain brief, before its question.
+		hasBrief: !!item.brief?.length,
+		brief: (item.brief ?? []).map((line) => ({ label: line.label, text: line.text })),
 		title: item.text ?? "Open the original item to read it",
 		context:
 			action.kind === "inline"

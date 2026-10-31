@@ -390,6 +390,22 @@ export class QueueBlocks {
 		}
 	}
 
+	/**
+	 * owner-card-brief (Ops #682): the queues read so far, for an owner card's "Waiting on it" (sync: only the cache;
+	 * the queues with tasks waiting on others are the ones it watches). A task chat's copy of a queue doesn't count;
+	 * a role's home chat goes by the role's id.
+	 */
+	knownQueues(): { file: string; name?: string; tasks: ReturnType<typeof taskQueueAll>["tasks"] }[] {
+		const roles = this.host.roles();
+		const out: { file: string; name?: string; tasks: ReturnType<typeof taskQueueAll>["tasks"] }[] = [];
+		for (const [file, c] of this.cache) {
+			if (!c.all || c.all.from) continue;
+			const role = roles.find((r) => r.homeChat && this.host.sameFile(r.homeChat, file));
+			out.push({ file, ...(role ? { name: role.id } : {}), tasks: c.all.tasks });
+		}
+		return out;
+	}
+
 	/** A task in a queue from what was read (sync: only the cache). */
 	private lookCached(r: { file: string; id: number }): RefLook | undefined {
 		const c = this.cache.get(r.file);

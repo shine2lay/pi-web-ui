@@ -114,6 +114,19 @@ export function detailOf(raw: unknown): string | undefined {
 	);
 }
 
+/** owner-card-brief (Ops #682): the longest card kind kept (pi-queue's are one or two words). */
+const CARD_MAX = 40;
+
+/**
+ * owner-card-brief (Ops #682): the kind of card and its one plain sentence (`card`, `in_short`) that pi-queue
+ * saves with a stuck question, as given; the brief checks them. Older questions have neither.
+ */
+function cardOf(raw: Record<string, unknown>): Pick<UiTaskQueueTask, "card" | "inShort"> {
+	const card = oneLine(raw.card, CARD_MAX);
+	const inShort = oneLine(raw.in_short, NOTE_MAX);
+	return { ...(card ? { card } : {}), ...(inShort ? { inShort } : {}) };
+}
+
 type PauseReason = NonNullable<UiTaskQueue["pausedReason"]>;
 const PAUSE_REASONS = new Set<PauseReason>(["user", "stopped", "error", "restart", "finished"]);
 
@@ -716,6 +729,10 @@ function apply(s: State, raw: unknown): void {
 			const detail = detailOf(op.detail);
 			if (detail) task.detail = detail;
 			else delete task.detail;
+			// owner-card-brief (Ops #682): with each new question (the list drops them once it isn't stuck).
+			const card = cardOf(op);
+			task.card = card.card;
+			task.inShort = card.inShort;
 			task.askOps = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
@@ -1037,6 +1054,7 @@ function taskOf(raw: unknown): Task {
 	if (status === "stuck") {
 		const detail = detailOf(c.detail);
 		if (detail) t.detail = detail;
+		Object.assign(t, cardOf(c));
 	}
 	if (finite(c.stuckAt)) t.stuckAt = c.stuckAt;
 	const ask = rec(c.ask);
@@ -1343,7 +1361,10 @@ export function taskQueueFromEntries(
 	}
 	const tasks = s.tasks
 		.filter((t): t is Task & UiTaskQueueTask => t.status !== "removed" && !hidden.has(t))
-		.map(({ heldFrom: _heldFrom, stuckAt: _stuckAt, back: _back, ...t }): UiTaskQueueTask => t);
+		.map(({ heldFrom: _heldFrom, stuckAt: _stuckAt, back: _back, card, inShort, ...t }): UiTaskQueueTask =>
+			// owner-card-brief (Ops #682): a card's kind and plain sentence only go with a task that needs the user.
+			t.status === "stuck" ? { ...t, ...(card ? { card } : {}), ...(inShort ? { inShort } : {}) } : t,
+		);
 	// queue-lanes: only a queue with tasks that run in chats of their own shows lanes (a task's own chat never).
 	const lanes = s.from ? [] : lanesOf(s.tasks, taskQueueShareableOf(shareable));
 	return {

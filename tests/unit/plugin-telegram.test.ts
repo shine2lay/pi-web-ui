@@ -920,6 +920,86 @@ describe("telegram plugin: how messages look", () => {
 		expect(renderHead(older)).toBe("\u{1F4CC} <b>Task #26 needs you</b>\n<i>Make it nice</i>");
 	});
 
+	// owner-card-brief (Ops #682): the plain brief comes first, whole, before the question; never cut like the package.
+	it("a stuck task with a plain brief: the whole brief first, then the question; the package is still cut", () => {
+		const brief = [
+			{ label: "In short", text: "The audit of kept messages was stopped halfway; carrying on finishes it." },
+			{
+				label: "The project",
+				text: "\u201CR&D <tidy>\u201D: Keep only the messages that are needed, and drop the rest once each is checked.",
+			},
+			{ label: "This task", text: "\u201CComplete audit of retained role and worker messages\u201D." },
+			{
+				label: "Why you, now",
+				text: "Its run was stopped while it was working; nothing more is known about who stopped it.",
+			},
+			{ label: "Waiting on it", text: "Nothing else waits on it." },
+			{ label: "Your answers", text: "\u201CCarry on\u201D: it picks up where it stopped." },
+			{ label: "Recommended", text: "None given." },
+		];
+		const briefHtml = [
+			"<b>In short:</b> The audit of kept messages was stopped halfway; carrying on finishes it.",
+			"<b>The project:</b> \u201CR&amp;D &lt;tidy&gt;\u201D: Keep only the messages that are needed, and drop the rest once each is checked.",
+			"<b>This task:</b> \u201CComplete audit of retained role and worker messages\u201D.",
+			"<b>Why you, now:</b> Its run was stopped while it was working; nothing more is known about who stopped it.",
+			"<b>Waiting on it:</b> Nothing else waits on it.",
+			"<b>Your answers:</b> \u201CCarry on\u201D: it picks up where it stopped.",
+			"<b>Recommended:</b> None given.",
+		].join("\n");
+		const head = "\u{1F4CC} <b>Task #666 needs you</b>\n<i>Complete audit of retained role and worker messages</i>";
+		const ask = (text: string, detail?: string) => ({
+			...base,
+			conversationTitle: "Ops lead",
+			kind: "stuck",
+			title: "Task #666 needs you: Complete audit of retained role and worker messages",
+			task: { id: 666, title: "Complete audit of retained role and worker messages" },
+			brief,
+			fields: [
+				{
+					id: "answer",
+					text,
+					...(detail ? { detail } : {}),
+					options: [{ value: "Carry on", label: "Carry on" }],
+					multi: false,
+					allowText: true,
+				},
+			],
+		});
+		const stop = "You stopped this task's run. Reply here to carry on.";
+		expect(renderAsk(ask(stop), st()).text).toBe(
+			[head, briefHtml, "<b>You stopped this task's run.</b>\nReply here to carry on."].join("\n\n") + end,
+		);
+		// The package stays below it, cut to 500 as before; the brief, longer than that, stays whole.
+		expect(briefHtml.length).toBeGreaterThan(500);
+		const withPackage = renderAsk(ask(stop, `**Goal:** ${"a ".repeat(400)}`), st()).text;
+		expect(withPackage.startsWith(`${head}\n\n${briefHtml}\n\n<b>You stopped this task's run.</b>`)).toBe(true);
+		expect(withPackage).not.toContain("a ".repeat(260));
+		// A long question is cut as before ("\u2026"); the brief before it stays whole.
+		const long = `${stop}\n\n${"word ".repeat(1500)}`;
+		const cutQuestion = renderAsk(ask(long), st()).text;
+		expect(cutQuestion.startsWith(`${head}\n\n${briefHtml}\n\n<b>You stopped this task's run.</b>`)).toBe(true);
+		expect(cutQuestion).toContain("\u2026");
+		expect(cutQuestion).not.toContain("word ".repeat(1500));
+		// A card too long for one message (here: every choice described at length): the short form keeps the
+		// brief whole, before the question.
+		const described = ask(long);
+		described.fields[0].options = Array.from({ length: 12 }, (_, n) => ({
+			value: `Answer ${n + 1}`,
+			label: `Answer ${n + 1}`,
+			description: "what it does ".repeat(16),
+		}));
+		const huge = renderAsk(described, st()).text;
+		expect(huge.startsWith(`${head}\n\n${briefHtml}\n\n`)).toBe(true);
+		expect(huge).toContain("(cut: open the chat for the rest)");
+		// A card without a brief (an older server) looks as it did.
+		const { brief: _brief, ...older } = ask(stop);
+		expect(renderAsk(older, st()).text).toBe(
+			[head, "<b>You stopped this task's run.</b>\nReply here to carry on."].join("\n\n") + end,
+		);
+		// Not a brief (a broken shape): left out rather than shown half.
+		expect(renderAsk({ ...ask(stop), brief: [{ label: 1 }] }, st()).text).toBe(renderAsk(older, st()).text);
+	});
+
 	it("a permission prompt: the command as code (in a collapsed quote when long), and the reason once", () => {
 		const approval = (command: string) => ({
 			...base,

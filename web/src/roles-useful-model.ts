@@ -14,6 +14,7 @@
  */
 import { parseFocus } from "./chat-focus";
 import { graceLeft } from "./page-live";
+import type { UiOwnerCardBriefLine } from "./types";
 
 export const ROLE_LIMIT = 64;
 export const RECORD_LIMIT = 20;
@@ -602,6 +603,9 @@ export interface NeedsYouItem {
 	roleLabel: string | null;
 	/** null: absent or unsafe; the row says "Open item". */
 	text: string | null;
+	/** owner-card-brief (Ops #682): a queue card's plain brief, shown before its question; absent when it has
+	 *  none or it isn't whole and plain (briefLines). */
+	brief?: UiOwnerCardBriefLine[];
 	/** null: absent, invalid or in the future; the row says "time unknown". */
 	since: number | null;
 	link: UsefulOpenTarget | null;
@@ -724,6 +728,30 @@ export function plain(value: unknown, limit: number): Bounded | null {
 	const head = Array.from(text.slice(0, limit * 2 + 2));
 	if (text.length <= limit * 2 + 2 && head.length <= limit) return { text, clipped: false };
 	return { text: head.slice(0, limit - 1).join("") + "…", clipped: true };
+}
+/** owner-card-brief (Ops #682): how many lines a card's brief has at most, and how long each part may be. */
+const BRIEF_LINES_MAX = 10;
+const BRIEF_LABEL_MAX = 40;
+const BRIEF_TEXT_MAX = 2_000;
+/** owner-card-brief (Ops #682): a queue card's plain brief, every line whole and plain, or none at all: a
+ *  broken or unsafe one is left out rather than shown half. The Needs-you rows, the answer dialog and the
+ *  Queue tab take it through here. */
+export function briefLines(value: unknown): UiOwnerCardBriefLine[] | undefined {
+	if (!Array.isArray(value) || !value.length || value.length > BRIEF_LINES_MAX) return undefined;
+	const lines: UiOwnerCardBriefLine[] = [];
+	for (const line of value) {
+		const fields = object(line);
+		const words = (part: unknown, max: number) => {
+			// As plain() reads agent text: tab, CR and LF as a space; any other unsafe character rejects it.
+			const text = typeof part === "string" ? part.replace(/[\t\n\r]+/g, " ").trim() : "";
+			return text && text.length <= max && !UNSAFE.test(text) ? text : null;
+		};
+		const label = words(fields?.label, BRIEF_LABEL_MAX);
+		const text = words(fields?.text, BRIEF_TEXT_MAX);
+		if (!label || !text) return undefined;
+		lines.push({ label, text });
+	}
+	return lines;
 }
 function label(value: unknown, id: string): { text: string; truncated: boolean } {
 	const bounded = plain(value, LABEL_LIMIT);
@@ -1054,7 +1082,7 @@ function needsYou(
 					counts.get(String(ask.key)) === 1 && routes.get(JSON.stringify(askLink(ask))) === 1,
 				)
 			: undefined;
-		items.push({
+		const item: NeedsYouItem = {
 			key: String(index),
 			roleId: roleId(ask.role) && labels.has(ask.role) ? ask.role : null,
 			answer,
@@ -1063,7 +1091,11 @@ function needsYou(
 			text: plain(ask.text, TEXT_LIMIT)?.text ?? null,
 			since: sinceOf(ask.since, now),
 			link: askLink(ask),
-		});
+		};
+		// owner-card-brief (Ops #682): only a queue card's whole, plain brief; the row has no key for it otherwise.
+		const brief = briefLines(ask.brief);
+		if (brief) item.brief = brief;
+		items.push(item);
 	});
 	let tell: TellState;
 	if (source === "disconnected" || source === "cached" || source === "stale") tell = "not-live";

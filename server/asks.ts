@@ -30,7 +30,14 @@ import {
 	type OwnerQuestionCooReason,
 	type OwnerQuestionDirectReason,
 } from "./owner-question-route.js";
-import type { QuestionAnswer, UiApprovalCategory, UiDialog, UiQuestion, UiQuestionOption } from "./protocol.js";
+import type {
+	QuestionAnswer,
+	UiApprovalCategory,
+	UiDialog,
+	UiOwnerCardBriefLine,
+	UiQuestion,
+	UiQuestionOption,
+} from "./protocol.js";
 
 export type AskKind = "question" | "dialog" | "approval" | "stuck";
 
@@ -75,6 +82,9 @@ export interface Ask {
 	fields: AskField[];
 	/** A queued task that needs you (kind "stuck"): its number and title. */
 	task?: { id: number; title: string };
+	/** owner-card-brief (Ops #682): kind "stuck": the plain brief every surface shows first, whole (made with the
+	 *  ask, refreshed for the web; Telegram sends the one it was made with). */
+	brief?: UiOwnerCardBriefLine[];
 	/** decision-records: kind "question": the ask_user_question tool call it came from. */
 	toolCallId?: string;
 	/** owner-question routing: where it went and the line it is shown with (absent = no route, as before). */
@@ -268,6 +278,17 @@ export class AskHub {
 		} catch (err) {
 			return { ok: false, error: (err as Error)?.message ?? String(err) };
 		}
+	}
+
+	/**
+	 * owner-card-brief (Ops #682): a waiting ask's plain brief, made again from the records (how many tasks wait on
+	 * it may have changed). No event: a channel that already sent the card (Telegram) doesn't send it again; the web
+	 * shows the new one at its next look. Nothing changes when there is no brief to give.
+	 */
+	refreshBrief(id: string, brief: UiOwnerCardBriefLine[] | undefined): void {
+		const e = this.asks.get(id);
+		if (!e || !brief?.length) return;
+		e.ask = { ...e.ask, brief };
 	}
 
 	get(id: string): Ask | undefined {
@@ -552,6 +573,8 @@ export interface StuckAskInput {
 	choices?: string[];
 	/** task-question decisions (rule 21): the whole package the question came with (Markdown). */
 	detail?: string;
+	/** owner-card-brief (Ops #682): the card's plain brief (owner-card-brief.ts). */
+	brief?: UiOwnerCardBriefLine[];
 }
 
 /** A queued task that needs you: its question, its choices, its package (rule 21), and always a typed answer. */
@@ -564,6 +587,7 @@ export function stuckAsk(id: string, s: StuckAskInput, meta: AskMeta, now = Date
 		...meta,
 		title: `Task #${s.taskId} needs you: ${s.taskTitle}`,
 		task: { id: s.taskId, title: s.taskTitle },
+		...(s.brief?.length ? { brief: s.brief } : {}),
 		fields: [
 			{
 				id: "answer",

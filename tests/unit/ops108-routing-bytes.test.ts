@@ -28,6 +28,9 @@ describe("Ops108 baseline", () => {
 		// record `{ bridge, chat }` (now also carries the notice's client) and the unload's offSettings call
 		// (now in one loop with the tool's and the listener's); no Ops108 routing line changed. Was 8875cff0….
 		expect(sha("server/plugins.ts")).toBe("553e809deb9cc8ddc6136c35d8c5e4b11dd21a2167a526f21fad27a3249fc173");
-		expect(sha("plugins/telegram/index.mjs")).toBe("9163761261c38a2774001444fd48f0c42fe86eeca08661e1e734ab217ffe9e4f");
+		// Re-pinned by owner-card-brief (Ops #682, owner via COO rm-d2c1f9b2): it only adds the display-only
+		// renderBrief and puts its lines first in renderAsk's message and short form; its diff removes only renderAsk's
+		// doc comment and the two joined part lists (now with the brief); no Ops108 routing line changed. Was 91637612….
+		expect(sha("plugins/telegram/index.mjs")).toBe("f33f4073e39ade08a23d4b10a26e968d2aba8f4cc30da9987e202410d1baf488");
 	});
 });

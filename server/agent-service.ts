@@ -117,6 +117,8 @@ import {
 	type StuckWanted,
 	wantedStuckAsks,
 } from "./stuck-asks.js";
+import { briefOfAsk, stuckAskBriefs } from "./owner-card-brief.js";
+import { workFolder, workProjectOf } from "./work-records.js";
 import { nativeOwnerQuestionBinding, nativeQuestionHost } from "./queue-question-native.js";
 import type { QuestionBinding, QuestionCommitResult } from "./queue-question-port.js";
 import { answersFromPage, askViewOf, ROLE_ASK_KEY_MAX } from "./roles-asks.js";
@@ -7813,9 +7815,16 @@ export class ClientSession {
 			ClientSession.askingChats = asking;
 			ClientSession.emitConversationsToAll();
 		}
+		// owner-card-brief (Ops #682): each card's plain brief, from the records; never part of its sig.
+		const briefOf = stuckAskBriefs(sources, ClientSession.queueBlocks?.knownQueues() ?? [], (id) =>
+			workProjectOf(workFolder(), id),
+		);
 		for (const [key, have] of [...ClientSession.stuckAsks]) {
 			const w = wanted.get(key);
-			if (w && stuckSig(w) === have.sig) continue;
+			if (w && stuckSig(w) === have.sig) {
+				askHub.refreshBrief(have.askId, briefOf(w));
+				continue;
+			}
 			ClientSession.stuckAsks.delete(key);
 			const given = ClientSession.stuckAnswers.get(have.askId);
 			ClientSession.stuckAnswers.delete(have.askId);
@@ -7847,6 +7856,7 @@ export class ClientSession {
 						question: w.question,
 						choices: w.choices,
 						...(w.detail ? { detail: w.detail } : {}),
+						brief: briefOf(w),
 					},
 					w.meta,
 				),
@@ -9344,6 +9354,7 @@ export class ClientSession {
 				question: t.question ?? "",
 				choices: [...(t.choices ?? [])],
 				...(t.detail ? { detail: t.detail } : {}),
+				...briefOfAsk(askHub.get(have.askId)),
 			});
 		}
 		return bindings.length > 0 ? bindings : undefined;

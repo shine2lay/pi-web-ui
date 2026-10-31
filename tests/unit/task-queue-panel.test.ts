@@ -132,6 +132,47 @@ describe("TaskQueuePanel", () => {
 		);
 	});
 
+	// owner-card-brief (Ops #682): the live card's plain brief comes first, before its question and package.
+	it("opens a stuck card with its plain brief from the live ask; none without one, or a broken one", () => {
+		const detail = "## Goal\nShip it";
+		const stuck = task(1, "stuck", { question: "Which port?", choices: ["8080"], detail });
+		const brief = [
+			{ label: "Why you, now", text: "Its run failed with an error." },
+			{ label: "Waiting on it", text: "Nothing else waits on it." },
+		];
+		const withBinding = (b: unknown) =>
+			renderToStaticMarkup(
+				createElement(
+					LanguageProvider,
+					null,
+					createElement(TaskQueuePanel, {
+						queue: q([stuck], { queueId: "q-1" }),
+						conversationId: "c-1",
+						onAnswer: noop,
+						answerBindings: [
+							{
+								conversationId: "c-1",
+								queueId: "q-1",
+								taskId: 1,
+								questionId: "ask-1",
+								question: "Which port?",
+								choices: ["8080"],
+								detail,
+								...(b ? { brief: b } : {}),
+							},
+						],
+					} as Parameters<typeof TaskQueuePanel>[0]),
+				),
+			);
+		const html = withBinding(brief);
+		expect(html).toContain('<dl class="owner-card-brief">');
+		expect(html).toContain("<dt>Why you, now:</dt> <dd>Its run failed with an error.</dd>");
+		expect(html.indexOf("owner-card-brief")).toBeLessThan(html.indexOf("Which port?"));
+		expect(html.indexOf("owner-card-brief")).toBeLessThan(html.indexOf("task-queue-question-detail"));
+		expect(withBinding(undefined)).not.toContain("owner-card-brief");
+		expect(withBinding([{ label: "Why you, now", text: "a\u202eb" }])).not.toContain("owner-card-brief");
+	});
+
 	it("gives waiting tasks up, down and remove, with the ends disabled", () => {
 		const html = render(q([task(1, "ready"), task(2, "ready"), task(3, "ready")]), { onCommand: noop });
 		// Whole <button> tags, so the order of the attributes doesn't matter.

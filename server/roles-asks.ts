@@ -4,7 +4,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import type { Ask, AskFieldAnswer, AskOption } from "./asks.js";
-import type { UiRoleAsk, UiRoleAskField, UiRoleAskOption, UiRoleAskView } from "./protocol.js";
+import type { UiOwnerCardBriefLine, UiRoleAsk, UiRoleAskField, UiRoleAskOption, UiRoleAskView } from "./protocol.js";
 
 export const ROLE_ASK_KEY_MAX = 400;
 export const ROLE_ASK_FIELDS_MAX = 10;
@@ -13,6 +13,9 @@ export const ROLE_ASK_VIEW_MAX = 256_000;
 export const ROLE_ANSWER_TEXT_MAX = 20_000;
 const ID_MAX = 200;
 const VALUE_MAX = 2_000;
+const BRIEF_LINES_MAX = 10;
+const BRIEF_LABEL_MAX = 40;
+const BRIEF_TEXT_MAX = 2_000;
 const UNSAFE = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\u2028\u2029]/u;
 // Chat targets belong only in the existing in-memory Open chat link, never in the answer form.
 const CHAT_PATH = /(?:\/|[a-z]:\\)[^\n\r]*?\.jsonl\b/i;
@@ -28,6 +31,20 @@ function text(value: unknown, max: number): value is string {
 }
 function optional(value: unknown, max: number): boolean {
 	return value === undefined || text(value, max);
+}
+
+/** owner-card-brief (Ops #682): a stuck card's plain brief, whole and valid, or none; a bad one never refuses the form. */
+function briefOf(value: unknown): UiOwnerCardBriefLine[] | undefined {
+	if (!Array.isArray(value) || !value.length || value.length > BRIEF_LINES_MAX) return undefined;
+	const lines: UiOwnerCardBriefLine[] = [];
+	for (const line of value) {
+		if (!line || typeof line !== "object") return undefined;
+		const { label, text: words } = line as Record<string, unknown>;
+		if (!text(label, BRIEF_LABEL_MAX) || !label.trim() || !text(words, BRIEF_TEXT_MAX) || !words.trim())
+			return undefined;
+		lines.push({ label, text: words });
+	}
+	return lines;
 }
 
 /** Kind/shape policy only; membership and complete-form checks still apply.
@@ -171,7 +188,9 @@ export function askViewOf(ask: Ask): UiRoleAskView | null {
 		.update(encoded)
 		.update(JSON.stringify([ask.createdAt, ask.sessionFile, ask.conversationId]))
 		.digest("hex");
-	return { ...view, revision };
+	// The brief stays out of the revision: a refreshed brief (say, one more task waiting) never refuses an open form.
+	const brief = ask.kind === "stuck" ? briefOf(ask.brief) : undefined;
+	return { ...view, revision, ...(brief ? { brief } : {}) };
 }
 
 /** Validate the whole form, including conditional branches, before it enters the existing AskHub path. */

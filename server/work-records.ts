@@ -19,8 +19,10 @@
  * reader here depends on, so a compacted log shows the same records.
  */
 
+import { statSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { piQueueReaders } from "./pi-queue-readers.js";
 import { readUpTo, STATE_READ_FLAGS } from "./state-file-read.js";
 import type { UiWorkRecord, UiWorkRecords } from "./protocol.js";
@@ -266,6 +268,54 @@ function canonicalRecords(dir: string): UiWorkRecords | undefined {
 		// A log readWork refuses (damaged, a change it doesn't know): workRecordsFrom reads it and says what it skipped.
 		return undefined;
 	}
+}
+
+/** pi-work-management's workDir(), as the Roles reader finds it: PI_WORK_DIR, or "work" in pi's agent folder. */
+export function workFolder(env: NodeJS.ProcessEnv = process.env): string {
+	return env.PI_WORK_DIR || join(env.PI_CODING_AGENT_DIR ?? getAgentDir(), "work");
+}
+
+/** owner-card-brief (Ops #682): a project as an owner card names it: its name and the outcome it is for. */
+export interface WorkProjectBrief {
+	name: string;
+	outcome?: string;
+}
+
+/** owner-card-brief: the projects workProjectOf read last, with the log's size and last change they came from. */
+let projectsSeen: { dir: string; size: number; mtimeMs: number; projects: Map<string, WorkProjectBrief> } | null = null;
+
+/**
+ * owner-card-brief (Ops #682): one project's name and outcome, from pi-queue's own readWork of the log in `dir`,
+ * read again only when the log changed (readWork hands out a copy of its whole state on every call). undefined when
+ * there's no project by that id or the registry can't be read here (pi-queue not loaded yet, or it refuses the log).
+ */
+export function workProjectOf(dir: string, id: string): WorkProjectBrief | undefined {
+	let st: ReturnType<typeof statSync>;
+	try {
+		st = statSync(join(dir, "events.jsonl"));
+	} catch {
+		return undefined;
+	}
+	if (!st?.isFile() || st.size > WORK_LOG_MAX) return undefined;
+	const seen = projectsSeen;
+	if (seen && seen.dir === dir && seen.size === st.size && seen.mtimeMs === st.mtimeMs) return seen.projects.get(id);
+	const readers = piQueueReaders();
+	if (!readers) return undefined;
+	let raw: unknown;
+	try {
+		raw = (readers.readWork(dir) as { projects?: unknown } | null)?.projects;
+	} catch {
+		return undefined;
+	}
+	if (!mapLike(raw)) return undefined;
+	const projects = new Map<string, WorkProjectBrief>();
+	for (const [key, value] of raw.entries()) {
+		const r = value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+		if (!workId(key) || !r || !workName(r.name)) continue;
+		projects.set(key, { name: r.name, ...(text(r.outcome) ? { outcome: r.outcome } : {}) });
+	}
+	projectsSeen = { dir, size: st.size, mtimeMs: st.mtimeMs, projects };
+	return projects.get(id);
 }
 
 const NONE: UiWorkRecords = { initiatives: [], projects: [] };

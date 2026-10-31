@@ -168,6 +168,23 @@ describe("blockVerdict (pi-queue's, mirrored)", () => {
 	});
 });
 
+describe("QueueBlocks.knownQueues (owner-card-brief, Ops #682)", () => {
+	it("lists the queues the check has read, named by the role whose home chat holds them; nothing before a read", async () => {
+		const { w, blocks } = world();
+		expect(blocks.knownQueues()).toEqual([]);
+		w.ops(A, { op: "block", id: 1, on: [onB(1)], start: w.now, tries: 0 });
+		blocks.watchQueue(A);
+		await blocks.tick();
+		const known = blocks.knownQueues();
+		const byFile = new Map(known.map((q) => [q.file, q]));
+		// B is temper's home chat; A is a queue no role's home chat holds.
+		expect(byFile.get(B)?.name).toBe("temper");
+		expect(byFile.get(B)?.tasks.map((t) => t.plan.title)).toEqual(["Team runner", "Docs"]);
+		expect(byFile.get(A)?.name).toBeUndefined();
+		expect(byFile.get(A)?.tasks.find((t) => t.id === 1)?.block?.on?.[0]).toMatchObject({ file: B, id: 1 });
+	});
+});
+
 describe("QueueBlocks: the background check", () => {
 	it("does nothing while the blocker is worked on; nudges the queue's chat once it's done, and not again within 5 min", async () => {
 		const { w, blocks } = world();

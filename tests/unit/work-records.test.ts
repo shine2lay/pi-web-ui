@@ -3,11 +3,19 @@
  * (pi-work-management's events.jsonl, replayed by server/work-records.ts).
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { WORK_LOG_MAX, WORK_RECORDS_SEND_MAX, WorkRecordsFile, workRecordsFrom } from "../../server/work-records.js";
+import { PI_QUEUE_READERS_KEY } from "../../server/pi-queue-readers.js";
+import {
+	WORK_LOG_MAX,
+	WORK_RECORDS_SEND_MAX,
+	WorkRecordsFile,
+	workFolder,
+	workProjectOf,
+	workRecordsFrom,
+} from "../../server/work-records.js";
 
 let seq = 0;
 const line = (e: Record<string, unknown>) => JSON.stringify({ v: 1, seq: ++seq, ts: 1000 + seq, by: "ops", ...e });
@@ -268,5 +276,79 @@ describe("WorkRecordsFile", () => {
 			projects: [],
 			problem: "unreadable",
 		});
+	});
+});
+
+describe("workProjectOf (owner-card-brief, Ops #682)", () => {
+	const slot = globalThis as unknown as Record<symbol, unknown>;
+	const dirs: string[] = [];
+	afterEach(() => {
+		delete slot[PI_QUEUE_READERS_KEY];
+		for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+	});
+	const folder = (content: string) => {
+		const d = mkdtempSync(join(tmpdir(), "owner-card-work-"));
+		dirs.push(d);
+		writeFileSync(join(d, "events.jsonl"), content);
+		return d;
+	};
+	const readers = (projects: Map<string, unknown>) => {
+		let reads = 0;
+		slot[PI_QUEUE_READERS_KEY] = {
+			version: 1,
+			replay: () => null,
+			readWork: () => {
+				reads++;
+				return { projects };
+			},
+		};
+		return () => reads;
+	};
+
+	it("a project's name and outcome from pi-queue's reader, read again only when the log changes", () => {
+		const d = folder("x\n");
+		const reads = readers(
+			new Map<string, unknown>([
+				["owner-cards", { name: "Owner cards he can answer cold", outcome: "He never picks blind." }],
+				["no-outcome", { name: "Bare", outcome: "" }],
+				["Bad Id", { name: "Skipped" }],
+				["bad-name", { name: "One\nTwo" }],
+			]),
+		);
+		expect(workProjectOf(d, "owner-cards")).toEqual({
+			name: "Owner cards he can answer cold",
+			outcome: "He never picks blind.",
+		});
+		expect(workProjectOf(d, "no-outcome")).toEqual({ name: "Bare" });
+		expect(workProjectOf(d, "Bad Id")).toBeUndefined();
+		expect(workProjectOf(d, "bad-name")).toBeUndefined();
+		expect(workProjectOf(d, "missing")).toBeUndefined();
+		expect(reads()).toBe(1);
+		writeFileSync(join(d, "events.jsonl"), "xy\n");
+		workProjectOf(d, "owner-cards");
+		expect(reads()).toBe(2);
+	});
+
+	it("nothing when the log is missing, too big or pi-queue isn't loaded, or its reader throws", () => {
+		const d = folder("x\n");
+		expect(workProjectOf(d, "owner-cards")).toBeUndefined();
+		expect(workProjectOf(join(d, "nope"), "owner-cards")).toBeUndefined();
+		slot[PI_QUEUE_READERS_KEY] = {
+			version: 1,
+			replay: () => null,
+			readWork: () => {
+				throw new Error("refused");
+			},
+		};
+		expect(workProjectOf(folder("y\n"), "owner-cards")).toBeUndefined();
+		readers(new Map([["owner-cards", { name: "N" }]]));
+		const big = folder("");
+		truncateSync(join(big, "events.jsonl"), WORK_LOG_MAX + 1);
+		expect(workProjectOf(big, "owner-cards")).toBeUndefined();
+	});
+
+	it("the folder is PI_WORK_DIR, or work in pi's agent folder", () => {
+		expect(workFolder({ PI_WORK_DIR: "/w" })).toBe("/w");
+		expect(workFolder({ PI_CODING_AGENT_DIR: "/a" })).toBe(join("/a", "work"));
 	});
 });

@@ -19,6 +19,7 @@
 
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
+	UiOwnerCardBriefLine,
 	UiTaskQueue,
 	UiTaskQueueBlock,
 	UiTaskQueueHold,
@@ -29,6 +30,8 @@ import type {
 	UiProfilePatch,
 } from "../types";
 import { effectiveProfile, ProfileEditor, ProfileSummary } from "./QueueProfile";
+import { OwnerCardBrief } from "./OwnerCardBrief";
+import { briefLines } from "../roles-useful-model";
 import { useT, type Translate } from "../i18n";
 import { Markdown } from "./Markdown";
 import { lineTime } from "./TldrPanel";
@@ -401,6 +404,8 @@ export interface TaskQueueAnswerBinding {
 	readonly question: string;
 	readonly choices: readonly string[];
 	readonly detail?: string;
+	/** owner-card-brief (Ops #682): the card's plain brief, shown first (briefLines takes it only whole). */
+	readonly brief?: readonly UiOwnerCardBriefLine[];
 }
 
 export interface TaskQueueAnswerRequest {
@@ -727,6 +732,9 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		const wait = kind === "waiting" ? task.wait : undefined;
 		// queue-paused: the owner's pause on it (its own, or its whole queue's).
 		const held = taskQueueHeldOf(queue, task);
+		// owner-card-brief (Ops #682): a stuck card's live ask: its answer target and its plain brief.
+		const binding =
+			task.status === "stuck" ? answerBinding(answerBindings, conversationId, queue.queueId, task) : undefined;
 		// queue-main-chat: a task asking its main chat doesn't need the user (yet): plain, no needs-you.
 		const cls = [
 			"task-queue-task",
@@ -861,6 +869,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					<div className="task-queue-question">
 						{/* queue-paused: a paused task doesn't need you while paused: resume it to answer. */}
 						{!held && <span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>}
+						{!held && <OwnerCardBrief lines={briefLines(binding?.brief)} />}
 						{task.question && <span className="task-queue-question-text">{task.question}</span>}
 						{task.detail && (
 							// task-question decisions (rule 21): the whole package, shown with the question (Markdown, no raw HTML).
@@ -884,7 +893,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 								task={task}
 								conversationId={conversationId}
 								queueId={queue.queueId}
-								binding={answerBinding(answerBindings, conversationId, queue.queueId, task)}
+								binding={binding}
 								onAnswerResult={onAnswerResult}
 							/>
 						) : (
