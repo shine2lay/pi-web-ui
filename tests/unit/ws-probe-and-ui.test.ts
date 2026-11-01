@@ -594,6 +594,72 @@ describe("async initialization and flow-light discovery", () => {
 		render(createElement(ChatInput, { ...props, sessionId: "synthetic", conversationId: "synthetic" }));
 		expect(input.placeholder).not.toContain("initializing");
 	});
+	it("keeps a ?chat= link's pendingSwitch and switch_preview across session_initialized on the same socket, and clears them on a new socket ready", () => {
+		const socket = socketHarness();
+		socket.receive({
+			type: "ready",
+			serverVersion: "synthetic",
+			appVersion: "synthetic",
+			engine: "pi",
+			managed: true,
+			commandRecovery: 1,
+			recoveryGeneration: "synthetic-gen",
+		});
+		expect(api.chat.ready).toBe(true);
+		const target = { kind: "session" as const, path: "/tmp/link-target.jsonl" };
+		act(() => {
+			api.send({ type: "switch_session", path: target.path });
+		});
+		expect(api.chat.pendingSwitch).toEqual({ target, startedAt: T0, hidden: false });
+
+		// 1. session_initialized arrives while pendingSwitch is waiting for switch_preview:
+		//    pendingSwitch must stay intact so the arriving switch_preview matches sameSwitchTarget.
+		socket.receive({
+			type: "session_initialized",
+			connectionGeneration: "synthetic-gen",
+		});
+		expect(api.chat.pendingSwitch).toEqual({ target, startedAt: T0, hidden: false });
+		socket.receive({
+			type: "switch_preview",
+			target,
+			state: {
+				...state(0, [message("m-prev", "assistant", "preview message")]),
+				conversationId: "",
+				sessionId: "sess-link-1",
+				sessionFile: target.path,
+			},
+		});
+		expect(api.chat.pendingSwitch).toEqual({ target, startedAt: T0, hidden: false });
+		expect(api.chat.preview?.sessionId).toBe("sess-link-1");
+
+		// 2. If session_initialized arrives after switch_preview is already showing, preview stays intact.
+		socket.receive({
+			type: "session_initialized",
+			connectionGeneration: "synthetic-gen",
+		});
+		expect(api.chat.pendingSwitch).toEqual({ target, startedAt: T0, hidden: false });
+		expect(api.chat.preview?.sessionId).toBe("sess-link-1");
+
+		// 3. A ready on a new socket still clears pendingSwitch and preview.
+		act(() => {
+			socket.remoteClose();
+		});
+		tick(3_000);
+		const socket2 = UiSocket.instances[1];
+		expect(socket2).toBeDefined();
+		socket2.open();
+		socket2.receive({
+			type: "ready",
+			serverVersion: "synthetic",
+			appVersion: "synthetic",
+			engine: "pi",
+			managed: true,
+			commandRecovery: 1,
+			recoveryGeneration: "synthetic-gen-2",
+		});
+		expect(api.chat.pendingSwitch).toBeNull();
+		expect(api.chat.preview).toBeNull();
+	});
 	it("discovers flow-light through the existing dynamic selector without hiding fork tool cards", () => {
 		expect(listThemes(join(process.cwd(), "themes"), "/nonexistent-themes")).toContainEqual(
 			expect.objectContaining({ id: "flow-light", nameEn: "Pure Flow Light", scheme: "light", builtin: true }),

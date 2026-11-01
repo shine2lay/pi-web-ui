@@ -147,6 +147,15 @@ const frame = (state: Pick<UiState, "conversationId" | "sessionId" | "cwd">, eng
 });
 const sameFrame = (a: Frame | null, b: Frame | null) =>
 	!!a && !!b && a.conversationId === b.conversationId && a.sessionId === b.sessionId && a.workspace === b.workspace;
+/** server/agent-service.ts emitSwitchPreview sends conversationId: "" because no server
+ *  conversation exists yet while a session file is still being opened. Match that preview
+ *  to the opened snapshot by sessionId + workspace once the snapshot brings a conversationId. */
+const samePreviewFrame = (preview: Frame | null, actual: Frame | null) =>
+	!!preview &&
+	!!actual &&
+	(preview.conversationId === "" ? !!actual.conversationId : preview.conversationId === actual.conversationId) &&
+	preview.sessionId === actual.sessionId &&
+	preview.workspace === actual.workspace;
 
 export function createRecoveryChatTransport(options: RecoveryChatOptions) {
 	const client = options.client ?? nativeRecoveryClient();
@@ -222,10 +231,14 @@ export function createRecoveryChatTransport(options: RecoveryChatOptions) {
 		)
 			return true;
 		if (binding.workspace !== actual.workspace) return false;
+		const sameConversation =
+			binding.heldTarget && binding.conversationId === ""
+				? !!actual.conversationId
+				: actual.conversationId === binding.conversationId;
 		return (
 			(!opening || opening.complete) &&
 			binding.lifetime === sessionLifetime &&
-			actual.conversationId === binding.conversationId &&
+			sameConversation &&
 			actual.sessionId === binding.sessionId
 		);
 	}
@@ -286,8 +299,10 @@ export function createRecoveryChatTransport(options: RecoveryChatOptions) {
 			if (
 				binding.heldTarget &&
 				((opening && !opening.complete) ||
-					actual?.conversationId !== binding.conversationId ||
-					actual.sessionId !== binding.sessionId)
+					(binding.conversationId === ""
+						? !actual?.conversationId
+						: actual?.conversationId !== binding.conversationId) ||
+					actual?.sessionId !== binding.sessionId)
 			)
 				return { kind: "not-published", reason: "The original held target is not attached; its full copy remains." };
 			if (!message.recovery)
@@ -400,7 +415,7 @@ export function createRecoveryChatTransport(options: RecoveryChatOptions) {
 			if (actual?.workspace !== next.workspace) workspaceLifetime = {};
 			if (!sameFrame(actual, next)) sessionLifetime = {};
 			actual = next;
-			if (opening?.preview && sameFrame(opening.preview, next)) sessionLifetime = opening.lifetime;
+			if (opening?.preview && samePreviewFrame(opening.preview, next)) sessionLifetime = opening.lifetime;
 		},
 		beginSwitch(target: SwitchTarget): void {
 			cancelHolds("You left the original opening target before it was transmitted.");
@@ -415,7 +430,7 @@ export function createRecoveryChatTransport(options: RecoveryChatOptions) {
 			const original = opening;
 			if (!original || !sameSwitchTarget(original.target, target)) return;
 			original.complete = true;
-			if (sameFrame(actual, original.preview)) sessionLifetime = original.lifetime;
+			if (samePreviewFrame(original.preview, actual)) sessionLifetime = original.lifetime;
 			for (const [key, hold] of [...held]) {
 				if (opening !== original || !sameSwitchTarget(hold.target, target)) continue;
 				const ok = await client.flushHeld(hold.prepared);

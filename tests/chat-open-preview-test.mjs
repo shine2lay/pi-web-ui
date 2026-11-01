@@ -106,15 +106,17 @@ const BIG = "01a0c000-0000-7000-8000-0000000000b1";
 const BIG4 = "01a0c000-0000-7000-8000-0000000000b7";
 const BIG2 = "01a0c000-0000-7000-8000-0000000000b2";
 const BIG3 = "01a0c000-0000-7000-8000-0000000000b6";
+const BIG_LINK = "01a0c000-0000-7000-8000-0000000000b8";
 const BRANCHED = "01a0c000-0000-7000-8000-0000000000b3";
 const CUTOFF = "01a0c000-0000-7000-8000-0000000000b4";
 const RUBBISH = "01a0c000-0000-7000-8000-0000000000b5";
 
 const bigFile = seedBigChat(BIG, 900);
-// The two the browser opens are never opened over the socket: a chat that is already open shows up
+// The ones the browser opens are never opened over the socket: a chat that is already open shows up
 // as a recent chat, not as a history row.
 const big2File = seedBigChat(BIG2, 900);
 const big3File = seedBigChat(BIG3, 900);
+const bigLinkFile = seedBigChat(BIG_LINK, 900);
 // Big enough (~65 MB) that loading it blocks the server for most of a second after the preview has
 // been built: that is what the "the preview does not wait for the load" check below needs. Without
 // the wait for the frame to really leave, the preview lands together with the snapshot.
@@ -151,7 +153,12 @@ const srv = await ownServer({
 	name: "chat-open-preview",
 	mock: ({ sideRequest, lastUser }) =>
 		sideRequest ? "Seeded chat" : `REPLY:${(lastUser ?? "").trim().split(/\s+/).slice(0, 2).join(" ")}`,
-	env: { PI_CODING_AGENT_SESSION_DIR: sessionsDir, PI_WEB_CWD: workCwd },
+	env: {
+		PI_CODING_AGENT_SESSION_DIR: sessionsDir,
+		PI_WEB_CWD: workCwd,
+		PI_IDENTITY_DIR: join(sessionsDir, "no-identities"),
+		PI_IDENTITY_REINDEX: "0",
+	},
 });
 
 // ---- socket client ---------------------------------------------------------
@@ -345,22 +352,42 @@ try {
 	const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
 	// Hold the snapshot and switch_done frames back so the preview can be seen and written in.
 	await ctx.addInitScript(() => {
+		const isChatLink = new URLSearchParams(window.location.search).has("chat");
 		window.__held = [];
-		window.__holding = false;
+		window.__holding = isChatLink;
 		window.__sent = [];
+		window.__frames = [];
 		const Native = window.WebSocket;
 		window.WebSocket = class extends Native {
 			constructor(...args) {
 				super(...args);
 				this.__app = null;
+				window.__ws = this;
+				let linkSwitched = !isChatLink;
+				let heldInit = null;
+				let heldPreview = null;
 				super.onmessage = (ev) => {
 					let type = "";
+					let m = null;
 					try {
-						const m = JSON.parse(ev.data);
+						m = JSON.parse(ev.data);
 						type = m.type;
+						window.__frames.push(
+							type === "ready"
+								? { type, commandRecovery: m.commandRecovery, recoveryGeneration: !!m.recoveryGeneration }
+								: { type },
+						);
 						if (type === "sessions") window.__sessions = (m.sessions ?? []).map((s) => s.path);
 					} catch {
 						/* not json */
+					}
+					if (!linkSwitched && type === "session_initialized") {
+						heldInit = ev;
+						return;
+					}
+					if (heldInit && type === "switch_preview") {
+						heldPreview = ev;
+						return;
 					}
 					if (window.__holding && (type === "snapshot" || type === "snapshot_delta" || type === "switch_done")) {
 						window.__held.push(ev);
@@ -370,14 +397,30 @@ try {
 				};
 				const send = this.send.bind(this);
 				this.send = (data) => {
+					let type = "";
 					try {
 						const m = JSON.parse(data);
+						type = m.type;
 						window.__sent.push(m);
 						(window.__sentAll = window.__sentAll ?? []).push(m.type);
 					} catch {
 						/* not json */
 					}
-					return send(data);
+					const out = send(data);
+					if (!linkSwitched && type === "switch_session") {
+						linkSwitched = true;
+						if (heldInit) {
+							const initEv = heldInit;
+							const prevEv = heldPreview;
+							heldInit = null;
+							heldPreview = null;
+							queueMicrotask(() => {
+								this.__app?.call(this, initEv);
+								if (prevEv) this.__app?.call(this, prevEv);
+							});
+						}
+					}
+					return out;
 				};
 				window.__release = () => {
 					window.__holding = false;
@@ -493,6 +536,20 @@ try {
 	check("a message written while the chat opens waits, marked as sending", true);
 	check("it is not sent while the chat is still opening", heldSend === 0, `${heldSend} prompts sent`);
 
+	// Wait until the server has actually produced the held snapshot and switch_done for big3File
+	// before releasing, then release them together.
+	await page.waitForFunction(
+		() =>
+			window.__held.some((ev) => {
+				try {
+					return JSON.parse(String(ev.data)).type === "switch_done";
+				} catch {
+					return false;
+				}
+			}),
+		null,
+		{ timeout: 30000 },
+	);
 	const released = await page.evaluate(() => window.__release());
 	check("the snapshot reaches the page when released", released > 0, `${released} frames`);
 	await page.waitForFunction(
@@ -543,6 +600,105 @@ try {
 		afterLeaving.join(","),
 	);
 	check("and it never reaches the chat's file", !readFileSync(big2File, "utf8").includes("LEFT-BEFORE-IT-OPENED"));
+
+	// ---- 8. a fresh page opened with ?chat= to a not-loaded chat keeps its early preview across session_initialized ----
+	const linkPage = await ctx.newPage();
+	linkPage.on("pageerror", (e) => pageErrors.push(String(e)));
+	linkPage.on("console", (m) => {
+		if (m.type() === "error") pageErrors.push(m.text());
+	});
+	await linkPage.goto(`${srv.http}/?chat=${encodeURIComponent(bigLinkFile)}`, { waitUntil: "domcontentloaded" });
+	await linkPage.locator(".inputbox textarea").waitFor({ timeout: 30000 });
+	await linkPage.waitForFunction(
+		() =>
+			window.__frames.some((f) => f.type === "session_initialized") &&
+			window.__frames.some((f) => f.type === "switch_preview"),
+		null,
+		{ timeout: 30000 },
+	);
+	// Let React commit the render from switch_preview / session_initialized.
+	await sleep(100);
+	const linkPreview = await linkPage.evaluate(() => ({
+		msgs: document.querySelectorAll(".messages .msg").length,
+		overlayPreview: !!document.querySelector('.switch-overlay[data-switch-preview="1"]'),
+		heldBack: window.__held.length,
+		lastText: ([...document.querySelectorAll(".messages .msg")].at(-1)?.textContent ?? "").slice(0, 60),
+		commandRecovery: window.__frames.some((f) => f.type === "ready" && f.commandRecovery === 1 && f.recoveryGeneration),
+		sessionInitialized: window.__frames.some((f) => f.type === "session_initialized"),
+	}));
+	check(
+		"a ?chat= link on a fresh page runs with command recovery and session_initialized",
+		linkPreview.commandRecovery && linkPreview.sessionInitialized,
+		JSON.stringify(linkPreview),
+	);
+	check(
+		"a ?chat= link to a not-loaded chat shows the newest messages from switch_preview before the snapshot",
+		linkPreview.msgs > 0 && linkPreview.overlayPreview && linkPreview.lastText.includes("answer 899"),
+		JSON.stringify(linkPreview),
+	);
+	check(
+		"the ?chat= link's real snapshot is still held back while the preview is shown",
+		linkPreview.heldBack > 0,
+		`${linkPreview.heldBack} frames held`,
+	);
+	await linkPage.evaluate(() => {
+		document.querySelectorAll(".messages .msg").forEach((el, i) => {
+			el.dataset.e2eLinkTag = `ltag${i}`;
+		});
+	});
+	// Wait until the target chat's snapshot and switch_done have arrived in __held before releasing.
+	await linkPage.waitForFunction(
+		() =>
+			window.__held.some((ev) => {
+				try {
+					return JSON.parse(ev.data).type === "switch_done";
+				} catch {
+					return false;
+				}
+			}),
+		null,
+		{ timeout: 30000 },
+	);
+	await linkPage.evaluate(() => window.__release());
+	await linkPage.waitForFunction(() => !document.querySelector(".switch-overlay"), null, { timeout: 30000 });
+	const linkAfterSwap = await linkPage.evaluate(() => ({
+		keptTags: [...document.querySelectorAll(".messages .msg")].filter((el) => el.dataset.e2eLinkTag).length,
+		overlay: !!document.querySelector(".switch-overlay"),
+	}));
+	check(
+		"the ?chat= link's preview messages are not rebuilt when the snapshot arrives",
+		linkAfterSwap.keptTags > 0 && !linkAfterSwap.overlay,
+		JSON.stringify(linkAfterSwap),
+	);
+
+	await linkPage.close();
+
+	// ---- 9. a ready on a NEW socket still clears a pending switch and preview ----
+	await emptyChat();
+	await page.evaluate(() => {
+		window.__holding = true;
+		window.__held.length = 0;
+		window.__frames.length = 0;
+	});
+	await openFromHistory(big3File);
+	await page.locator('.switch-overlay[data-switch-preview="1"]').waitFor({ timeout: 30000 });
+	// Close the socket while snapshot is still held back; a new socket connects and receives ready.
+	await page.evaluate(() => {
+		window.__frames.length = 0;
+		window.__ws.close();
+	});
+	await page.waitForFunction(() => window.__frames.some((f) => f.type === "ready"), null, { timeout: 30000 });
+	await sleep(100);
+	const afterNewSocketReady = await page.evaluate(() => ({
+		overlay: !!document.querySelector(".switch-overlay"),
+		msgs: document.querySelectorAll(".messages .msg").length,
+	}));
+	check(
+		"a ready on a new socket still clears a pending switch and preview",
+		!afterNewSocketReady.overlay && afterNewSocketReady.msgs === 0,
+		JSON.stringify(afterNewSocketReady),
+	);
+	await page.evaluate(() => window.__release());
 } catch (err) {
 	console.error(err);
 	failures++;

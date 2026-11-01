@@ -2024,21 +2024,10 @@ export function useChat() {
 	}, []);
 
 	/** Read probes/watch replay run only after the asynchronous attach has finished.
-	 * Transport ready is not a session/command-admission receipt. */
+	 * Transport ready is not a session/command-admission receipt; new-socket state resets
+	 * already ran on the socket's "ready" frame, so finishing attach on the same socket
+	 * must not re-dispatch "ready" and wipe a ?chat= link's pendingSwitch or preview. */
 	const finishReady = useCallback((ws: WebSocket, msg: Extract<ServerMessage, { type: "ready" }>) => {
-		dispatch({
-			type: "ready",
-			serverVersion: msg.serverVersion,
-			protocolVersion: msg.protocolVersion,
-			engine: msg.engine,
-			appVersion: msg.appVersion,
-			managed: msg.managed,
-			tabs: msg.tabs,
-			service: msg.service,
-		});
-		answeredQuestionsRef.current.clear();
-		resumeBasesRef.current.clear();
-		dispatch({ type: "question", question: null });
 		ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
 		resendNotebookWatch();
 		resendRolesWatch();
@@ -2210,6 +2199,9 @@ export function useChat() {
 						tabs: msg.tabs,
 						service: msg.service,
 					});
+					answeredQuestionsRef.current.clear();
+					resumeBasesRef.current.clear();
+					dispatch({ type: "question", question: null });
 					recovery.ready(ws, msg.recoveryGeneration);
 					if (msg.commandRecovery === 1 && msg.recoveryGeneration) pendingReadyRef.current = msg;
 					else finishReady(ws, msg); // Legacy read/control compatibility, not authored admission.
@@ -2346,7 +2338,10 @@ export function useChat() {
 					// Volatile acceptance only changes the visual optimistic row, never recovery storage.
 					if (msg.ok)
 						for (const [key, pending] of visibleRecoverySends.current) {
-							if (pending.id === msg.id && pending.conversationId === msg.conversationId)
+							if (
+								pending.id === msg.id &&
+								(pending.conversationId === msg.conversationId || (!pending.conversationId && !!msg.conversationId))
+							)
 								visibleRecoverySends.current.delete(key);
 						}
 					dispatch({

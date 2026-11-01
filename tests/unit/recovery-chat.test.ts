@@ -411,6 +411,27 @@ describe("native recovery/socket/target bridge — fixed synthetic ports, not br
 		await finished;
 		expect(f.frames).toHaveLength(1);
 	});
+	it("flushes a prompt written during a session-file switch_preview with conversationId '' once snapshot assigns conversationId", async () => {
+		const f = fixture();
+		await f.boot();
+		const target = { kind: "session", path: "/tmp/s2.jsonl" } as const;
+		// Real server emitSwitchPreview serializer sets conversationId: "" before a conversation exists.
+		const previewFrame = state("", "s2", "/original");
+		const openedSnapshot = state("c2", "s2", "/original");
+		f.bridge.beginSwitch(target);
+		f.setPreview(previewFrame);
+		f.bridge.preview(f.socket, target, previewFrame);
+		expect(await f.bridge.admit(prompt())).toBe(true);
+		expect(f.frames).toEqual([]);
+		expect(f.originals.get("p1")?.work).toMatchObject({ pending: { sessionId: "s2", conversationId: "" } });
+		f.setState(openedSnapshot);
+		const finished = f.bridge.completeSwitch(target);
+		const sent = await f.nextFrame();
+		expect(sent).toMatchObject({ id: "p1", forSession: "s2", text: "  exact α\n" });
+		f.bridge.receiveDisposition(f.socket, f.disposition(sent));
+		await finished;
+		expect(f.frames).toHaveLength(1);
+	});
 	it("cancels a never-wire hold without deleting data or allowing late switch replay", async () => {
 		const f = fixture();
 		await f.boot();
