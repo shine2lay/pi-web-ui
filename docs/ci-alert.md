@@ -27,6 +27,21 @@ Send one JSON line to the control socket. Its path is given by `controlPath(data
 }
 ```
 
+A red push run with the ids of its failing tests (Ops #725) has:
+
+```json
+{
+  "kind": "failed",
+  "repo": "shine2lay/rollcall",
+  "workflow": "ci",
+  "runId": "41277155659",
+  "url": "https://github.com/shine2lay/rollcall/actions/runs/41277155659",
+  "event": "push",
+  "failingTests": ["tests/test_api.py::test_login[admin]", "tests/unit/test_orders.py::TestOrders::test_cancel"],
+  "failingTestsNotShown": 3
+}
+```
+
 A missed scheduled run instead has:
 
 ```json
@@ -48,7 +63,7 @@ The same key again returns the **first** record's id with `duplicate: true`, wit
 
 ## Checked fields
 
-Only `cmd`, `token`, `role` and `alert` are command fields. No free-text field, logs, test output, branch, or arbitrary extra keys are accepted.
+Only `cmd`, `token`, `role` and `alert` are command fields. No free-text field, logs, test output (failure messages, tracebacks), branch, or arbitrary extra keys are accepted. Failing tests are named only by checked pytest ids.
 
 - `role`: an existing role with a home chat. Role lookup trims and lowercases the id, as the existing app-report senders do.
 - `kind`: `failed` or `missing`.
@@ -62,7 +77,9 @@ Only `cmd`, `token`, `role` and `alert` are command fields. No free-text field, 
 - `conclusion`: optional, only with `failed`; `failure`, `timed_out`, `startup_failure` or `cancelled`. Absent means `failure`, not `null`.
 - `cancelReason`: optional, only with conclusion `cancelled`; `time-limit`, `by-hand` or `unknown`. Absent means `unknown`.
 - `limitMinutes`: optional, only with `cancelReason: "time-limit"`; an integer from 1 to 1440.
-- `event`: optional; `schedule` or `workflow_dispatch`.
+- `event`: optional; `schedule`, `workflow_dispatch` or `push`.
+- `failingTests`: optional, only with `failed` (any conclusion); a list of at most 20 pytest node ids. An id is at most 300 characters and matches `^[A-Za-z0-9_./-]+\.py(::[A-Za-z_][A-Za-z0-9_]*)+(\[[A-Za-z0-9_.,=+:-]{1,100}\])?$`: no space, line break, backtick, `*`, `<` or parenthesis. An id that doesn't match is replaced by `(test id not shown)`, like an unsafe job name, never interpreted. A list that isn't one, or has more than 20 items, is refused.
+- `failingTestsNotShown`: optional, only with `failed`; an integer from 0 to 100000, how many more tests failed than `failingTests` lists.
 
 Unknown enum values, wrong types, extra fields and bad combinations are refused. There are no new rate caps or quotas. The existing control socket's framing and transport limits are unchanged.
 
@@ -72,7 +89,13 @@ The example's body is:
 
 > CI watch: shine2lay/rollcall ci, manual run 41277155657 on commit 0123456 was cut off by its 40-min time limit. Jobs not finished: backend. https://github.com/shine2lay/rollcall/actions/runs/41277155657
 
-`event: "schedule"` says **nightly run**, `workflow_dispatch` says **manual run**, and an absent event says **run**. No branch is inferred: the schema has no branch field. Other endings are **failed**, **timed out**, **failed to start**, **was cancelled by hand**, and **was cancelled (no reason given)**. A time-limit cancellation without minutes says **was cut off by its time limit**.
+`event: "schedule"` says **nightly run**, `workflow_dispatch` says **manual run**, `push` says **push run**, and an absent event says **run**. No branch is inferred: the schema has no branch field. Other endings are **failed**, **timed out**, **failed to start**, **was cancelled by hand**, and **was cancelled (no reason given)**. A time-limit cancellation without minutes says **was cut off by its time limit**.
+
+Failing tests follow the jobs, before the run's link, in the same one-line body. The push example's body is:
+
+> CI watch: shine2lay/rollcall ci, push run 41277155659 failed. Failing tests: `tests/test_api.py::test_login[admin]`, `tests/unit/test_orders.py::TestOrders::test_cancel` and 3 more. https://github.com/shine2lay/rollcall/actions/runs/41277155659
+
+Each id is in a code span, so the open card shows it whole (its Markdown would otherwise turn `__snapshots__` bold, `_a_` italic or a `www.` path into a link); `(test id not shown)` stays plain words. With no ids and `failingTestsNotShown` above 0 the sentence is "Failing tests: N not listed."; with neither (or an empty list and 0) there is no sentence. The folded row and the header are unchanged: they show what happened, the repo and the workflow.
 
 A missing alert says which scheduled UTC slot got no run. The header names the CI watch, what happened, the repo and the workflow. The hint asks the receiving chat to use its tools to open the run, find the failing tests and fix or queue the fix; for a missing run, check the schedule and whether the workflow is turned on. It asks for no reply and reuses the work check's `statusHint("poke")`: one status line, no narration or summary.
 
@@ -85,7 +108,7 @@ Keys are global across roles:
 - Failed: `repo:workflow:runId`.
 - Missing: `repo:workflow:missing:slot`, using the normalised UTC timestamp.
 
-Changing jobs, SHA, conclusion or the recipient does not create a new alert for the same key. Validation and role/home lookup still run before duplicate lookup. The `ci` record field stores the key and the checked kind/repo/workflow/runId/sha/slot/conclusion/cancelReason/limitMinutes/event fields that were supplied or defaulted. Text is built by the server, not taken from the caller.
+Changing jobs, failing tests, SHA, conclusion or the recipient does not create a new alert for the same key. Validation and role/home lookup still run before duplicate lookup. The `ci` record field stores the key and the checked kind/repo/workflow/runId/sha/slot/conclusion/cancelReason/limitMinutes/event fields that were supplied or defaulted. Jobs, the URL and the failing tests reach the record only through the server's text, as checked values. Text is built by the server, not taken from the caller.
 
 Dedupe survives restarts and applies while the record exists. The existing record rotation keeps reports for at least nine days, and waiting messages are not rotated out; it is not a permanent run-id archive. A watcher should also keep its own delivery state. Never edit `role-messages.json` by hand.
 
@@ -95,8 +118,8 @@ Dedupe survives restarts and applies while the record exists. The existing recor
 - `server/role-messages.ts`: `requestCiAlert`, shared `appReportRole`/`addAppReport` with `requestPoke` and `requestStall`, persistent key lookup, stamps and refusal of replies.
 - `server/control-socket.ts`: `ci_alert` and the shared app-token check; thin methods in `server/agent-service.ts` and `server/index.ts`'s engine interface.
 - `server/protocol.ts`, `web/src/role-message-text.ts`, the existing message card/row and i18n: label a CI alert as the CI watch, not a 6 am report.
-- `tests/unit/ci-alert.test.ts`: allowed fields, refusal cases, safe job names, all conclusions/reasons, text and key.
-- `tests/unit/ci-alert-route.test.ts`: temporary store and fake host; socket token refusals, delivery, dedupe/restart, no-reply and app-report regression checks. No real chat or model.
+- `tests/unit/ci-alert.test.ts`: allowed fields, refusal cases, safe job names and test ids, all conclusions/reasons, push runs, the failing-tests sentence, text and key, and the open card's Markdown render of the ids.
+- `tests/unit/ci-alert-route.test.ts`: temporary store and fake host; socket token refusals, delivery, dedupe/restart (including a push run whose second test list is a duplicate and whose unsafe id never reaches the store), no-reply and app-report regression checks. No real chat or model.
 
 ## H-CI-ALERT-ROUTE
 
@@ -139,6 +162,16 @@ Dedupe survives restarts and applies while the record exists. The existing recor
 - Deploy: `pi-web-deploy` installed `aa4a6bca` at 09:50 PST; `pi-web-deploy result aa4a6bca…` exit 0, "live, and the checks all passed".
 - Live look only at `rm-595e6554` (same kit, no sends): on the 390 px phone the CI row's button overflows 0 px (35 px before) and its kind chip ends in an ellipsis at 138 px (the old row ran off the edge with no closing border). On the desktop view (1400 px window, 1196 px row) the chip is 238 px and not cut, and the preview is 652 px. Across the three folded rows in Ops' home chat: none overflows and no chip is cut on the desktop. On the phone the only cut chip is the CI row's own. axe found nothing serious or critical in desktop dark, desktop light and phone dark; no page errors.
 - Limit: on the phone the CI row's preview gets 0 px, because the sender name, the chip and the turn chip fill the row; the rationale "so the preview keeps room" holds on the desktop only. Not changed further: for a CI alert the preview repeats the chip's words (what happened, repo, workflow), and the open card shows all of it. A later change that wants a preview on phone rows with long kinds needs its own hypothesis.
+
+## H-CI-ALERT-PUSH-TESTS (Ops #725)
+
+Requested by RollCall (rm-3415271c), relayed by Systems (rm-c9936423): a red push run on master should reach RollCall's home chat at once, with the failing test ids, so a test-selection miss or a broken master shows straight away.
+
+- *Problem and evidence:* the contract above refused any event other than `schedule` and `workflow_dispatch` and had no test field ("No free-text field, logs, test output ... accepted"). A push run on master and its failing tests couldn't be reported, though RollCall needs them.
+- *Change:* two checked additions, still without any free text. (1) `event: "push"`, worded **push run**. (2) `failingTests`, an optional list of at most 20 pytest node ids, each at most 300 characters and matching `^[A-Za-z0-9_./-]+\.py(::[A-Za-z_][A-Za-z0-9_]*)+(\[[A-Za-z0-9_.,=+:-]{1,100}\])?$`, and `failingTestsNotShown`, an optional whole number from 0 to 100000 (how many more failed). Both only with kind `failed`. They follow the jobs rules through the same code: an id that doesn't match is shown as `(test id not shown)`, never interpreted; only checked values reach the text; unknown keys and wrong types are still refused. The text gains "Failing tests: <id>, <id> and N more." The open card shows the ids in full; the folded row is unchanged. The dedupe key stays `repo:workflow:runId`, so a different test list never makes a new alert for the same run.
+- *Expected and measured by:* unit cases for every new field's allowed and refused values, an unsafe id shown as `(test id not shown)`, the text of a push run with test ids, and an unchanged key; the new cases fail on `bca34a12` and pass after. One look-only render of a fixture record, no real send.
+- *Wrong if:* any text other than the checked ids and the server's fixed words reaches the chat; an existing alert's text or key changes; an existing test changes its result (other than the one assertion that pinned `push` as refused).
+- *Live sends:* none in this task. The watcher change that sends these fields is the next task, and makes the first real one.
 
 ## Undo
 

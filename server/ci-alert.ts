@@ -2,7 +2,8 @@
  * ci-alert (Ops #720): what a CI alert may say. A script on this machine (the CI watch) tells a role's home chat
  * that a CI run failed, was cut off, or never appeared, through the control socket's ci_alert (with the app
  * token). The server writes the whole message from the fields checked here: a caller can't put free text in,
- * no logs, no test output. docs/ci-alert.md is the contract.
+ * no logs, no test output. docs/ci-alert.md is the contract. Ops #725: push runs, and the ids of the failing
+ * tests, each checked as a pytest node id like a job name.
  *
  * Here: checkCiAlert (the fields, closed enums and their combinations), ciAlertKey (the dedupe key),
  * ciAlertText (the message), ciAlertTitle (the header's words) and ciAlertHint (what the receiving chat does).
@@ -16,7 +17,7 @@ export type CiConclusion = "failure" | "timed_out" | "startup_failure" | "cancel
 /** Why a cancelled run was cancelled, as the watcher worked it out. */
 export type CiCancelReason = "time-limit" | "by-hand" | "unknown";
 /** What started the run. */
-export type CiEvent = "schedule" | "workflow_dispatch";
+export type CiEvent = "schedule" | "workflow_dispatch" | "push";
 
 /** A checked alert: every field is one of the closed shapes checkCiAlert allows. */
 export interface CiAlert {
@@ -40,6 +41,10 @@ export interface CiAlert {
 	/** cancelReason time-limit: the limit in minutes. */
 	limitMinutes?: number;
 	event?: CiEvent;
+	/** kind failed: at most 20 pytest node ids of failing tests; unsafe ids become "(test id not shown)". */
+	failingTests?: string[];
+	/** kind failed: how many more tests failed than failingTests lists (0-100000). */
+	failingTestsNotShown?: number;
 }
 
 export type CiAlertCheck = { ok: true; alert: CiAlert } | { ok: false; error: string };
@@ -47,12 +52,16 @@ export type CiAlertCheck = { ok: true; alert: CiAlert } | { ok: false; error: st
 export const CI_JOBS_SHOWN = 15;
 export const CI_JOB_NAME_MAX = 80;
 export const CI_NAME_NOT_SHOWN = "(name not shown)";
+export const CI_TESTS_SHOWN = 20;
+export const CI_TEST_ID_MAX = 300;
+export const CI_TEST_ID_NOT_SHOWN = "(test id not shown)";
+export const CI_TESTS_NOT_SHOWN_MAX = 100000;
 const CI_WORKFLOW_MAX = 100;
 
 const KINDS: readonly CiAlertKind[] = ["failed", "missing"];
 const CONCLUSIONS: readonly CiConclusion[] = ["failure", "timed_out", "startup_failure", "cancelled"];
 const CANCEL_REASONS: readonly CiCancelReason[] = ["time-limit", "by-hand", "unknown"];
-const EVENTS: readonly CiEvent[] = ["schedule", "workflow_dispatch"];
+const EVENTS: readonly CiEvent[] = ["schedule", "workflow_dispatch", "push"];
 /** The fields each kind takes; any other key is refused. */
 const FIELDS: Readonly<Record<CiAlertKind, readonly string[]>> = {
 	failed: [
@@ -67,6 +76,8 @@ const FIELDS: Readonly<Record<CiAlertKind, readonly string[]>> = {
 		"cancelReason",
 		"limitMinutes",
 		"event",
+		"failingTests",
+		"failingTestsNotShown",
 	],
 	missing: ["kind", "repo", "workflow", "slot", "event"],
 };
@@ -78,6 +89,9 @@ const SHA_RE = /^[0-9a-fA-F]{40}$/;
 const JOB_RE = /^[A-Za-z0-9 _.:/()[\],-]+$/;
 const RUN_DIGITS_RE = /^[0-9]+$/;
 const JOB_HEADER_RE = /(?:^|\s)\[(?:Role message|Board(?: order)?|Queue|System)(?:\s|\])/i;
+/** A pytest node id: file.py, one or more ::names, an optional [parameters]. No space, line break, backtick, *, <
+ *  or ( ): it can't look like a header or close the code span ciAlertText puts it in. */
+const TEST_ID_RE = /^[A-Za-z0-9_./-]+\.py(::[A-Za-z_][A-Za-z0-9_]*)+(\[[A-Za-z0-9_.,=+:-]{1,100}\])?$/;
 const SLOT_RE =
 	/^([0-9]{4})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]+)?)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$/;
 
@@ -104,11 +118,41 @@ function oneOf<T extends string>(v: unknown, allowed: readonly T[]): v is T {
 	return typeof v === "string" && (allowed as readonly string[]).includes(v);
 }
 
+/** A caller's value as it may appear in the message: a string of at most `max` characters that `pattern` matches
+ *  (and `unsafe`, when given, doesn't), else the stand-in. The length is checked before any pattern runs. */
+function shownOrStandIn(v: unknown, max: number, pattern: RegExp, standIn: string, unsafe?: RegExp): string {
+	if (typeof v !== "string" || v.length > max || !pattern.test(v) || unsafe?.test(v)) return standIn;
+	return v;
+}
+
 /** A job name as it may appear in the message: the allowed characters only, else "(name not shown)". */
 export function shownJobName(v: unknown): string {
-	if (typeof v !== "string" || v.length > CI_JOB_NAME_MAX || !JOB_RE.test(v) || JOB_HEADER_RE.test(v))
-		return CI_NAME_NOT_SHOWN;
-	return v;
+	return shownOrStandIn(v, CI_JOB_NAME_MAX, JOB_RE, CI_NAME_NOT_SHOWN, JOB_HEADER_RE);
+}
+
+/** A failing test's id as it may appear in the message: a pytest node id of at most 300 characters, else
+ *  "(test id not shown)". */
+export function shownTestId(v: unknown): string {
+	return shownOrStandIn(v, CI_TEST_ID_MAX, TEST_ID_RE, CI_TEST_ID_NOT_SHOWN);
+}
+
+type ShownList = { ok: true; items: string[] } | { ok: false; error: string };
+
+/** A list field (jobs, failingTests): a list of at most `max` items, each shown through `show`; else refused. */
+function shownList(
+	raw: unknown,
+	field: string,
+	max: number,
+	show: (v: unknown) => string,
+	words: { list: string; items: string },
+): ShownList {
+	if (!Array.isArray(raw)) return { ok: false, error: `alert.${field} must be a list of ${words.list}` };
+	if (raw.length > max) return { ok: false, error: `alert.${field} may contain at most ${max} ${words.items}` };
+	return { ok: true, items: raw.map(show) };
+}
+
+function isWholeNumber(v: unknown, min: number, max: number): v is number {
+	return typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
 }
 
 /** The checked alert, or why it's refused. Unknown keys, bad values and fields that don't fit the kind (or the
@@ -132,7 +176,8 @@ export function checkCiAlert(raw: unknown): CiAlertCheck {
 	if (typeof workflow !== "string" || workflow.length > CI_WORKFLOW_MAX || !WORKFLOW_RE.test(workflow))
 		return no(`alert.workflow must be 1-${CI_WORKFLOW_MAX} characters of letters, digits, space and _./()-`);
 	const event = raw.event;
-	if (event !== undefined && !oneOf(event, EVENTS)) return no("alert.event must be schedule or workflow_dispatch");
+	if (event !== undefined && !oneOf(event, EVENTS))
+		return no("alert.event must be schedule, workflow_dispatch or push");
 	const common: CiAlert = { kind, repo, workflow, ...(event === undefined ? {} : { event }) };
 
 	if (kind === "missing") {
@@ -157,9 +202,20 @@ export function checkCiAlert(raw: unknown): CiAlertCheck {
 		alert.sha = raw.sha.toLowerCase();
 	}
 	if (raw.jobs !== undefined) {
-		if (!Array.isArray(raw.jobs)) return no("alert.jobs must be a list of job names");
-		if (raw.jobs.length > CI_JOBS_SHOWN) return no(`alert.jobs may contain at most ${CI_JOBS_SHOWN} names`);
-		alert.jobs = raw.jobs.map(shownJobName);
+		const jobs = shownList(raw.jobs, "jobs", CI_JOBS_SHOWN, shownJobName, { list: "job names", items: "names" });
+		if (!jobs.ok) return jobs;
+		alert.jobs = jobs.items;
+	}
+	if (raw.failingTests !== undefined) {
+		const words = { list: "pytest test ids", items: "ids" };
+		const tests = shownList(raw.failingTests, "failingTests", CI_TESTS_SHOWN, shownTestId, words);
+		if (!tests.ok) return tests;
+		alert.failingTests = tests.items;
+	}
+	if (raw.failingTestsNotShown !== undefined) {
+		if (!isWholeNumber(raw.failingTestsNotShown, 0, CI_TESTS_NOT_SHOWN_MAX))
+			return no(`alert.failingTestsNotShown must be a whole number from 0 to ${CI_TESTS_NOT_SHOWN_MAX}`);
+		alert.failingTestsNotShown = raw.failingTestsNotShown;
 	}
 	// Only a missing field takes the default: null is a bad value, refused like any other.
 	const conclusion = raw.conclusion === undefined ? "failure" : raw.conclusion;
@@ -176,8 +232,7 @@ export function checkCiAlert(raw: unknown): CiAlertCheck {
 	if (raw.limitMinutes !== undefined) {
 		if (alert.cancelReason !== "time-limit") return no("alert.limitMinutes goes only with cancelReason time-limit");
 		const n = raw.limitMinutes;
-		if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 1440)
-			return no("alert.limitMinutes must be a whole number from 1 to 1440");
+		if (!isWholeNumber(n, 1, 1440)) return no("alert.limitMinutes must be a whole number from 1 to 1440");
 		alert.limitMinutes = n;
 	}
 	return { ok: true, alert };
@@ -226,17 +281,41 @@ function endedWith(a: CiAlert): string {
 	}
 }
 
+function runWords(event: CiEvent | undefined): string {
+	switch (event) {
+		case "schedule":
+			return "nightly run";
+		case "workflow_dispatch":
+			return "manual run";
+		case "push":
+			return "push run";
+		default:
+			return "run";
+	}
+}
+
+/** "Failing tests: `<id>`, `<id>` and N more.", or "" with nothing to say. Each id in a code span, so the open
+ *  card's Markdown shows it as it is (underscores, dots); the stand-in stays plain words. */
+function failingTestsSentence(a: CiAlert): string {
+	const more = a.failingTestsNotShown ?? 0;
+	const ids = (a.failingTests ?? []).map((id) => (id === CI_TEST_ID_NOT_SHOWN ? id : `\`${id}\``));
+	if (!ids.length) return more > 0 ? `Failing tests: ${more} not listed.` : "";
+	return `Failing tests: ${ids.join(", ")}${more > 0 ? ` and ${more} more` : ""}.`;
+}
+
 /** The message, from the checked fields only. */
 export function ciAlertText(a: CiAlert): string {
 	if (a.kind === "missing")
 		return `CI watch: ${a.repo} ${a.workflow}: the run scheduled for ${a.slot ?? "?"} never appeared.`;
-	const run = a.event === "schedule" ? "nightly run" : a.event === "workflow_dispatch" ? "manual run" : "run";
+	const run = runWords(a.event);
 	const at = a.sha ? ` on commit ${a.sha.slice(0, 7)}` : "";
 	let text = `CI watch: ${a.repo} ${a.workflow}, ${run} ${a.runId ?? "?"}${at} ${endedWith(a)}.`;
 	if (a.jobs?.length) {
 		const label = a.conclusion === "cancelled" || a.conclusion === "timed_out" ? "Jobs not finished" : "Failed jobs";
 		text += ` ${label}: ${a.jobs.join(", ")}.`;
 	}
+	const tests = failingTestsSentence(a);
+	if (tests) text += ` ${tests}`;
 	if (a.url) text += ` ${a.url}`;
 	return text;
 }
