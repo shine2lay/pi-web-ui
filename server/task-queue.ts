@@ -67,6 +67,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
+import { deepFreeze } from "./deep-freeze.js";
 import { piQueueReaders } from "./pi-queue-readers.js";
 import { requesterOf } from "./queue-requester.js";
 import { checkPatch, normProfile, normLaunch, patchProfile } from "./queue-profile.js";
@@ -1134,11 +1135,16 @@ function stateOf(raw: unknown, queueId: string | undefined): State {
  * The queue the entries replay to: by pi-queue's own replay once pi-queue has loaded in this process
  * (canonical-readers), else by apply(), this file's mirror of it. A state pi-queue's replay can't give (it threw on
  * an entry, or holds what this file can't show) is replayed by apply() too.
+ * H-QUEUE-REPLAY-2 (Ops #713): every read of a queue session gets the same state, frozen all the way down, made again
+ * only when a queue entry is appended; a reader that has to change it changes its own copy (taskQueueFromEntries).
  */
 interface ReplaySlot {
 	reader: unknown;
 	prefix: TaskQueueEntryLike[];
-	state: State;
+	/** apply()'s state, which later entries change in place (only without pi-queue's replay); never handed out. */
+	raw?: State;
+	/** What every read gets, frozen. */
+	out: State;
 }
 
 const replayByArray = new WeakMap<object, Map<string, ReplaySlot>>();
@@ -1212,8 +1218,13 @@ function emptyReplayState(queueId: string | undefined): State {
 	};
 }
 
+/** Whether a session entry is one of the queue's own changes. */
+function isQueueEntry(e: TaskQueueEntryLike | undefined): boolean {
+	return !!e && e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE;
+}
+
 function applyEntry(s: State, e: TaskQueueEntryLike): void {
-	if (e && e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
+	if (isQueueEntry(e)) apply(s, e.data);
 }
 
 function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | undefined): State {
@@ -1245,61 +1256,48 @@ function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | u
 	if (slot) {
 		let hasQueueEntry = false;
 		for (let i = slot.prefix.length; i < entries.length; i++) {
-			const e = entries[i];
-			if (e && e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) {
-				hasQueueEntry = true;
-			}
+			if (isQueueEntry(entries[i])) hasQueueEntry = true;
 		}
 		if (!hasQueueEntry) {
 			for (let i = slot.prefix.length; i < entries.length; i++) slot.prefix.push(entries[i]);
 			saveReplaySlot(arrRef, firstRef, key, slot);
-			return cloneReplayState(slot.state);
+			return slot.out;
 		}
 		if (readers) {
 			try {
-				const s = stateOf(readers.replay(entries, queueId), queueId);
+				const out = deepFreeze(stateOf(readers.replay(entries, queueId), queueId));
 				for (let i = slot.prefix.length; i < entries.length; i++) slot.prefix.push(entries[i]);
-				slot.state = cloneReplayState(s);
+				slot.out = out;
 				saveReplaySlot(arrRef, firstRef, key, slot);
-				return s;
+				return out;
 			} catch {
 				// Fall back to full apply() below.
 			}
-		} else {
+		} else if (slot.raw) {
 			for (let i = slot.prefix.length; i < entries.length; i++) {
-				applyEntry(slot.state, entries[i]);
+				applyEntry(slot.raw, entries[i]);
 				slot.prefix.push(entries[i]);
 			}
+			slot.out = deepFreeze(cloneReplayState(slot.raw));
 			saveReplaySlot(arrRef, firstRef, key, slot);
-			return cloneReplayState(slot.state);
+			return slot.out;
 		}
 	}
 
 	if (readers) {
 		try {
-			const s = stateOf(readers.replay(entries, queueId), queueId);
-			saveReplaySlot(
-				arrRef,
-				firstRef,
-				key,
-				{ reader: readerFn, prefix: entries.slice(), state: cloneReplayState(s) },
-				arraySlot,
-			);
-			return s;
+			const out = deepFreeze(stateOf(readers.replay(entries, queueId), queueId));
+			saveReplaySlot(arrRef, firstRef, key, { reader: readerFn, prefix: entries.slice(), out }, arraySlot);
+			return out;
 		} catch {
 			// apply() below.
 		}
 	}
-	const s = emptyReplayState(queueId);
-	for (let i = 0; i < entries.length; i++) applyEntry(s, entries[i]);
-	saveReplaySlot(
-		arrRef,
-		firstRef,
-		key,
-		{ reader: undefined, prefix: entries.slice(), state: cloneReplayState(s) },
-		arraySlot,
-	);
-	return s;
+	const raw = emptyReplayState(queueId);
+	for (let i = 0; i < entries.length; i++) applyEntry(raw, entries[i]);
+	const out = deepFreeze(cloneReplayState(raw));
+	saveReplaySlot(arrRef, firstRef, key, { reader: undefined, prefix: entries.slice(), raw, out }, arraySlot);
+	return out;
 }
 
 /** 只用到的会话条目字段（SessionEntry 的子集，测试好造）。 */
@@ -1324,56 +1322,17 @@ export function taskQueueFromEntries(
 	shareable: readonly string[] = TASK_QUEUE_DEFAULT_SHAREABLE,
 	queueId?: string,
 ): UiTaskQueue {
+	// H-QUEUE-REPLAY-2: the replayed state is shared and frozen; each task shown is a copy of its own (shownTask).
 	const s = replayState(Array.isArray(entries) ? entries : [...entries], queueId);
-	// question-lead: which department has the question goes only with a question that is with a lead now.
-	for (const t of s.tasks) if (t.status !== "asking" || !t.askOps) delete t.askLead;
 	const done = s.tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0));
 	// queue-drop: dropped tasks are kept the same way (the newest `maxDone` of them), next to the done ones.
 	const dropped = s.tasks
 		.filter((t) => t.status === "dropped")
 		.sort((a, b) => (b.dropped?.at ?? 0) - (a.dropped?.at ?? 0));
 	const hidden = new Set([...done.slice(maxDone), ...dropped.slice(maxDone)]);
-	// queue-side-by-side: an open task that comes after others shows which of them are still open
-	// (pi-queue's openDeps: not done or removed yet, in queue order).
-	for (const t of s.tasks) {
-		if (!t.after || !OPEN.has(t.status)) continue;
-		const open = s.tasks.filter((d) => t.after?.includes(d.id) && OPEN.has(d.status));
-		if (!open.length) continue;
-		t.waitingFor = open.map((d) => d.id);
-		// queue-why: and how each of them stands, like a block's refs below: a paused one (itself or the whole
-		// queue) is `held`. Only in the queue's own chat (a task's chat has only its task).
-		if (!s.from)
-			t.waitingForRefs = open.map((d): UiTaskQueueRef => ({
-				file: "",
-				name: "",
-				id: d.id,
-				status: d.status,
-				title: d.plan.title,
-				...(d.chat ? { chat: d.chat } : {}),
-				...(heldBy(s, d) ? { held: true } : {}),
-			}));
-	}
-	// queue-blocked: a block's own-queue refs ("#12") show how those tasks stand here (in the queue's
-	// own chat; a task's chat has only its task). queue-blocks.ts fills in the others.
-	for (const t of s.from ? [] : s.tasks) {
-		for (const r of t.block?.on ?? []) {
-			if (r.name) continue;
-			const d = s.tasks.find((x) => x.id === r.id);
-			r.status = d ? d.status : "gone";
-			if (d) r.title = d.plan.title;
-			if (d?.chat) r.chat = d.chat;
-			// queue-drop: why its lead dropped it (dropped, or cleared since).
-			if (d?.dropped && (d.status === "dropped" || d.status === "removed")) r.dropped = d.dropped.why;
-			// queue-paused: the task it waits on is paused (it keeps waiting quietly).
-			if (d && heldBy(s, d)) r.held = true;
-		}
-	}
 	const tasks = s.tasks
 		.filter((t): t is Task & UiTaskQueueTask => t.status !== "removed" && !hidden.has(t))
-		.map(({ heldFrom: _heldFrom, stuckAt: _stuckAt, back: _back, card, inShort, ...t }): UiTaskQueueTask =>
-			// owner-card-brief (Ops #682): a card's kind and plain sentence only go with a task that needs the user.
-			t.status === "stuck" ? { ...t, ...(card ? { card } : {}), ...(inShort ? { inShort } : {}) } : t,
-		);
+		.map((t) => shownTask(s, t));
 	// queue-lanes: only a queue with tasks that run in chats of their own shows lanes (a task's own chat never).
 	const lanes = s.from ? [] : lanesOf(s.tasks, taskQueueShareableOf(shareable));
 	return {
@@ -1394,6 +1353,61 @@ export function taskQueueFromEntries(
 	};
 }
 
+/**
+ * A task as the Queue panel shows it, on a copy of its own: the replayed task is shared and frozen (H-QUEUE-REPLAY-2),
+ * and queue-blocks.ts fills in its block and the refs in it and in `outside` afterwards. Same keys in the same order
+ * as when the replayed task itself was changed.
+ */
+function shownTask(s: State, t: Task & UiTaskQueueTask): UiTaskQueueTask {
+	const { heldFrom: _heldFrom, stuckAt: _stuckAt, back: _back, card, inShort, ...c } = t;
+	// question-lead: which department has the question goes only with a question that is with a lead now.
+	if (c.status !== "asking" || !c.askOps) delete c.askLead;
+	// queue-side-by-side: an open task that comes after others shows which of them are still open
+	// (pi-queue's openDeps: not done or removed yet, in queue order).
+	const open =
+		c.after && OPEN.has(c.status) ? s.tasks.filter((d) => c.after?.includes(d.id) && OPEN.has(d.status)) : [];
+	if (open.length) {
+		c.waitingFor = open.map((d) => d.id);
+		// queue-why: and how each of them stands, like a block's refs below: a paused one (itself or the whole
+		// queue) is `held`. Only in the queue's own chat (a task's chat has only its task).
+		if (!s.from)
+			c.waitingForRefs = open.map((d): UiTaskQueueRef => ({
+				file: "",
+				name: "",
+				id: d.id,
+				status: d.status,
+				title: d.plan.title,
+				...(d.chat ? { chat: d.chat } : {}),
+				...(heldBy(s, d) ? { held: true } : {}),
+			}));
+	}
+	if (c.block) {
+		const block = { ...c.block };
+		// queue-blocked: a block's own-queue refs ("#12") show how those tasks stand here (in the queue's
+		// own chat; a task's chat has only its task). queue-blocks.ts fills in the others.
+		if (Array.isArray(block.on)) block.on = block.on.map((r) => (r.name || s.from ? { ...r } : ownQueueRef(s, r)));
+		c.block = block;
+	}
+	if (Array.isArray(c.outside)) c.outside = c.outside.map((r) => ({ ...r }));
+	// owner-card-brief (Ops #682): a card's kind and plain sentence only go with a task that needs the user (last,
+	// as before).
+	return c.status === "stuck" ? { ...c, ...(card ? { card } : {}), ...(inShort ? { inShort } : {}) } : c;
+}
+
+/** queue-blocked: a copy of an own-queue ref ("#12") with how that task stands here. */
+function ownQueueRef(s: State, r: UiTaskQueueRef): UiTaskQueueRef {
+	const c = { ...r };
+	const d = s.tasks.find((x) => x.id === r.id);
+	c.status = d ? d.status : "gone";
+	if (d) c.title = d.plan.title;
+	if (d?.chat) c.chat = d.chat;
+	// queue-drop: why its lead dropped it (dropped, or cleared since).
+	if (d?.dropped && (d.status === "dropped" || d.status === "removed")) c.dropped = d.dropped.why;
+	// queue-paused: the task it waits on is paused (it keeps waiting quietly).
+	if (d && heldBy(s, d)) c.held = true;
+	return c;
+}
+
 /** queue-blocked: a task as replayed, removed ones too. */
 export type TaskQueueTaskAny = Omit<UiTaskQueueTask, "status"> & {
 	status: Status;
@@ -1406,6 +1420,7 @@ export type TaskQueueTaskAny = Omit<UiTaskQueueTask, "status"> & {
 /**
  * queue-blocked: every task in a queue as replayed (removed ones and every done one too), and in a
  * task's own chat the queue it came from. For looking up tasks other tasks wait on (queue-blocks.ts).
+ * H-QUEUE-REPLAY-2: the tasks are the shared replayed ones, frozen all the way down: read them, don't change them.
  *
  * queue-lead-reminders: `entries` as the chat's file holds them, its session header first when it has one
  * (queueEntriesOf with the header). The header binds the queue to that chat, as pi-queue's own replay and the

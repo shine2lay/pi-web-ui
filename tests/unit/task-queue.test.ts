@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	DETAIL_MAX,
 	detailOf,
@@ -1945,5 +1945,86 @@ describe("H-QUEUE-REPLAY: incremental replayState", () => {
 			taskQueueFromEntries(freshEntries(workerOps.slice(0, 2)), true),
 		);
 		expect(taskQueueFromEntries(workerEntries, true)).toEqual(taskQueueFromEntries(freshEntries(workerOps), true));
+	});
+});
+
+describe("H-QUEUE-REPLAY-2: reads share one frozen replayed state", () => {
+	const named = { file: "/chats/temper.jsonl", name: "temper", id: 38 };
+	const ops: Array<Record<string, unknown>> = [
+		{ op: "add", id: 1, plan: plan("One"), touches: ["a"] },
+		{ op: "add", id: 2, plan: plan("Two"), touches: ["b"], after: [3] },
+		{ op: "add", id: 3, plan: plan("Three"), touches: ["c"], outside: [named] },
+		{ op: "run" },
+		{ op: "start", id: 1, lane: true },
+		{ op: "chat", id: 1, file: "/chats/one.jsonl", title: "Queue #1: One" },
+		{ op: "block", id: 1, on: [{ file: "/chats/main.jsonl", id: 3 }, named], start: 0, tries: 0 },
+	];
+	// Copies of the entries without structuredClone (counted below): their own objects, so a replay of them is a full one.
+	const copiesOf = (list: TaskQueueEntryLike[]): TaskQueueEntryLike[] => JSON.parse(JSON.stringify(list));
+
+	it("re-reads without a new queue entry copy nothing, the shared state is frozen, and the panel's view is its own", () => {
+		const stream = entries(ops);
+		const copies = vi.spyOn(globalThis, "structuredClone");
+		let first: ReturnType<typeof taskQueueFromEntries>;
+		let all: ReturnType<typeof taskQueueAll>;
+		try {
+			first = taskQueueFromEntries(stream, true);
+			const copied = copies.mock.calls.length;
+			stream.push({ type: "message", data: { text: "hi" } });
+			all = taskQueueAll(stream);
+			expect(taskQueueAll(stream.slice()).tasks).toBe(all.tasks);
+			const again = taskQueueFromEntries(stream.slice(), true);
+			expect(copies.mock.calls.length).toBe(copied);
+			expect(again).toEqual(first);
+			expect(again).not.toBe(first);
+		} finally {
+			copies.mockRestore();
+		}
+		// Frozen all the way down: a reader that changes it fails instead of changing what the next read shows.
+		expect(Object.isFrozen(all.tasks)).toBe(true);
+		expect(Object.isFrozen(all.tasks[0]) && Object.isFrozen(all.tasks[0].plan)).toBe(true);
+		expect(Object.isFrozen(all.tasks[0].block?.on)).toBe(true);
+		expect(() => all.tasks.push(all.tasks[0])).toThrow(TypeError);
+		expect(() => {
+			all.tasks[0].status = "done";
+		}).toThrow(TypeError);
+		expect(() => {
+			all.tasks[0].plan.title = "changed";
+		}).toThrow(TypeError);
+		// The panel's view: its own-queue refs filled in, a waiting task's refs added, as before.
+		const one = first.tasks.find((t) => t.id === 1);
+		expect(one?.block?.on?.[0]).toMatchObject({ id: 3, status: "ready", title: "Three" });
+		expect(one?.block?.on?.[1]).toEqual(named);
+		expect(first.tasks.find((t) => t.id === 2)?.waitingFor).toEqual([3]);
+		// Its tasks, blocks and refs are its own: queue-blocks.ts fills them in; the next read is as it was.
+		const view = taskQueueFromEntries(stream, true);
+		const block = view.tasks.find((t) => t.id === 1)?.block;
+		if (!block?.on) throw new Error("no block");
+		block.nextPokeAt = 5;
+		block.on[1].status = "done";
+		block.on[1].title = "Their task";
+		const outside = view.tasks.find((t) => t.id === 3)?.outside;
+		if (!outside) throw new Error("no outside");
+		outside[0].status = "working";
+		view.tasks[0].summary = "changed";
+		expect(taskQueueFromEntries(stream, true)).toEqual(first);
+		expect(taskQueueFromEntries(stream, true)).toEqual(taskQueueFromEntries(copiesOf(stream), true));
+		expect(taskQueueAll(stream)).toEqual(taskQueueAll(copiesOf(stream)));
+	});
+
+	it("a new queue entry gives a new state, equal to a full replay, and leaves the earlier one as it was", () => {
+		const stream = entries(ops);
+		const before = taskQueueAll(stream);
+		const beforeView = taskQueueFromEntries(stream, true);
+		stream.push(...entries([{ op: "update", id: 3, plan: plan("Three, again") }]));
+		const after = taskQueueAll(stream);
+		expect(after.tasks).not.toBe(before.tasks);
+		expect(Object.isFrozen(after.tasks)).toBe(true);
+		expect(after).toEqual(taskQueueAll(copiesOf(stream)));
+		expect(before).toEqual(taskQueueAll(copiesOf(stream.slice(0, ops.length))));
+		const view = taskQueueFromEntries(stream, true);
+		expect(view.tasks.find((t) => t.id === 1)?.block?.on?.[0]).toMatchObject({ id: 3, title: "Three, again" });
+		expect(view).toEqual(taskQueueFromEntries(copiesOf(stream), true));
+		expect(beforeView.tasks.find((t) => t.id === 1)?.block?.on?.[0]).toMatchObject({ id: 3, title: "Three" });
 	});
 });
