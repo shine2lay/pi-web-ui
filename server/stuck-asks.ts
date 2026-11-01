@@ -18,7 +18,7 @@
 import { createHash } from "node:crypto";
 import type { AskMeta } from "./asks.js";
 import type { UiTaskQueue, UiTaskQueueTask } from "./protocol.js";
-import { questionBindingKey, type QuestionBinding } from "./queue-question-port.js";
+import { questionBindingKey, type QuestionBinding, type OwnerQuestionOccurrence } from "./queue-question-port.js";
 
 /** One open chat and its queue. */
 export interface StuckSource {
@@ -28,6 +28,8 @@ export interface StuckSource {
 	meta: AskMeta;
 	/** From the native endpoint, not a UI echo or question text. */
 	questionBinding?(id: number): QuestionBinding | undefined;
+	/** Canonical read-only resolution, independent of native write-port liveness. */
+	questionOccurrence?(id: number): OwnerQuestionOccurrence;
 }
 
 /** A stuck task that should be asked about. */
@@ -64,6 +66,20 @@ export const stuckSig = (w: Pick<StuckWanted, "question" | "choices" | "detail" 
 			? JSON.stringify([w.question, w.choices, w.detail])
 			: JSON.stringify([w.question, w.choices]);
 
+/** Queue-panel answer fences use the same canonical occurrence as reconciliation, including unavailability. */
+export function stuckSigForOccurrence(
+	task: Pick<UiTaskQueueTask, "question" | "choices" | "detail">,
+	occurrence: OwnerQuestionOccurrence,
+): string | undefined {
+	if (occurrence.status === "unavailable" || occurrence.status === "ended") return undefined;
+	return stuckSig({
+		question: task.question ?? "",
+		choices: task.choices ?? [],
+		detail: task.detail,
+		...(occurrence.status === "bound" ? { binding: occurrence.binding } : {}),
+	});
+}
+
 /** Native old-card fences must survive a restarted server's counter starting over. */
 export const stuckAskId = (w: StuckWanted, sequence: number): string =>
 	w.binding ? `stuck-${createHash("sha256").update(stuckSig(w)).digest("hex").slice(0, 24)}` : `stuck-${sequence}`;
@@ -99,6 +115,15 @@ export function wantedStuckAsks(sources: StuckSource[]): {
 				if (t.status === "asking" || t.status === "blocked") asking.add(target);
 			}
 			if (t.status !== "stuck" || wanted.has(key)) continue;
+			const occurrence = s.questionOccurrence?.(t.id);
+			// Missing modern identity is not legacy. Removing a transient card preserves its durable hold record;
+			// restoration uses the original native key and clock. A current native answer/recall also removes it.
+			if (occurrence?.status === "unavailable" || occurrence?.status === "ended") continue;
+			const binding = occurrence
+				? occurrence.status === "bound"
+					? occurrence.binding
+					: undefined
+				: s.questionBinding?.(t.id);
 			const meta: AskMeta =
 				target === s.file
 					? s.meta
@@ -115,7 +140,7 @@ export function wantedStuckAsks(sources: StuckSource[]): {
 				question: t.question ?? "",
 				choices: t.choices ?? [],
 				...(t.detail ? { detail: t.detail } : {}),
-				...(s.questionBinding ? { binding: s.questionBinding(t.id) } : {}),
+				...(binding ? { binding } : {}),
 				meta,
 				task: t,
 				queueFile: s.queue.from?.file ?? s.file,

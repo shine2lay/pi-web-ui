@@ -38,6 +38,7 @@ const BRIEF = {
 const OWNER_QUESTION = "Should the synthetic task keep short cache?";
 const OWNER_CHOICES = ["Keep it", "Not now"];
 const OWNER_CONTEXT = {
+	in_short: "Choose whether the synthetic task should keep its short cache. This changes only the existing policy.",
 	goal: NATIVE_PLAN.goal,
 	progress: BRIEF.progress,
 	decided: "The synthetic task plan is already approved.",

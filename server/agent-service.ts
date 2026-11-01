@@ -110,6 +110,7 @@ import {
 	stuckGoneReason,
 	stuckKey,
 	stuckSig,
+	stuckSigForOccurrence,
 	stuckTarget,
 	type StuckSource,
 	type StuckWanted,
@@ -138,7 +139,11 @@ import {
 	stuckCardReachedOwner,
 } from "./owner-question-surfaces.js";
 import { workFolder, workProjectOf } from "./work-records.js";
-import { nativeOwnerQuestionBinding, nativeQuestionHost } from "./queue-question-native.js";
+import {
+	nativeOwnerQuestionBinding,
+	nativeOwnerQuestionOccurrence,
+	nativeQuestionHost,
+} from "./queue-question-native.js";
 import type { QuestionBinding, QuestionCommitResult } from "./queue-question-port.js";
 import { answersFromPage, askViewOf, ROLE_ASK_KEY_MAX } from "./roles-asks.js";
 import { type AdoptCandidate, pickAdoptTarget } from "./attach-adopt.js";
@@ -7962,7 +7967,7 @@ export class ClientSession {
 					file: meta.sessionFile,
 					queue,
 					meta,
-					questionBinding: (id) => ClientSession.questionBindingOf(conv, id),
+					questionOccurrence: (id) => nativeOwnerQuestionOccurrence(conv.session, id),
 				});
 		}
 		// left-task-status: the open task chats' statuses changed: every window's list shows them again.
@@ -8153,12 +8158,7 @@ export class ClientSession {
 				(binding!.detail === undefined || (task.detail ?? "") === binding!.detail)
 			) {
 				const key = stuckKey(target, taskId);
-				const expectedSig = stuckSig({
-					binding: ClientSession.questionBindingOf(conv, taskId),
-					question: task.question ?? "",
-					choices: task.choices ?? [],
-					...(task.detail ? { detail: task.detail } : {}),
-				});
+				const expectedSig = stuckSigForOccurrence(task, nativeOwnerQuestionOccurrence(conv.session, taskId));
 				const current = ClientSession.stuckAsks.get(key);
 				if (!current || current.sig !== expectedSig) ClientSession.reconcileStuckAsks();
 				const have = ClientSession.stuckAsks.get(key);
@@ -9551,13 +9551,8 @@ export class ClientSession {
 			if (!target) return false;
 			const key = stuckKey(target, t.id);
 			const have = ClientSession.stuckAsks.get(key);
-			const sig = stuckSig({
-				binding: ClientSession.questionBindingOf(conv, t.id),
-				question: t.question ?? "",
-				choices: t.choices ?? [],
-				...(t.detail ? { detail: t.detail } : {}),
-			});
-			return !have || have.sig !== sig;
+			const sig = stuckSigForOccurrence(t, nativeOwnerQuestionOccurrence(conv.session, t.id));
+			return sig !== undefined && (!have || have.sig !== sig);
 		});
 		if (needsReconcile) ClientSession.reconcileStuckAsks();
 		const bindings: UiTaskQueueAnswerBinding[] = [];
@@ -9566,12 +9561,7 @@ export class ClientSession {
 			if (!target) continue;
 			const key = stuckKey(target, t.id);
 			const have = ClientSession.stuckAsks.get(key);
-			const sig = stuckSig({
-				binding: ClientSession.questionBindingOf(conv, t.id),
-				question: t.question ?? "",
-				choices: t.choices ?? [],
-				...(t.detail ? { detail: t.detail } : {}),
-			});
+			const sig = stuckSigForOccurrence(t, nativeOwnerQuestionOccurrence(conv.session, t.id));
 			if (!have || have.sig !== sig || !have.askId?.trim()) continue;
 			bindings.push({
 				conversationId: conv.id,

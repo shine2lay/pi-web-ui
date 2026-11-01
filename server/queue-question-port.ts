@@ -10,6 +10,9 @@ export interface QuestionBinding {
 	revision: number;
 	escalation: string;
 }
+/** Read-only canonical routing identity; unavailable is never a legacy answer permission. */
+export type OwnerQuestionOccurrence =
+	{ status: "bound"; binding: QuestionBinding } | { status: "legacy" | "unavailable" | "ended" };
 export type QuestionChange =
 	| { kind: "recall"; rid: string; tag: string; reason: string }
 	| { kind: "owner"; rid: string; answer: string; from: string; record?: string }

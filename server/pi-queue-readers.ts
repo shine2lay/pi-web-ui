@@ -14,6 +14,8 @@
  * this file never gets a shape it doesn't know. Anything else in the slot reads as no readers.
  */
 
+import type { OwnerQuestionOccurrence } from "./queue-question-port.js";
+
 /** The key pi-queue publishes its version-1 readers under (pi-queue readers.ts: READERS_V1_KEY). */
 export const PI_QUEUE_READERS_KEY = Symbol.for("pi-queue.readers.v1");
 
@@ -31,6 +33,18 @@ export interface PiQueueReaders {
 	replay(entries: Iterable<PiQueueEntry>, queueId?: string): unknown;
 	/** The work registry from `<dir>/events.jsonl` (pi-queue's readWork; its WorkState). Throws when the log can't be used. */
 	readWork(dir: string): unknown;
+}
+
+/** Routing reads use v2 without changing the v1 protocol consumed by existing readers. */
+export function piQueueOccurrenceReader():
+	| ((entries: Iterable<PiQueueEntry>, sessionId: string, file: string, id: number) => OwnerQuestionOccurrence)
+	| undefined {
+	const slot = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-queue.readers.v2")];
+	if (!slot || typeof slot !== "object") return undefined;
+	const r = slot as { version?: unknown; ownerQuestionOccurrence?: unknown };
+	return r.version === 2 && typeof r.ownerQuestionOccurrence === "function"
+		? (r.ownerQuestionOccurrence as NonNullable<ReturnType<typeof piQueueOccurrenceReader>>)
+		: undefined;
 }
 
 /** pi-queue's readers, once a pi-queue with version-1 readers has loaded in this process; else undefined. */

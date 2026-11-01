@@ -18,7 +18,7 @@ const world = async () => {
 	worlds.push(value);
 	return value;
 };
-const STOP = "You stopped this task's run. Reply here to carry on.";
+const STOP = "This task's run was stopped while it was working. Carry on picks up where it stopped.";
 const id = NATIVE_TASK_ID;
 let calls = 0;
 

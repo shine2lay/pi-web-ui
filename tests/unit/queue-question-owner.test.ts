@@ -4,6 +4,7 @@ import { ClientSession } from "../../server/agent-service.js";
 import type { ServerMessage, UiTaskQueue, UiTaskQueueAnswerBinding } from "../../server/protocol.js";
 import { askHub } from "../../server/asks.js";
 import { nativeOwnerQuestionBinding } from "../../server/queue-question-native.js";
+import * as readers from "../../server/pi-queue-readers.js";
 import { questionHostFixture, queueRecords } from "../fixtures/question-commit-host.js";
 
 const cleanups: (() => void)[] = [];
@@ -86,6 +87,13 @@ function ownerFixture() {
 	});
 	return {
 		...f,
+		// Keep restart-sensitive getters live rather than snapshotting them through the spread.
+		get integration() {
+			return f.integration;
+		},
+		get worker() {
+			return f.worker;
+		},
 		queue,
 		conv,
 		client,
@@ -142,6 +150,35 @@ describe("actual native owner acceptance", () => {
 		expect(answer.applied).toBe(false);
 		expect(answer.reason).toBe("synthetic delivery failed");
 		f.restart();
+		expect((await f.recall()).status).toBe("refused");
+	});
+
+	it("canonical reconciliation preserves the first admitted answer's failed-delivery retry after restart", async () => {
+		const f = ownerFixture();
+		const canonical = vi
+			.spyOn(readers, "piQueueOccurrenceReader")
+			.mockReturnValue(() => ({ status: "bound", binding: f.binding }));
+		cleanups.push(() => canonical.mockRestore());
+		ClientSession.stuckAnswerSender = vi.fn(async () => ({ ok: false, error: "synthetic delivery failed" }));
+		const old = f.card();
+		expect((await f.answer(old)).applied).toBe(false);
+		const admitted = structuredClone(queueRecords(f.worker));
+		f.restart();
+		// AgentService installs the new coordinator after restart; don't leave the fixture's callback on the old one.
+		ClientSession.admitQuestionAnswer = f.integration.admitOwnerAnswer;
+		askHub.settle(old.questionId, { how: "gone", reason: "synthetic restart" });
+		f.statics.stuckAsks.delete(`${f.binding.worker}#7`);
+		f.statics.stuckSeq = 0;
+		const fresh = f.card();
+		expect(fresh.questionId).toBe(old.questionId);
+		ClientSession.stuckAnswerSender = f.delivered;
+		expect((await f.answer(fresh, "No")).applied).toBe(false);
+		expect(f.delivered).not.toHaveBeenCalled();
+		const retried = await f.answer(fresh);
+		expect(retried.reason).toBeUndefined();
+		expect(retried.applied).toBe(true);
+		expect(f.delivered).toHaveBeenCalledOnce();
+		expect(queueRecords(f.worker)).toEqual(admitted);
 		expect((await f.recall()).status).toBe("refused");
 	});
 

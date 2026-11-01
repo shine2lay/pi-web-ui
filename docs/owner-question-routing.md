@@ -421,10 +421,43 @@ moment. Wrong if any of these fails. **Result: pending** (the live check, after 
   that never had the key (the live file's shape), kept on and stored as on by another save, and off once turned off,
   through other saves and a restart, until turned on again. On #686's code the three "on" cases fail.
 
+## Native identity continuity (Ops #732)
+
+H-OWNER-HOLD-IDENTITY: temporary write-port loss or worker/home handoff must not create another routing occurrence.
+Ops #687's live duplicate remains a **MISS**; the exact historical 11:43 trigger is **UNKNOWN**. The confirmed
+source path is worker-only `ownerBinding`: when the worker closes, stuck-source selection uses the home copy,
+whose native endpoint cannot supply a worker binding. The old signature then loses its native tuple and admits
+another hold, even though the native question did not change. Missing write support, endpoint or binding has the
+same effect. A controlled reproduction establishes this code path, not the historical runtime state.
+
+The repair uses pi-queue's versioned canonical readers (`pi-queue.readers.v2`, `ownerQuestionOccurrence`) and the
+same `questionBinding` used by commit validation. It reads native branch/linked queue state without opening or
+waking a worker. The linked worker is authoritative; a home copy must match its occurrence and question package.
+The result is bound, genuinely legacy, unavailable or ended. Missing modern identity removes only the temporary
+card; it never invents an unbound signature. Restoration reuses the existing native signature and durable hold,
+including its original deadline or release. Historical bound/unbound duplicate rows are retained, not merged or
+rekeyed; recovery uses the verified bound row, not a third key.
+
+Origin-only climbed questions and automatic questions without a proven capture retain supported unbound behavior.
+A markerless stale home cannot bypass a modern worker. Owner admission is **not** proof of completed delivery:
+an admitted answer whose send failed keeps its exact bound retry path across restart; native commit guards still
+refuse different words, stale consent and recall after admission. Ended/recalled native state cannot be revived by
+an old home copy. Routing identity grants no answer authority; current native answer/recall validation is unchanged.
+
+Checks: pi-queue `tests/owner-question-occurrence.test.ts`; host `tests/unit/owner-question-continuity.test.ts` plus
+`queue-question-owner.test.ts` and existing native commit/recall suites. Synthetic fixtures cover held/released
+handoffs, absence/restoration, simultaneous refresh, restart, original safety-net clock, existing duplicate history,
+legacy sources and genuine replacements. Exact test/install receipts and metadata-only live qualification are in
+`/home/shinelay/kept-from-tmp/2026-11-01/owner-question-identity/RESULT.md`. This repair does not qualify #687's
+unobserved direct/owner-away route matrix. Keep routing on; no live question, answer or release is manufactured.
+
 ## Undo
 
 With the switch on (#687): turn `ownerQuestionsViaCoo` off in Settings. New asks go as before, and the next sweep lets
 every held ask through; after that nothing is held or written while it stays off. Keep the code and existing hold
 records: once records exist, undo is this forward-disable, not a revert to readers that do not know their new fields.
 Before activation and with no hold records, #686's commit alone can also be reverted and deployed; #684/#685 stay
-installed with their switch off. No role prompt, identity file, pi-queue code or Telegram answer path changed.
+installed with their switch off. No role prompt or identity file changes. #732 extends pi-queue's read-only identity
+transport and retains native answer fences. After this repair, prefer forward repair; an owner-authorized Settings
+disable remains available, but reverting to binding-loss readers or deleting/merging hold or answer records is not
+safe undo. The repair itself does not authorize turning routing off.

@@ -4,7 +4,14 @@ import { identityIdOnBranch, liveChatIdentityId, samePath, type IdentityDef } fr
 import { QuestionCommitCoordinator } from "./queue-question-commit.js";
 import { QuestionCardDelivery } from "./queue-question-card.js";
 import { supportsNativeQuestionWrite } from "./queue-question-durability.js";
-import { questionEndpoint, type QuestionBinding, type QuestionCommitResult } from "./queue-question-port.js";
+import {
+	questionEndpoint,
+	isQuestionBinding,
+	type QuestionBinding,
+	type QuestionCommitResult,
+	type OwnerQuestionOccurrence,
+} from "./queue-question-port.js";
+import { piQueueOccurrenceReader } from "./pi-queue-readers.js";
 import { ownerQuestionChange } from "./queue-question-owner.js";
 import { UnboundOwnerAcceptance, type QuestionAcceptanceSource } from "./queue-question-acceptance.js";
 import { taskQueueAll } from "./task-queue.js";
@@ -17,6 +24,33 @@ export function nativeOwnerQuestionBinding(session: AgentSession, id: number): Q
 	if (!endpoint) return undefined;
 	// An owner-specific absence is authoritative: a retained recall receipt is not an active owner ask.
 	return endpoint.ownerBinding ? endpoint.ownerBinding(id) : endpoint.binding(id);
+}
+
+/** Routing identity is a read, not write capability. Re-read the same canonical occurrence when ports disappear
+ * or a home copy speaks for a closed worker. Answer/recall paths still use their current native commit guards. */
+export function nativeOwnerQuestionOccurrence(session: AgentSession, id: number): OwnerQuestionOccurrence {
+	const read = piQueueOccurrenceReader();
+	if (!read) {
+		// Older producers have no typed read transport: retain their existing supported legacy behavior.
+		const binding = nativeOwnerQuestionBinding(session, id);
+		return binding ? { status: "bound", binding } : { status: "legacy" };
+	}
+	try {
+		const sm = session.sessionManager,
+			file = sm.getSessionFile();
+		if (!file) return { status: "unavailable" };
+		const occurrence = read(sm.getBranch(), sm.getSessionId(), file, id);
+		if (occurrence?.status === "bound") {
+			return isQuestionBinding(occurrence.binding) &&
+				occurrence.binding.id === id &&
+				(file === occurrence.binding.worker || file === occurrence.binding.queue)
+				? occurrence
+				: { status: "unavailable" };
+		}
+		return ["legacy", "unavailable", "ended"].includes(occurrence?.status) ? occurrence : { status: "unavailable" };
+	} catch {
+		return { status: "unavailable" };
+	}
 }
 
 export interface NativeQuestionHost {
