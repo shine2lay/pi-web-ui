@@ -2672,6 +2672,8 @@ export function useChat() {
 							questions: msg.questions,
 							...(msg.conversationId !== undefined ? { conversationId: msg.conversationId } : {}),
 							...(msg.conversationTitle !== undefined ? { conversationTitle: msg.conversationTitle } : {}),
+							// owner-question routing (Ops #685): which way it came (absent while the switch is off).
+							...(msg.route ? { route: msg.route } : {}),
 						},
 					});
 					break;
@@ -2688,6 +2690,8 @@ export function useChat() {
 							...(msg.category ? { category: msg.category } : {}),
 							...(msg.conversationId !== undefined ? { conversationId: msg.conversationId } : {}),
 							...(msg.conversationTitle !== undefined ? { conversationTitle: msg.conversationTitle } : {}),
+							// owner-question routing (Ops #685): which way it came (absent while the switch is off).
+							...(msg.route ? { route: msg.route } : {}),
 						},
 					});
 					break;

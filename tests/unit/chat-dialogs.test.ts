@@ -181,6 +181,25 @@ describe("chatUiContext", () => {
 		await expect(p).resolves.toBeUndefined();
 		expect(d.size).toBe(0);
 	});
+
+	it("lets the chat keep a notice from the window, and passes the others on as they were (Ops #685)", () => {
+		const calls: unknown[][] = [];
+		const base = {
+			label: "window",
+			notify(this: { label: string }, ...args: unknown[]) {
+				calls.push([this.label, ...args]);
+			},
+		};
+		const asked: string[] = [];
+		const ui = chatUiContext(base, new ChatDialogs(), "s1", (message) => {
+			asked.push(message);
+			return !message.startsWith("Task #7 needs you");
+		});
+		ui.notify("Task #7 needs you: Which port?", "warning");
+		ui.notify("Queue started", "info", "Queue started (en)");
+		expect(asked).toEqual(["Task #7 needs you: Which port?", "Queue started"]);
+		expect(calls).toEqual([["window", "Queue started", "info", "Queue started (en)"]]);
+	});
 });
 
 // telegram-answers: a watcher (the list of asks) hears each pop-up open and close, with who

@@ -1,6 +1,7 @@
 /** An ask waiting on the owner, with its Answer and Open chat buttons: in the You panel's list and in a department
  *  panel's Decisions. Which way it can be answered comes from roles-answer-actions. */
 import { exactAge, type ExactRoles } from "../roles-exact-model";
+import { ownerQuestionRouteOf, routeNoteLines } from "../owner-question-route";
 import { questionAction, resolveQuestionAction, QUESTION_ACTION_REASONS } from "../roles-answer-actions";
 import type { SurfaceValues } from "../roles-u0/types";
 import type { NeedsYouItem } from "../roles-useful-model";
@@ -9,6 +10,8 @@ import type { ExactViewState } from "./view-state";
 export function askValues(item: NeedsYouItem, model: ExactRoles, view: ExactViewState): SurfaceValues {
 	const { actions } = view;
 	const action = questionAction(model.needs, item, actions.dialogs?.(), !!actions.answer);
+	const route = ownerQuestionRouteOf(item.route);
+	const routeLines = route ? routeNoteLines(route) : [];
 	const canAnswer = action.kind !== "unavailable";
 	const choices: SurfaceValues[] = [];
 	if (canAnswer)
@@ -48,6 +51,11 @@ export function askValues(item: NeedsYouItem, model: ExactRoles, view: ExactView
 		kindBg: "#2A2416",
 		role: item.roleLabel ?? "Unknown role",
 		age: exactAge(item.since, model.now),
+		// owner-question routing (Ops #685): which way it came, first, then COO's words; none with the setting off.
+		hasRoute: !!route,
+		routeLine: route?.line ?? "",
+		hasRouteLines: routeLines.length > 0,
+		routeLines: routeLines.map((line) => ({ label: line.label, text: line.text })),
 		// owner-card-brief (Ops #682): a queue card opens with its plain brief, before its question.
 		hasBrief: !!item.brief?.length,
 		brief: (item.brief ?? []).map((line) => ({ label: line.label, text: line.text })),

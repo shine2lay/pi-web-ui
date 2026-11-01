@@ -1365,6 +1365,7 @@ export interface DispatchSession {
 		quietQueueWakes?: boolean;
 		quietStallPokes?: boolean;
 		quietScheduledWakes?: boolean;
+		ownerQuestionsViaCoo?: boolean;
 		visionBridgeEnabled?: boolean;
 		visionBridgeModel?: string | null;
 		visionBridgePromptMode?: "append" | "replace";
@@ -3887,6 +3888,7 @@ wss.on("connection", (ws, req) => {
 					quietQueueWakes: (msg as { quietQueueWakes?: boolean }).quietQueueWakes,
 					quietStallPokes: (msg as { quietStallPokes?: boolean }).quietStallPokes,
 					quietScheduledWakes: (msg as { quietScheduledWakes?: boolean }).quietScheduledWakes,
+					ownerQuestionsViaCoo: (msg as { ownerQuestionsViaCoo?: boolean }).ownerQuestionsViaCoo,
 					devNoCache: (msg as { devNoCache?: boolean }).devNoCache,
 					autoReload: (msg as { autoReload?: boolean }).autoReload,
 					skillsFullText: (msg as { skillsFullText?: string[] }).skillsFullText,

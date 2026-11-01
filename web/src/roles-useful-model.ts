@@ -606,6 +606,9 @@ export interface NeedsYouItem {
 	/** owner-card-brief (Ops #682): a queue card's plain brief, shown before its question; absent when it has
 	 *  none or it isn't whole and plain (briefLines). */
 	brief?: UiOwnerCardBriefLine[];
+	/** owner-question routing (Ops #685): which way the ask came, as the feed sent it (absent with the
+	 *  ownerQuestionsViaCoo setting off); ownerQuestionRouteOf reads it where the card is drawn. */
+	route?: unknown;
 	/** null: absent, invalid or in the future; the row says "time unknown". */
 	since: number | null;
 	link: UsefulOpenTarget | null;
@@ -1095,6 +1098,7 @@ function needsYou(
 		// owner-card-brief (Ops #682): only a queue card's whole, plain brief; the row has no key for it otherwise.
 		const brief = briefLines(ask.brief);
 		if (brief) item.brief = brief;
+		if (ask.route !== undefined) item.route = ask.route;
 		items.push(item);
 	});
 	let tell: TellState;

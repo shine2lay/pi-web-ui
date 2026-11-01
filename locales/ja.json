@@ -2226,6 +2226,8 @@
 		"quietStallPokesDesc": "オン：停滞チェックの催促で始まったターンを閉じた1行で表示。オフ：全部表示",
 		"quietScheduledWakes": "予定された起動を折りたたむ",
 		"quietScheduledWakesDesc": "オン：予定された起動で始まったターンを閉じた1行で表示。オフ：全部表示",
+		"ownerQuestionsViaCoo": "あなたへの質問はまずCOOへ",
+		"ownerQuestionsViaCooDesc": "オン：あなたが始めていない作業からの質問や、30分書き込みがない後の質問はまずCOOへ行き、COOが回すと届きます（COOが何もしなければ30分後）。オフ：すべての質問がすぐ届きます",
 		"boardNoteLabel": "掲示板 · {what}",
 		"boardOrderLabel": "{from} から · 掲示板の指示",
 		"boardOrderLabelVia": "{from} から、{via} 経由 · 掲示板の指示",

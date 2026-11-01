@@ -1993,6 +1993,9 @@ export const en = {
 	quietStallPokesDesc: "On: a turn started by a stall-check poke shows as one closed row; Off: it shows in full",
 	quietScheduledWakes: "Fold scheduled wake-ups",
 	quietScheduledWakesDesc: "On: a turn started by a scheduled wake-up shows as one closed row; Off: it shows in full",
+	ownerQuestionsViaCoo: "Questions for you go through COO first",
+	ownerQuestionsViaCooDesc:
+		"On: a question from work you didn't start, or one asked after you've been away 30 minutes, goes to COO first and reaches you once COO passes it on (or after 30 minutes if COO does nothing); Off: every question reaches you at once",
 	boardNoteLabel: "the board \u00b7 {what}",
 	boardOrderLabel: "from {from} \u00b7 board order",
 	boardOrderLabelVia: "from {from}, via {via} \u00b7 board order",

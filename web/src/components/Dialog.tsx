@@ -3,6 +3,7 @@ import { useT } from "../i18n";
 import { appSend } from "../app-globals";
 import { useEscapeKey } from "../shortcut-stack";
 import { Markdown } from "./Markdown";
+import { OwnerQuestionRoute } from "./OwnerQuestionRoute";
 
 interface DialogProps {
 	dialog: {
@@ -10,6 +11,8 @@ interface DialogProps {
 		kind: "select" | "confirm" | "input";
 		title: string;
 		args: unknown[];
+		/** owner-question routing (Ops #685): which way it came (absent while the switch is off). */
+		route?: unknown;
 	};
 	/**
 	 * escape-hidden-question: whether Escape cancels this ask (default true). App passes "the chat view is showing":
@@ -64,6 +67,7 @@ export function Dialog({ dialog, escapeEnabled = true, focusRequest }: DialogPro
 					✕
 				</button>
 			</div>
+			<OwnerQuestionRoute route={dialog.route} />
 
 			{dialog.kind === "select" && (
 				<div className="dialog-options">

@@ -1040,11 +1040,35 @@ export function renderBrief(ask) {
 	return out.join("\n");
 }
 
+/** owner-question routing (Ops #685): how long each route line may be. */
+const ROUTE_TEXT_MAX = 600;
+
 /**
- * The whole message for a waiting question: { text, reply_markup }. A one-line head, then a queue
- * card's plain brief (whole), the body, the question and its detail with a blank line between them; when a choice has a
- * description, a "CHOICES" line and every choice numbered like its button, each with its
- * description under it; then a line, and a footer with the folder and a link to the chat.
+ * owner-question routing (Ops #685): which way an ask came, as Telegram HTML: its line in italics ("You were
+ * chatting here", "Came through COO"), then COO's note and recommendation when it let the ask through. Empty
+ * for an ask with no route (the switch off) or a direct one without a line. A held ask never comes here.
+ */
+export function renderRoute(ask) {
+	const route = ask?.route;
+	if (!route || typeof route !== "object") return "";
+	const text = (v) => (typeof v === "string" ? cut(v.replace(/\s+/g, " ").trim(), ROUTE_TEXT_MAX) : "");
+	const line = text(route.label) || (route.to === "coo" && route.releasedBy ? "Came through COO" : "");
+	if (!line) return "";
+	const out = [`<i>${escapeHtml(line)}</i>`];
+	if (route.to === "coo") {
+		const note = text(route.note);
+		const recommendation = text(route.recommendation);
+		if (note) out.push(`<b>COO:</b> ${escapeHtml(note)}`);
+		if (recommendation) out.push(`<b>COO recommends:</b> ${escapeHtml(recommendation)}`);
+	}
+	return out.join("\n");
+}
+
+/**
+ * The whole message for a waiting question: { text, reply_markup }. A one-line head, then which way it came
+ * (owner-question routing), the card's plain brief when it has one (whole), the body, the question and its detail
+ * with a blank line between them; when a choice has a description, a "CHOICES" line and every choice numbered like
+ * its button, each with its description under it; then a line, and a footer with the folder and a link to the chat.
  * st = { ref, step, answers, ticks, sending, link }. extra = { warning, note }.
  */
 export function renderAsk(ask, st, extra = {}) {
@@ -1097,10 +1121,11 @@ export function renderAsk(ask, st, extra = {}) {
 	// The footer sits under a line, right after the last part.
 	const end = footer ? `\n${RULE}\n${footer}` : "";
 
+	const route = renderRoute(ask);
 	const brief = renderBrief(ask);
 	const body = (raw) => (!raw ? "" : approval ? codeBlock(raw) : toTelegramHtml(raw));
 	const build = (bodyRaw, note = "") =>
-		[head, brief, body(bodyRaw), note ? `<i>${escapeHtml(note)}</i>` : "", done.join("\n"), ...parts, ...tail]
+		[head, route, brief, body(bodyRaw), note ? `<i>${escapeHtml(note)}</i>` : "", done.join("\n"), ...parts, ...tail]
 			.filter(Boolean)
 			.join("\n\n") + end;
 

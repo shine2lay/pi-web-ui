@@ -36,6 +36,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { isOwnerInputTime } from "./owner-input-time.js";
 import type { UiTaskRequesterInput } from "./protocol.js";
 import { requesterOf, type RequesterTurn } from "./queue-requester.js";
 
@@ -82,6 +83,9 @@ export interface RunningChat {
 	awaiting?: boolean;
 	/** The running turn's requester inputs (ids and kinds only): its carry-on turn answers the same ones. */
 	requester?: SavedRequester;
+	/** owner-input-time.ts: when the owner last wrote into the running turn (ms): its carry-on turn keeps it.
+	 *  Kept beside `requester`, not in it: an older build's check drops a requester with unknown keys. */
+	ownerLastWroteAt?: number;
 }
 
 /** A turn's requester inputs as the list keeps them: queue-requester.ts records, never text. */
@@ -392,6 +396,19 @@ export function requesterTurnOf(saved: SavedRequester): RequesterTurn {
 		: { requesterInputs: saved.inputs.map((input) => ({ ...input })) };
 }
 
+/**
+ * What a cut-off chat's carry-on turn starts with: its saved requester inputs and, when kept, the time
+ * the owner last wrote into it (owner-input-time.ts). Undefined when no requester was saved: the
+ * carry-on turn's requester stays unknown, as before.
+ */
+export function carriedTurnOf(chat: Pick<RunningChat, "requester" | "ownerLastWroteAt">): RequesterTurn | undefined {
+	const saved = savedRequesterOf(chat.requester);
+	if (!saved) return undefined;
+	const turn = requesterTurnOf(saved);
+	if (isOwnerInputTime(chat.ownerLastWroteAt)) turn.ownerLastWroteAt = chat.ownerLastWroteAt;
+	return turn;
+}
+
 // ---------------------------------------------------------------------------
 // The live list
 // ---------------------------------------------------------------------------
@@ -402,7 +419,10 @@ export function readRunningChatsFile(file: string): RunningChatsFile | null {
 		if (!data || data.v !== 1 || !Array.isArray(data.chats)) return null;
 		// A saved requester is checked on read: a bad or edited one is dropped, never guessed.
 		for (const chat of data.chats) {
-			if (!chat || typeof chat !== "object" || !("requester" in chat)) continue;
+			if (!chat || typeof chat !== "object") continue;
+			// owner-input-time: a bad time is dropped too, never trusted.
+			if ("ownerLastWroteAt" in chat && !isOwnerInputTime(chat.ownerLastWroteAt)) delete chat.ownerLastWroteAt;
+			if (!("requester" in chat)) continue;
 			const requester = savedRequesterOf(chat.requester);
 			if (requester) chat.requester = requester;
 			else delete chat.requester;
@@ -502,9 +522,12 @@ export class RunningChats {
 		const c = this.chats.get(sessionFile);
 		if (!c || c.awaiting) return;
 		const requester = requesterToSave(turn);
-		if (JSON.stringify(requester) === JSON.stringify(c.requester)) return;
+		const wrote = isOwnerInputTime(turn.ownerLastWroteAt) ? turn.ownerLastWroteAt : undefined;
+		if (JSON.stringify(requester) === JSON.stringify(c.requester) && wrote === c.ownerLastWroteAt) return;
 		if (requester) c.requester = requester;
 		else delete c.requester;
+		if (wrote !== undefined) c.ownerLastWroteAt = wrote;
+		else delete c.ownerLastWroteAt;
 		this.write();
 	}
 

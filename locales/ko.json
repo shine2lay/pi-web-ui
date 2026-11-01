@@ -2226,6 +2226,8 @@
 		"quietStallPokesDesc": "켜기: 정체 확인 알림으로 시작된 턴을 닫힌 한 줄로 표시; 끄기: 전체 표시",
 		"quietScheduledWakes": "예약된 깨우기 접기",
 		"quietScheduledWakesDesc": "켜기: 예약된 깨우기로 시작된 턴을 닫힌 한 줄로 표시; 끄기: 전체 표시",
+		"ownerQuestionsViaCoo": "나에게 오는 질문은 먼저 COO로",
+		"ownerQuestionsViaCooDesc": "켜기: 내가 시작하지 않은 작업의 질문이나 30분 동안 글을 쓰지 않은 뒤의 질문은 먼저 COO로 가고, COO가 넘기면 도착합니다(COO가 아무것도 하지 않으면 30분 뒤); 끄기: 모든 질문이 바로 도착합니다",
 		"boardNoteLabel": "게시판 · {what}",
 		"boardOrderLabel": "{from}에서 · 게시판 지시",
 		"boardOrderLabelVia": "{from}에서, {via} 경유 · 게시판 지시",

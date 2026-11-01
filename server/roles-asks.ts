@@ -4,7 +4,15 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import type { Ask, AskFieldAnswer, AskOption } from "./asks.js";
-import type { UiOwnerCardBriefLine, UiRoleAsk, UiRoleAskField, UiRoleAskOption, UiRoleAskView } from "./protocol.js";
+import { ownerQuestionRouteView } from "./owner-question-surfaces.js";
+import type {
+	UiOwnerCardBriefLine,
+	UiOwnerQuestionRoute,
+	UiRoleAsk,
+	UiRoleAskField,
+	UiRoleAskOption,
+	UiRoleAskView,
+} from "./protocol.js";
 
 export const ROLE_ASK_KEY_MAX = 400;
 export const ROLE_ASK_FIELDS_MAX = 10;
@@ -190,7 +198,25 @@ export function askViewOf(ask: Ask): UiRoleAskView | null {
 		.digest("hex");
 	// The brief stays out of the revision: a refreshed brief (say, one more task waiting) never refuses an open form.
 	const brief = ask.kind === "stuck" ? briefOf(ask.brief) : undefined;
-	return { ...view, revision, ...(brief ? { brief } : {}) };
+	return { ...view, revision, ...(brief ? { brief } : {}), ...routeOf(ask) };
+}
+
+/** owner-question routing (Ops #685): which way it came, shown first; outside the revision like the brief, its
+ *  line plain or none, COO's words plain or left out (never refuses the form). Nothing while the switch is off. */
+function routeOf(ask: Ask): { route?: UiOwnerQuestionRoute } {
+	const route = ownerQuestionRouteView(ask);
+	if (!route || !route.line || !text(route.line, BRIEF_TEXT_MAX)) return {};
+	const words = (part: string | undefined) => (part && text(part, BRIEF_TEXT_MAX) ? part : undefined);
+	const note = words(route.note);
+	const recommendation = words(route.recommendation);
+	return {
+		route: {
+			line: route.line,
+			...(note ? { note } : {}),
+			...(recommendation ? { recommendation } : {}),
+			...(route.held ? { held: true as const } : {}),
+		},
+	};
 }
 
 /** Validate the whole form, including conditional branches, before it enters the existing AskHub path. */

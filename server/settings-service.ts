@@ -362,6 +362,7 @@ export class SettingsService {
 				...(this.settings.quietQueueWakes ? { quietQueueWakes: true } : {}),
 				...(this.settings.quietStallPokes ? { quietStallPokes: true } : {}),
 				...(this.settings.quietScheduledWakes ? { quietScheduledWakes: true } : {}),
+				...(this.settings.ownerQuestionsViaCoo ? { ownerQuestionsViaCoo: true } : {}),
 				visionBridgeEnabled: this.settings.visionBridgeEnabled,
 				visionBridgeModel: this.settings.visionBridgeModel,
 				visionBridgePromptMode: this.settings.visionBridgePromptMode,
@@ -482,6 +483,7 @@ export class SettingsService {
 		quietQueueWakes?: boolean;
 		quietStallPokes?: boolean;
 		quietScheduledWakes?: boolean;
+		ownerQuestionsViaCoo?: boolean;
 		devNoCache?: boolean;
 		autoReload?: boolean;
 		skillsFullText?: string[];
@@ -622,6 +624,9 @@ export class SettingsService {
 		if (partial.quietStallPokes !== undefined) this.settings.quietStallPokes = partial.quietStallPokes === true;
 		if (partial.quietScheduledWakes !== undefined)
 			this.settings.quietScheduledWakes = partial.quietScheduledWakes === true;
+		// owner-question routing (Ops #685): read at each ask and each safety-net sweep (no reload).
+		if (partial.ownerQuestionsViaCoo !== undefined)
+			this.settings.ownerQuestionsViaCoo = partial.ownerQuestionsViaCoo === true;
 		// 编排模式 / skill 全文注入：before_agent_start 逐 run 实时读取（agent-service
 		// composeInputs + 指导块追加），开关下一轮即生效，无需 reload runtime。
 		if (partial.skillsFullText !== undefined) {
@@ -808,6 +813,7 @@ export class SettingsService {
 			quietQueueWakes: this.settings.quietQueueWakes,
 			quietStallPokes: this.settings.quietStallPokes,
 			quietScheduledWakes: this.settings.quietScheduledWakes,
+			ownerQuestionsViaCoo: this.settings.ownerQuestionsViaCoo,
 			// UI 布局偏好也不进预设——保留当前值。
 			uiLayout: normalizeUiLayout(this.settings.uiLayout),
 			// Presets don't capture vision-bridge prefs — keep the current ones.

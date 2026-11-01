@@ -2226,6 +2226,8 @@
 		"quietStallPokesDesc": "Ligado: um turno iniciado por um aviso de travamento aparece como uma linha fechada; Desligado: completo",
 		"quietScheduledWakes": "Recolher despertares agendados",
 		"quietScheduledWakesDesc": "Ligado: um turno iniciado por um despertar agendado aparece como uma linha fechada; Desligado: completo",
+		"ownerQuestionsViaCoo": "Perguntas para você passam primeiro pelo COO",
+		"ownerQuestionsViaCooDesc": "Ligado: uma pergunta de um trabalho que você não iniciou, ou feita depois de 30 minutos sem você escrever, vai primeiro ao COO e chega a você quando o COO a repassa (ou após 30 minutos se o COO não fizer nada); Desligado: toda pergunta chega a você na hora",
 		"boardNoteLabel": "o mural · {what}",
 		"boardOrderLabel": "de {from} · ordem do mural",
 		"boardOrderLabelVia": "de {from}, via {via} · ordem do mural",

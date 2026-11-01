@@ -250,8 +250,8 @@ export class OwnerQuestionHolds {
 		const i = this.holds.findIndex((h) => h.key === key);
 		const h = this.holds[i];
 		if (!h || h.state !== "held") return false;
-		const n = boundedText(note);
-		const r = boundedText(recommendation);
+		const n = boundedHoldText(note);
+		const r = boundedHoldText(recommendation);
 		const released: OwnerQuestionHold = {
 			...h,
 			state: "released",
@@ -268,7 +268,7 @@ export class OwnerQuestionHolds {
 	returned(key: string, note: string): boolean {
 		const i = this.holds.findIndex((h) => h.key === key);
 		const h = this.holds[i];
-		const n = boundedText(note);
+		const n = boundedHoldText(note);
 		if (!h || h.state !== "held" || h.kind !== "question" || !n) return false;
 		this.save(replaceAt(this.holds, i, { ...h, state: "returned", finishedAt: this.now(), note: n }), true);
 		return true;
@@ -369,8 +369,8 @@ const copyHold = (h: OwnerQuestionHold): OwnerQuestionHold => ({
 	...(h.deliveredToCoo ? { deliveredToCoo: { ...h.deliveredToCoo } } : {}),
 });
 
-/** Trimmed, at most HOLD_TEXT_MAX characters; "" for nothing. */
-function boundedText(s: string | undefined): string {
+/** Trimmed, at most HOLD_TEXT_MAX characters; "" for nothing. COO's note and recommendation, wherever kept. */
+export function boundedHoldText(s: string | undefined): string {
 	const t = typeof s === "string" ? s.trim() : "";
 	if (t.length <= HOLD_TEXT_MAX) return t;
 	let cut = t.slice(0, HOLD_TEXT_MAX - 1);

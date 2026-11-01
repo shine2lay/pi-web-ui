@@ -156,10 +156,26 @@ export class ChatDialogs {
  * The ctx.ui a chat's extensions get: `base` (the window's WebUIContext), except that select /
  * confirm / input are asked through the chat's own ChatDialogs. Answers come back typed the way
  * pi declares them: select gives one of the options or undefined; confirm is true only for an
- * explicit yes; input gives the text or undefined.
+ * explicit yes; input gives the text or undefined. `showNotice`, when given, decides whether a
+ * notice the chat's extensions raise reaches the window (owner-question routing, Ops #685); without
+ * it every notice does, as before.
  */
-export function chatUiContext<T extends object>(base: T, dialogs: ChatDialogs, owner: unknown): T {
+export function chatUiContext<T extends object>(
+	base: T,
+	dialogs: ChatDialogs,
+	owner: unknown,
+	showNotice?: (message: string) => boolean,
+): T {
 	const own: Record<string, unknown> = {
+		...(showNotice
+			? {
+					notify: (message: string, ...rest: unknown[]) => {
+						if (!showNotice(String(message ?? ""))) return;
+						const notify: unknown = Reflect.get(base, "notify", base);
+						if (typeof notify === "function") notify.call(base, message, ...rest);
+					},
+				}
+			: {}),
 		select: async (title: string, options: string[], opts?: DialogOptions) => {
 			const list = Array.isArray(options) ? options.map(String) : [];
 			const v = await dialogs.open("select", String(title ?? ""), [list], owner, opts);

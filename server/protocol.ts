@@ -585,6 +585,19 @@ export interface UiTaskQueueAnswerBinding {
 	detail?: string;
 	/** owner-card-brief (Ops #682): the card's plain brief, shown first; never part of the answer's match. */
 	brief?: UiOwnerCardBriefLine[];
+	/** owner-question routing (Ops #685): which way it came, shown before the brief. */
+	route?: UiOwnerQuestionRoute;
+}
+
+/** owner-question routing (Ops #685): which way an owner ask came, as every card shows it first:
+ *  its line ("You were chatting here …", "Came through COO", or HELD_FOR_COO_LINE while held),
+ *  then COO's note and recommendation when it let the ask through. Absent = no line (switch off). */
+export interface UiOwnerQuestionRoute {
+	line: string;
+	note?: string;
+	recommendation?: string;
+	/** Still with COO: shown only on the asking chat's page and the Queue tab, answerable there. */
+	held?: true;
 }
 
 /** owner-card-brief (Ops #682): one line of the plain brief every queue card to the owner opens with,
@@ -632,6 +645,8 @@ export interface UiDialog {
 	title: string;
 	/** select：[选项数组]；confirm：[正文]；input：[占位文字]。 */
 	args: unknown[];
+	/** owner-question routing (Ops #685): which way it came (snapshot only). */
+	route?: UiOwnerQuestionRoute;
 }
 
 /** switch-cache：客户端手里已经有的一截消息（上次看这条对话时的窗口）。
@@ -1717,6 +1732,8 @@ export type ClientCommand =
 			quietQueueWakes?: boolean;
 			quietStallPokes?: boolean;
 			quietScheduledWakes?: boolean;
+			/** owner-question routing (Ops #685): the owner's questions go through COO first (default off). */
+			ownerQuestionsViaCoo?: boolean;
 			/** skill 全文注入名单（默认空 = 名录模式）。名单里的技能 {{skills}} 展开正文。 */
 			skillsFullText?: string[];
 			/** 子代理默认模型（"provider/id"；null/未设 = 子代理跟随主对话当前模型）。
@@ -2223,6 +2240,10 @@ export interface UiRoleAsk {
 	askId?: string;
 	/** owner-card-brief (Ops #682): a queue card's plain brief (the live ask's), shown before its question. */
 	brief?: UiOwnerCardBriefLine[];
+	/** owner-question routing (Ops #685): which way it came, shown before the brief. */
+	route?: UiOwnerQuestionRoute;
+	/** owner-question routing: held for COO, it reaches the owner by this time at the latest (ms). */
+	until?: number;
 }
 
 /** roles-answer: one choice of an ask's question, as the Roles page shows it. */
@@ -2259,6 +2280,8 @@ export interface UiRoleAskView {
 	/** owner-card-brief (Ops #682): a queue card's plain brief, shown first; outside the revision, so a fresher
 	 *  count of waiting tasks never refuses an open form. */
 	brief?: UiOwnerCardBriefLine[];
+	/** owner-question routing (Ops #685): which way it came, shown before the brief; outside the revision too. */
+	route?: UiOwnerQuestionRoute;
 }
 
 /** roles-answer: the answer to one question: the chosen values and/or typed words. */
@@ -2800,6 +2823,9 @@ export interface UiRoleOverview {
 	homeBusy?: boolean;
 	/** Its open asks, oldest first. */
 	asks: UiRoleAsk[];
+	/** owner-question routing (Ops #685): its asks held for COO first, oldest first (never under Needs you
+	 *  or in the counts; roles_overview lists them). Absent when none. */
+	withCoo?: UiRoleAsk[];
 	/** roles-asks-read: every started task chat was read for open dialogs (false: more than
 	 *  ROLES_TASK_CHATS_MAX started, or one couldn't be read). Absent from an older server, which read 8 at most. */
 	allChatsRead?: boolean;
@@ -3431,6 +3457,8 @@ export interface UiPendingQuestion {
 	conversationId?: string;
 	/** 所属会话标题/名称（可选），用于在提问弹窗中展示来源对话。 */
 	conversationTitle?: string;
+	/** owner-question routing (Ops #685): which way it came. */
+	route?: UiOwnerQuestionRoute;
 }
 
 /** 审批规则档位（「允许同类审批」的粒度）：稳定 id + 双语名（前端按 locale 自选）。
@@ -3480,6 +3508,8 @@ export interface UiToolApproval {
 	category?: UiApprovalCategory;
 	conversationId?: string;
 	conversationTitle?: string;
+	/** owner-question routing (Ops #685): which way it came. */
+	route?: UiOwnerQuestionRoute;
 }
 
 /** A background server the agent left running (listening-port diff around a
@@ -4676,6 +4706,9 @@ export interface UiSettingsState {
 	quietQueueWakes?: boolean;
 	quietStallPokes?: boolean;
 	quietScheduledWakes?: boolean;
+	/** owner-question routing (Ops #685, docs/owner-question-routing.md): the owner's questions go
+	 *  through COO first. Off (absent) = every ask reaches him at once, as before. */
+	ownerQuestionsViaCoo?: boolean;
 	/** skill 全文注入名单（默认空 = 名录模式）：名单里的技能 {{skills}} 展开正文。 */
 	skillsFullText: string[];
 	/** Vision bridge on/off (default on). Off → images are sent as-is. */
@@ -5446,6 +5479,8 @@ export type ServerMessage =
 			conversationId?: string;
 			/** 所属会话标题/名称（可选），用于在提问弹窗中展示来源对话。 */
 			conversationTitle?: string;
+			/** owner-question routing (Ops #685): which way it came. */
+			route?: UiOwnerQuestionRoute;
 	  }
 	/** 高危工具拦截触发待审批（Human-in-the-Loop）：弹窗/内联卡片等待用户批准、拒绝或就地修改参数（Edit & Run）。 */
 	| {
@@ -5460,6 +5495,8 @@ export type ServerMessage =
 			category?: UiApprovalCategory;
 			conversationId?: string;
 			conversationTitle?: string;
+			/** owner-question routing (Ops #685): which way it came. */
+			route?: UiOwnerQuestionRoute;
 	  }
 	/** 审批已完成或被取消/撤回（前端关闭审批弹窗）。 */
 	| { type: "tool_approval_resolved"; id: string }

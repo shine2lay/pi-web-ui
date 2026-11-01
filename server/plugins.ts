@@ -56,6 +56,7 @@ import { PluginDomConsent, declarationWantsDom } from "./plugin-dom.js";
 import { validatePluginManifest, formatManifestIssue, isKnownPermission } from "./plugin-manifest-validate.js";
 import { buildPluginApiCatalog } from "./plugin-api-catalog.js";
 import { askHub, type Ask, type AskEvent, type AskFieldAnswer, type AskResult } from "./asks.js";
+import { ownerSeesAskEvent } from "./owner-question-surfaces.js";
 import { connNoticeHub, type ConnNotice } from "./conn-events.js";
 import type { RoleReply, RoleSendOptions, RoleSendResult, RoleSendVia } from "./role-replies.js";
 import { AGENT_TOOL_CATALOG } from "./tool-manager.js";
@@ -4406,6 +4407,8 @@ export class PluginManager {
 				on: (handler) => {
 					if (!can("asks") || typeof handler !== "function") return () => {};
 					const off = askHub.on((ev) => {
+						// owner-question routing (Ops #685): nothing about an ask held for COO goes out to a plugin.
+						if (!ownerSeesAskEvent(ev)) return;
 						try {
 							handler({ ...ev, ask: copyAsk(ev.ask) });
 						} catch (err) {

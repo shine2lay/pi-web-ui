@@ -17,6 +17,8 @@
  */
 
 import type { Ask } from "./asks.js";
+import type { HeldOwnerAsk } from "./owner-question-router.js";
+import { linesAboutHeldAsks, routeOfAsk } from "./owner-question-surfaces.js";
 import { focusPart, identityFilePath, samePath, type IdentityDef } from "./identities.js";
 import type {
 	UiBoard,
@@ -75,7 +77,7 @@ import {
 	ROLES_REPORT_MAX,
 	type ReportRun,
 } from "./roles-reports.js";
-import { lineOf, newestWaiting, roleModelLabel, roleWorkMode, statusOf } from "./roles-row.js";
+import { lineOf, newestWaiting, roleModelLabel, roleWorkMode, statusOf, writtenForAsk } from "./roles-row.js";
 import { ChatPaths, TranscriptScans, type TranscriptScan } from "./roles-transcripts.js";
 import { TLDR_MAX_LINES, tldrLinesFromEntries } from "./tldr-lines.js";
 
@@ -121,6 +123,8 @@ export interface RolesOverviewHost {
 	chatState(file: string): ChatRuntime;
 	/** The questions, dialogs and approvals waiting now. */
 	asks(): Ask[];
+	/** owner-question routing (Ops #685): the asks held for COO first (absent: none). */
+	heldAsks?(): HeldOwnerAsk[];
 	openRequestsTo(role: string): { open: number; newest?: UiRoleRequest };
 	/** roles-sent: a role's open requests and questions to the receivers `keep` lets through (absent: none read). */
 	openRequestsFrom?(role: string, keep: (to: string) => boolean): UiRoleSent;
@@ -282,6 +286,13 @@ export class RolesOverviewReader {
 		const asks = live.filter((a) => a.kind !== "stuck");
 		// roles-answer: a stuck task's ask, so the page can answer it there (its id rides on the task's item).
 		const stuck = live.filter((a) => a.kind === "stuck");
+		// owner-question routing (Ops #685): asks held for COO first (none while the switch is off).
+		let held: HeldOwnerAsk[] = [];
+		try {
+			held = this.host.heldAsks?.() ?? [];
+		} catch {
+			held = [];
+		}
 		const runs = await this.runs.get();
 		const job = await this.job.get();
 		const keep = new Set<string>();
@@ -300,10 +311,18 @@ export class RolesOverviewReader {
 		const doneFacts = new Map<string, Map<number, DoneFact>>();
 		const withHome = new Set(defs.filter((d) => !!d.homeChat).map((d) => d.id));
 		for (const def of defs) {
-			const row = await this.role(def, at, asks, runs, job, keep, stuck, evidence, {
-				roles: withHome,
-				done: doneFacts,
-			});
+			const row = await this.role(
+				def,
+				at,
+				asks,
+				runs,
+				job,
+				keep,
+				stuck,
+				evidence,
+				{ roles: withHome, done: doneFacts },
+				held,
+			);
 			let sent: UiRoleSent | undefined;
 			try {
 				sent = this.host.openRequestsFrom?.(def.id, listed);
@@ -378,6 +397,8 @@ export class RolesOverviewReader {
 		evidence?: EvidenceView,
 		// live-progress: the roles with a home chat (withLead names only one of them) and where its done tasks go.
 		live: { roles: ReadonlySet<string>; done?: Map<string, Map<number, DoneFact>> } = { roles: new Set() },
+		// owner-question routing (Ops #685): asks held for COO first, with when each reaches the owner at the latest.
+		heldAsks: HeldOwnerAsk[] = [],
 	): Promise<UiRoleOverview> {
 		const problems: string[] = [];
 		const mode = roleWorkMode(def.id, def.role.config, now);
@@ -469,20 +490,39 @@ export class RolesOverviewReader {
 			where: t.id,
 		});
 
+		// owner-question routing (Ops #685): the queued tasks' cards held for COO first.
+		const heldStuck = heldAsks.filter((h) => h.ask.kind === "stuck");
+		const sameStuck = (a: Ask, taskId: number, target: string | undefined | null) =>
+			a.task?.id === taskId && !!target && !!a.sessionFile && samePath(a.sessionFile, target);
+		/** A line saying the owner is needed about a stuck task whose card is with COO first: not his yet. */
+		const aboutCardWithCoo = (l: UiTldrLine, t: UiTaskQueueTask | undefined) =>
+			!!t &&
+			l.needsYou &&
+			!l.answered &&
+			t.status === "stuck" &&
+			heldStuck.some((h) => sameStuck(h.ask, t.id, t.lane ? t.chat?.file : home));
+
+		// A chat's own needs-you line about its ask held for COO first isn't his yet either (folded into that ask below).
+		const heldOther = heldAsks.filter((h) => h.ask.kind !== "stuck").map((h) => h.ask);
+
 		// TL;DR: the home chat's lines (a line copied up from a task chat keeps that chat) and the task
 		// chats' own lines; a copy whose original is here too is left out.
 		const tldr: UiRoleTldrLine[] = [];
 		const own = new Set<string>();
 		for (const info of infos) {
 			const quiet = !!heldOf(info.task);
+			const withCooLines = linesAboutHeldAsks(info.lines, info.file, heldOther);
 			for (const l of info.lines) {
 				own.add(`${info.file}\n${l.text}`);
+				if (aboutCardWithCoo(l, info.task) || withCooLines.has(l.id)) continue;
 				tldr.push(lineOf(l, taskRef(info.task), quiet));
 			}
 		}
+		const homeWithCooLines = linesAboutHeldAsks(homeLines, home, heldOther);
 		for (const l of homeLines) {
 			const t = taskOfChat(l.chat?.file);
 			if (t?.chat?.file && own.has(`${t.chat.file}\n${l.text}`)) continue;
+			if (aboutCardWithCoo(l, t) || homeWithCooLines.has(l.id)) continue;
 			// A copy stays a home chat line (its id is there) that says which task it is about.
 			const ref: UiRoleChatRef = t ? { file: homeRef.file, where: t.id } : homeRef;
 			tldr.push(lineOf(l, ref, !!heldOf(t)));
@@ -491,6 +531,8 @@ export class RolesOverviewReader {
 
 		// What waits on the owner.
 		const asks: UiRoleAsk[] = [];
+		// owner-question routing (Ops #685): what is with COO first (roles_overview lists it; never counted).
+		const withCoo: UiRoleAsk[] = [];
 		const keyOf = (rest: string) => `${def.id}:${rest}`;
 		for (const l of homeLines) {
 			if (!l.needsYou || l.answered) continue;
@@ -521,6 +563,22 @@ export class RolesOverviewReader {
 				(a) => a.task?.id === t.id && !!target && !!a.sessionFile && samePath(a.sessionFile, target),
 			);
 			const live = matches.length === 1 ? matches[0] : undefined;
+			// owner-question routing (Ops #685): a card held for COO first isn't under Needs you or in the counts.
+			const heldCard = live ? undefined : onlyOne(heldStuck.filter((h) => sameStuck(h.ask, t.id, target)));
+			if (heldCard) {
+				withCoo.push({
+					key: keyOf(`task:${t.id}`),
+					role: def.id,
+					kind: "task",
+					text: t.question || line?.text || t.plan.title,
+					since: heldCard.ask.createdAt,
+					chat: { file: homeRef.file, where: t.id },
+					focus: `task:${t.id}`,
+					...routeOfAsk(heldCard.ask),
+					until: heldCard.until,
+				});
+				continue;
+			}
 			asks.push({
 				key: keyOf(`task:${t.id}`),
 				role: def.id,
@@ -533,11 +591,13 @@ export class RolesOverviewReader {
 				...(live ? { askId: live.id } : {}),
 				// owner-card-brief (Ops #682): the card's plain brief, shown before its question.
 				...briefOfAsk(live),
+				// owner-question routing (Ops #685): which way it came.
+				...routeOfAsk(live),
 			});
 		}
-		for (const a of liveAsks) {
+		const askItem = (a: Ask): UiRoleAsk | undefined => {
 			const file = a.sessionFile;
-			if (!file) continue;
+			if (!file) return undefined;
 			let ref: UiRoleChatRef | undefined;
 			let lines: UiTldrLine[] = [];
 			if (home && samePath(file, home)) {
@@ -551,15 +611,15 @@ export class RolesOverviewReader {
 					lines = info.lines;
 				}
 			}
-			if (!ref) continue;
+			if (!ref) return undefined;
 			// The needs-you line its chat wrote for this question (just before it) is the same ask.
-			const line = newestWaiting(lines.filter((l) => l.ts <= a.createdAt + 5_000));
+			const line = newestWaiting(lines.filter((l) => writtenForAsk(l, a.createdAt)));
 			if (line) {
 				const dup = asks.findIndex((x) => x.key === keyOf(`tldr:${line.id}`));
 				if (dup >= 0) asks.splice(dup, 1);
 			}
 			const since = line && line.ts > 0 ? Math.min(line.ts, a.createdAt) : a.createdAt;
-			asks.push({
+			return {
 				key: keyOf(`question:${a.id}`),
 				role: def.id,
 				kind: "question",
@@ -569,7 +629,19 @@ export class RolesOverviewReader {
 				focus: `question:${a.id}`,
 				// Keep unrecognised dialogs visible through Open chat, without a page-answer target.
 				...(roleAnswerKindAllowed(a) ? { askId: a.id } : {}),
-			});
+				// owner-question routing (Ops #685): which way it came.
+				...routeOfAsk(a),
+			};
+		};
+		for (const a of liveAsks) {
+			const item = askItem(a);
+			if (item) asks.push(item);
+		}
+		// owner-question routing (Ops #685): held for COO first; its needs-you line went with it (above).
+		for (const h of heldAsks) {
+			if (h.ask.kind === "stuck") continue;
+			const item = askItem(h.ask);
+			if (item) withCoo.push({ ...item, until: h.until });
 		}
 
 		// The queue in short.
@@ -681,6 +753,7 @@ export class RolesOverviewReader {
 			...(lastActivity ? { lastActivity } : {}),
 			...(homeBusy ? { homeBusy: true } : {}),
 			asks: sortedAsks,
+			...(withCoo.length ? { withCoo: sortAsks(withCoo) } : {}),
 			allChatsRead,
 			tldr: tldr.slice(0, ROLES_TLDR_MAX),
 			...(queue ? { queue } : {}),
@@ -787,6 +860,11 @@ export class RolesOverviewReader {
 			...(got.at !== undefined ? { messageAt: got.at } : {}),
 		};
 	}
+}
+
+/** The one item, or undefined when there are none or several. */
+function onlyOne<T>(items: T[]): T | undefined {
+	return items.length === 1 ? items[0] : undefined;
 }
 
 function short(s: string): string {

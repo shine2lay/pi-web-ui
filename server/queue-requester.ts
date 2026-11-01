@@ -1,3 +1,4 @@
+import { mergeOwnerLastWrote } from "./owner-input-time.js";
 import type { UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
 
 export const REQUESTER_INPUTS_MAX = 32;
@@ -99,6 +100,8 @@ export function requesterForAdmission(input: {
 export interface RequesterTurn {
 	requesterInputs?: UiTaskRequesterInput[];
 	requesterOverflow?: true;
+	/** owner-input-time.ts: the host's time of the owner's latest input taken into the turn (ms). */
+	ownerLastWroteAt?: number;
 }
 export function collectRequesterInput(turn: RequesterTurn, raw: unknown): void {
 	if (turn.requesterOverflow) return;
@@ -112,6 +115,7 @@ export function collectRequesterInput(turn: RequesterTurn, raw: unknown): void {
 	} else inputs.push(input);
 }
 export function mergeRequesterTurn(into: RequesterTurn, from: RequesterTurn): void {
+	mergeOwnerLastWrote(into, from);
 	if (from.requesterOverflow) {
 		into.requesterOverflow = true;
 		delete into.requesterInputs;

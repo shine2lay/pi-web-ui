@@ -85,6 +85,7 @@ import {
 	askDeliveryOnAsk,
 	askDeliveryOnGraceExpiry,
 	pickPendingQuestionForSnapshot,
+	questionPendingMessage,
 	shouldCancelOnClientDispose,
 } from "./ask-delivery.js";
 import type { PendingQuestionEntry } from "./ask-delivery.js";
@@ -92,12 +93,14 @@ import {
 	approvalAsk,
 	approvalFrom,
 	type Ask,
+	type AskEvent,
 	askHub,
 	type AskMeta,
 	dialogAnswersOf,
 	dialogAsk,
 	dialogValueFrom,
 	FROM_BROWSER,
+	isAskHeld,
 	NOT_WAITING,
 	questionAnswersFrom,
 	questionAsk,
@@ -119,6 +122,24 @@ import {
 	wantedStuckAsks,
 } from "./stuck-asks.js";
 import { briefOfAsk, stuckAskBriefs } from "./owner-card-brief.js";
+import { noteOwnerInput } from "./owner-input-time.js";
+import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "./owner-question-holds.js";
+import {
+	isQuestionReturned,
+	OwnerQuestionRouter,
+	questionReturnedText,
+	type QuestionReturned,
+} from "./owner-question-router.js";
+import {
+	dialogView,
+	lineAboutUnseenCard,
+	linesAboutHeldAsks,
+	queueNoticeAboutUnseenCard,
+	queueStatusesShownToOwner,
+	routeOfAsk,
+	shownToWindow,
+	stuckCardReachedOwner,
+} from "./owner-question-surfaces.js";
 import { workFolder, workProjectOf } from "./work-records.js";
 import { nativeOwnerQuestionBinding, nativeQuestionHost } from "./queue-question-native.js";
 import type { QuestionBinding, QuestionCommitResult } from "./queue-question-port.js";
@@ -149,6 +170,7 @@ import { checkPluginUpdates } from "./plugin-updater.js";
 import { isBundledInUse, sdkCopies } from "./sdk-origin.js";
 import { hasActiveSubagentRun, hasPendingWaitSubscription, shouldRetainActive } from "./wait-subscription-scan.js";
 import {
+	carriedTurnOf,
 	carryOnLogLine,
 	type CarryOnPlan,
 	guardNotice,
@@ -156,12 +178,10 @@ import {
 	planCarryOn,
 	readRunningChatsFile,
 	readTail,
-	requesterTurnOf,
 	RESTART_REASON_FILE,
 	RUNNING_CHATS_FILE,
 	type RunningChat,
 	RunningChats,
-	savedRequesterOf,
 	stepFromTranscriptTail,
 	takeRestartReason,
 	toolDetail,
@@ -244,6 +264,7 @@ import {
 	isApprovalPolicyEmpty,
 	pluginApprovalCategory,
 	type ApprovalPolicy,
+	approvalPendingMessage,
 	type PendingApprovalEntry,
 	type ToolApprovalResolution,
 } from "./tool-approval.js";
@@ -1459,7 +1480,8 @@ export function makeAskUserQuestionTool(
 			q: UiQuestion[],
 			sig: { aborted?: boolean; toolCallId?: string },
 			conversationId?: string,
-		) => Promise<QuestionAnswer[] | null>;
+			// owner-question routing (Ops #685): COO handed the question back (not the owner's answer).
+		) => Promise<QuestionAnswer[] | QuestionReturned | null>;
 	},
 	/** 本 runtime 所属会话：提问跟着对话走，快照只把当前对话的问卷推给客户端。 */
 	ownerId?: string,
@@ -1550,6 +1572,10 @@ export function makeAskUserQuestionTool(
 			);
 			if (answers === null) {
 				throw new Error("User cancelled the question.");
+			}
+			// owner-question routing (Ops #685): COO handed it back; the call ends with that, never as his answer.
+			if (isQuestionReturned(answers)) {
+				return { content: [{ type: "text", text: questionReturnedText(answers.returned) }] } as never;
 			}
 			// 工具结果：把每道题的回答拼成简洁文本给模型，同时留 details 供 UI 展示。
 			const lines = answers.map((a) => {
@@ -2410,6 +2436,8 @@ export interface Conversation {
 	turnPending?: RoleTurnRecord;
 	/** telegram-coo: the running run's causes, send ids, last text and error (handed over when it settles). */
 	turnRecord?: RoleTurnRecord;
+	/** owner-input-time.ts: when the owner last wrote here (ms), by admission's clock. */
+	ownerLastWroteAt?: number;
 	/** quiet-turns: its last run was one another agent began (no "done" cue, no green light). */
 	lastRunQuiet?: boolean;
 	/** tool_call watchdog timers keyed by toolCallId — a tool that runs past
@@ -2556,6 +2584,8 @@ interface PromptFlow {
 function noteTurnCause(conv: Conversation, flow: PromptFlow, joined: boolean): void {
 	const rec = joined && conv.turnRecord ? conv.turnRecord : (conv.turnPending ??= newTurnRecord());
 	collectRoleInput(rec, flow);
+	// owner-input-time: the time of his accepted input, for owner-question routing's 30-minute window.
+	noteOwnerInput(conv, rec, flow.requester?.kind === "owner", Date.now());
 	// carry-on: a text joined the running turn: the live list keeps its requester inputs.
 	if (rec === conv.turnRecord) saveRunningRequester(conv);
 	// owner-contacts: pi took the owner's message into this chat's turn.
@@ -7669,6 +7699,90 @@ export class ClientSession {
 		};
 	}
 
+	/** owner-question routing (Ops #685): the identity whose home chat this is (COO's own asks go straight). */
+	private static homeRoleOf(sessionFile: string | undefined): string | undefined {
+		return homeChatOf(sessionFile, identityRegistry().identities)?.id;
+	}
+
+	/** owner-question routing (Ops #685): COO or the safety net let a held ask through (now shown wherever
+	 *  asks show, as any ask), or COO handed a question back (its call ends with COO's note). */
+	static ownerAskRouted(ev: AskEvent): void {
+		// Held, or ended while held: the chat list's rows stop or start showing its chat's needs-you line.
+		if (ev.type === "held" || ((ev.type === "answered" || ev.type === "gone") && isAskHeld(ev.ask))) {
+			ClientSession.emitConversationsToAll();
+			return;
+		}
+		if (ev.type !== "released" && ev.type !== "returned") return;
+		const ask = ev.ask;
+		if (ask.kind === "question") {
+			const qid = ClientSession.questionIdOfAsk(ask.id);
+			const entry = qid ? ClientSession.sharedQuestions.get(qid) : undefined;
+			if (qid && entry && ev.type === "returned") {
+				ClientSession.sharedQuestions.delete(qid);
+				if (entry.graceTimer) clearTimeout(entry.graceTimer);
+				entry.returned?.(ev.note);
+				ClientSession.broadcastToAllClients({ type: "question_retracted", id: qid });
+			} else if (qid && entry && askDeliveryOnAsk(ClientSession.connectedClientCount()) === "emit") {
+				ClientSession.broadcastToAllClients({ ...questionPendingMessage(qid, entry), ...routeOfAsk(ask) });
+			}
+		} else if (ask.kind === "approval" && ev.type === "released") {
+			const entry = ClientSession.sharedApprovals.get(ask.id);
+			if (entry) ClientSession.broadcastToAllClients({ ...approvalPendingMessage(entry), ...routeOfAsk(ask) });
+		}
+		// Each window's snapshot (the pop-up, the Queue tab card) and the chat list show it as it is now.
+		ClientSession.approvalsChanged();
+		ClientSession.emitConversationsToAll();
+	}
+
+	/** owner-question routing (Ops #685): whether the queued task's card answered in `target` has reached the
+	 *  owner (made, and not held for COO first). */
+	private static stuckCardReached(target: string): boolean {
+		return stuckCardReachedOwner(target, ClientSession.stuckAsks.values(), (id) => askHub.get(id));
+	}
+
+	/** owner-question routing (Ops #685): the chat's latest TL;DR line says the owner is needed about an ask that
+	 *  hasn't reached him yet: pi-queue's line about a queued task whose card isn't made yet or is held for COO
+	 *  first, or the chat's own line about its ask held for COO first (switch on only). */
+	private static lineAboutHeldAsk(conv: Conversation, lines: readonly UiTldrLine[]): boolean {
+		if (!ClientSession.ownerQuestions?.enabled) return false;
+		const last = lines[lines.length - 1];
+		if (!last?.needsYou || last.answered) return false;
+		try {
+			const chatFile = ClientSession.askMetaOf(conv).sessionFile;
+			return (
+				linesAboutHeldAsks(lines, chatFile, askHub.heldList()).has(last.id) ||
+				lineAboutUnseenCard(last.chat?.file, chatFile, ClientSession.taskQueueOfConv(conv).tasks, (target) =>
+					ClientSession.stuckCardReached(target),
+				)
+			);
+		} catch {
+			return false; // the line shows as before rather than the chat list failing
+		}
+	}
+
+	/** owner-question routing (Ops #685): `message`, a notice the chat's extensions raise, is pi-queue's "Task #N
+	 *  needs you" about a queued task whose card hasn't reached the owner yet (switch on only). */
+	private static noticeAboutHeldCard(conv: Conversation, message: string): boolean {
+		if (!ClientSession.ownerQuestions?.enabled) return false;
+		try {
+			return queueNoticeAboutUnseenCard(
+				message,
+				ClientSession.askMetaOf(conv).sessionFile,
+				ClientSession.taskQueueOfConv(conv).tasks,
+				(target) => ClientSession.stuckCardReached(target),
+			);
+		} catch {
+			return false; // the notice shows as before rather than the extension's call failing
+		}
+	}
+
+	/** left-task-status as the owner sees it: no "Needs decision" on a task chat whose card hasn't reached
+	 *  him yet (owner-question routing, Ops #685; switch on only). */
+	private static queueStatusesForOwner(): ReadonlyMap<string, UiQueueChatStatus> {
+		if (!ClientSession.ownerQuestions?.enabled) return ClientSession.queueStatuses;
+		return queueStatusesShownToOwner(ClientSession.queueStatuses, (file) => ClientSession.stuckCardReached(file));
+	}
+
 	/** telegram-answers: the queued tasks that wait on the user, as asks (stuck-asks.ts), by key. */
 	private static readonly stuckAsks = new Map<string, { askId: string; sig: string; target: string }>();
 	private static stuckSeq = 0;
@@ -7686,6 +7800,9 @@ export class ClientSession {
 	/** telegram-answers: sends a stuck task's answer into the chat with this transcript, as the user's
 	 *  reply (AgentService sets it: the wake-up client opens the chat, or switches to it, and sends). */
 	static stuckAnswerSender: ((file: string, text: string) => Promise<AskResult>) | null = null;
+	/** owner-question routing (Ops #685): routes each owner ask while the ownerQuestionsViaCoo setting is on
+	 *  (AgentService sets it; null in other engines: no ask is routed, every one shows as before). */
+	static ownerQuestions: OwnerQuestionRouter | null = null;
 	/** Canonical admission precedes any owner-answer delivery, including a deferred native prompt. */
 	static admitQuestionAnswer:
 		((binding: QuestionBinding, text: string, from: string) => Promise<QuestionCommitResult>) | null = null;
@@ -7846,26 +7963,39 @@ export class ClientSession {
 				askHub.settle(have.askId, { how: "gone", reason: why.reason });
 			}
 		}
+		let added = false;
 		for (const [key, w] of wanted) {
 			if (ClientSession.stuckAsks.has(key)) continue;
+			added = true;
 			const askId = stuckAskId(w, ++ClientSession.stuckSeq);
-			ClientSession.stuckAsks.set(key, { askId, sig: stuckSig(w), target: w.target });
+			const sig = stuckSig(w);
+			ClientSession.stuckAsks.set(key, { askId, sig, target: w.target });
+			const ask = stuckAsk(
+				askId,
+				{
+					taskId: w.taskId,
+					taskTitle: w.taskTitle,
+					question: w.question,
+					choices: w.choices,
+					...(w.detail ? { detail: w.detail } : {}),
+					brief: briefOf(w),
+				},
+				w.meta,
+			);
 			askHub.add(
-				stuckAsk(
-					askId,
-					{
-						taskId: w.taskId,
-						taskTitle: w.taskTitle,
-						question: w.question,
-						choices: w.choices,
-						...(w.detail ? { detail: w.detail } : {}),
-						brief: briefOf(w),
-					},
-					w.meta,
-				),
+				ask,
 				(answers, from) => ClientSession.answerStuck(askId, w, stuckTextFrom(answers), from),
+				// owner-question routing (Ops #685): queued work goes to COO first; a card that comes back
+				// (a restart, its chat reopened) follows its hold record.
+				ClientSession.ownerQuestions?.routeAskIn(ask, undefined, () => ClientSession.homeRoleOf(w.meta.sessionFile), {
+					key,
+					sig,
+				}),
 			);
 		}
+		// owner-question routing (Ops #685): the chat list kept a task's "needs you" marks back until its card was
+		// made; one that reached the owner (not held for COO) shows them now.
+		if (added && ClientSession.ownerQuestions?.enabled) ClientSession.emitConversationsToAll();
 	}
 
 	/** telegram-answers: what was just sent into the chat with this transcript (the last 5 minutes). */
@@ -8019,18 +8149,29 @@ export class ClientSession {
 		return outcome;
 	}
 
+	/** telegram-answers: a chat pop-up's id in the list of asks. */
+	private static dialogAskId(ui: Pick<UiDialog, "id">): string {
+		return `dlg-${ui.id}`;
+	}
+
 	/** telegram-answers: the pop-ups of a chat, seen from the list of asks. `chat` is a getter: the
 	 *  watcher is made while the chat object itself is still being built. */
 	private static dialogWatcher(chat: () => Conversation): DialogWatcher {
-		const askId = (ui: UiDialog): string => `dlg-${ui.id}`;
+		const askId = ClientSession.dialogAskId;
 		return {
 			opened: (ui) => {
 				const conv = chat();
-				askHub.add(dialogAsk(askId(ui), ui, ClientSession.askMetaOf(conv)), (answers, from) => {
-					const value = dialogValueFrom(ui, answers);
-					if (value === undefined) return { ok: false, error: "not one of the choices" };
-					return conv.dialogs.answer(ui.id, value, from) ? { ok: true } : { ok: false, error: NOT_WAITING };
-				});
+				const ask = dialogAsk(askId(ui), ui, ClientSession.askMetaOf(conv));
+				askHub.add(
+					ask,
+					(answers, from) => {
+						const value = dialogValueFrom(ui, answers);
+						if (value === undefined) return { ok: false, error: "not one of the choices" };
+						return conv.dialogs.answer(ui.id, value, from) ? { ok: true } : { ok: false, error: NOT_WAITING };
+					},
+					// owner-question routing (Ops #685): where it goes (none while the switch is off: as before).
+					ClientSession.ownerQuestions?.routeAskIn(ask, conv, () => ClientSession.homeRoleOf(ask.sessionFile)),
+				);
 			},
 			closed: (ui, value, how) => {
 				if (value === null) askHub.settle(askId(ui), { how: "gone", reason: how.reason ?? "cancelled" });
@@ -8058,7 +8199,12 @@ export class ClientSession {
 		await conv.session.bindExtensions({
 			mode: "rpc",
 			// 弹窗（select/confirm/input）归这条对话，其余 ctx.ui 照旧给本窗口（见 chat-dialogs.ts）。
-			uiContext: chatUiContext(this.webUi, conv.dialogs, conv.session),
+			uiContext: chatUiContext(
+				this.webUi,
+				conv.dialogs,
+				conv.session,
+				(message) => !ClientSession.noticeAboutHeldCard(conv, message),
+			),
 			onError: this.makeExtensionErrorReporter(
 				conv.isEphemeral ? { text: `Ephemeral chat ${conv.id}: `, textEn: `Ephemeral chat ${conv.id}: ` } : undefined,
 			),
@@ -9358,6 +9504,8 @@ export class ClientSession {
 				choices: [...(t.choices ?? [])],
 				...(t.detail ? { detail: t.detail } : {}),
 				...briefOfAsk(askHub.get(have.askId)),
+				// owner-question routing (Ops #685): which way it came; held for COO, still answerable here.
+				...routeOfAsk(askHub.get(have.askId)),
 			});
 		}
 		return bindings.length > 0 ? bindings : undefined;
@@ -9677,7 +9825,9 @@ export class ClientSession {
 		const taskQueue = this.taskQueueOf(this.conv);
 		const taskQueueChanged = taskQueue !== this.emittedTaskQueue;
 		this.emittedTaskQueue = taskQueue;
-		const dialog = this.conv.dialogs.current;
+		// owner-question routing (Ops #685): with which way it came (the dialog itself while the switch is off).
+		const current = this.conv.dialogs.current;
+		const dialog = dialogView(current, current ? askHub.get(ClientSession.dialogAskId(current)) : undefined);
 		const dialogChanged = dialog !== this.emittedDialog;
 		this.emittedDialog = dialog;
 		const identity = this.snapshotIdentityOf(this.conv);
@@ -10077,7 +10227,7 @@ export class ClientSession {
 		questions: UiQuestion[],
 		sig: { aborted?: boolean; toolCallId?: string },
 		conversationId?: string,
-	): Promise<QuestionAnswer[] | null> {
+	): Promise<QuestionAnswer[] | QuestionReturned | null> {
 		return new Promise((resolve, reject) => {
 			if (sig?.aborted || this.disposed) {
 				reject(new Error("ask_user_question aborted"));
@@ -10099,16 +10249,20 @@ export class ClientSession {
 			const file = manager?.getSessionFile();
 			if (manager && file) entry.nativeSource = { sessionId: manager.getSessionId(), file };
 			this.pendingQuestions.set(id, entry);
+			const askingConv = conversationId ? this.convs.get(conversationId) : undefined;
+			const ask: Ask = {
+				...questionAsk(id, questions, ClientSession.askMetaOf(askingConv)),
+				...(sig.toolCallId ? { toolCallId: sig.toolCallId } : {}),
+			};
+			// owner-question routing (Ops #685): where it goes (none while the switch is off: as before). Only a
+			// question with its own chat is routed: a held one still shows on that chat's page.
+			const route = askingConv
+				? ClientSession.ownerQuestions?.routeAskIn(ask, askingConv, () => ClientSession.homeRoleOf(ask.sessionFile))
+				: undefined;
+			if (route?.to === "coo") entry.returned = (note) => resolve({ returned: note });
 			// telegram-answers: also in the list of asks, so a plugin (Telegram) can show and answer it.
 			askHub.add(
-				{
-					...questionAsk(
-						id,
-						questions,
-						ClientSession.askMetaOf(conversationId ? this.convs.get(conversationId) : undefined),
-					),
-					...(sig.toolCallId ? { toolCallId: sig.toolCallId } : {}),
-				},
+				ask,
 				(answers, from) => {
 					const qid = ClientSession.questionIdOfAsk(id);
 					const current = qid ? this.pendingQuestions.get(qid) : undefined;
@@ -10116,7 +10270,15 @@ export class ClientSession {
 					const ok = this.resolveQuestion(qid, questionAnswersFrom(current.questions, answers), false, from);
 					return ok ? { ok: true } : { ok: false, error: NOT_WAITING };
 				},
+				route,
 			);
+			// owner-question routing: held for COO, it shows only on the asking chat's own page (its
+			// snapshot): no pop-up elsewhere, no Telegram, no no-page timer, until COO or the safety net
+			// lets it through (ClientSession.ownerAskRouted).
+			if (isAskHeld(askHub.get(id))) {
+				ClientSession.approvalsChanged();
+				return;
+			}
 			// 运行列表的「?」角标靠 conversations 推送（问卷登记/解决不经过快照通道）。
 			ClientSession.emitConversationsToAll();
 			// ask-question-delivery：不走上游的 shouldPopQuestion（只推给正开着该对话的页面）。
@@ -10128,13 +10290,8 @@ export class ClientSession {
 				// multi-device：广播给**所有**在线设备，而不只是发起提问的那一台——
 				// 在笔记本上被问、走到台式机上回答。conversationTitle 让正在看别
 				// 的对话的那台知道这是谁在问。
-				ClientSession.broadcastToAllClients({
-					type: "question_pending",
-					id,
-					questions,
-					...(conversationId !== undefined ? { conversationId } : {}),
-					...(conversationTitle ? { conversationTitle } : {}),
-				});
+				// owner-question routing (Ops #685): with which way it came (nothing while the switch is off).
+				ClientSession.broadcastToAllClients({ ...questionPendingMessage(id, entry), ...routeOfAsk(askHub.get(id)) });
 				return;
 			}
 			// 刷新/重连的空窗：等一会儿。期间页面回来了 → 快照把对话框补出来
@@ -10200,8 +10357,14 @@ export class ClientSession {
 	 *  恰好回到那条对话时才复活，否则永远丢失而服务端还阻塞着（见 ask-delivery.ts）。
 	 *  conversationId 随快照一起给前端，用于标注这张问卷属于哪条对话。 */
 	private pendingQuestionForSnapshot(): UiState["pendingQuestion"] {
-		const picked = pickPendingQuestionForSnapshot(this.pendingQuestions);
-		if (!picked) return null;
+		// owner-question routing (Ops #685): one held for COO shows only in its own chat's window, with its line.
+		const askOf = (id: string) => askHub.get(this.pendingQuestions.get(id)?.askId ?? id);
+		const shown = [...this.pendingQuestions].filter(([id, p]) =>
+			shownToWindow(isAskHeld(askOf(id)), p.conversationId, this.activeId),
+		);
+		const found = pickPendingQuestionForSnapshot(shown);
+		if (!found) return null;
+		const picked = { ...found, ...routeOfAsk(askOf(found.id)) };
 		// 标题按对话现名取（改过名也跟上，同上游）；取不到时用提问时记下的（picked 已带）。
 		// 不回落到「本客户端当前对话」：问卷进程共享，那会给别的设备标错来源。
 		const liveTitle = picked.conversationId !== undefined ? this.convs.get(picked.conversationId)?.title : undefined;
@@ -10240,6 +10403,8 @@ export class ClientSession {
 	/** 取某对话的等答复问卷简要信息（用于会话列表与横幅展示）。 */
 	private getPendingQuestionForConv(convId: string): { id: string; title?: string } | undefined {
 		for (const [id, p] of this.pendingQuestions) {
+			// owner-question routing (Ops #685): one held for COO is no "?" and no Needs you (its page shows it).
+			if (isAskHeld(askHub.get(p.askId ?? id))) continue;
 			if (p.conversationId === undefined || p.conversationId === convId) {
 				const q0 = p.questions[0];
 				const title = q0?.header?.trim() || q0?.question?.trim() || undefined;
@@ -10321,8 +10486,9 @@ export class ClientSession {
 				createdAt: Date.now(),
 			};
 			this.pendingApprovals.set(id, entry);
+			const ask = approvalAsk(id, { toolName, params, reason, reasonEn, category }, ClientSession.askMetaOf(conv));
 			askHub.add(
-				approvalAsk(id, { toolName, params, reason, reasonEn, category }, ClientSession.askMetaOf(conv)),
+				ask,
 				(answers, from) => {
 					const a = approvalFrom(answers);
 					if (!a) return { ok: false, error: "not one of the choices" };
@@ -10330,20 +10496,15 @@ export class ClientSession {
 						? { ok: true }
 						: { ok: false, error: NOT_WAITING };
 				},
+				// owner-question routing (Ops #685): where it goes (none while the switch is off: as before). Only a
+				// prompt with its own chat is routed: a held one still shows on that chat's page.
+				conversationId !== undefined && conv
+					? ClientSession.ownerQuestions?.routeAskIn(ask, conv, () => ClientSession.homeRoleOf(ask.sessionFile))
+					: undefined,
 			);
-			// Every window shows it, named after its chat (like questions).
-			ClientSession.broadcastToAllClients({
-				type: "tool_approval_pending",
-				id,
-				toolCallId,
-				toolName,
-				params: params as Record<string, unknown>,
-				reason,
-				reasonEn,
-				...(category ? { category } : {}),
-				...(conversationId !== undefined ? { conversationId } : {}),
-				...(conversationTitle ? { conversationTitle } : {}),
-			});
+			// Every window shows it, named after its chat (like questions); held for COO, only its own chat's page.
+			if (!isAskHeld(askHub.get(id)))
+				ClientSession.broadcastToAllClients({ ...approvalPendingMessage(entry), ...routeOfAsk(askHub.get(id)) });
 			ClientSession.approvalsChanged();
 		});
 	}
@@ -10491,6 +10652,8 @@ export class ClientSession {
 	private pendingApprovalForSnapshot(): UiState["pendingApproval"] {
 		let picked: [string, PendingApprovalEntry] | undefined;
 		for (const e of this.pendingApprovals) {
+			// owner-question routing (Ops #685): one held for COO shows only in its own chat's window.
+			if (!shownToWindow(isAskHeld(askHub.get(e[0])), e[1].conversationId, this.activeId)) continue;
 			if (e[1].conversationId === undefined || e[1].conversationId === this.activeId) {
 				picked = e;
 				break;
@@ -10510,6 +10673,8 @@ export class ClientSession {
 			...(p.category ? { category: p.category } : {}),
 			conversationId: p.conversationId,
 			conversationTitle: liveTitle ?? p.conversationTitle,
+			// owner-question routing (Ops #685): which way it came (nothing while the switch is off).
+			...routeOfAsk(askHub.get(id)),
 		};
 	}
 
@@ -11615,6 +11780,7 @@ export class ClientSession {
 		quietQueueWakes?: boolean;
 		quietStallPokes?: boolean;
 		quietScheduledWakes?: boolean;
+		ownerQuestionsViaCoo?: boolean;
 		visionBridgeEnabled?: boolean;
 		visionBridgeModel?: string | null;
 		visionBridgePromptMode?: PromptMode;
@@ -14486,6 +14652,8 @@ export class ClientSession {
 					questions: q.questions,
 					conversationId: qConvId,
 					...(conv?.title ? { conversationTitle: conv.title } : {}),
+					// owner-question routing (Ops #685): its line, as its chat's page shows it (nothing while off).
+					...routeOfAsk(askHub.get(q.askId ?? nid)),
 				});
 			}
 		}
@@ -14890,12 +15058,17 @@ export class ClientSession {
 					return pq ? { hasQuestion: true as const, questionId: pq.id, questionTitle: pq.title } : {};
 				})(),
 				// per-chat-dialogs：扩展弹窗在等你 → 左栏同样挂「?」。
-				...(conv.dialogs.current ? { dialogId: conv.dialogs.current.id } : {}),
+				// owner-question routing (Ops #685): not one held for COO (its own page shows it; no Needs you).
+				...(conv.dialogs.current && !isAskHeld(askHub.get(ClientSession.dialogAskId(conv.dialogs.current)))
+					? { dialogId: conv.dialogs.current.id }
+					: {}),
 				// tldr-sidebar：最新一行还没折叠的 TL;DR，左栏显示在标题下面代替「N 条消息」。
 				// 用 TL;DR tab 的同一份缓存（会话树没动就不重扫）；只有加载着的对话才有，历史行不读文件。
 				...(() => {
-					const tldr = latestUnseenTldr(this.tldrOf(conv));
-					return tldr ? { tldr } : {};
+					const lines = this.tldrOf(conv);
+					const tldr = latestUnseenTldr(lines);
+					// owner-question routing (Ops #685): not a "needs you" line about an ask not his yet.
+					return tldr && !ClientSession.lineAboutHeldAsk(conv, lines) ? { tldr } : {};
 				})(),
 				// identities: the chat's identity label (its branch; cached per leaf).
 				...(() => {
@@ -14951,7 +15124,8 @@ export class ClientSession {
 		applyQueueHomes(conversations, homes);
 		applyElsewhereQueueHomes(elsewhere, homes);
 		// left-task-status: an open task chat that is parked says how its task stands (from the cached queues).
-		applyQueueChatStatuses(conversations, elsewhere, ClientSession.queueStatuses);
+		const queueStatuses = ClientSession.queueStatusesForOwner();
+		applyQueueChatStatuses(conversations, elsewhere, queueStatuses);
 		// (Optional chaining: stand-in windows in the unit tests don't list saved chats.)
 		const byFile = this.sessionsByFile as ReadonlyMap<string, SessionSummary> | undefined;
 		const queueTasks = queueTaskRows(
@@ -14960,7 +15134,7 @@ export class ClientSession {
 			waiting,
 			this.cwd,
 		);
-		applyQueueChatStatuses(queueTasks, [], ClientSession.queueStatuses);
+		applyQueueChatStatuses(queueTasks, [], queueStatuses);
 		this.emit({
 			type: "conversations",
 			conversations,
@@ -18475,7 +18649,20 @@ export class AgentService {
 			},
 		};
 		rolesOverviewSource = () => this.readRolesOverview();
+		// owner-question routing (Ops #685): the switch is read at each ask; off (the default) routes nothing.
+		ClientSession.ownerQuestions?.dispose();
+		this.ownerQuestions = new OwnerQuestionRouter({
+			enabled: () => this.stateStore.getSettings("").ownerQuestionsViaCoo === true,
+			hub: askHub,
+			holds: () => new OwnerQuestionHolds(join(this.stateStore.dataDir, OWNER_QUESTION_HOLDS_FILE)),
+		});
+		ClientSession.ownerQuestions = this.ownerQuestions;
+		this.stopOwnerAskRouted = askHub.observe((ev) => ClientSession.ownerAskRouted(ev));
 	}
+
+	/** owner-question routing (Ops #685): this service's router, and its watch on released and returned asks. */
+	private readonly ownerQuestions: OwnerQuestionRouter;
+	private stopOwnerAskRouted: (() => void) | null = null;
 
 	// -----------------------------------------------------------------------
 	// role-messages: role chats message each other (role-messages.ts)
@@ -18515,6 +18702,8 @@ export class AgentService {
 		this.startDecisionRecords();
 		this.progressFeed.start();
 		this.startStallWatch();
+		// owner-question routing (Ops #685): the safety net's sweep (lets nothing through while the switch is off).
+		this.ownerQuestions.start();
 	}
 
 	// -----------------------------------------------------------------------
@@ -19096,6 +19285,8 @@ export class AgentService {
 				identities: () => identityRegistry().identities,
 				chatState: (file) => this.queueChatState(file).state,
 				asks: () => askHub.list(),
+				// owner-question routing (Ops #685): asks with COO first (none while the switch is off).
+				heldAsks: () => this.ownerQuestions.heldAsks(),
 				openRequestsTo: (role) => this.roleMessages.openRequestsTo(role),
 				openRequestsFrom: (role, keep) => this.roleMessages.openRequestsFrom(role, keep),
 				openPairs: () => this.roleMessages.openPairs(),
@@ -20930,8 +21121,9 @@ export class AgentService {
 					continue;
 				}
 				let ok = false;
-				// The cut-off turn's requester inputs (checked again; none or bad = unknown, as before).
-				const saved = savedRequesterOf(item.chat.requester);
+				// The cut-off turn's requester inputs (checked again; none or bad = unknown, as before), with
+				// when the owner last wrote into it (owner-input-time.ts).
+				const carriedTurn = carriedTurnOf(item.chat);
 				try {
 					ok =
 						existsSync(file) &&
@@ -20943,7 +21135,7 @@ export class AgentService {
 									deliver: (target, text) => cs.queueRoleMailForResume(target, text, this.roleMessageHow(target, text)),
 									note: (target, text) => cs.noteRoleMessage(target, text),
 								}),
-							saved ? requesterTurnOf(saved) : undefined,
+							carriedTurn,
 						));
 				} catch (err) {
 					console.error(`[carry-on] "${item.chat.title}": ${(err as Error).message}`);
@@ -21168,6 +21360,10 @@ export class AgentService {
 		decisionsService = null;
 		this.stopDecisionAnswers?.();
 		this.stopDecisionAnswers = null;
+		this.stopOwnerAskRouted?.();
+		this.stopOwnerAskRouted = null;
+		this.ownerQuestions.dispose();
+		if (ClientSession.ownerQuestions === this.ownerQuestions) ClientSession.ownerQuestions = null;
 		this.participants.dispose();
 		ClientSession.participantRetained = undefined;
 		this.uninstallQueueHost?.();

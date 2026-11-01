@@ -141,6 +141,7 @@ import { useWideChat } from "./chat-width-settings";
 import { registerFilePreviewHost } from "./file-preview-bridge";
 import { projectNameFromCwd, useProjectTitle } from "./title-settings";
 import { notify } from "./notify";
+import { cueIdOf } from "./owner-question-route";
 import { diffStreamingCues } from "./streaming-cues";
 import { DoneCues } from "./done-settle";
 import { useTheme } from "./theme";
@@ -1346,15 +1347,17 @@ export function App() {
 	// chat in the background asked) or in the open chat's snapshot. The window's own dialogs (the
 	// goal wizard) still come as `dialog` messages. Pop-ups already waiting when the page connected
 	// don't sound. (Replaces upstream's notifiedDialogIds, which only saw the window's own dialog.)
+	// owner-question routing (Ops #685): a pop-up held for COO first shows quietly; it sounds once let through.
+	const dialogCueId = cueIdOf(dialog);
 	useEffect(() => {
-		const id = dialog?.id;
+		const id = dialogCueId;
 		const cued = cuedDialogs.current;
-		if (id === undefined || !cued || cued.has(id)) return;
+		if (id === null || !cued || cued.has(id)) return;
 		cued.add(id);
 		playSound("question", sound);
 		void notify(t("notifyQuestionTitle"), t("notifyQuestionBody"));
 		if (tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) speak(t("ttsAnnounceQuestion"), tts);
-	}, [dialog?.id, sound, tts, t]);
+	}, [dialogCueId, sound, tts, t]);
 	useEffect(() => {
 		if (chat.conversations === listAtConnect.current) return;
 		const ids = chat.conversations.flatMap((c) => (c.dialogId !== undefined ? [c.dialogId] : []));
@@ -1373,7 +1376,8 @@ export function App() {
 	}, [chat.conversations, sound, tts, t]);
 
 	useEffect(() => {
-		const qid = chat.question?.id ?? null;
+		// owner-question routing (Ops #685): a question held for COO first shows quietly; it sounds once let through.
+		const qid = cueIdOf(chat.question);
 		const rid = chat.remoteQuestion ? `${chat.remoteQuestion.owner}:${chat.remoteQuestion.id}` : null;
 		let shouldCue = false;
 
@@ -1418,7 +1422,8 @@ export function App() {
 	// 按 ID 集合去重，切换会话核对代码后再切回时绝不重复响铃。
 	useEffect(() => {
 		const approval = chat.approval;
-		const id = approval?.id ?? null;
+		// owner-question routing (Ops #685): a prompt held for COO first shows quietly; it sounds once let through.
+		const id = cueIdOf(approval);
 		if (id !== null && !notifiedApprovalIds.current.has(id)) {
 			notifiedApprovalIds.current.add(id);
 			if (notifiedApprovalIds.current.size > 64) {

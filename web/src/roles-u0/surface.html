@@ -187,7 +187,7 @@ body{margin:0}
 <span style="padding: 3px 8px; border-radius: 5px; font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: {{it.kindFg}}; background: {{it.kindBg}}">{{it.kind}}</span>
 <span style="font-weight: 600; color: #D6D9DD">{{it.role}}</span>
 <span style="margin-left: auto; color: #A9AEB6">Waiting on you · {{it.age}}</span>
-</div>
+</div><sc-if value="{{it.hasRoute}}" hint-placeholder-val="{{false}}"><div data-owner-question-route="1" style="display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; line-height: 1.4; color: #C9CDD2; overflow-wrap: anywhere"><p style="margin: 0; font-weight: 650; color: #ECEDEE">{{it.routeLine}}</p><sc-if value="{{it.hasRouteLines}}" hint-placeholder-val="{{false}}"><dl style="margin: 0; display: flex; flex-direction: column; gap: 4px"><sc-for list="{{it.routeLines}}" as="r" hint-placeholder-count="2"><div style="overflow-wrap: anywhere"><dt style="display: inline; font-weight: 650; color: #ECEDEE">{{r.label}}:</dt> <dd style="display: inline; margin: 0">{{r.text}}</dd></div></sc-for></dl></sc-if></div></sc-if>
 <sc-if value="{{it.hasBrief}}" hint-placeholder-val="{{false}}"><dl data-owner-card-brief="1" style="margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; line-height: 1.4; color: #C9CDD2"><sc-for list="{{it.brief}}" as="b" hint-placeholder-count="6"><div style="overflow-wrap: anywhere"><dt style="display: inline; font-weight: 650; color: #ECEDEE">{{b.label}}:</dt> <dd style="display: inline; margin: 0">{{b.text}}</dd></div></sc-for></dl></sc-if>
 <p style="margin: 0; font-size: 15.5px; font-weight: 650; line-height: 1.3">{{it.title}}</p>
 <p style="margin: 0; font-size: 13.5px; color: #B9BEC5">{{it.context}}</p>
@@ -271,7 +271,7 @@ body{margin:0}
 <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12.5px">
 <span style="padding: 3px 8px; border-radius: 5px; font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: {{it.kindFg}}; background: {{it.kindBg}}">{{it.kind}}</span>
 <span style="margin-left: auto; color: #A9AEB6">Waiting on you · {{it.age}}</span>
-</div>
+</div><sc-if value="{{it.hasRoute}}" hint-placeholder-val="{{false}}"><div data-owner-question-route="1" style="display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; line-height: 1.4; color: #C9CDD2; overflow-wrap: anywhere"><p style="margin: 0; font-weight: 650; color: #ECEDEE">{{it.routeLine}}</p><sc-if value="{{it.hasRouteLines}}" hint-placeholder-val="{{false}}"><dl style="margin: 0; display: flex; flex-direction: column; gap: 4px"><sc-for list="{{it.routeLines}}" as="r" hint-placeholder-count="2"><div style="overflow-wrap: anywhere"><dt style="display: inline; font-weight: 650; color: #ECEDEE">{{r.label}}:</dt> <dd style="display: inline; margin: 0">{{r.text}}</dd></div></sc-for></dl></sc-if></div></sc-if>
 <sc-if value="{{it.hasBrief}}" hint-placeholder-val="{{false}}"><dl data-owner-card-brief="1" style="margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; line-height: 1.4; color: #C9CDD2"><sc-for list="{{it.brief}}" as="b" hint-placeholder-count="6"><div style="overflow-wrap: anywhere"><dt style="display: inline; font-weight: 650; color: #ECEDEE">{{b.label}}:</dt> <dd style="display: inline; margin: 0">{{b.text}}</dd></div></sc-for></dl></sc-if>
 <p style="margin: 0; font-size: 16px; font-weight: 650; line-height: 1.3">{{it.title}}</p>
 <p style="margin: 0; font-size: 13.5px; color: #C9CDD2">{{it.context}}</p>

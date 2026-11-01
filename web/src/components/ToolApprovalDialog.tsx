@@ -4,6 +4,7 @@ import { FiAlertTriangle, FiCheck, FiCheckCircle, FiEdit3, FiLayers, FiX } from 
 import { appSend } from "../app-globals";
 import { useT } from "../i18n";
 import type { UiToolApproval } from "../types";
+import { OwnerQuestionRoute } from "./OwnerQuestionRoute";
 
 interface ToolApprovalDialogProps {
 	approval: UiToolApproval | null;
@@ -118,6 +119,7 @@ export function ToolApprovalDialog({ approval }: ToolApprovalDialogProps) {
 				</div>
 
 				<div className="tool-info-body" style={{ padding: "16px 20px" }}>
+					<OwnerQuestionRoute route={approval.route} />
 					{/* 风险告警原因 */}
 					{(approval.reason || approval.reasonEn) && (
 						<div

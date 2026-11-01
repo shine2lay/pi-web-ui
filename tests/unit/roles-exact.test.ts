@@ -425,6 +425,52 @@ describe("the supplied Roles design with the existing feed", () => {
 		expect(document.querySelector('[role="region"]')?.textContent).toContain("Question 2");
 	});
 
+	it("owner-question routing (Ops #685): a routed card opens with which way it came, then COO's words, before its brief; none without a route", () => {
+		const brief = [{ label: "The project", text: "Not part of a project." }];
+		const released = ask(1, {
+			kind: "task",
+			focus: "task:7",
+			askId: "stuck:x#1",
+			brief,
+			route: { line: "Came through COO", note: "Ops needs a port.", recommendation: "Use 8080." },
+		});
+		const direct = ask(2, { route: { line: "You were chatting here (you wrote 1 minute ago)" } });
+		const unsafe = ask(3, { route: { line: "Came\u0007through COO" } });
+		const asks = [released, direct, unsafe, ask(4)];
+		const { view } = fixture(projectExactRoles(state([role()], asks), "open", NOW), true);
+		const inbox = list(view.values().inbox).map(object);
+		expect(inbox.map((item) => item.hasRoute)).toEqual([true, true, false, false]);
+		expect(inbox.map((item) => item.routeLine)).toEqual([
+			"Came through COO",
+			"You were chatting here (you wrote 1 minute ago)",
+			"",
+			"",
+		]);
+		expect(list(inbox[0].routeLines).map(object)).toEqual([
+			{ label: "COO", text: "Ops needs a port." },
+			{ label: "COO recommends", text: "Use 8080." },
+		]);
+		expect(inbox.map((item) => item.hasRouteLines)).toEqual([true, false, false, false]);
+		view.openRole("ops", document.body);
+		vi.runAllTimers();
+		const routes = [...document.querySelectorAll("[data-owner-question-route]")];
+		expect(routes).toHaveLength(2);
+		// Let through by COO: its line first after the header, then COO's words, then the brief, then the question.
+		expect(routes[0].previousElementSibling?.textContent).toContain("Waiting on you");
+		expect(routes[0].textContent).toBe("Came through COOCOO: Ops needs a port.COO recommends: Use 8080.");
+		expect(routes[0].nextElementSibling?.hasAttribute("data-owner-card-brief")).toBe(true);
+		expect(routes[0].nextElementSibling?.nextElementSibling?.textContent).toBe("Question 1");
+		// Straight to him: just its line, before the question.
+		expect(routes[1].textContent).toBe("You were chatting here (you wrote 1 minute ago)");
+		expect(routes[1].nextElementSibling?.textContent).toBe("Question 2");
+		// No route, or one that isn't plain: the card is drawn as before, its question straight after its header.
+		for (const question of ["Question 3", "Question 4"]) {
+			const text = [...document.querySelectorAll("p, div")].find((el) => el.textContent === question);
+			expect(text?.previousElementSibling?.textContent).toContain("Waiting on you");
+		}
+		expect(document.body.textContent).not.toContain("Came\u0007through");
+	});
+
 	it("the full-queue link goes to the role's home queue, not the first task's chat", () => {
 		const { view, actions } = fixture();
 		view.openRole("ops");

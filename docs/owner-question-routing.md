@@ -1,9 +1,9 @@
 # Owner-question routing: straight to the owner, or through COO first
 
-Ops #684 (project owner-cards-plain-context, lead Ops). Groundwork only: the routing rule, the durable hold store
-with its safety-net clock, and AskHub's held state, with tests. **Nothing calls them yet**, so nothing changes for
-any chat or surface. #685 records the facts the rule needs and passes a route, #686 adds COO's card and the plain
-lines on the owner's surfaces, #687 switches it on.
+Ops #684 (project owner-cards-plain-context, lead Ops) laid the groundwork: the routing rule, the durable hold store
+with its safety-net clock, and AskHub's held state. Ops #685 wires every owner ask through it behind a switch,
+`ownerQuestionsViaCoo`, which is **off** until #687 turns it on: while it is off nothing changes for any chat or
+surface. #686 adds COO's card and tool to let a held ask through or hand it back.
 
 ## Why
 
@@ -157,6 +157,69 @@ Also through: a clock set back before the hold (`clock-moved-back`), or one that
 
 `AskHub`'s constructor takes an optional clock (`Date.now` by default) for the times it holds and lets through.
 
+## The wiring (#685)
+
+**The switch.** `ownerQuestionsViaCoo` in pi-web-ui's settings (Settings, "Questions for you go through COO first";
+`server/client-state.ts`, `server/settings-service.ts`), **off** by default. Off is exactly as before #685: no ask is
+routed, nothing is held or written, and every card looks as it did. Turning it off again is the undo, with no revert:
+new asks go as before, and the next sweep (within 30 seconds) lets everything held through.
+
+**His last input's time** (`server/owner-input-time.ts`). Admission collects each accepted input into the chat's turn
+record (`noteTurnCause` in agent-service, `collectRoleInput`); when it recorded the input as his (an owner requester:
+a real browser page through `browserRoleInput`, or a Telegram message through `host.roles.send`), `noteOwnerInput`
+stamps the host's time on the chat and the turn (`ownerLastWroteAt`). Nothing is read from words.
+`server/running-chats.ts` saves the time beside the turn's requester (`RunningChat.ownerLastWroteAt`, a field of its
+own, so an older build reading the file loses nothing), and `carriedTurnOf` gives it back to a turn carried on after a
+restart.
+
+**Where an ask is routed.** At the moment it is made, `OwnerQuestionRouter.routeAskIn`
+(`server/owner-question-router.ts`) applies the rule to the asking chat's turn record, `ownerLastWroteAt`, the role
+whose home chat asks, and now:
+
+| Ask | Call site |
+| --- | --- |
+| ask_user_question | `askUser` |
+| Extension dialogs (`ChatDialogs`, including pi-queue's plan approvals) | the dialog watcher |
+| Tool approvals | `askApproval` |
+| A queued task's card | the stuck-card reconcile (`wantedStuckAsks`, then `askHub.add`): route `queued-work`, keyed by the card's key and signature, so it stays held from its first time across restarts |
+
+The role-message guard's continuation-grant asks are not routed. agent-service.ts only calls; the logic is in
+`server/owner-question-router.ts` and `server/owner-question-surfaces.ts`.
+
+**A held ask** stays off his screens until it is let through:
+
+- no pop-up in other windows (`shownToWindow`); no "?" or needs-you highlight in the chat list or the lead bar; not
+  under Needs you or in the Roles page's counts;
+- nothing to Telegram or any other plugin: `server/plugins.ts` passes a plugin only the ask events
+  `ownerSeesAskEvent` allows;
+- no sound, desktop notification or spoken announcement (`cueIdOf` in `web/src/owner-question-route.ts`);
+- the needs-you marks about it wait with it: pi-queue's "Task #N needs you" line and notice and the task chat's
+  "Needs decision" label while the card isn't made yet or is held, and the asking chat's own needs-you line written
+  for it (the newest unanswered one up to 5 seconds after the ask, `writtenForAsk`, as the Roles page pairs them);
+- roles_overview, which COO reads, lists it under "waits on the owner" as "with COO first until HH:MM".
+
+The asking chat's own page and the Queue tab still show it, quietly, marked "With COO first. You can answer here.";
+an answer there settles it as usual, and its record becomes gone.
+
+**Let through** by COO (#686) or by the safety net, it reaches him everywhere as today, with the route's line first,
+before #682's brief, then COO's note and recommendation when given: in the pop-ups, the Queue tab card, the Roles
+page's decision cards (`web/src/roles-exact/owner-asks.ts`, `web/src/roles-u0/surface.html`) and answer dialog, and
+Telegram (`renderRoute` before the brief). A direct ask carries its line too ("You were chatting here (you wrote 1
+minute ago)", "From COO's chat").
+
+**The safety net.** The router's interval (`SAFETY_NET_SWEEP_MS`, 30 seconds) calls the store's `due(now)` and lets
+through what is due. A queued task's card made again after a restart follows the store: still held from its first
+time, or shown at once with COO's words once released.
+
+**Handed back.** `returnToAsker` ends the ask_user_question call with: "Not the owner's answer. COO handed this back
+as your own call: <note>. If only the owner can give it, ask again: it goes straight to him." A second ask from the
+same chat in the same turn goes straight to him (`asked-again-after-return`).
+
+**Known edges** (switch on only, for #686 and #687). pi-queue writes its line and notice about 100 ms before the card
+is made, and a chat mostly writes its own needs-you line just before it asks: a mark can show for that moment, without
+a sound. A task whose card is held doesn't count as waiting on the owner, so the stall watch may call it quiet if COO
+keeps it long.
+
 ## Hypotheses and results
 
 **H-OWNER-ROUTE-RULE (rule 20).** Wrong now: every owner ask goes to him on every surface at once, whoever started
@@ -178,6 +241,24 @@ past these points.
 (2); and the file (9): a file that isn't JSON, another version, a record it doesn't know, the same key twice, a file
 too big, a link or a folder in its place, and a failing write all fail open, and a missing file is an empty store.
 
+**H-OWNER-ROUTE-WIRE (#685).** Wrong now: every owner ask reaches every surface at once (evidence above). The change:
+the switch; the time of his last accepted input recorded at admission and kept across a carry-on; the rule applied
+where each ask is made; a held ask kept off every owner surface but its own chat's page and the Queue tab; a released
+one shown everywhere with its line first; the safety-net interval; the return text. Expected: integration tests with
+fake chats show each case: his question with his last input 1 minute old shows at once with its line; the same turn
+at 31 minutes is held as owner-away; a carried-on turn keeps his time; a role-started turn's question is held, absent
+from Telegram's input, Needs you and the counts but present in the asking chat; a release shows COO's note; the
+safety net lets it through after 30 minutes on a fake clock; a restart reload follows the store; the return text,
+and a re-ask goes direct; switch off is byte-identical to today. Wrong if a held ask reaches any owner surface before
+release, never reaches him after the safety net, the window misroutes a case, or switch off changes anything.
+**Result: HIT.** Every case passes (below), and none of the four wrong-if results showed. Switch off: the same run of
+every kind of ask, with the router in the path but off and with no router at all, gives byte-identical output on
+every surface (events, the list, Telegram's text and buttons, the Roles overview and roles_overview's text, the
+pop-ups' messages), routes nothing and writes no store file. Testing also found two more ways a held ask showed, now
+kept back with it: the needs-you marks written about it (pi-queue's line, notice and task label, and the chat's own
+line), and the pop-up's sound and desktop notification on its own page; and a review before landing found the Roles
+page's decision cards drew #682's brief but not the route's line, now added there too.
+
 ## Checks
 
 - `tests/unit/owner-question-route.test.ts` (52 tests): the case table, its order and sides, the window constant, no
@@ -193,7 +274,23 @@ too big, a link or a folder in its place, and a failing write all fail open, and
   this change and after it (add, the same id again, list, get, a bad, a missing and two good answers, a late answer,
   settling twice, listeners on and off) gives byte-identical events and results (2,935 bytes each), and every event
   carries the caller's own object in both.
+- #685, `tests/unit/owner-question-wiring.test.ts` (13 tests): the cases of H-OWNER-ROUTE-WIRE through the real
+  router, store, AskHub, Telegram plugin and Roles reader with fake chats, and switch off against no router at all.
+- #685, `tests/unit/owner-question-client-session.test.ts` (11 tests): the same cases through the real ClientSession
+  with two fake windows (pop-ups, snapshots, the chat list's "?", the Queue tab card, the needs-you marks), and
+  switch off giving exactly today's messages.
+- #685, `tests/unit/owner-question-route-view.test.ts` (3 tests): the page shows only plain route lines, and a held
+  card doesn't sound. `tests/unit/chat-dialogs.test.ts`: a chat can keep a notice from the window.
+  `tests/unit/roles-exact.test.ts`: the Roles page's decision card opens with the route's line, then COO's words,
+  then the brief and the question; a card with no route, or one that isn't plain, is drawn as before.
+- Before #685's code (its base, 5e36933a), the three new files can't load, and the chat-dialogs notice test fails.
+- Roles page with no route, old against new (a one-off render, not kept): the same asks, with and without a brief,
+  in Your decisions and the role's panel give the same page, node for node and character for character, apart from
+  the renderer's own `data-u0-key` position labels, which shift by one after the added block and are read by nothing
+  else.
 
 ## Undo
 
-Revert the commit. Nothing calls the new code, so no deploy is needed either way.
+With the switch on (#687): turn `ownerQuestionsViaCoo` off in Settings. New asks go as before, and the next sweep lets
+every held ask through; after that nothing is held or written while it stays off. To remove the code: revert #685's commit, then
+#684's, and deploy; `<dataDir>/owner-question-holds.json`, if written, can be deleted then.

@@ -110,6 +110,26 @@ function askLine(a: UiRoleAsk, role: string, tz: string, now: number, lim: Limit
 	return `- ${a.kind} in ${whereText(a.chat, role)}${since}: ${clip(a.text, lim.lineMax)}`;
 }
 
+/** "14:35" in the overview's time zone. */
+export function clockText(ms: number, tz: string): string {
+	try {
+		return new Intl.DateTimeFormat("en-GB", {
+			timeZone: tz || undefined,
+			hour: "2-digit",
+			minute: "2-digit",
+			hourCycle: "h23",
+		}).format(new Date(ms));
+	} catch {
+		return new Date(ms).toISOString().slice(11, 16);
+	}
+}
+
+/** owner-question routing (Ops #685): an ask held for COO first, and until when at the latest. */
+function withCooLine(a: UiRoleAsk, role: string, tz: string, lim: Limits): string {
+	const until = a.until !== undefined && Number.isFinite(a.until) ? ` until ${clockText(a.until, tz)}` : "";
+	return `- ${a.kind} in ${whereText(a.chat, role)}, with COO first${until}: ${clip(a.text, lim.lineMax)}`;
+}
+
 /** One role's lines. */
 export function roleText(r: UiRoleOverview, tz: string, now: number, lim: Limits): string {
 	const out = [
@@ -140,10 +160,15 @@ export function roleText(r: UiRoleOverview, tz: string, now: number, lim: Limits
 		}
 		if (r.tldr.length > lim.tldr) out.push(`- (${r.tldr.length - lim.tldr} older lines not shown)`);
 	}
-	if (r.asks.length) {
-		out.push(`Waiting on the owner (${r.asks.length}):`);
+	const withCoo = r.withCoo ?? [];
+	if (r.asks.length || withCoo.length) {
+		const cooText = withCoo.length ? `, and ${withCoo.length} with COO first` : "";
+		out.push(`Waiting on the owner (${r.asks.length}${cooText}):`);
 		for (const a of r.asks.slice(0, lim.asks)) out.push(askLine(a, r.id, tz, now, lim));
 		if (r.asks.length > lim.asks) out.push(`- (${r.asks.length - lim.asks} more)`);
+		// owner-question routing (Ops #685): not his yet; it reaches him when COO lets it through, or by then.
+		for (const a of withCoo.slice(0, lim.asks)) out.push(withCooLine(a, r.id, tz, lim));
+		if (withCoo.length > lim.asks) out.push(`- (${withCoo.length - lim.asks} more with COO first)`);
 	}
 	if (r.queue) {
 		const q = r.queue;
@@ -210,6 +235,12 @@ export function boardSummary(view: UiRolesOverview, tz: string, now: number): st
 	return out;
 }
 
+/** owner-question routing (Ops #685): ", and N more with COO first" (nothing when none). */
+function cooHead(view: UiRolesOverview): string {
+	const n = view.roles.reduce((sum, r) => sum + (r.withCoo?.length ?? 0), 0);
+	return n ? `, and ${n} more with COO first` : "";
+}
+
 /** The overview as text: all roles in short, or one role in full. Throws for a role that isn't there. */
 export function formatRolesOverview(view: UiRolesOverview, opts: { role?: string; now?: number } = {}): string {
 	const now = opts.now ?? Date.now();
@@ -223,7 +254,7 @@ export function formatRolesOverview(view: UiRolesOverview, opts: { role?: string
 	let lim = wanted ? FULL : SHORT;
 	const head = [
 		`Roles overview at ${whenText(view.at, tz, now)}, times in ${tz || "the server's time zone"}.`,
-		`${view.roles.length} roles; ${view.asks.length} things wait on the owner.${view.paused ? " Role messages are paused by the owner." : ""}`,
+		`${view.roles.length} roles; ${view.asks.length} things wait on the owner${cooHead(view)}.${view.paused ? " Role messages are paused by the owner." : ""}`,
 	];
 	if (!wanted) {
 		const counts = new Map<string, number>();

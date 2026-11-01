@@ -2226,6 +2226,8 @@
 		"quietStallPokesDesc": "Attivo: un turno avviato da un sollecito di stallo appare come una riga chiusa; Spento: completo",
 		"quietScheduledWakes": "Ripiega i risvegli programmati",
 		"quietScheduledWakesDesc": "Attivo: un turno avviato da un risveglio programmato appare come una riga chiusa; Spento: completo",
+		"ownerQuestionsViaCoo": "Le domande per te passano prima da COO",
+		"ownerQuestionsViaCooDesc": "Attivo: una domanda da un lavoro che non hai avviato, o fatta dopo 30 minuti di tua assenza, va prima a COO e ti arriva quando COO la inoltra (o dopo 30 minuti se COO non fa nulla); Spento: ogni domanda ti arriva subito",
 		"boardNoteLabel": "la bacheca · {what}",
 		"boardOrderLabel": "da {from} · ordine della bacheca",
 		"boardOrderLabelVia": "da {from}, tramite {via} · ordine della bacheca",

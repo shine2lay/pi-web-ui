@@ -31,6 +31,7 @@ import type {
 } from "../types";
 import { effectiveProfile, ProfileEditor, ProfileSummary } from "./QueueProfile";
 import { OwnerCardBrief } from "./OwnerCardBrief";
+import { OwnerQuestionRoute } from "./OwnerQuestionRoute";
 import { briefLines } from "../roles-useful-model";
 import { useT, type Translate } from "../i18n";
 import { Markdown } from "./Markdown";
@@ -406,6 +407,8 @@ export interface TaskQueueAnswerBinding {
 	readonly detail?: string;
 	/** owner-card-brief (Ops #682): the card's plain brief, shown first (briefLines takes it only whole). */
 	readonly brief?: readonly UiOwnerCardBriefLine[];
+	/** owner-question routing (Ops #685): which way it came, shown before the brief (absent while the switch is off). */
+	readonly route?: unknown;
 }
 
 export interface TaskQueueAnswerRequest {
@@ -869,6 +872,7 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 					<div className="task-queue-question">
 						{/* queue-paused: a paused task doesn't need you while paused: resume it to answer. */}
 						{!held && <span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>}
+						{!held && <OwnerQuestionRoute route={binding?.route} />}
 						{!held && <OwnerCardBrief lines={briefLines(binding?.brief)} />}
 						{task.question && <span className="task-queue-question-text">{task.question}</span>}
 						{task.detail && (

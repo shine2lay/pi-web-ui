@@ -458,6 +458,8 @@ interface SettingsPatch {
 	quietQueueWakes?: boolean;
 	quietStallPokes?: boolean;
 	quietScheduledWakes?: boolean;
+	/** owner-question routing (Ops #685): the owner's questions go through COO first (server setting; default off). */
+	ownerQuestionsViaCoo?: boolean;
 	devNoCache?: boolean;
 	autoReload?: boolean;
 	skillsFullText?: string[];
@@ -2462,6 +2464,12 @@ export function SettingsModal({
 									tip={t("quietScheduledWakesDesc")}
 									enabled={settings.quietScheduledWakes ?? false}
 									onToggle={() => setPartial({ quietScheduledWakes: !(settings.quietScheduledWakes ?? false) })}
+								/>
+								<ToggleRow
+									title={t("ownerQuestionsViaCoo")}
+									tip={t("ownerQuestionsViaCooDesc")}
+									enabled={settings.ownerQuestionsViaCoo ?? false}
+									onToggle={() => setPartial({ ownerQuestionsViaCoo: !(settings.ownerQuestionsViaCoo ?? false) })}
 								/>
 								<ToggleRow
 									title={t("presentAutoOpen")}

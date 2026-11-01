@@ -3447,6 +3447,23 @@ button.rolemsg-fold:focus-visible {
 	display: inline;
 	margin: 0;
 }
+/* owner-question routing (Ops #685): the line a card opens with, saying which way it came, before the brief;
+   COO's note and recommendation under it in the brief's form. Held for COO: the amber Needs-you edge. */
+.owner-question-route {
+	margin: 4px 0 6px;
+	overflow-wrap: anywhere;
+}
+.owner-question-route.held {
+	border-left: 3px solid var(--amber-fg);
+	padding-left: 6px;
+}
+.owner-question-route-line {
+	margin: 0 0 2px;
+	font-weight: 600;
+}
+.owner-question-route .owner-card-brief {
+	margin: 0;
+}
 /* queue-blocked: a blocked task: the theme's cyan edge and badge (not Needs you's amber, not the blue of the
    main chat's answers), and one line saying what it waits on. */
 .task-queue-task.blocked {

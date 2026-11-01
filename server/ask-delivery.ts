@@ -23,7 +23,7 @@
  *      · 到点还是没有 → 拒掉，让模型知道「没人在线」，可以改用正文提问而不是干等。
  */
 
-import type { QuestionAnswer, UiQuestion } from "./protocol.js";
+import type { QuestionAnswer, ServerMessage, UiQuestion } from "./protocol.js";
 import type { QuestionAcceptanceSource } from "./queue-question-acceptance.js";
 
 /** 一张待答问卷的服务端状态。 */
@@ -41,6 +41,23 @@ export interface PendingQuestionEntry {
 	askId?: string;
 	/** Native source at presentation; not a queue/question binding or answer authority. */
 	nativeSource?: QuestionAcceptanceSource;
+	/** owner-question routing (Ops #685): COO handed the question back with this note; the call ends
+	 *  with it (owner-question-router.ts questionReturnedText), never as the owner's answer. */
+	returned?: (note: string) => void;
+}
+
+/** The message every window gets for a waiting question, named after the chat that asks. */
+export function questionPendingMessage(
+	id: string,
+	entry: Pick<PendingQuestionEntry, "questions" | "conversationId" | "conversationTitle">,
+): Extract<ServerMessage, { type: "question_pending" }> {
+	return {
+		type: "question_pending",
+		id,
+		questions: entry.questions,
+		...(entry.conversationId !== undefined ? { conversationId: entry.conversationId } : {}),
+		...(entry.conversationTitle ? { conversationTitle: entry.conversationTitle } : {}),
+	};
 }
 
 /** 没有页面连着时，等待页面回来的宽限期（毫秒）。刷新/重连通常 1-3 秒。 */

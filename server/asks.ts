@@ -23,7 +23,8 @@
  * adds its line to the ask). One routed to COO is held: kept and answerable on the asking chat's own
  * page, but neither listed nor announced ("held" instead of "appeared") until it is let through
  * (release: "released", then "appeared"), or COO hands a question back (returnToAsker: "returned",
- * and it no longer waits). No caller passes a route yet (Ops #684, inert groundwork).
+ * and it no longer waits). owner-question-router.ts routes each ask while the ownerQuestionsViaCoo setting is on
+ * (Ops #685); with it off no route is passed, as before.
  */
 import {
 	cameThroughCooLabel,
@@ -167,7 +168,8 @@ const ONLY_QUESTIONS_GO_BACK = "only a question can go back to the chat that ask
 const RETURN_NEEDS_NOTE = "say what the chat should do instead";
 
 /** owner-question routing: routed to COO and not let through yet. */
-const isHeld = (ask: Ask): boolean => ask.route?.to === "coo" && ask.route.releasedBy === undefined;
+export const isAskHeld = (ask: Ask | undefined): boolean =>
+	ask?.route?.to === "coo" && ask.route.releasedBy === undefined;
 
 /** A COO route let through, with its line: COO's words, or that COO added nothing and how long it took. */
 function letThrough(route: CooRoute, by: AskReleasedBy, at: number, note?: string, recommendation?: string): CooRoute {
@@ -186,6 +188,7 @@ function letThrough(route: CooRoute, by: AskReleasedBy, at: number, note?: strin
 export class AskHub {
 	private readonly asks = new Map<string, { ask: Ask; onAnswer: AskAnswerFn }>();
 	private readonly listeners = new Set<(ev: AskEvent) => void>();
+	private readonly observers = new Set<(ev: AskEvent) => void>();
 
 	/** `now`: when an ask is held and let through (owner-question routing). */
 	constructor(private readonly now: () => number = Date.now) {}
@@ -204,7 +207,7 @@ export class AskHub {
 		if (this.asks.has(ask.id)) return false;
 		const kept: Ask = route ? { ...ask, route: this.routeOf(route) } : ask;
 		this.asks.set(ask.id, { ask: kept, onAnswer });
-		this.emit(isHeld(kept) ? { type: "held", ask: kept } : { type: "appeared", ask: kept });
+		this.emit(isAskHeld(kept) ? { type: "held", ask: kept } : { type: "appeared", ask: kept });
 		return true;
 	}
 
@@ -232,7 +235,7 @@ export class AskHub {
 		const e = this.asks.get(id);
 		if (!e) return { ok: false, error: NOT_WAITING };
 		if (e.ask.kind !== "question") return { ok: false, error: ONLY_QUESTIONS_GO_BACK };
-		if (!isHeld(e.ask)) return { ok: false, error: NOT_HELD };
+		if (!isAskHeld(e.ask)) return { ok: false, error: NOT_HELD };
 		const text = typeof note === "string" ? note.trim() : "";
 		if (!text) return { ok: false, error: RETURN_NEEDS_NOTE };
 		this.asks.delete(id);
@@ -298,12 +301,12 @@ export class AskHub {
 
 	/** Everything waiting for the owner now, oldest first (not what is held for COO). */
 	list(): Ask[] {
-		return [...this.asks.values()].filter((e) => !isHeld(e.ask)).map((e) => e.ask);
+		return [...this.asks.values()].filter((e) => !isAskHeld(e.ask)).map((e) => e.ask);
 	}
 
 	/** owner-question routing: everything held for COO now, oldest first. */
 	heldList(): Ask[] {
-		return [...this.asks.values()].filter((e) => isHeld(e.ask)).map((e) => e.ask);
+		return [...this.asks.values()].filter((e) => isAskHeld(e.ask)).map((e) => e.ask);
 	}
 
 	/** Hear every change. Returns the way to stop. */
@@ -314,8 +317,19 @@ export class AskHub {
 		};
 	}
 
+	/**
+	 * Hear every change as a bookkeeper (owner-question routing): before the listeners, and without
+	 * counting as someone who can answer elsewhere (`listening`). Returns the way to stop.
+	 */
+	observe(fn: (ev: AskEvent) => void): () => void {
+		this.observers.add(fn);
+		return () => {
+			this.observers.delete(fn);
+		};
+	}
+
 	private emit(ev: AskEvent): void {
-		for (const fn of [...this.listeners]) {
+		for (const fn of [...this.observers, ...this.listeners]) {
 			try {
 				fn(ev);
 			} catch (err) {

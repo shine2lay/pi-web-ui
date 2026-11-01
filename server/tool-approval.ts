@@ -18,7 +18,7 @@
  *    策略只活在内存里（挂在 Conversation 上，过户随对话搬走），重启/新对话即恢复询问。
  */
 
-import type { UiApprovalCategory } from "./protocol.js";
+import type { ServerMessage, UiApprovalCategory } from "./protocol.js";
 import { DEFAULT_APPROVAL_RULES, evaluateApprovalRules, type ApprovalRule } from "./approval-rules.js";
 
 /** 高危操作/自定义规则检测结果。 */
@@ -142,6 +142,24 @@ export interface PendingApprovalEntry {
 	conversationTitle?: string;
 	resolve: (res: ToolApprovalResolution) => void;
 	createdAt: number;
+}
+
+/** The message every window gets for a waiting prompt (named after its chat, like questions). */
+export function approvalPendingMessage(
+	e: PendingApprovalEntry,
+): Extract<ServerMessage, { type: "tool_approval_pending" }> {
+	return {
+		type: "tool_approval_pending",
+		id: e.id,
+		toolCallId: e.toolCallId,
+		toolName: e.toolName,
+		params: e.params as Record<string, unknown>,
+		reason: e.reason,
+		reasonEn: e.reasonEn,
+		...(e.category ? { category: e.category } : {}),
+		...(e.conversationId !== undefined ? { conversationId: e.conversationId } : {}),
+		...(e.conversationTitle ? { conversationTitle: e.conversationTitle } : {}),
+	};
 }
 
 export type { ApprovalRule } from "./approval-rules.js";

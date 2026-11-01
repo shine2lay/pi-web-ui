@@ -72,6 +72,14 @@ export function lineOf(l: UiTldrLine, chat: UiRoleChatRef, quiet = false): UiRol
 	};
 }
 
+/** How long after an ask its chat may still write the needs-you line about it (most write it just before). */
+export const ASK_LINE_AFTER_MS = 5_000;
+
+/** Whether a chat's line could be the needs-you line it wrote for an ask made at `askCreatedAt`. */
+export function writtenForAsk(l: Pick<UiTldrLine, "ts">, askCreatedAt: number): boolean {
+	return l.ts <= askCreatedAt + ASK_LINE_AFTER_MS;
+}
+
 export function newestWaiting(lines: UiTldrLine[]): UiTldrLine | undefined {
 	let best: UiTldrLine | undefined;
 	for (const l of lines) if (l.needsYou && !l.answered && (!best || l.ts >= best.ts)) best = l;

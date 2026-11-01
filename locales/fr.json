@@ -2226,6 +2226,8 @@
 		"quietStallPokesDesc": "Activé : un tour lancé par une relance de blocage s'affiche en une ligne fermée ; Désactivé : en entier",
 		"quietScheduledWakes": "Replier les réveils programmés",
 		"quietScheduledWakesDesc": "Activé : un tour lancé par un réveil programmé s'affiche en une ligne fermée ; Désactivé : en entier",
+		"ownerQuestionsViaCoo": "Les questions pour vous passent d'abord par COO",
+		"ownerQuestionsViaCooDesc": "Activé : une question venant d'un travail que vous n'avez pas lancé, ou posée après 30 minutes d'absence, va d'abord à COO et vous parvient dès que COO la transmet (ou après 30 minutes si COO ne fait rien) ; Désactivé : chaque question vous parvient tout de suite",
 		"boardNoteLabel": "le tableau · {what}",
 		"boardOrderLabel": "de {from} · consigne du tableau",
 		"boardOrderLabelVia": "de {from}, via {via} · consigne du tableau",

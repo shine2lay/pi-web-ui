@@ -5,6 +5,7 @@ import { useEscapeKey } from "../shortcut-stack";
 import { hoverCapable } from "../tip-position";
 import { HoverDetail } from "./HoverDetail";
 import { Markdown } from "./Markdown";
+import { OwnerQuestionRoute } from "./OwnerQuestionRoute";
 
 interface QuestionItem {
 	id: string;
@@ -30,6 +31,8 @@ interface DshQuestionDialogProps {
 		conversationId?: string;
 		conversationTitle?: string;
 		questions: QuestionItem[];
+		/** owner-question routing (Ops #685): which way it came (absent while the switch is off). */
+		route?: unknown;
 	};
 	/** 跨页作答时持有方会话 id：答案转交过去（question_answer 带 owner）。 */
 	owner?: string;
@@ -172,6 +175,7 @@ export function DshQuestionDialog({
 						✕
 					</button>
 				</div>
+				<OwnerQuestionRoute route={question.route} />
 				<div className="set-section">
 					<div className="set-hint">{t("questionNoneAvailable")}</div>
 				</div>
@@ -266,6 +270,7 @@ export function DshQuestionDialog({
 					✕
 				</button>
 			</div>
+			<OwnerQuestionRoute route={question.route} />
 			<div className="set-section" key={q.id}>
 				<div className="set-section-title">{q.header ?? `${t("modelQuestion")} ${currentStep + 1}`}</div>
 				<div className="question-head">

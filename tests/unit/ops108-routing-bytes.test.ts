@@ -27,13 +27,21 @@ describe("Ops108 baseline", () => {
 		// telegram_send tool and the "telegram:send" bus listener (telegram); its diff removes only the bridge
 		// record `{ bridge, chat }` (now also carries the notice's client) and the unload's offSettings call
 		// (now in one loop with the tool's and the listener's); no Ops108 routing line changed. Was 8875cff0….
-		expect(sha("server/plugins.ts")).toBe("553e809deb9cc8ddc6136c35d8c5e4b11dd21a2167a526f21fad27a3249fc173");
+		// Re-pinned by owner-question-wiring (Ops #685, owner via COO rm-fbbc87f6 and rm-79d1a979): it only adds the
+		// ownerSeesAskEvent import and one line in host.asks.on that keeps an ask held for COO, and its held, released
+		// and returned events, from plugins (with the switch off no ask is held, so every event goes out as before);
+		// its diff removes no line; no Ops108 routing line changed. Was 553e809d….
+		expect(sha("server/plugins.ts")).toBe("ee2f3e0d9af04b1029f36232eda43def9fe3c5a56594b75d086b8a3868996e51");
 		// Re-pinned by owner-card-brief (Ops #682, owner via COO rm-d2c1f9b2): it only adds the display-only
 		// renderBrief and puts its lines first in renderAsk's message and short form; its diff removes only renderAsk's
 		// doc comment and the two joined part lists (now with the brief); no Ops108 routing line changed. Was 91637612….
 		// Re-pinned by grant-card-brief (Ops #683, owner via COO rm-d2c1f9b2): renderBrief, display only, shows the
 		// brief of any card that has one (continuation-grant cards too), not only a stuck task's; its diff changes only
 		// that line and renderBrief's doc comment; no Ops108 routing line changed. Was f33f4073….
-		expect(sha("plugins/telegram/index.mjs")).toBe("af8c8cceb9545b6a5f0a8bfc25b09d6658446195988415c113e09c6e3998c3df");
+		// Re-pinned by owner-question-wiring (Ops #685, owner via COO rm-fbbc87f6 and rm-79d1a979): it only adds the
+		// display-only renderRoute (which way an ask came, COO's note and recommendation) and puts it after the head in
+		// renderAsk's message; its diff removes only renderAsk's doc comment and its joined part list (now with the
+		// route); no Ops108 routing line changed. Was af8c8cce….
+		expect(sha("plugins/telegram/index.mjs")).toBe("5a065c5c16163882724b5ca0c6c51252854390eccb656f938a4d2955a7714b79");
 	});
 });

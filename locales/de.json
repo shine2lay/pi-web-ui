@@ -2226,6 +2226,8 @@
 		"quietStallPokesDesc": "An: Ein durch einen Stillstands-Anstoß begonnener Durchgang erscheint als eine geschlossene Zeile; Aus: vollständig",
 		"quietScheduledWakes": "Geplante Weckrufe falten",
 		"quietScheduledWakesDesc": "An: Ein durch geplantes Wecken begonnener Durchgang erscheint als eine geschlossene Zeile; Aus: vollständig",
+		"ownerQuestionsViaCoo": "Fragen an dich gehen zuerst an COO",
+		"ownerQuestionsViaCooDesc": "An: Eine Frage aus Arbeit, die du nicht begonnen hast, oder eine, die gestellt wird, nachdem du 30 Minuten weg warst, geht zuerst an COO und erreicht dich, sobald COO sie weitergibt (oder nach 30 Minuten, wenn COO nichts tut); Aus: Jede Frage erreicht dich sofort",
 		"boardNoteLabel": "die Pinnwand · {what}",
 		"boardOrderLabel": "von {from} · Anweisung der Pinnwand",
 		"boardOrderLabelVia": "von {from}, über {via} · Anweisung der Pinnwand",

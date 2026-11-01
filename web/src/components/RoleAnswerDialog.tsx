@@ -11,6 +11,7 @@ import {
 } from "../roles-answer-model";
 import { answerRoleAsk, openRoleAsk } from "../roles-answer-state";
 import { OwnerCardBrief } from "./OwnerCardBrief";
+import { OwnerQuestionRoute } from "./OwnerQuestionRoute";
 import type { NeedsYou, NeedsYouItem, UsefulOpenTarget } from "../roles-useful-model";
 import type { UiRoleAskView } from "../types";
 
@@ -145,6 +146,7 @@ export function RoleAnswerDialog({
 				{view && (
 					<>
 						<h3 className="roles-answer-text">{view.title}</h3>
+						<OwnerQuestionRoute route={view.route} />
 						<OwnerCardBrief lines={view.brief} />
 						{view.task && (
 							<p className="roles-answer-text">
