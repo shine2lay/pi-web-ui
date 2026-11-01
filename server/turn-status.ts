@@ -91,7 +91,9 @@ function formOf(name: TurnStateName): string {
 export function statusHint(kind: TurnStatusKind): string {
 	return (
 		"The owner doesn't read this turn. Do its work with tools; your only text is one status line, no narration " +
-		`or summary, one of: ${STATES_FOR[kind].map(formOf).join("; ")}. Several messages in the turn: one line ` +
+		"or summary. Write no text before or between tool calls, and nothing after the status line. " +
+		"OK, DONE, ANSWERED and NEEDS OWNER take no detail; QUEUED #N requires #N. Use one of: " +
+		`${STATES_FOR[kind].map(formOf).join("; ")}. Several messages in the turn: one line ` +
 		'each, "<message id> <STATE>".'
 	);
 }

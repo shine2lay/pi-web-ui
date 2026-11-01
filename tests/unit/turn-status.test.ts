@@ -93,6 +93,8 @@ describe("turn-status: statusLinesOf, the code check of a turn's text", () => {
 			"DECLINED",
 			`DECLINED: ${words(DETAIL_WORDS_MAX + 1)}`,
 			"OK: nothing to do",
+			"DONE: replied",
+			"NEEDS OWNER: approval",
 			"ANSWERED #3",
 		]) {
 			expect(statusLinesOf(t), t).toBeNull();
@@ -165,6 +167,14 @@ describe("turn-status: statusHint, the incoming note's sentence for each kind", 
 			).toBe(true);
 			expect(h).toContain("no narration or summary");
 			expect(h.endsWith('Several messages in the turn: one line each, "<message id> <STATE>".')).toBe(true);
+		}
+	});
+
+	it("H-STATUS-LINE-2: explicitly forbids surrounding text and invalid status details (Ops #727)", () => {
+		for (const kind of Object.keys(STATES_FOR) as TurnStatusKind[]) {
+			const h = statusHint(kind);
+			expect(h.includes("Write no text before or between tool calls, and nothing after the status line.")).toBe(true);
+			expect(h.includes("OK, DONE, ANSWERED and NEEDS OWNER take no detail; QUEUED #N requires #N.")).toBe(true);
 		}
 	});
 
