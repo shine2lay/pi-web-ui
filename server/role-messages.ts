@@ -62,6 +62,7 @@ import { guardPolicyIsValid, ROLE_MESSAGE_POLICY, roleMessagesHourlyExempt } fro
 import type { GuardPolicy } from "./role-message-guard-contract-v2.js";
 import { readQueueEntries } from "./queue-entries-tail.js";
 import { statusHint } from "./turn-status.js";
+import { checkCiAlert, ciAlertHint, ciAlertKey, ciAlertText, ciAlertTitle, type CiAlert } from "./ci-alert.js";
 import {
 	taskQueueAll,
 	taskQueueBackOwed,
@@ -128,6 +129,9 @@ export const ROLE_POKE_SENDER = {
 } as const;
 /** stall-wake (Ops #284): who wakes a lead about stalled work (not a role: the app's work check). */
 export const ROLE_STALL_SENDER = { role: "app", title: "the work check", chat: "Work check", file: "" } as const;
+/** ci-alert (Ops #720): who tells a role's home chat about a CI run (not a role: a script on this machine, through
+ *  the control socket's ci_alert with the app token). */
+export const ROLE_CI_SENDER = { role: "app", title: "the CI watch", chat: "CI watch", file: "" } as const;
 /** role-reports: an answer without the four headings counts as final once the chat has been idle this long. */
 const REPORT_SETTLE_MS = 2 * 60_000;
 /** role-reports: no answer this long after delivery: recorded as none. */
@@ -194,6 +198,9 @@ export interface RoleMessageRecord {
 	/** stall-wake (Ops #284): kind report sent by the work check (stall-wake.ts) about stalled work: outside the role
 	 *  message caps and guards like a poke, a chain of its own, with the check's own caps. */
 	stall?: RoleStallInfo;
+	/** ci-alert (Ops #720): kind report sent by the CI watch about a CI run (ci-alert.ts): outside the role message
+	 *  caps and guards like a poke, a chain of its own; one record per key (the dedupe). */
+	ci?: RoleCiInfo;
 	/** telegram-coo: a question or request a role's home chat sent while its turn was the owner's (his
 	 *  Telegram message started it, or a reply to an earlier one of these did): the turn its reply starts
 	 *  goes to his Telegram (role-replies.ts forOwner). */
@@ -307,6 +314,15 @@ export interface RoleStallInfo {
 		owner?: true;
 	}[];
 }
+
+/** ci-alert (Ops #720): the checked fields a CI alert's header and hint are made from, and its dedupe key. */
+export type RoleCiInfo = { key: string } & Pick<
+	CiAlert,
+	"kind" | "repo" | "workflow" | "runId" | "sha" | "slot" | "conclusion" | "cancelReason" | "limitMinutes" | "event"
+>;
+
+/** ci-alert: the record, new or (duplicate) the key's first. */
+export type CiAlertResult = { ok: true; record: RoleMessageRecord; duplicate: boolean } | { ok: false; error: string };
 
 interface StoreFile {
 	v: number;
@@ -428,7 +444,7 @@ export function chatLabel(o: { taskId?: number; isHome: boolean; title?: string 
 	return t ? `chat "${t}"` : "a chat";
 }
 
-type HeaderParts = Pick<RoleMessageRecord, "id" | "from" | "kind" | "replyTo" | "report" | "poke" | "stall">;
+type HeaderParts = Pick<RoleMessageRecord, "id" | "from" | "kind" | "replyTo" | "report" | "poke" | "stall" | "ci">;
 
 /** progress-feed (task #85): what an ask for a progress update tells the lead to do with it. turn-status
  *  (Ops #688): the lead's turn ends with one status line. */
@@ -457,6 +473,8 @@ export function stallNames(s: RoleStallInfo): string {
 }
 
 export function roleMessageHeader(r: HeaderParts): string {
+	// ci-alert (Ops #720): its words are checked fields (ci-alert.ts), no brackets or line breaks.
+	if (r.kind === "report" && r.ci) return `[Role message ${r.id} from the CI watch \u00b7 ${ciAlertTitle(r.ci)}]`;
 	if (r.kind === "report" && r.stall)
 		return `[Role message ${r.id} from the work check \u00b7 stalled work \u00b7 ${oneLine(stallNames(r.stall), 120).replace(/[\]\n]/g, " ")}]`;
 	if (r.kind === "report" && r.poke)
@@ -500,6 +518,7 @@ export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } 
 						: leadHint;
 			}
 			if (r.poke) return POKE_HINT;
+			if (r.ci) return ciAlertHint(r.ci);
 			return "(The app's 6 am report request: your answer in this chat is the report the owner reads. No message_role, no new work, no tasks started.)";
 		case "fyi":
 			// No turn of its own: it is read with the chat's next message, which may be the owner's.
@@ -1239,6 +1258,7 @@ export class RoleMessages {
 			...(r.kind === "report" && r.report ? { reportDate: r.report.date } : {}),
 			...(r.poke ? { poke: { initiative: r.poke.initiative, name: r.poke.name } } : {}),
 			...(r.stall ? { stall: { names: stallNames(r.stall) } } : {}),
+			...(r.ci ? { ci: { title: ciAlertTitle(r.ci) } } : {}),
 			...(r.initiative ? { initiative: r.initiative } : {}),
 			// quiet-turns: a reply answering a question asked for the owner starts his turn, never folded.
 			...(this.ownerAnswerOf(r.id) ? { forOwner: true } : {}),
@@ -1503,30 +1523,19 @@ export class RoleMessages {
 	 * the role message caps and guards (kind report, like the 6 am report), a chain of its own.
 	 */
 	requestPoke(input: { role: string; initiative: string; name: string; text: string; why: string[] }): RolePokeResult {
-		const roleId = input.role.trim().toLowerCase();
-		const role = this.host.roles().find((r) => r.id === roleId);
-		if (!role) return { ok: false, error: `there's no role "${oneLine(roleId, 40)}"` };
-		if (!role.homeChat) return { ok: false, error: `${role.id} has no home chat` };
-		const record: RoleMessageRecord = {
-			id: newRoleMessageId((id) => !!this.byId(id)),
-			at: this.now(),
-			from: { ...ROLE_POKE_SENDER },
-			to: { role: role.id, title: role.title },
-			kind: "report",
-			chain: 1,
-			text: input.text,
-			state: "waiting",
-			sends: 0,
-			attempts: 0,
-			initiative: input.initiative,
-			poke: { initiative: input.initiative, name: input.name, why: [...input.why] },
-		};
-		this.data.messages.push(record);
-		this.save();
-		this.log(
-			`${record.id} Initiatives page -> ${role.id} \u00b7 progress update ${input.initiative} (${input.why.join(", ")})`,
+		const found = this.appReportRole(input.role);
+		if (!found.ok) return found;
+		const record = this.addAppReport(
+			found.role,
+			ROLE_POKE_SENDER,
+			input.text,
+			{
+				initiative: input.initiative,
+				poke: { initiative: input.initiative, name: input.name, why: [...input.why] },
+			},
+			(id, to) =>
+				`${id} Initiatives page -> ${to} \u00b7 progress update ${input.initiative} (${input.why.join(", ")})`,
 		);
-		this.kick();
 		return { ok: true, record };
 	}
 
@@ -1536,31 +1545,95 @@ export class RoleMessages {
 	 * message caps and guards (kind report), a chain of its own; stall-wake.ts keeps its own caps and ledger.
 	 */
 	requestStall(input: { role: string; items: RoleStallInfo["items"]; text: string }): RolePokeResult {
-		const roleId = input.role.trim().toLowerCase();
+		const found = this.appReportRole(input.role);
+		if (!found.ok) return found;
+		if (!input.items.length) return { ok: false, error: "no stalled items" };
+		const record = this.addAppReport(
+			found.role,
+			ROLE_STALL_SENDER,
+			input.text,
+			{ stall: { items: input.items.map((i) => ({ ...i })) } },
+			(id, to) =>
+				`${id} work check -> ${to} \u00b7 stalled work ${input.items.map((i) => `${i.kind} ${i.id} step ${i.step}`).join(", ")}`,
+		);
+		return { ok: true, record };
+	}
+
+	/**
+	 * ci-alert (Ops #720): the CI watch tells a role's home chat that a CI run failed (or was cut off) or that a
+	 * scheduled run never appeared (control socket ci_alert, after the app token was checked). Sent like requestPoke
+	 * (after any running turn, starts a turn, retries), as the app's: outside the role message caps and guards (kind
+	 * report), a chain of its own. The server writes the text from the checked fields only (ci-alert.ts). One record
+	 * per key: a key already in the store returns its first record (duplicate) and sends nothing.
+	 */
+	requestCiAlert(input: { role?: unknown; alert?: unknown }): CiAlertResult {
+		const checked = checkCiAlert(input.alert);
+		if (!checked.ok) return checked;
+		if (typeof input.role !== "string") return { ok: false, error: "role must be a role id" };
+		const found = this.appReportRole(input.role);
+		if (!found.ok) return found;
+		const alert = checked.alert;
+		const key = ciAlertKey(alert);
+		const first = this.data.messages.find((m) => m.ci?.key === key);
+		if (first) {
+			this.log(`${first.id} CI watch: the same alert again (${oneLine(key, 200)}), not sent`);
+			return { ok: true, record: first, duplicate: true };
+		}
+		const ci: RoleCiInfo = { key, kind: alert.kind, repo: alert.repo, workflow: alert.workflow };
+		for (const f of ["runId", "sha", "slot", "conclusion", "cancelReason", "limitMinutes", "event"] as const) {
+			if (alert[f] !== undefined) Object.assign(ci, { [f]: alert[f] });
+		}
+		const record = this.addAppReport(
+			found.role,
+			ROLE_CI_SENDER,
+			ciAlertText(alert),
+			{ ci },
+			(id, to) => `${id} CI watch -> ${to} \u00b7 ${ciAlertTitle(ci)} (${oneLine(key, 200)})`,
+		);
+		return { ok: true, record, duplicate: false };
+	}
+
+	/** ci-alert: a refused CI alert (no token, a wrong one), in the server log (never the token). */
+	noteCiAlertRefused(role: unknown, why: string): void {
+		const label = typeof role === "string" ? oneLine(role, 40) : "?";
+		this.log(`refused a CI alert for ${label}: ${why.slice(0, 200)}`);
+	}
+
+	/** The app's reports (Initiatives page, work check, CI watch) go to a role's home chat: the role, or why not. */
+	private appReportRole(roleInput: string): { ok: true; role: IdentityDef } | { ok: false; error: string } {
+		const roleId = roleInput.trim().toLowerCase();
 		const role = this.host.roles().find((r) => r.id === roleId);
 		if (!role) return { ok: false, error: `there's no role "${oneLine(roleId, 40)}"` };
 		if (!role.homeChat) return { ok: false, error: `${role.id} has no home chat` };
-		if (!input.items.length) return { ok: false, error: "no stalled items" };
+		return { ok: true, role };
+	}
+
+	/** The app's report record (kind report, chain 1, from `sender`), stored, logged and sent on its way. */
+	private addAppReport(
+		role: { id: string; title: string },
+		sender: RoleMessageRecord["from"],
+		text: string,
+		extra: Pick<RoleMessageRecord, "initiative" | "poke" | "stall" | "ci">,
+		logLine: (id: string, to: string) => string,
+	): RoleMessageRecord {
 		const record: RoleMessageRecord = {
 			id: newRoleMessageId((id) => !!this.byId(id)),
 			at: this.now(),
-			from: { ...ROLE_STALL_SENDER },
+			from: { ...sender },
 			to: { role: role.id, title: role.title },
 			kind: "report",
 			chain: 1,
-			text: input.text,
+			text,
 			state: "waiting",
 			sends: 0,
 			attempts: 0,
-			stall: { items: input.items.map((i) => ({ ...i })) },
+			...extra,
 		};
 		this.data.messages.push(record);
 		this.save();
-		this.log(
-			`${record.id} work check -> ${role.id} \u00b7 stalled work ${input.items.map((i) => `${i.kind} ${i.id} step ${i.step}`).join(", ")}`,
-		);
+		this.log(logLine(record.id, role.id));
 		this.kick();
-		return { ok: true, record };
+		return record;
 	}
 
 	/** stall-wake: durable creation receipts recover any lost ledger line before the next cap calculation.
@@ -1779,6 +1852,12 @@ export class RoleMessages {
 					error: dead.length
 						? `${replyTo} is the work check's wake about ${dead.map((i) => `project ${i.id}`).join(", ")} with nothing moving: a reply doesn't clear it. Take a way out with your tools: ${deadEndWaysOut(dead[0].id)} The check sees what you do.`
 						: `${replyTo} is the work check's wake about stalled work: no reply is needed. Act with your tools (queue_add under it, work_project or work_initiative change or wait); the check sees what you do.`,
+				};
+			}
+			if (original.kind === "report" && original.ci) {
+				return {
+					ok: false,
+					error: `${replyTo} is the CI watch's alert: no reply is needed. Look into it with your tools (open the run, fix or queue the fix).`,
 				};
 			}
 			if (original.kind === "report" && original.poke) {
@@ -2024,6 +2103,9 @@ export class RoleMessages {
 			return;
 		}
 		const state = this.host.chatState(target);
+		// CI must start its own app turn, never inherit a running owner's Telegram attribution.
+		// A carry-on is also an existing turn: leave the alert in the outbox until it settles.
+		if (r.ci && (state === "working" || resumeFile)) return;
 		const flight = this.inFlight.get(r.id);
 		if (flight) {
 			// It got in: it lands when the chat takes it (after its running turn).

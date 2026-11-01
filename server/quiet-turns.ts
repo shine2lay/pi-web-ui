@@ -38,6 +38,8 @@ export interface QuietStamp {
 	poke?: boolean | { initiative: string; name: string };
 	/** stall-wake (Ops #284): the work check's wake about stalled work (kind report): folded like a role's. */
 	stall?: boolean | { names: string };
+	/** CI alerts are app work notices, not owner-facing reports. */
+	ci?: boolean | { title: string };
 }
 
 export interface QuietCall {
@@ -110,6 +112,10 @@ const POKE_HEAD = new RegExp(
 );
 /** stall-wake (Ops #284): role-messages.ts roleMessageHeader for the work check's wake. */
 const STALL_HEAD = new RegExp(`^\\[Role message ${RM} from the work check \\u00b7 stalled work \\u00b7 [^\\]]+\\]$`);
+/** ci-alert: only the fixed header emitted by role-messages.ts, with checked repo/workflow fields. */
+const CI_HEAD = new RegExp(
+	`^\\[Role message ${RM} from the CI watch \\u00b7 (?:failed|timed out|failed to start|cancelled|missing run) \\u00b7 [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+ \\u00b7 [A-Za-z0-9 _./()-]{1,100}\\]$`,
+);
 /** pi-queue's wake-on-done notices (queue.ts wakeOnDoneText, #88). */
 const QUEUE_WAKE = /^\[Queue\] (?:Task #\d+ \(.*\) is done in its chat |\d+ tasks are done in their chats:)/;
 
@@ -136,10 +142,11 @@ function roleStarter(text: string, stamp: QuietStamp | null | undefined): Starte
 	const head = (nl === -1 ? text : text.slice(0, nl)).trimEnd();
 	const body = nl === -1 ? "" : text.slice(nl + 1).replace(/^\n+/, "");
 	if (stamp) {
+		if (stamp.ci) return stamp.forOwner ? "visible" : { kind: "role" };
 		if (stamp.poke || stamp.stall) return { kind: "role" };
 		if (stamp.kind === "report" || stamp.forOwner) return "visible";
 	} else {
-		if (POKE_HEAD.test(head) || STALL_HEAD.test(head)) return { kind: "role" };
+		if (POKE_HEAD.test(head) || STALL_HEAD.test(head) || CI_HEAD.test(head)) return { kind: "role" };
 		if (REPORT_HEAD.test(head)) return "visible";
 		const cut = text.lastIndexOf("\n\n");
 		const hint = cut === -1 ? "" : text.slice(cut + 2);

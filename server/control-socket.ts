@@ -15,6 +15,10 @@
  *                             ← {"ok":true,"receipt":{...},"existing":false,"paused":false}
  *     role-reports: only the app's 6 am report job (it shows <dataDir>/app-token); once per role and day.
  *   → {"cmd":"role_reports","date":"YYYY-MM-DD"}  ← {"ok":true,"receipts":[...]} (no text)
+ *   → {"cmd":"ci_alert","token":"<app token>","role":"ops","alert":{"kind":"failed","repo":"o/n",...}}
+ *                             ← {"ok":true,"id":"rm-…","duplicate":false}
+ *     ci-alert (Ops #720): the CI watch tells a role's home chat about a CI run; checked fields only, one per
+ *     key (docs/ci-alert.md).
  *   → {"cmd":"decisions_backfill","date":"YYYY-MM-DD"}  ← {"ok":true,"decisions":{...}} (starts it in the
  *     background; decision-records, task #83)
  *   → {"cmd":"decisions_status"}  ← {"ok":true,"decisions":{file, backfill, counts, reader, decisions}}
@@ -71,6 +75,8 @@ type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesc
 			| "requestRoleReport"
 			| "roleReportReceipts"
 			| "noteRoleReportRefused"
+			| "requestCiAlert"
+			| "noteCiAlertRefused"
 			| "decisionsBackfill"
 			| "decisionsStatus"
 			| "decisionsRead"
@@ -99,6 +105,7 @@ export interface ControlCommand {
 		| "unquiesce"
 		| "role_report"
 		| "role_reports"
+		| "ci_alert"
 		| "decisions_backfill"
 		| "decisions_status"
 		| "decisions_read"
@@ -117,6 +124,8 @@ export interface ControlCommand {
 	role?: unknown;
 	date?: unknown;
 	activity?: unknown;
+	/** ci-alert: ci_alert's alert (ci-alert.ts checkCiAlert); with token and role. */
+	alert?: unknown;
 }
 
 export interface ControlStatus {
@@ -139,6 +148,9 @@ export interface ControlStatus {
 	paused?: boolean;
 	/** role-reports: role_reports' receipts. */
 	receipts?: RoleReportReceipt[];
+	/** ci-alert: the alert's record, and whether it was already sent (the key's first record). */
+	id?: string;
+	duplicate?: boolean;
 	/** decision-records: decisions_backfill's progress, or decisions_status. */
 	decisions?: unknown;
 	/** progress-feed: feed_status, or what feed_catch_up sent. */
@@ -211,8 +223,8 @@ export function startControlServer(opts: {
 		if (!service.requestRoleReport || !service.roleReportReceipts) {
 			return { ok: false, error: "report requests aren't supported here" };
 		}
-		if (!appToken || !isAppToken(req.token, appToken)) {
-			const why = req.token === undefined ? "no app token" : "a wrong app token";
+		const why = appTokenRefusal(req.token);
+		if (why) {
 			service.noteRoleReportRefused?.(req.role, req.date, why);
 			return { ok: false, error: `refused: only the app's report job may ask for reports (${why})` };
 		}
@@ -220,6 +232,26 @@ export function startControlServer(opts: {
 		if (!res.ok) return { ok: false, error: res.error };
 		const receipt = service.roleReportReceipts(res.record.report?.date).find((x) => x.id === res.record.id);
 		return { ok: true, ...(receipt ? { receipt } : {}), existing: res.existing, paused: res.paused };
+	}
+
+	/** Why a command that needs the app token is refused (no token, a wrong one), or undefined when it's the token. */
+	function appTokenRefusal(token: unknown): string | undefined {
+		if (appToken && isAppToken(token, appToken)) return undefined;
+		return token === undefined ? "no app token" : "a wrong app token";
+	}
+
+	/** ci-alert (Ops #720): the CI watch tells a role's home chat about a CI run (only with the app token). */
+	function ciAlert(req: ControlCommand): ControlStatus {
+		if (!service.requestCiAlert) return { ok: false, error: "CI alerts aren't supported here" };
+		const why = appTokenRefusal(req.token);
+		if (why) {
+			service.noteCiAlertRefused?.(req.role, why);
+			return { ok: false, error: `refused: only the app's own jobs may send CI alerts (${why})` };
+		}
+		const extra = Object.keys(req).filter((k) => !["cmd", "token", "role", "alert"].includes(k));
+		if (extra.length) return { ok: false, error: "ci_alert takes only cmd, token, role and alert" };
+		const res = service.requestCiAlert({ role: req.role, alert: req.alert });
+		return res.ok ? { ok: true, id: res.record.id, duplicate: res.duplicate } : { ok: false, error: res.error };
 	}
 
 	function handleConnection(sock: Socket): void {
@@ -257,6 +289,9 @@ export function startControlServer(opts: {
 						break;
 					case "role_report":
 						resp = roleReport(req);
+						break;
+					case "ci_alert":
+						resp = ciAlert(req);
 						break;
 					case "role_reports":
 						resp = service.roleReportReceipts

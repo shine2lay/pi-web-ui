@@ -113,6 +113,9 @@ export interface UiRoleMessage {
 	poke?: { initiative: string; name: string };
 	/** stall-wake (Ops #284): kind report sent by the work check about stalled work: the items' names. */
 	stall?: { names: string };
+	/** ci-alert (Ops #720): kind report sent by the CI watch about a CI run: the header's words (what happened,
+	 *  repo, workflow). */
+	ci?: { title: string };
 	/** decision-records: the initiative it is part of (a short id). */
 	initiative?: string;
 	/** quiet-turns: a reply that answers a question asked for the owner: the turn it starts is his to

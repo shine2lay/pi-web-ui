@@ -56,6 +56,7 @@ export function quietMsgOf(m: UiMessage): QuietMsg {
 							...(rm.forOwner ? { forOwner: true } : {}),
 							// stall-wake (Ops #284): the work check's wake folds like a role's turn.
 							...(rm.stall ? { stall: true } : {}),
+							...(rm.ci ? { ci: true } : {}),
 						},
 					}
 				: {}),

@@ -243,6 +243,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `tests/unit/dead-end.test.ts` (new: must-catch, must-pass and quiet cases, each run twice), dead-end cases in `tests/unit/stall-watch.test.ts` (one existing fixture, a task blocked on nothing recorded, is now a dead end), `tests/unit/stall-wake.test.ts` and `tests/unit/queue-host.test.ts`; the new cases fail on the code before. Sealed gate; live look: `pi-web-ui stall list` against a hand count from the registry.
 - Undo: revert this commit and install with `pi-web-deploy` (pi-queue then says nothing about dead ends: its host has no `deadEnd`). Or turn the whole work check off with `{"mode":"off"}` in `~/.pi-web-ui/stall-watch.json`. Nothing stored changes.
 
+## ci-alert: the CI watch tells a role's home chat about a failed or missing CI run
+
+- `local` (Ops #720; requested by Systems rm-e2ea029a, owner test-selection order via COO rm-f6106b33). H-CI-ALERT-ROUTE, contract, checks and live result: `docs/ci-alert.md`. Scripts had no supported route other than `role_report`, whose 6 am job is off and stays off.
+- `server/ci-alert.ts`: checked fixed fields, closed conclusions/cancel reasons, key, server-written body, header words and work-check status-line hint. No caller text/logs/test output. `server/control-socket.ts` adds `ci_alert` behind the existing app-token check, returning an id and duplicate flag; thin engine/service wiring.
+- `server/role-messages.ts`: `requestCiAlert` shares role lookup and record/store/log/kick with `requestPoke`/`requestStall`. Sender is the CI watch, kind report, chain 1: outside role caps/guards, after the active turn, retries, no Telegram, no reply. The persisted `ci.key` dedupes each run or missed slot. No new quotas. Message stamps, parsing and the existing message card/row label the CI variant.
+- Checks: `tests/unit/ci-alert.test.ts`, `tests/unit/ci-alert-route.test.ts`, related report/stall/message tests and sealed landing gate; token/bad-field refusals, one record per key across restart, fixed wording, legacy app-report behavior. Live: the task permits one alert to Ops and one identical duplicate request, no other real-chat tests.
+- Undo: before records exist, revert; afterwards forward-disable the command while keeping stored records and their display/delivery meaning (`docs/ci-alert.md`). Deploy only through `pi-web-deploy`.
+
 ## role-message-policy-v2-reader: read expanded finite grants without enlarging historical authority
 
 - `local` (Ops #453; Owner67477/67481 chose Both). H-MSG-DOUBLE-1 and rollout/undo: `docs/role-message-policy-v2.md`. **Compatibility phase keeps active V1 (20/6/11/12/max5)**; the separately checked activation selects V2 (40/12/22/23/max10) only after this reader is installed. No new setting/screen, feature/ladder/wake/hold activation or authority bypass.

@@ -34,6 +34,8 @@ export interface ParsedRoleMessage {
 	poke?: { name: string };
 	/** stall-wake (Ops #284): the work check's wake about stalled work: the items' names. */
 	stall?: { names: string };
+	/** ci-alert (Ops #720): the CI watch's alert about a CI run: the header's words (what happened, repo, workflow). */
+	ci?: { title: string };
 	/** What the sender wrote (header and hint lines removed). */
 	body: string;
 	/** The hint line for the model, when there is one. */
@@ -48,6 +50,8 @@ const POKE_RE = new RegExp(
 );
 /** stall-wake (Ops #284): server/role-messages.ts roleMessageHeader for the work check's wake. */
 const STALL_RE = new RegExp(`^\\[Role message (${ID}) from the work check \\u00b7 stalled work \\u00b7 ([^\\]]+)\\]$`);
+/** ci-alert (Ops #720): server/role-messages.ts roleMessageHeader for the CI watch's alert. */
+const CI_RE = new RegExp(`^\\[Role message (${ID}) from the CI watch \\u00b7 ([^\\]]+)\\]$`);
 const ROLE_RE = new RegExp(
 	`^\\[Role message (${ID}) from ([a-z0-9][a-z0-9._-]*) \\((.*)\\), sent from its (.*) \\u00b7 (question|request|fyi|reply to (${ID})|reply)\\]$`,
 );
@@ -56,6 +60,7 @@ const HINT_STARTS = [
 	"(The app's 6 am report request:",
 	"(The Initiatives page asks you,",
 	"(The work check found",
+	"(The CI watch found",
 	"(An FYI from another role,",
 	"(The answer to your message",
 	"(Answer it once, with message_role",
@@ -121,12 +126,15 @@ export function parseRoleMessageText(text: string): ParsedRoleMessage | null {
 	const report = REPORT_RE.exec(head);
 	const poke = report ? null : POKE_RE.exec(head);
 	const stall = report || poke ? null : STALL_RE.exec(head);
+	const ci = report || poke || stall ? null : CI_RE.exec(head);
 	if (report) {
 		parsed = { id: report[1], kind: "report", reportDate: report[2] };
 	} else if (stall) {
 		parsed = { id: stall[1], kind: "report", stall: { names: stall[2] } };
 	} else if (poke) {
 		parsed = { id: poke[1], kind: "report", poke: { name: poke[2] } };
+	} else if (ci) {
+		parsed = { id: ci[1], kind: "report", ci: { title: ci[2] } };
 	} else {
 		const m = ROLE_RE.exec(head);
 		if (!m) return null;
@@ -159,6 +167,8 @@ export interface RoleMessageView {
 	poke?: { name: string; initiative?: string };
 	/** stall-wake (Ops #284): kind report from the work check: a wake about stalled work. */
 	stall?: { names: string };
+	/** ci-alert (Ops #720): kind report from the CI watch: an alert about a CI run. */
+	ci?: { title: string };
 	/** board: an order the owner gave through a role (COO): that role. */
 	via?: string;
 	/** board: a note's head ("2 new posts"), an order's time. */
@@ -202,6 +212,7 @@ export function roleMessageViewOf(message: ChatMessageLike, text: string): RoleM
 		...(p.reportDate ? { reportDate: p.reportDate } : {}),
 		...(p.poke ? { poke: p.poke } : {}),
 		...(p.stall ? { stall: p.stall } : {}),
+		...(p.ci ? { ci: p.ci } : {}),
 		text: p.body,
 		stamped: false,
 	};

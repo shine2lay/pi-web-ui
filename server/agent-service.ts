@@ -401,6 +401,7 @@ import {
 	type RoleMessageSender,
 	type RoleReportReceipt,
 	type RoleReportResult,
+	type CiAlertResult,
 } from "./role-messages.js";
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { admitRoleMailAtResume, installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
@@ -2544,6 +2545,8 @@ function atomicWriteFileSync(file: string, data: string): void {
  *  the host.roles.send id, and, for a reply to a question asked for the owner, who answered and his
  *  send ids (role-replies.ts forOwner). */
 interface RoleDeliveryHow {
+	/** CI reports need their own turn; do not merge their cause into a running owner's turn. */
+	requireIdle?: boolean;
 	requester?: UiTaskRequesterInput;
 	cause?: RoleTurnCause;
 	sendId?: string;
@@ -6863,11 +6866,22 @@ export class ClientSession {
 		/** telegram-coo: who sent it (default a role), the host.roles.send id, and whether it answers a
 		 *  question asked for the owner (role-replies.ts). */
 		how: RoleDeliveryHow = {},
-	): Promise<{ ok: true } | { ok: false; error: string }> {
+	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
 		await this.switchSession(file);
 		const id = this.conversationIdBySessionFile(file);
 		const conv = id ? this.convs.get(id) : undefined;
 		if (!id || !conv || id !== this.activeId) return { ok: false, error: "couldn't open the chat" };
+		// Recheck after reopening: another prompt could have started since the outbox's idle check.
+		// There is no await between this check and prompt taking its serialized admission slot.
+		if (
+			how.requireIdle &&
+			(conv.session.isStreaming ||
+				conv.session.isCompacting ||
+				conv.turnRecord ||
+				conv.turnPending ||
+				(conv.sendsInFlight ?? 0) > 0)
+		)
+			return { ok: false, busy: true, error: "the chat is still working" };
 		void this.prompt(text, undefined, true, ackId, {
 			source: "extension",
 			cause: how.cause ?? "role",
@@ -19270,6 +19284,17 @@ export class AgentService {
 		this.roleMessages.noteReportRefused(role, date, why);
 	}
 
+	/** ci-alert (Ops #720): the CI watch tells a role's home chat about a CI run (control socket, after the app
+	 *  token was checked). One per key; the server writes the text from the checked fields. */
+	requestCiAlert(input: { role?: unknown; alert?: unknown }): CiAlertResult {
+		return this.roleMessages.requestCiAlert(input);
+	}
+
+	/** ci-alert: a CI alert the control socket refused (no token, a wrong one): logged. */
+	noteCiAlertRefused(role: unknown, why: string): void {
+		this.roleMessages.noteCiAlertRefused(role, why);
+	}
+
 	/** roles-overview: the Roles page's reader (made on first use; it only reads, see roles-overview.ts). */
 	private rolesReader: RolesOverviewReader | null = null;
 	/** stall-watch (H-STALL-COST-2): the newest overview made here, by any reader, and when (Date.now()). */
@@ -19464,6 +19489,7 @@ export class AgentService {
 			: undefined;
 		return {
 			cause: this.roleMessageCause(text),
+			...(record?.ci ? { requireIdle: true } : {}),
 			...(owner ? { forOwner: owner } : {}),
 			...(requester ? { requester } : {}),
 		};

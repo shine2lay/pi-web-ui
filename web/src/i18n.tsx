@@ -1955,6 +1955,14 @@ export const en = {
 		"From the work check ({id}), waking the lead about work that isn't moving. The server set the sender.",
 	roleStallCardFromText:
 		"From the work check ({id}), as the message's first line says (the server no longer has its record).",
+	/* ci-alert (Ops #720): the CI watch tells a role's home chat about a CI run */
+	roleMessageFoldCiWatch: "From the CI watch",
+	roleCiLabel: "the CI watch \u00b7 {title}",
+	roleCiCardTitle: "CI alert \u00b7 {title}",
+	roleCiCardFrom:
+		"From the CI watch ({id}), a script on this machine that watches CI runs. The server set the sender and wrote the text from checked fields.",
+	roleCiCardFromText:
+		"From the CI watch ({id}), as the message's first line says (the server no longer has its record).",
 	roleMessageFoldOpen: "Show the whole message",
 	roleMessageFoldClose: "Fold the message into one line",
 	roleMessageFoldUnstamped: "sender as its first line says",
