@@ -49,11 +49,17 @@ Ops #715 (lead Ops; plan approved in Ops lead, Nov 1). Entries now also go at th
 
 **What would prove it wrong.** The replay of 290+292 or 290+295 still failing the check, or any entry's text changing.
 
-**Result: HIT, at the replay (Nov 1, before landing).** Both replays come out whole and pass the check; with the union alone both glue and fail (the test's "union alone" cases). The three Oct 18 cases pass unchanged with the new driver. Still to check: lands 292 and 295 with the new setting (wt land logs).
+**Result: HIT, at the replay before landing and again through the live setting after it (Nov 1).**
+
+- Before landing: both replays come out whole and pass the check; with the union alone both glue and fail (the test's "union alone" cases). The three Oct 18 cases pass unchanged with the new driver.
+- Landed as 89eebfd5 by wt land 300-7a6689, a batch of three with Ops #688 and Ops #713, checked once as 8e0e471f (ended 03:25 PST). The setting was switched in the main folder at 03:28:56 PST.
+- Through the live setting, on the real commits: `git merge-tree --write-tree --merge-base 55f2d565 4c33de7b 43a70f0a` (290+292) and the same with `3d27a022` (290+295), run in a worktree branched before this change and so without its own copy of the script, merge this file clean. The check passes both (249 and 250 entries), and each result is the base, 290's entry, one blank line and the later entry, byte for byte. 290+295 also conflicts in `server/task-queue.ts`, which is code (land 298 failed on it). wt's own rebase, `git rebase -q --no-autostash 4c33de7b` of 292's commit in a throwaway detached worktree (removed after), gives the same tree (248e8c8a) and passes; the old command on the same rebase glues the heading at line 8356 and fails.
+- How it reaches every land: every worktree, wt's batch worktrees included, reads the main folder's `.git/config` (`git config --show-origin` names it; no per-worktree config is set), and wt's own git commands drop inherited Git repository variables (`GIT_LOCAL_VARS` in agent-tools' `lib/wt.mjs`). wt runs under `node` from PATH, and Git runs the driver with the same PATH.
+- Lands 292 and 295 didn't wait for this: both landed again with their entries moved to the middle of the file (role-task-labels as land 299 in batch 294-7129f0, 5e36933a; queue-replay-shared-frozen as land 302 in this change's own batch). So no land has yet merged two end-of-file entries through the new driver. The first one that does is the live check: its wt land log, and `node scripts/check-patches-md.mjs` on `mine`.
 
 ## Switching it on, and the undo
 
-`.gitattributes` is in the tree, so every checkout of `mine` has the attribute. The driver is one setting in the repo's git config (`.git/config` of the main folder, shared by all its worktrees). Run in the main folder, once `scripts/patches-union-merge.mjs` is on `mine` there (set on Nov 1, Ops #715):
+`.gitattributes` is in the tree, so every checkout of `mine` has the attribute. The driver is one setting in the repo's git config (`.git/config` of the main folder, shared by all its worktrees). Run in the main folder, once `scripts/patches-union-merge.mjs` is on `mine` there (set Nov 1 at 03:28:56 PST, Ops #715, after 89eebfd5 landed):
 
 ```sh
 git config merge.patches-union.name "PATCHES.md whole-entry union"
