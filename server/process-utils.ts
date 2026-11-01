@@ -5,44 +5,36 @@
  */
 
 /**
- * Snapshot currently LISTENING TCP ports → owning pid. Windows: netstat;
- * POSIX: lsof. Used to detect servers the agent started in the background
+ * Snapshot currently LISTENING TCP ports → owning pid, through netstat on
+ * Windows. Used to detect servers the agent started in the background
  * (the bash tool itself exits, leaving e.g. `npm run dev &` listening).
+ *
+ * Everywhere else the snapshot is empty and nothing is spawned (Ops #699,
+ * PATCHES.md "port-snapshots-no-spawn"). The lsof parser that ran here took
+ * the port from a line's last whitespace-separated token, which in lsof's
+ * output is always the TCP state "(LISTEN)", so it never matched a line and
+ * the map was always empty on Linux and macOS. Each bash tool call still
+ * spawned lsof twice for that empty answer, about 250 ms of the server's
+ * main thread a run on a busy machine. Returning the same empty map without
+ * spawning leaves every caller's result unchanged.
  */
 export async function snapshotListeningPorts(): Promise<Map<number, number>> {
 	const m = new Map<number, number>();
+	if (process.platform !== "win32") return m;
 	try {
 		const { execFile } = await import("node:child_process");
-		if (process.platform === "win32") {
-			const out = await new Promise<string>((resolve, reject) =>
-				execFile("netstat", ["-ano", "-p", "tcp"], { windowsHide: true, timeout: 8000 }, (err, stdout) =>
-					err ? reject(err) : resolve(stdout),
-				),
-			);
-			for (const line of out.split(/\r?\n/)) {
-				const p = line.trim().split(/\s+/);
-				// TCP 0.0.0.0:5173 0.0.0.0:0 LISTENING 12345
-				if (p.length >= 5 && p[0] === "TCP" && p[3] === "LISTENING") {
-					const port = Number(p[1].split(":").pop());
-					const pid = Number(p[4]);
-					if (Number.isFinite(port) && Number.isFinite(pid)) m.set(port, pid);
-				}
-			}
-		} else {
-			const out = await new Promise<string>((resolve, reject) =>
-				execFile("lsof", ["-iTCP", "-sTCP:LISTEN", "-P", "-n"], { timeout: 8000 }, (err, stdout) =>
-					err ? reject(err) : resolve(stdout),
-				),
-			);
-			for (const line of out.split(/\r?\n/).slice(1)) {
-				const p = line.trim().split(/\s+/);
-				if (p.length >= 9) {
-					// NAME column tail: "*:5173 (LISTEN)" or "[::1]:5173 (LISTEN)"
-					const mm = (p[p.length - 1] ?? "").match(/(\d+)\)?\s*$/);
-					const port = mm ? Number(mm[1]) : NaN;
-					const pid = Number(p[1]);
-					if (Number.isFinite(port) && Number.isFinite(pid)) m.set(port, pid);
-				}
+		const out = await new Promise<string>((resolve, reject) =>
+			execFile("netstat", ["-ano", "-p", "tcp"], { windowsHide: true, timeout: 8000 }, (err, stdout) =>
+				err ? reject(err) : resolve(stdout),
+			),
+		);
+		for (const line of out.split(/\r?\n/)) {
+			const p = line.trim().split(/\s+/);
+			// TCP 0.0.0.0:5173 0.0.0.0:0 LISTENING 12345
+			if (p.length >= 5 && p[0] === "TCP" && p[3] === "LISTENING") {
+				const port = Number(p[1].split(":").pop());
+				const pid = Number(p[4]);
+				if (Number.isFinite(port) && Number.isFinite(pid)) m.set(port, pid);
 			}
 		}
 	} catch {
