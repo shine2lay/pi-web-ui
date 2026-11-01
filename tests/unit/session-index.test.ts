@@ -6,6 +6,7 @@
  */
 import {
 	appendFileSync,
+	existsSync,
 	mkdirSync,
 	openSync,
 	closeSync,
@@ -18,9 +19,9 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultSessionDirPath, SessionIndex } from "../../server/session-index.js";
-import { loadSensitive } from "./load-independent.js";
+import { loadSensitive, threadCpuMs } from "./load-independent.js";
 import { IDENTITY_ENTRY_TYPE, IdentityFileIndex, identityIdOfEntry } from "../../server/identities.js";
 
 const T0 = Date.parse("2026-09-01T10:00:00.000Z");
@@ -459,5 +460,158 @@ describe("session-index: never blocks the server", () => {
 		const busy = loadSensitive(`session-index's event-loop pause (${maxGap.toFixed(0)} ms measured)`);
 		if (busy) return ctx.skip(busy);
 		expect(maxGap).toBeLessThan(200);
+	});
+});
+
+describe("session-index: cheap saves", () => {
+	/** The file on disk equals a full `JSON.stringify` re-serialization of the index and reloads cleanly with 0 full reads. */
+	async function expectByteIdenticalToWholeSave(idx: SessionIndex): Promise<string> {
+		await idx.flush();
+		const raw = readFileSync(saveFile, "utf8");
+		const parsed = JSON.parse(raw);
+		const fullReserialized = JSON.stringify({
+			version: parsed.version,
+			fold: parsed.fold,
+			identityType: parsed.identityType,
+			files: Object.fromEntries(Object.entries(parsed.files)),
+		});
+		expect(raw).toBe(fullReserialized);
+		const reloaded = newIndex({ workers: 0 });
+		expect(await reloaded.listAll()).toEqual(await idx.listAll());
+		expect(reloaded.stats.rejectedSaves).toBe(0);
+		expect(reloaded.stats.fullReads).toBe(0);
+		return raw;
+	}
+
+	it("writes the exact bytes of a full re-serialization across mixed adds, changes and removals, atomically", async () => {
+		let t = writeChats();
+		const idx = newIndex({ workers: 0 });
+		await idx.listAll();
+		const firstRaw = await expectByteIdenticalToWholeSave(idx);
+		const firstIno = statSync(saveFile).ino;
+		expect(existsSync(`${saveFile}.${process.pid}.tmp`)).toBe(false);
+
+		// A reader holding the previous file open sees it whole while a new save replaces the path by rename.
+		const oldFd = openSync(saveFile, "r");
+		try {
+			// Remove the first entry in `files` (so the next entry becomes the first and drops its leading comma),
+			// grow one entry, rewrite one in place, change an identity, and add two new transcripts.
+			const firstKey = Object.keys(JSON.parse(firstRaw).files)[0]!;
+			rmSync(firstKey);
+			appendFileSync(
+				join(dirA, "2026-09-01T11-00-00-000Z_bbbb.jsonl"),
+				lines(message("assistant", "grown reply", (t += 60_000)), sessionInfo("Renamed bbbb", (t += 60_000))),
+			);
+			writeFileSync(
+				join(dirB, "2026-09-01T12-00-00-000Z_cccc.jsonl"),
+				lines(header("cccc", CWD_B, T0 + 60_000), message("user", "rewritten cccc", (t += 60_000))),
+			);
+			appendFileSync(join(dirA, "2026-09-01T16-30-00-000Z_jjjj.jsonl"), lines(identity("qa", (t += 60_000))));
+			writeFileSync(
+				join(dirA, "2026-09-01T18-00-00-000Z_mmmm.jsonl"),
+				lines(header("mmmm", CWD_A, (t += 60_000)), message("user", 'added "m" — line 1\nline 2', (t += 60_000))),
+			);
+			writeFileSync(
+				join(dirB, "2026-09-01T18-30-00-000Z_nnnn.jsonl"),
+				lines(header("nnnn", CWD_B, (t += 60_000)), message("user", "added n", (t += 60_000))),
+			);
+
+			await expectSameAsPi(idx);
+			const secondRaw = await expectByteIdenticalToWholeSave(idx);
+			expect(secondRaw).not.toBe(firstRaw);
+			expect(statSync(saveFile).ino).not.toBe(firstIno);
+			expect(existsSync(`${saveFile}.${process.pid}.tmp`)).toBe(false);
+			expect(readFileSync(oldFd, "utf8")).toBe(firstRaw);
+		} finally {
+			closeSync(oldFd);
+		}
+
+		// Re-create the removed first file (it now lands at the end of the Map insertion order), then remove a middle one.
+		writeFileSync(
+			join(dirA, "2026-09-01T10-00-00-000Z_aaaa.jsonl"),
+			lines(header("aaaa", CWD_A, (t += 60_000)), message("user", "aaaa returned at the end", (t += 60_000))),
+		);
+		rmSync(join(dirB, "2026-09-01T12-30-00-000Z_dddd.jsonl"));
+		await expectSameAsPi(idx);
+		await expectByteIdenticalToWholeSave(idx);
+	});
+
+	it("does not re-serialize unchanged entries on save, and saves an 18.5 MB index in a few ms of CPU", async () => {
+		let t = writeChats();
+		const idx = newIndex({ workers: 0 });
+		await idx.listAll();
+		await idx.flush();
+
+		// Touch one chat; the other chats are unchanged and must not be passed to JSON.stringify again.
+		appendFileSync(
+			join(dirA, "2026-09-01T10-00-00-000Z_aaaa.jsonl"),
+			lines(message("assistant", "only aaaa changed", (t += 60_000)), sessionInfo("aaaa title", (t += 60_000))),
+		);
+		await idx.listAll();
+		const spy = vi.spyOn(JSON, "stringify");
+		let serialized: string[];
+		try {
+			await idx.flush();
+			serialized = spy.mock.results.map((r) => String(r.value));
+		} finally {
+			spy.mockRestore();
+		}
+		expect(serialized.some((s) => s.includes("aaaa title"))).toBe(true);
+		for (const unchangedFirstMessage of ["the real first message", "forked question", "with a role"]) {
+			expect(serialized.some((s) => s.includes(unchangedFirstMessage))).toBe(false);
+		}
+		await expectByteIdenticalToWholeSave(idx);
+
+		// An 18.5 MB-sized synthetic index (2,040 entries across > 2 writev batches of 1,024, ~9 KB firstMessage each):
+		// after the first save caches all pieces, changing 13 working chats costs only those 13 entries.
+		const olderRoot = join(getAgentDir(), "older-synthetic");
+		const files: Record<string, unknown> = {};
+		const body = 'synthetic "first message" — with quotes and em-dash '.repeat(175);
+		for (let i = 0; i < 2040; i++) {
+			const p = join(olderRoot, `--synthetic-${i % 4}--`, `2026-08-01T00-00-00-000Z_s${i}.jsonl`);
+			files[p] = {
+				dev: 1,
+				ino: 100_000 + i,
+				size: 50_000 + i,
+				mtimeMs: T0 + i * 1000,
+				offset: 50_000 + i,
+				fp: { headLen: 128, head: "aa", tailLen: 128, tail: "bb" },
+				committed: {
+					header: { id: `syn-${i}`, cwd: `/synthetic/${i % 4}`, timestamp: iso(T0 + i * 1000) },
+					bad: false,
+					messageCount: 20,
+					firstMessage: `${i}:${body}`,
+					lastActivity: T0 + i * 1000,
+				},
+				view: null,
+			};
+		}
+		const bigFile = join(getAgentDir(), "web", "session-index-18mb.json");
+		writeFileSync(bigFile, JSON.stringify({ version: 1, fold: 1, identityType: IDENTITY_ENTRY_TYPE, files }));
+		expect(statSync(bigFile).size).toBeGreaterThan(18_500_000);
+
+		const workDir = join(getAgentDir(), "web", "work-18mb");
+		mkdirSync(workDir, { recursive: true });
+		const working: string[] = [];
+		for (let c = 0; c < 13; c++) {
+			const f = join(workDir, `2026-09-02T00-00-${String(c).padStart(2, "0")}-000Z_w${c}.jsonl`);
+			writeFileSync(f, lines(header(`w${c}`, CWD_A, (t += 1000)), message("user", `work ${c}`, (t += 1000))));
+			working.push(f);
+		}
+		const bigIdx = newIndex({ workers: 0, file: bigFile });
+		await bigIdx.listProject(CWD_A, workDir);
+		await bigIdx.flush(); // initial save caches all 2,053 pieces
+
+		for (const f of working) appendFileSync(f, lines(message("assistant", "step done", (t += 1000))));
+		await bigIdx.listProject(CWD_A, workDir);
+		const cpu0 = threadCpuMs();
+		await bigIdx.flush();
+		const steadySaveCpuMs = threadCpuMs() - cpu0;
+
+		const savedText = readFileSync(bigFile, "utf8");
+		expect(savedText.length).toBeGreaterThan(18_500_000);
+		expect(savedText).toBe(JSON.stringify(JSON.parse(savedText)));
+		// Old code re-serialized all 18.5 MB on every save (~330-500 ms thread CPU); cached pieces take ~5-25 ms.
+		expect(steadySaveCpuMs).toBeLessThan(100);
 	});
 });

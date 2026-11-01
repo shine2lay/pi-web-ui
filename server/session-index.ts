@@ -19,13 +19,15 @@
  * one runs join it (single-flight); `invalidate()` makes the next listing start a fresh walk.
  *
  * Saved to `<dataDir>/session-index.json` (versioned, written atomically, a few seconds after a change).
- * It's a cache: a missing, broken or old-version file only means one read from the start.
+ * It's a cache: a missing, broken or old-version file only means one read from the start. A save reuses
+ * each entry's bytes from the save before and serializes only the entries replaced since (the file is the
+ * same, byte for byte, as serializing the whole index), a slice at a time, so it never holds the server up.
  *
  * The rows are the ones `SessionManager.listAll(dir)` / `SessionManager.list(cwd, dir)` return, in the same
  * order, except `allMessagesText` (always ""): global search keeps reading the full text through pi.
  */
 import { existsSync, type Stats } from "node:fs";
-import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
 import { availableParallelism, homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,6 +49,9 @@ const SAVE_VERSION = 1;
 const SAVE_DELAY_MS = 2000;
 /** Workers left idle this long are stopped (the next read starts them again). */
 const WORKER_IDLE_MS = 30_000;
+/** A save gives the server a turn after serializing about this many new bytes (the first save after a start
+ *  serializes every entry; later ones only the entries that changed). */
+const SAVE_SLICE_BYTES = 256 * 1024;
 
 /** A `custom` entry type the index follows (the last one with an id wins), e.g. the chat's identity. */
 export interface CustomFollow {
@@ -97,6 +102,14 @@ interface Entry {
 }
 
 type Cand = { path: string; st: Stats };
+
+/** One entry as the saved file holds it, `,"<path>":<entry JSON>` in UTF-8, plus the view without the
+ *  leading comma for the first entry in `files`. */
+interface SavedPiece {
+	entry: Entry;
+	withComma: Buffer;
+	first: Buffer;
+}
 
 const zeroStats = (): SessionIndexStats => ({
 	refreshes: 0,
@@ -188,6 +201,56 @@ function sortInfos(infos: SessionInfo[]): SessionInfo[] {
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+/** The saved file as one JSON.stringify of the whole index (what every save wrote before the pieces). */
+function wholeSavedText(identityType: string | null, entries: Iterable<[string, Entry]>): string {
+	const files: Record<string, unknown> = {};
+	for (const [path, e] of entries) files[path] = e;
+	return JSON.stringify({ version: SAVE_VERSION, fold: FOLD_VERSION, identityType, files });
+}
+
+/** JSON.stringify writes this key where it was set: not an array index (an object lists those first) and
+ *  not `__proto__` (assigning it sets the prototype). Chat files' paths always are such keys (`.jsonl`). */
+function keyKeepsItsPlace(key: string): boolean {
+	if (key === "__proto__") return false;
+	return !/^(?:0|[1-9]\d*)$/.test(key) || Number(key) >= 2 ** 32 - 1;
+}
+
+const FILES_END = Buffer.from("}}");
+const WRITEV_BATCH = 1024; // POSIX IOV_MAX
+const nextTurn = () => new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+
+/** Write `parts` to `file` with `writev` (at most 1,024 buffers per call), without copying the whole file
+ *  into one buffer on the event loop first. */
+async function writePieces(file: string, parts: Buffer[]): Promise<void> {
+	const fh = await open(file, "w");
+	try {
+		let i = 0;
+		let leadOffset = 0;
+		while (i < parts.length) {
+			const batch = parts.slice(i, Math.min(parts.length, i + WRITEV_BATCH));
+			if (leadOffset > 0) batch[0] = batch[0].subarray(leadOffset);
+			let expected = 0;
+			for (const b of batch) expected += b.length;
+			if (expected === 0) break;
+			const { bytesWritten } = await fh.writev(batch);
+			if (bytesWritten <= 0) throw new Error("short writev");
+			let rem = bytesWritten;
+			while (i < parts.length) {
+				const len = parts[i].length - leadOffset;
+				if (rem < len) {
+					leadOffset += rem;
+					break;
+				}
+				rem -= len;
+				leadOffset = 0;
+				i++;
+			}
+		}
+	} finally {
+		await fh.close();
+	}
+}
 
 function parseFold(v: unknown): Fold | null {
 	if (!isObj(v)) return null;
@@ -368,6 +431,8 @@ export class SessionIndex {
 	private saveTimer: NodeJS.Timeout | null = null;
 	private saving: Promise<void> | null = null;
 	private saveWarned = false;
+	/** Each entry's bytes in the file as of the last save: the next save serializes only entries replaced since. */
+	private savedPieces = new Map<string, SavedPiece>();
 	private announced = false;
 
 	constructor(opts: SessionIndexOptions = {}) {
@@ -673,19 +738,14 @@ export class SessionIndex {
 			return;
 		}
 		this.dirty = false;
-		const files: Record<string, unknown> = {};
-		for (const [path, e] of this.entries) files[path] = e;
-		const body = JSON.stringify({
-			version: SAVE_VERSION,
-			fold: FOLD_VERSION,
-			identityType: this.identity?.customType ?? null,
-			files,
-		});
+		// The entries as they are now; a change while this save runs is saved by the next one.
+		const snapshot = [...this.entries];
 		const tmp = `${file}.${process.pid}.tmp`;
 		this.saving = (async () => {
 			try {
+				const parts = await this.savedParts(snapshot);
 				await mkdir(dirname(file), { recursive: true });
-				await writeFile(tmp, body);
+				await writePieces(tmp, parts);
 				await rename(tmp, file);
 			} catch (err) {
 				await unlink(tmp).catch(() => {});
@@ -698,6 +758,40 @@ export class SessionIndex {
 			}
 		})();
 		await this.saving;
+	}
+
+	/** The saved file's bytes in pieces: their concatenation is `wholeSavedText` of these entries, put together
+	 *  from each entry's bytes kept from the last save. Only entries replaced since (or never saved: the first
+	 *  save after a start) are serialized, and the server gets a turn after each SAVE_SLICE_BYTES of them. */
+	private async savedParts(snapshot: [string, Entry][]): Promise<Buffer[]> {
+		const identityType = this.identity?.customType ?? null;
+		// `{"version":…,"fold":…,"identityType":…,"files":{` — the pieces — `}}`.
+		const head = JSON.stringify({ version: SAVE_VERSION, fold: FOLD_VERSION, identityType, files: {} });
+		const parts: Buffer[] = [Buffer.from(head.slice(0, -2))];
+		const kept = new Map<string, SavedPiece>();
+		let sliceBytes = 0;
+		for (const [path, entry] of snapshot) {
+			let piece = this.savedPieces.get(path);
+			if (piece?.entry !== entry) {
+				if (!keyKeepsItsPlace(path)) {
+					// Not a chat file's path (only a hand-edited saved file could hold one): the whole index, as before.
+					this.savedPieces.clear();
+					return [Buffer.from(wholeSavedText(identityType, snapshot))];
+				}
+				const withComma = Buffer.from(`,${JSON.stringify(path)}:${JSON.stringify(entry)}`);
+				piece = { entry, withComma, first: withComma.subarray(1) };
+				sliceBytes += withComma.length;
+				if (sliceBytes >= SAVE_SLICE_BYTES) {
+					sliceBytes = 0;
+					await nextTurn();
+				}
+			}
+			kept.set(path, piece);
+			parts.push(parts.length === 1 ? piece.first : piece.withComma);
+		}
+		parts.push(FILES_END);
+		this.savedPieces = kept;
+		return parts;
 	}
 }
 
