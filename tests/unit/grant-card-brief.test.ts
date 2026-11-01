@@ -144,7 +144,9 @@ describe("the grant card's plain brief", () => {
 			plainSentence(raw, 2);
 			grantCardBrief(input({ context: { goal: raw, whyNeeded: raw, nextStepAndOutcome: raw } }));
 		}
-		expect(performance.now() - started).toBeLessThan(500);
+		// Capped: 0.2 to 0.3 s on the build machine at load 38; uncapped: 19.6 s. 3 s keeps about ten times the
+		// capped time as headroom for a busy test run and still fails without the cap.
+		expect(performance.now() - started).toBeLessThan(3000);
 		// What a brief shows is unchanged: the first sentence of a long text still comes through.
 		const long = `Finish the hand-off today. ${"More words about it. ".repeat(900)}`;
 		expect(plainSentence(long, 2)).toBe("Finish the hand-off today.");

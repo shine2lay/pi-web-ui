@@ -169,8 +169,9 @@ what each answer authorizes):
 - **L1, availability:** a request's context can be 16 KB, and #682's path and tidy patterns take time that grows
   with the square of a long run: 0.8 to 2 s per call on Security's worst cases, on every look at a pending card.
   `plainWords` now reads only the first 2,000 characters (this covers #682's queue cards too). Test: those worst
-  cases, whole, through `plainWords`, `plainSentence` and the grant brief, take under 500 ms together; a long
-  text's first sentence still comes through.
+  cases, whole, through `plainWords`, `plainSentence` and the grant brief, take under 3 s together (capped: 0.2
+  to 0.3 s at load 38; uncapped: 19.6 s, so the test fails without the cap; a first bar of 500 ms left under
+  twice the capped time as headroom on a busy machine); a long text's first sentence still comes through.
 - **L2, attribution:** the requester's first sentences sat under labels that read like the guard's own facts ("If
   you allow it"). They are now "Its goal", "Its reason", "Its plan if allowed".
 - **L3, who may send:** "X wants to keep messaging A and B" understated a home-chat grant, under which any named
