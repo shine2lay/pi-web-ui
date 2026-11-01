@@ -189,6 +189,18 @@ describe("OwnerQuestionHolds: durable records", () => {
 		expect(s.delivered("stuck:nope")).toBe(false);
 	});
 
+	it("rejects invalid delivery ids without recording a delivery", () => {
+		const s = storeOn(clockAt());
+		s.admit(STUCK, "stuck", "queued-work");
+		const text = readFileSync(file, "utf8");
+		for (const sendId of ["", "s".repeat(301)]) {
+			expect(s.delivered(STUCK, sendId)).toBe(false);
+			expect(s.get(STUCK)?.deliveredToCoo).toBeUndefined();
+			expect(readFileSync(file, "utf8")).toBe(text);
+		}
+		expect(s.ok).toBe(true);
+	});
+
 	it("the COO turn that got it ends without COO acting: due at once", () => {
 		const clock = clockAt();
 		const s = storeOn(clock);
@@ -265,8 +277,12 @@ describe("OwnerQuestionHolds: durable records", () => {
 	});
 
 	it("keeps COO's words bounded", () => {
-		const s = storeOn(clockAt());
+		const clock = clockAt();
+		const s = storeOn(clock);
 		s.admit(STUCK, "stuck", "queued-work");
+		expect(s.cooHold(STUCK, T0 + 60 * MIN, "w".repeat(HOLD_TEXT_MAX + 50))).toBe(T0 + 60 * MIN);
+		expect(s.get(STUCK)?.holdWhy).toBe(`${"w".repeat(HOLD_TEXT_MAX - 1)}…`);
+		expect(storeOn(clock).get(STUCK)?.holdWhy).toBe(s.get(STUCK)?.holdWhy);
 		s.release(STUCK, "coo", "n".repeat(HOLD_TEXT_MAX + 50), "r".repeat(HOLD_TEXT_MAX + 1));
 		expect(s.get(STUCK)?.note).toHaveLength(HOLD_TEXT_MAX);
 		expect(s.get(STUCK)?.recommendation).toHaveLength(HOLD_TEXT_MAX);
@@ -330,6 +346,75 @@ describe("OwnerQuestionHolds and its clock", () => {
 });
 
 describe("OwnerQuestionHolds after a restart", () => {
+	it("keeps COO's hold reason and deadline across a restart", () => {
+		const clock = clockAt();
+		const before = storeOn(clock);
+		before.admit(STUCK, "stuck", "queued-work");
+		before.delivered(STUCK);
+		clock.now += 5 * MIN;
+		expect(before.cooHold(STUCK, T0 + 60 * MIN, "  Waiting for the review.  ")).toBe(T0 + 60 * MIN);
+		before.cooTurnEnded(STUCK);
+		const expected = held({
+			deliveredToCoo: { at: T0, turnEndedAt: T0 + 5 * MIN },
+			holdUntil: T0 + 60 * MIN,
+			holdWhy: "Waiting for the review.",
+		});
+		expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ v: 1, holds: [expected] });
+		clock.now += 30 * MIN;
+		const after = storeOn(clock);
+		expect(after.ok).toBe(true);
+		expect(after.admit(STUCK, "stuck", "queued-work")).toEqual({ action: "hold", deliver: false, hold: expected });
+		expect(after.due()).toEqual([]);
+	});
+
+	it("a renewed hold replaces COO's reason durably", () => {
+		const clock = clockAt();
+		const before = storeOn(clock);
+		before.admit(STUCK, "stuck", "queued-work");
+		expect(before.cooHold(STUCK, T0 + 60 * MIN, "Waiting for the review.")).toBe(T0 + 60 * MIN);
+		clock.now += 30 * MIN;
+		const renewed = storeOn(clock);
+		expect(renewed.cooHold(STUCK, T0 + 90 * MIN, "  Review arrived; checking its result.  ")).toBe(T0 + 90 * MIN);
+		expect(storeOn(clock).get(STUCK)).toEqual(
+			held({ holdUntil: T0 + 90 * MIN, holdWhy: "Review arrived; checking its result." }),
+		);
+	});
+
+	it("a legacy version-1 hold without a reason still loads and renews without one", () => {
+		const clock = clockAt();
+		writeFileSync(file, JSON.stringify({ v: 1, holds: [held({ holdUntil: T0 + 60 * MIN })] }));
+		clock.now += 30 * MIN;
+		const s = storeOn(clock);
+		expect(s.ok).toBe(true);
+		expect(s.admit(STUCK, "stuck", "queued-work")).toEqual({
+			action: "hold",
+			deliver: true,
+			hold: held({ holdUntil: T0 + 60 * MIN }),
+		});
+		expect(s.cooHold(STUCK, T0 + 90 * MIN)).toBe(T0 + 90 * MIN);
+		expect(storeOn(clock).get(STUCK)).toEqual(held({ holdUntil: T0 + 90 * MIN }));
+	});
+
+	it("keeps a stuck card's delivery id across restart for COO turn settlement", () => {
+		const clock = clockAt();
+		const before = storeOn(clock);
+		const sendId = "oqc-9f7b627e-38b5-4a11-80b6-6b1656e4efbd";
+		before.admit(STUCK, "stuck", "queued-work");
+		expect(before.delivered(STUCK, sendId)).toBe(true);
+		const expected = held({ deliveredToCoo: { at: T0, sendId } });
+		expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ v: 1, holds: [expected] });
+		clock.now += 5 * MIN;
+		const after = storeOn(clock);
+		expect(after.ok).toBe(true);
+		expect(after.admit(STUCK, "stuck", "queued-work")).toEqual({ action: "hold", deliver: false, hold: expected });
+		expect(after.delivered(STUCK, sendId)).toBe(false);
+		const matches = after.list().filter((h) => h.deliveredToCoo?.sendId === sendId);
+		expect(matches).toEqual([expected]);
+		for (const h of matches) expect(after.cooTurnEnded(h.key)).toBe(true);
+		expect(after.due()).toEqual([{ key: STUCK, why: "coo-turn-ended" }]);
+		expect(storeOn(clock).get(STUCK)).toEqual(held({ deliveredToCoo: { at: T0, sendId, turnEndedAt: T0 + 5 * MIN } }));
+	});
+
 	it("a held card already delivered is never delivered to COO twice", () => {
 		const clock = clockAt();
 		const before = storeOn(clock);
@@ -471,6 +556,36 @@ describe("OwnerQuestionHolds fails open", () => {
 	it("a record it doesn't know", () => {
 		writeFileSync(file, JSON.stringify({ v: 1, holds: [{ ...held(), state: "parked" }] }));
 		failsOpen(storeOn(clockAt()));
+	});
+
+	it.each([
+		{ name: "null", holdWhy: null },
+		{ name: "a number", holdWhy: 42 },
+		{ name: "a boolean", holdWhy: false },
+		{ name: "an array", holdWhy: [] },
+		{ name: "an object", holdWhy: {} },
+		{ name: "empty", holdWhy: "" },
+		{ name: "too long", holdWhy: "w".repeat(HOLD_TEXT_MAX + 1) },
+	])("a persisted hold reason that is $name fails open without rewriting the file", ({ holdWhy }) => {
+		const text = JSON.stringify({ v: 1, holds: [{ ...held({ holdUntil: T0 + 60 * MIN }), holdWhy }] });
+		writeFileSync(file, text);
+		failsOpen(storeOn(clockAt()));
+		expect(readFileSync(file, "utf8")).toBe(text);
+	});
+
+	it.each([
+		{ name: "null", sendId: null },
+		{ name: "a number", sendId: 42 },
+		{ name: "a boolean", sendId: false },
+		{ name: "an array", sendId: [] },
+		{ name: "an object", sendId: {} },
+		{ name: "empty", sendId: "" },
+		{ name: "longer than a key", sendId: "s".repeat(301) },
+	])("a persisted delivery id that is $name fails open without rewriting the file", ({ sendId }) => {
+		const text = JSON.stringify({ v: 1, holds: [{ ...held(), deliveredToCoo: { at: T0, sendId } }] });
+		writeFileSync(file, text);
+		failsOpen(storeOn(clockAt()));
+		expect(readFileSync(file, "utf8")).toBe(text);
 	});
 
 	it("the same key twice", () => {

@@ -30,15 +30,15 @@ How long he counts as chatting, he chose on 2026-10-31 (dr-cb84e6f50755, via COO
 `ownerQuestionRoute(input)` is pure: no model, no text, no clock of its own. Its input is only the host's own
 record and times:
 
-| Field | What it is |
-| --- | --- |
-| `kind` | The ask's kind: question, dialog, approval or stuck (a queued task's card). |
-| `turn` | The asking chat's current turn record (`conv.turnRecord`, a `RequesterTurn`) as admission filled it. |
-| `ownerLastWroteAt` | The host's own time of his latest accepted input in the asking chat (kept across a carry-on); absent = not known. #685 records it. |
-| `now` | The host's time now. |
-| `homeRole` | The identity whose home chat asks (`identities.ts` `homeChatOf`), if any. |
-| `grant` | Host-set: one of the role-message guard's continuation-grant asks. |
-| `askedAgainAfterReturn` | Host-set: COO handed this question back earlier in the same turn and the chat asks again. |
+| Field                   | What it is                                                                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`                  | The ask's kind: question, dialog, approval or stuck (a queued task's card).                                                        |
+| `turn`                  | The asking chat's current turn record (`conv.turnRecord`, a `RequesterTurn`) as admission filled it.                               |
+| `ownerLastWroteAt`      | The host's own time of his latest accepted input in the asking chat (kept across a carry-on); absent = not known. #685 records it. |
+| `now`                   | The host's time now.                                                                                                               |
+| `homeRole`              | The identity whose home chat asks (`identities.ts` `homeChatOf`), if any.                                                          |
+| `grant`                 | Host-set: one of the role-message guard's continuation-grant asks.                                                                 |
+| `askedAgainAfterReturn` | Host-set: COO handed this question back earlier in the same turn and the chat asks again.                                          |
 
 **His input.** An input counts as the owner's only when admission recorded it as an owner requester
 (`owner-contacts.ts` `ownerInputIds`): a prompt from a real browser page that passed the WebSocket origin/auth
@@ -54,15 +54,15 @@ asking chat is less than 30 minutes old. Unknown (absent, or not a real time) is
 
 **First rule that applies** (`OWNER_QUESTION_ROUTE_REASONS` is this closed list, in this order):
 
-| # | When | Route | Reason |
-| --- | --- | --- | --- |
-| 1 | COO's own home chat asks (identity `coo`) | direct | `coo-chat` |
-| 2 | A queued task's card (kind `stuck`), whichever chat shows it | coo | `queued-work` |
-| 3 | The turn holds his accepted input (he started it or typed into it while it ran) and he last wrote there under 30 minutes ago | direct | `owner-chatting` |
-| 4 | A question asked again in the same turn after COO handed it back | direct | `asked-again-after-return` |
-| 5 | A continuation-grant ask | direct | `grant-not-routed` |
-| 6 | The turn holds his accepted input, but his last input there is 30 minutes old or more, or its time isn't known | coo | `owner-away` |
-| 7 | Anything else: a role message, a Board post, a queue prompt or reminder, a schedule wake-up, a subagent, a plugin or extension message, or no record started the turn | coo | `not-started-by-owner` |
+| #   | When                                                                                                                                                                  | Route  | Reason                     |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | -------------------------- |
+| 1   | COO's own home chat asks (identity `coo`)                                                                                                                             | direct | `coo-chat`                 |
+| 2   | A queued task's card (kind `stuck`), whichever chat shows it                                                                                                          | coo    | `queued-work`              |
+| 3   | The turn holds his accepted input (he started it or typed into it while it ran) and he last wrote there under 30 minutes ago                                          | direct | `owner-chatting`           |
+| 4   | A question asked again in the same turn after COO handed it back                                                                                                      | direct | `asked-again-after-return` |
+| 5   | A continuation-grant ask                                                                                                                                              | direct | `grant-not-routed`         |
+| 6   | The turn holds his accepted input, but his last input there is 30 minutes old or more, or its time isn't known                                                        | coo    | `owner-away`               |
+| 7   | Anything else: a role message, a Board post, a queue prompt or reminder, a schedule wake-up, a subagent, a plugin or extension message, or no record started the turn | coo    | `not-started-by-owner`     |
 
 So grants and re-asks stay direct even in a turn he started long ago, and a time alone never makes a turn his: a
 fresh `ownerLastWroteAt` with no owner input in the turn is rule 7. A turn he wrote in earlier doesn't count either:
@@ -73,21 +73,21 @@ list by route.
 
 On the owner's surfaces:
 
-| Case | Line |
-| --- | --- |
-| direct `owner-chatting` | "You were chatting here", plus how long ago he last wrote there: "You were chatting here (you wrote 3 minutes ago)", "(you wrote just now)" under a minute |
-| direct `coo-chat` | "From COO's chat" |
-| direct `grant-not-routed`, `asked-again-after-return` | no line (shown as before) |
-| let through by COO with a note or a recommendation | "Came through COO", with the note and recommendation |
-| let through with nothing added (COO bare, or the safety net) | "Came through COO; COO added nothing (it reached you after 31 minutes)" |
+| Case                                                         | Line                                                                                                                                                       |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| direct `owner-chatting`                                      | "You were chatting here", plus how long ago he last wrote there: "You were chatting here (you wrote 3 minutes ago)", "(you wrote just now)" under a minute |
+| direct `coo-chat`                                            | "From COO's chat"                                                                                                                                          |
+| direct `grant-not-routed`, `asked-again-after-return`        | no line (shown as before)                                                                                                                                  |
+| let through by COO with a note or a recommendation           | "Came through COO", with the note and recommendation                                                                                                       |
+| let through with nothing added (COO bare, or the safety net) | "Came through COO; COO added nothing (it reached you after 31 minutes)"                                                                                    |
 
 On COO's card, why COO got it first (`cooReasonWords`):
 
-| Reason | Words |
-| --- | --- |
-| `queued-work` | "a queued task's card" |
-| `owner-away` | "the owner started this but hasn't written there for N minutes" ("... but it isn't known when he last wrote there" when the time isn't known) |
-| `not-started-by-owner` | "raised by work the owner didn't start" |
+| Reason                 | Words                                                                                                                                         |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `queued-work`          | "a queued task's card"                                                                                                                        |
+| `owner-away`           | "the owner started this but hasn't written there for N minutes" ("... but it isn't known when he last wrote there" when the time isn't known) |
+| `not-started-by-owner` | "raised by work the owner didn't start"                                                                                                       |
 
 Minutes are whole minutes, rounded down ("less than a minute", "1 minute", "N minutes").
 
@@ -98,8 +98,8 @@ Minutes are whole minutes, rounded down ("less than a minute", "1 minute", "N mi
 rename), mode 0600, `{ "v": 1, "holds": [...] }`. It holds no words of any question.
 
 **A record:** `key`, `kind`, `reason` (the COO reason), `createdAt`, `state` (held / released / returned / gone),
-`deliveredToCoo` (`at`, and `turnEndedAt` once that COO turn ended), `releasedBy` (coo / safety-net /
-owner-answered), `finishedAt`, `note`, `recommendation`, `holdUntil`.
+`deliveredToCoo` (`at`, optional `sendId`, and `turnEndedAt` once that COO turn ended), `releasedBy` (coo /
+safety-net / owner-answered), `finishedAt`, `note`, `recommendation`, `holdUntil`, optional `holdWhy`.
 
 **Keys:** a queued task's card: `holdKeyOfStuck(stuckKey, stuckSig)`, `stuck:` plus a SHA-256 of its ask key and
 signature (no path or question text). A question, dialog or approval: `holdKeyOfAsk(id)`, `ask:<id>` (hashed when
@@ -107,16 +107,16 @@ the id is over 200 characters).
 
 **Calls:**
 
-| Call | What it does |
-| --- | --- |
-| `admit(key, kind, reason)` | `hold` (with `deliver`: not yet sent to COO) or `show` (with why: released, returned, a due reason, full, bad-key, store-failed, clock-unusable). A held record kept from before a restart is held again, never delivered to COO twice; one whose time ran out meanwhile is released by the safety net and shown; a released or returned one is shown at once with what COO said; an ended one asked again is held afresh. |
-| `delivered(key)` | It went to COO. False when already delivered: never twice. |
-| `cooTurnEnded(key)` | The COO turn that got it ended. |
-| `cooHold(key, until)` | COO keeps holding it, at most 2 hours from now (`COO_HOLD_MAX_MS`); renewable while it is held and not yet due. |
-| `release(key, by, note?, recommendation?)` | Let through by COO, the safety net, or his own answer on the asking chat's page. |
-| `returned(key, note)` | COO handed a question back (questions only, a note required). |
-| `gone(key)` | The ask ended (answered, cancelled, the chat closed). |
-| `due(now?)` | The held ones the safety net lets through now. |
+| Call                                       | What it does                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `admit(key, kind, reason)`                 | `hold` (with `deliver`: not yet sent to COO) or `show` (with why: released, returned, a due reason, full, bad-key, store-failed, clock-unusable). A held record kept from before a restart is held again, never delivered to COO twice; one whose time ran out meanwhile is released by the safety net and shown; a released or returned one is shown at once with what COO said; an ended one asked again is held afresh. |
+| `delivered(key, sendId?)`                  | It went to COO. False when already delivered: never twice. The optional host send id binds its receiving turn across restart.                                                                                                                                                                                                                                                                                              |
+| `cooTurnEnded(key)`                        | The COO turn that got it ended.                                                                                                                                                                                                                                                                                                                                                                                            |
+| `cooHold(key, until, why?)`                | COO keeps holding it, at most 2 hours from now (`COO_HOLD_MAX_MS`); renewable while it is held and not yet due. Its reason survives a restart.                                                                                                                                                                                                                                                                             |
+| `release(key, by, note?, recommendation?)` | Let through by COO, the safety net, or his own answer on the asking chat's page.                                                                                                                                                                                                                                                                                                                                           |
+| `returned(key, note)`                      | COO handed a question back (questions only, a note required).                                                                                                                                                                                                                                                                                                                                                              |
+| `gone(key)`                                | The ask ended (answered, cancelled, the chat closed).                                                                                                                                                                                                                                                                                                                                                                      |
+| `due(now?)`                                | The held ones the safety net lets through now.                                                                                                                                                                                                                                                                                                                                                                             |
 
 Questions, dialogs and approvals live only in the process that asked them: on start, their held records are marked
 gone. Only a stuck card outlives a restart, because the queue shows it again.
@@ -144,16 +144,16 @@ Also through: a clock set back before the hold (`clock-moved-back`), or one that
 
 ## AskHub's held state (`server/asks.ts`)
 
-| Call or event | Behaviour |
-| --- | --- |
-| `add(ask, onAnswer)` with no route | Exactly as today: the caller's own object, "appeared", listed. |
-| `add(ask, onAnswer, { to: "direct", reason, label? })` | As today, on a copy carrying `route` (its reason and line). |
-| `add(ask, onAnswer, { to: "coo", reason, heldAt? })` | Kept, but no "appeared" and not in `list()`: emits "held". `heldAt` keeps the time it was first held across a restart. |
-| `add(..., { to: "coo", ..., releasedBy, releasedAt, note?, recommendation? })` | Already let through (after a restart): "appeared" at once with its line, never held again. |
-| `release(id, by, note?, recommendation?)` | `by` coo or safety-net. Sets the route's line, note and recommendation, then emits "released" and "appeared"; it is listed again in its first place. `NOT_HELD` if it isn't held. |
-| `returnToAsker(id, note)` | Questions only, held only, a note required. Emits "returned" with the note; it no longer waits. |
-| `heldList()` | What is held, oldest first. `list()` leaves those out. |
-| `answer()` / `settle()` | Unchanged, also on a held ask: the asking chat's own page can still answer it. |
+| Call or event                                                                  | Behaviour                                                                                                                                                                         |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `add(ask, onAnswer)` with no route                                             | Exactly as today: the caller's own object, "appeared", listed.                                                                                                                    |
+| `add(ask, onAnswer, { to: "direct", reason, label? })`                         | As today, on a copy carrying `route` (its reason and line).                                                                                                                       |
+| `add(ask, onAnswer, { to: "coo", reason, heldAt? })`                           | Kept, but no "appeared" and not in `list()`: emits "held". `heldAt` keeps the time it was first held across a restart.                                                            |
+| `add(..., { to: "coo", ..., releasedBy, releasedAt, note?, recommendation? })` | Already let through (after a restart): "appeared" at once with its line, never held again.                                                                                        |
+| `release(id, by, note?, recommendation?)`                                      | `by` coo or safety-net. Sets the route's line, note and recommendation, then emits "released" and "appeared"; it is listed again in its first place. `NOT_HELD` if it isn't held. |
+| `returnToAsker(id, note)`                                                      | Questions only, held only, a note required. Emits "returned" with the note; it no longer waits.                                                                                   |
+| `heldList()`                                                                   | What is held, oldest first. `list()` leaves those out.                                                                                                                            |
+| `answer()` / `settle()`                                                        | Unchanged, also on a held ask: the asking chat's own page can still answer it.                                                                                                    |
 
 `AskHub`'s constructor takes an optional clock (`Date.now` by default) for the times it holds and lets through.
 
@@ -176,12 +176,12 @@ restart.
 (`server/owner-question-router.ts`) applies the rule to the asking chat's turn record, `ownerLastWroteAt`, the role
 whose home chat asks, and now:
 
-| Ask | Call site |
-| --- | --- |
-| ask_user_question | `askUser` |
-| Extension dialogs (`ChatDialogs`, including pi-queue's plan approvals) | the dialog watcher |
-| Tool approvals | `askApproval` |
-| A queued task's card | the stuck-card reconcile (`wantedStuckAsks`, then `askHub.add`): route `queued-work`, keyed by the card's key and signature, so it stays held from its first time across restarts |
+| Ask                                                                    | Call site                                                                                                                                                                         |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ask_user_question                                                      | `askUser`                                                                                                                                                                         |
+| Extension dialogs (`ChatDialogs`, including pi-queue's plan approvals) | the dialog watcher                                                                                                                                                                |
+| Tool approvals                                                         | `askApproval`                                                                                                                                                                     |
+| A queued task's card                                                   | the stuck-card reconcile (`wantedStuckAsks`, then `askHub.add`): route `queued-work`, keyed by the card's key and signature, so it stays held from its first time across restarts |
 
 The role-message guard's continuation-grant asks are not routed. agent-service.ts only calls; the logic is in
 `server/owner-question-router.ts` and `server/owner-question-surfaces.ts`.
@@ -219,6 +219,78 @@ same chat in the same turn goes straight to him (`asked-again-after-return`).
 is made, and a chat mostly writes its own needs-you line just before it asks: a mark can show for that moment, without
 a sound. A task whose card is held doesn't count as waiting on the owner, so the stall watch may call it quiet if COO
 keeps it long.
+
+## COO's desk: the card, the tool and the safety net (#686)
+
+COO sees a held question before the owner does, can add context, and never answers in his place. Three modules,
+no model:
+
+| Module                          | Job                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `server/owner-question-card.ts` | The card's text (pure). Each question's tag, `oq-` and 8 hex characters, comes from its hold key. |
+| `server/owner-question-coo.ts`  | `CooOwnerQuestionDesk`: delivers cards, tracks what COO did, runs the turn-end safety net.        |
+| `server/owner-question-tool.ts` | The `owner_question` tool: checks what COO wrote, words the results, calls the desk.              |
+
+### Delivery
+
+- When AskHub emits "held", the desk waits `CARD_BATCH_MS` (2 seconds) and puts one card into COO's home chat by
+  the same delivery role messages use: after COO's current turn, as an extension input (never as the owner's
+  words), resuming the chat if it isn't loaded. It is not a role message, so role-message caps don't apply.
+- Every held question waiting when the card is written goes in that one card. One held while a card is on its way
+  gets the next card; none goes twice, and one already delivered before a restart gets no second card.
+- The card is written after opening the chat and waiting for prompt admission and prework. A question answered
+  or gone by then is left out; newly held asks join that card. A card with nothing left is never sent.
+- SDK input hooks can await too. The existing prompt-start guard checks freshness just before the SDK prepares
+  its loadout, before it starts a turn. A stale card is refused without consuming pending next-turn notes. A native
+  start still in preflight keeps the card outside the SDK's follow-up queue; it is composed afresh later.
+- A lazy card has one outstanding admission, not the ordinary role-delivery timeout: a slow start cannot both
+  time out and arrive later, followed by a duplicate retry. Ordinary role messages keep their existing timeout.
+- A card that can't go for now (COO's chat busy starting, say) is tried again after `CARD_RETRY_MS` (1 minute). One
+  that can never reach COO (no COO role, no home chat) lets its questions through to the owner at once, by the
+  safety net: routing fails open.
+- Switch off: nothing is delivered, and the tool says routing is off.
+
+### The card
+
+First line `[Owner question] from Design's home chat [oq-1a2b3c4d]`, or for several
+`[Owner question] 2 questions, from Design's home chat; Ops's task #12 “New fonts” [oq-…, oq-…]`. Then, for each
+question: who asks (role, chat, task), its kind and why it came to COO (the route's reason in plain words), #682's
+brief, the question and its choices, "It goes to the owner at HH:MM unless you act", the actions (return only for
+an `ask_user_question` question), and the package last. Conditional choices keep their branch conditions. The
+existing role-message card shell displays it with a separate **Package** fold per question; those folds open for
+search results without changing the reader's own folds. The card ends with the guidance and the turn-end rule.
+
+### The tool (`owner_question`)
+
+Registered only in COO's home chat, and refused anywhere else (checked again at every call). Its guidance is in its
+description and prompt guidelines, not in COO's role prompt (the owner's): gather the context and never answer for
+him; always release what only he can give (consent, spending, publishing, his pauses, his own stops); prefer release
+with a plain note and a recommendation; return only when the question is clearly the asking role's own call.
+
+| Action                               | Does                                                                                            | Refused when                                                                                                       |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `list`                               | What is held now: tag, who, kind, question, when it goes.                                       | Another chat; routing off.                                                                                         |
+| `release(id, note, recommendation?)` | `AskHub.release` with by `coo`: the card reaches him with COO's note first.                     | No note; a note or recommendation over 600 characters or holding an id, a path or code (#682's `plainTextFaults`). |
+| `hold(id, until, why)`               | Keeps it until `until` ("45m", "1h30m", "10:30" in his time), recorded in the store; renewable. | More than 2 hours ahead; a time passed; no reason.                                                                 |
+| `return(id, note)`                   | `AskHub.returnToAsker`: back to the chat that asked, as its own call.                           | Not an `ask_user_question` question (a queued task's card, a pop-up, a tool approval); no note.                    |
+
+An ask already answered, let through, handed back or gone is reported as such, and nothing is sent. No action
+answers an ask: the tool has no way to.
+
+It is not a row in Settings' tool switches: its switch is `ownerQuestionsViaCoo` (`tests/unit/tool-registration.test.ts`
+classifies it as COO-home-only). pi-identity's tool limits still apply to it: if COO's identity gives an allow list,
+`owner_question` has to be on it, and that file is the owner's. #687 checks this before switching on.
+
+### The safety net on COO's side
+
+When the COO turn that got a card settles, every question in it that is still held with no action from COO in
+that turn (no release, return or hold) goes to the owner at once, by the safety net. A question COO held stays held
+until its hold runs out (#685's 30-second sweep lets it through then). The hold reason and delivery receipt are
+stored beside the hold key. A restarted stuck card can have a new AskHub id; its hold key still binds it to the
+receiving turn. Running-chat carry-on keeps only checked host-generated card receipt ids, separately from
+requester and owner-input time; it does not restore an old turn cause or give owner/Telegram authority. A turn
+settling before delivery returns, or before a closed task's card reappears, still releases the right hold.
+The other safety-net points (30 minutes, a hold running out, the store failing) are #684's clock, run by #685.
 
 ## Hypotheses and results
 
@@ -259,6 +331,31 @@ kept back with it: the needs-you marks written about it (pi-queue's line, notice
 line), and the pop-up's sound and desktop notification on its own page; and a review before landing found the Roles
 page's decision cards drew #682's brief but not the route's line, now added there too.
 
+**H-OWNER-COO-CARD (#686).** Wrong now: COO can't see an owner question before he does, or add context to it. The
+change: on "held", a card in COO's home chat by the role-message delivery, the `owner_question` tool there only, and
+the turn-end safety net. Expected: tests show the card's content and batching, each action, each refusal (another
+chat, a note holding an id or path, return on a stuck card, a hold over 2 hours), release after COO's turn ends
+with no action, and nothing delivered with the switch off. Wrong if COO can answer a question for him, a card lacks
+who, what, choices or deadline, or a held question stays held after COO's turn ends with no action.
+**Result: HIT.** Every expected case passes and none of the three wrong-if results showed: the tool has no action
+that answers an ask; every card names who asks, the kind, the question with its choices and the deadline; and a
+question still held with no action when COO's turn settles goes to the owner at once, also after a restart before
+any ask has reopened the store (a final review found that path; the router now opens the shared store when routing
+is on, and the two restart cases fail without that change). With the switch off nothing is delivered, no store is
+opened or written and the tool says routing is off. Focused run: 19 files, 324 tests passed. How it got there:
+review before wiring found four gaps to correct under this hypothesis: active card receipts
+must survive a restart or a stuck card's changed ask id (persist the send id beside its hold key); dependent
+choices must remain visible (render their branch conditions); plain notes must reject every owner-question tag;
+and clock times must round-trip in the owner's zone at daylight-saving changes. The expected result is immediate
+turn-end release on the shared router/store even after reload, complete conditional choices, rejected tags and
+the next real local clock occurrence. Each has a fixed-input regression; any contrary result is a MISS.
+The delivery check must compose after both session opening and prompt admission, not merely before an artificial
+send delay: gone asks are omitted and newly held asks join the same card. Packages must really fold in the page,
+not just use Markdown quotes. Further review found that the SDK drains next-turn notes before its preflight
+callback; rejecting there would lose notes. The freshness check therefore runs at the existing prompt-start
+guard's loadout boundary and restores only the drained notes on refusal. A real-SDK fixed-response regression
+checks no stale turn, no lost note and one valid next-turn delivery. No provider request is read.
+
 ## Checks
 
 - `tests/unit/owner-question-route.test.ts` (52 tests): the case table, its order and sides, the window constant, no
@@ -289,8 +386,26 @@ page's decision cards drew #682's brief but not the route's line, now added ther
   the renderer's own `data-u0-key` position labels, which shift by one after the added block and are read by nothing
   else.
 
+- #686: `tests/unit/owner-question-card.test.ts` (the card: who, kind, reason, brief, question and choices, the
+  deadline, actions, the package folded, several in one card), `tests/unit/owner-question-coo.test.ts` (delivery and
+  batching, a gone ask never carded, retry and fail-open, the switch off, the turn-end safety net, where a question
+  stands), `tests/unit/owner-question-tool.test.ts` (each action and refusal, routing off, another chat, the hold
+  times), `tests/unit/owner-card-brief.test.ts` (`plainTextFaults`). The desk and tool tests share
+  `tests/unit/owner-question-desk-fixture.ts`: a real AskHub and hold store, no chat, no model.
+- #686 integration: `tests/unit/owner-question-coo-restart.test.ts` uses the real router, store and AskHub for
+  restart receipts, changed ask ids, deferred composition and fail-open. `tests/unit/owner-question-delivery.test.ts`
+  drives native host seams with synthetic chats for admission, extension-only attribution, tool registration and
+  turn-settle release. `tests/unit/owner-question-sdk-freshness.test.ts` uses an isolated SDK session and fixed
+  responses (no model) to check the last freshness boundary and preservation of pending next-turn notes.
+- #686 carry-on: `tests/unit/carry-on-requester.test.ts` checks persisted card receipts, malformed input rejection,
+  copy isolation and no owner/Telegram authority. `tests/unit/owner-question-body.test.ts` checks the package fold
+  in the rendered component and its search behavior; `tests/unit/role-message-text.test.ts` checks the card header.
+  `tests/unit/tool-registration.test.ts` classifies `owner_question` as a COO-home-only tool, not a catalog row.
+
 ## Undo
 
 With the switch on (#687): turn `ownerQuestionsViaCoo` off in Settings. New asks go as before, and the next sweep lets
-every held ask through; after that nothing is held or written while it stays off. To remove the code: revert #685's commit, then
-#684's, and deploy; `<dataDir>/owner-question-holds.json`, if written, can be deleted then.
+every held ask through; after that nothing is held or written while it stays off. Keep the code and existing hold
+records: once records exist, undo is this forward-disable, not a revert to readers that do not know their new fields.
+Before activation and with no hold records, #686's commit alone can also be reverted and deployed; #684/#685 stay
+installed with their switch off. No role prompt, identity file, pi-queue code or Telegram answer path changed.

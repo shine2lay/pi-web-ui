@@ -104,6 +104,7 @@ const IDS: readonly RegExp[] = [
 	/\s*#\d+\b/g,
 	/\brules?\s+\d+[a-z]?(?:\s*(?:,|and|or)\s*\d+[a-z]?)*/gi,
 	/\b(?:rm|dr|bp|cr|rq|ar|req)-[0-9a-z]{6,}\b/gi,
+	/\boq-[0-9a-f]{8}\b/gi,
 	/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/gi,
 	/\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b/g,
 	/\b[A-Z]{1,4}\d{1,4}\b/g,
@@ -121,6 +122,60 @@ export function hasIdOrPath(text: string): boolean {
  * could hold the server up for seconds on every look at the card.
  */
 const READ_MAX = 2000;
+
+/** Code in a text: backticks, names written as code, calls, operators, braces, tags, settings and flags. */
+const CODE: readonly RegExp[] = [
+	/`[^`\n]*`?/g,
+	/\b[a-z]{2,}[A-Z][a-z0-9]+\w*/g,
+	/\b[A-Za-z_$][\w$]*\(\)/g,
+	/\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b/g,
+	/===|!==|==|!=|=>|&&|\|\||::|\$\{|\$\(/g,
+	/[{}]/g,
+	/<\/?[a-z][^>]*>/g,
+	/\b\w+=\w+/g,
+	/(?:^|\s)--[a-z][\w-]*/g,
+];
+
+export interface PlainTextFault {
+	kind: "id" | "path" | "code";
+	text: string;
+}
+
+/**
+ * What in a text isn't plain words, each once, in text order (owner-question routing, Ops #686: COO's
+ * note and recommendation to the owner are held to the brief's bar). Where finds overlap, the one that
+ * starts first, then the longest, counts.
+ */
+export function plainTextFaults(text: string): PlainTextFault[] {
+	const found: Array<{ kind: PlainTextFault["kind"]; start: number; end: number; text: string }> = [];
+	const scan = (kind: PlainTextFault["kind"], res: readonly RegExp[]) => {
+		for (const re of res) {
+			for (const m of text.matchAll(new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`))) {
+				const lead = m[0].length - m[0].trimStart().length;
+				const t = m[0].trim();
+				if (!t) continue;
+				const start = (m.index ?? 0) + lead;
+				found.push({ kind, start, end: start + t.length, text: t });
+			}
+		}
+	};
+	scan("path", [URL, ...PATHS]);
+	scan("id", IDS);
+	scan("code", CODE);
+	found.sort((a, b) => a.start - b.start || b.end - a.end);
+	const out: PlainTextFault[] = [];
+	const seen = new Set<string>();
+	let reach = -1;
+	for (const f of found) {
+		if (f.start < reach) continue;
+		reach = f.end;
+		const k = `${f.kind}\n${f.text}`;
+		if (seen.has(k)) continue;
+		seen.add(k);
+		out.push({ kind: f.kind, text: f.text });
+	}
+	return out;
+}
 
 /** Markdown marks, links, paths and ids taken out, and what they leave behind tidied. */
 export function plainWords(raw: string): string {

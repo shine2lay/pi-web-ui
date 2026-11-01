@@ -20,7 +20,9 @@
  *
  * Each chat in the list also keeps its running turn's requester inputs (ids and kinds only, never
  * text; queue-requester.ts): the carry-on turn takes them over, so it still answers the same
- * messages (the owner's get their "settled", the tasks it queues name who asked).
+ * messages (the owner's get their "settled", the tasks it queues name who asked). Host-generated
+ * owner-question receipt ids are kept separately so the carried-on COO turn can settle its cards;
+ * no original turn cause or owner/transport authority is restored with those receipts.
  *
  * Everything here is plain file handling and text; agent-service.ts feeds the events and does the
  * reopening.
@@ -39,6 +41,7 @@ import {
 import { isOwnerInputTime } from "./owner-input-time.js";
 import type { UiTaskRequesterInput } from "./protocol.js";
 import { requesterOf, type RequesterTurn } from "./queue-requester.js";
+import { type CarriedRoleTurn, isOwnerQuestionSendId, ownerQuestionSendIdsOf } from "./role-replies.js";
 
 export const RUNNING_CHATS_FILE = "running-chats.json";
 /** Written by pi-web-deploy just before it restarts the service: { reason, at }. */
@@ -83,6 +86,8 @@ export interface RunningChat {
 	awaiting?: boolean;
 	/** The running turn's requester inputs (ids and kinds only): its carry-on turn answers the same ones. */
 	requester?: SavedRequester;
+	/** Host-only owner-question receipts, not owner provenance or a replay of every role-send id. */
+	ownerQuestionSendIds?: string[];
 	/** owner-input-time.ts: when the owner last wrote into the running turn (ms): its carry-on turn keeps it.
 	 *  Kept beside `requester`, not in it: an older build's check drops a requester with unknown keys. */
 	ownerLastWroteAt?: number;
@@ -397,15 +402,18 @@ export function requesterTurnOf(saved: SavedRequester): RequesterTurn {
 }
 
 /**
- * What a cut-off chat's carry-on turn starts with: its saved requester inputs and, when kept, the time
- * the owner last wrote into it (owner-input-time.ts). Undefined when no requester was saved: the
- * carry-on turn's requester stays unknown, as before.
+ * The carry-on turn's saved requester inputs/time and checked owner-question receipts. Receipts
+ * alone can survive; they never manufacture a requester, an owner-input time or a turn cause.
  */
-export function carriedTurnOf(chat: Pick<RunningChat, "requester" | "ownerLastWroteAt">): RequesterTurn | undefined {
+export function carriedTurnOf(
+	chat: Pick<RunningChat, "requester" | "ownerLastWroteAt" | "ownerQuestionSendIds">,
+): CarriedRoleTurn | undefined {
 	const saved = savedRequesterOf(chat.requester);
-	if (!saved) return undefined;
-	const turn = requesterTurnOf(saved);
-	if (isOwnerInputTime(chat.ownerLastWroteAt)) turn.ownerLastWroteAt = chat.ownerLastWroteAt;
+	const ownerQuestionSendIds = ownerQuestionSendIdsOf(chat.ownerQuestionSendIds);
+	if (!saved && !ownerQuestionSendIds) return undefined;
+	const turn: CarriedRoleTurn = saved ? requesterTurnOf(saved) : {};
+	if (saved && isOwnerInputTime(chat.ownerLastWroteAt)) turn.ownerLastWroteAt = chat.ownerLastWroteAt;
+	if (ownerQuestionSendIds) turn.ownerQuestionSendIds = ownerQuestionSendIds;
 	return turn;
 }
 
@@ -420,6 +428,9 @@ export function readRunningChatsFile(file: string): RunningChatsFile | null {
 		// A saved requester is checked on read: a bad or edited one is dropped, never guessed.
 		for (const chat of data.chats) {
 			if (!chat || typeof chat !== "object") continue;
+			const receipts = ownerQuestionSendIdsOf(chat.ownerQuestionSendIds);
+			if (receipts) chat.ownerQuestionSendIds = receipts;
+			else delete chat.ownerQuestionSendIds;
 			// owner-input-time: a bad time is dropped too, never trusted.
 			if ("ownerLastWroteAt" in chat && !isOwnerInputTime(chat.ownerLastWroteAt)) delete chat.ownerLastWroteAt;
 			if (!("requester" in chat)) continue;
@@ -459,6 +470,15 @@ export interface ChatRef {
 	cwd: string;
 }
 
+/** Live-list copies never share their mutable receipt list with callers or a carry-on plan. */
+function copyRunningChat(chat: RunningChat): RunningChat {
+	const copy = { ...chat, tools: [...(chat.tools ?? [])] };
+	const receipts = ownerQuestionSendIdsOf(chat.ownerQuestionSendIds);
+	if (receipts) copy.ownerQuestionSendIds = receipts;
+	else delete copy.ownerQuestionSendIds;
+	return copy;
+}
+
 export class RunningChats {
 	private chats = new Map<string, RunningChat>();
 	private frozen = false;
@@ -471,7 +491,7 @@ export class RunningChats {
 
 	/** Put the chats being carried on into the list: they count as working until their turn ends. */
 	seed(chats: readonly RunningChat[]): void {
-		for (const c of chats) this.chats.set(c.sessionFile, { ...c, tools: [...(c.tools ?? [])] });
+		for (const c of chats) this.chats.set(c.sessionFile, copyRunningChat(c));
 		this.write();
 	}
 
@@ -514,20 +534,28 @@ export class RunningChats {
 	}
 
 	/**
-	 * The running turn's requester inputs, after it started or a message joined it (ids and kinds only).
-	 * A carried-over entry keeps the inputs it came with until its carry-on turn starts.
+	 * The running turn's requester inputs and host owner-question receipts, never text or causes.
+	 * A carried-over entry keeps this metadata until its carry-on turn starts.
 	 */
-	setRequester(sessionFile: string, turn: RequesterTurn): void {
+	setRequester(sessionFile: string, turn: RequesterTurn & { ids?: readonly string[] }): void {
 		if (this.frozen) return;
 		const c = this.chats.get(sessionFile);
 		if (!c || c.awaiting) return;
 		const requester = requesterToSave(turn);
 		const wrote = isOwnerInputTime(turn.ownerLastWroteAt) ? turn.ownerLastWroteAt : undefined;
-		if (JSON.stringify(requester) === JSON.stringify(c.requester) && wrote === c.ownerLastWroteAt) return;
+		const receipts = ownerQuestionSendIdsOf(turn.ids?.filter(isOwnerQuestionSendId));
+		if (
+			JSON.stringify(requester) === JSON.stringify(c.requester) &&
+			wrote === c.ownerLastWroteAt &&
+			JSON.stringify(receipts) === JSON.stringify(c.ownerQuestionSendIds)
+		)
+			return;
 		if (requester) c.requester = requester;
 		else delete c.requester;
 		if (wrote !== undefined) c.ownerLastWroteAt = wrote;
 		else delete c.ownerLastWroteAt;
+		if (receipts) c.ownerQuestionSendIds = receipts;
+		else delete c.ownerQuestionSendIds;
 		this.write();
 	}
 
@@ -549,7 +577,7 @@ export class RunningChats {
 	}
 
 	list(): RunningChat[] {
-		return [...this.chats.values()].map((c) => ({ ...c, tools: [...c.tools] }));
+		return [...this.chats.values()].map(copyRunningChat);
 	}
 
 	has(sessionFile: string): boolean {
@@ -559,7 +587,7 @@ export class RunningChats {
 	/** The chat with this transcript, if it is in the list (a copy). */
 	get(sessionFile: string): RunningChat | undefined {
 		const c = this.chats.get(sessionFile);
-		return c ? { ...c, tools: [...c.tools] } : undefined;
+		return c ? copyRunningChat(c) : undefined;
 	}
 
 	private write(shutdown?: { at: number; signal: string }): void {

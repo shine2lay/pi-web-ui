@@ -23,7 +23,13 @@
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
-type PromptOptions = NonNullable<Parameters<AgentSession["prompt"]>[1]>;
+/** Server-only freshness check; never read from chat text or public prompt options. */
+export const PROMPT_FRESHNESS = Symbol("pi-web-ui.prompt-freshness");
+export const STALE_PROMPT_REASON = "the card changed before the chat took it";
+export const BUSY_PROMPT_REASON = "the chat became busy before the card could go";
+type PromptOptions = NonNullable<Parameters<AgentSession["prompt"]>[1]> & {
+	[PROMPT_FRESHNESS]?: () => boolean;
+};
 type CustomOptions = NonNullable<Parameters<AgentSession["sendCustomMessage"]>[1]>;
 type Disposition = Parameters<NonNullable<PromptOptions["preflightResult"]>>[0];
 
@@ -32,11 +38,19 @@ interface SessionInternals {
 	_isEmittingAgentSettled?: boolean;
 	_isAgentRunActive?: boolean;
 	_runAgentPrompt?: (messages: unknown) => Promise<void>;
+	_pendingNextTurnMessages?: unknown[];
+	_preparePromptAndToolLoadout?: (...args: unknown[]) => unknown;
 }
 
 type GuardedSession = Pick<AgentSession, "prompt" | "sendCustomMessage" | "isStreaming" | "agent">;
 
 const installed = new WeakSet<object>();
+const pendingStarts = new WeakMap<object, () => boolean>();
+
+/** Host-only lazy cards must wait outside the start line, never freeze into a native follow-up. */
+export function promptStartPending(session: object): boolean {
+	return pendingStarts.get(session)?.() === true;
+}
 const customMessageGuards = new WeakMap<
 	object,
 	{
@@ -60,6 +74,30 @@ function asFollowUp(options: PromptOptions | undefined): PromptOptions {
 	return options?.streamingBehavior ? options : { ...options, streamingBehavior: "followUp" };
 }
 
+/** SDK 1.0.1 drains nextTurn notes just before preparing its loadout, with no await between.
+ * Validate at that boundary, before changing the loadout. On refusal put precisely those notes
+ * back (including notes added during input hooks). Preflight alone is too late to reject safely. */
+function installFreshnessCheck(inner: GuardedSession & SessionInternals, current: () => boolean): () => void {
+	const prepare = inner._preparePromptAndToolLoadout;
+	const pending = inner._pendingNextTurnMessages;
+	if (!prepare || !Array.isArray(pending)) throw new Error("this session cannot check card freshness safely");
+	const restore = () => {
+		if (inner._preparePromptAndToolLoadout === wrapped) inner._preparePromptAndToolLoadout = prepare;
+	};
+	const wrapped = (...args: unknown[]): unknown => {
+		// A preparation from an earlier SDK step isn't this prompt's final admission yet.
+		if (inner._pendingNextTurnMessages === pending) return prepare.apply(inner, args);
+		restore();
+		if (!current()) {
+			inner._pendingNextTurnMessages = [...pending, ...(inner._pendingNextTurnMessages ?? [])];
+			throw new Error(STALE_PROMPT_REASON);
+		}
+		return prepare.apply(inner, args);
+	};
+	inner._preparePromptAndToolLoadout = wrapped;
+	return restore;
+}
+
 export function installPromptStartGuard(session: GuardedSession): void {
 	if (installed.has(session)) return;
 	installed.add(session);
@@ -71,6 +109,7 @@ export function installPromptStartGuard(session: GuardedSession): void {
 	// The line of starts: each waits for the one before it to be taken.
 	let line: Promise<void> = Promise.resolve();
 	let starting = 0;
+	pendingStarts.set(session, () => starting > 0 || inner._isEmittingAgentSettled === true);
 	const enter = (): { ready: Promise<void>; done: () => void } => {
 		const ready = line;
 		let resolve!: () => void;
@@ -91,6 +130,9 @@ export function installPromptStartGuard(session: GuardedSession): void {
 	};
 
 	session.prompt = async (text: string, options?: PromptOptions): Promise<void> => {
+		const current = options?.[PROMPT_FRESHNESS];
+		if (current && (starting || session.isStreaming || inner._isEmittingAgentSettled))
+			throw new Error(BUSY_PROMPT_REASON);
 		// While agent_settled is being emitted the SDK defers the call and replays it through here.
 		if (inner._isEmittingAgentSettled) return prompt(text, options);
 		if (!starting && session.isStreaming) return prompt(text, asFollowUp(options));
@@ -105,9 +147,12 @@ export function installPromptStartGuard(session: GuardedSession): void {
 				preflight?.(disposition);
 			},
 		};
+		let restoreFreshness: (() => void) | undefined;
 		try {
+			if (current) restoreFreshness = installFreshnessCheck(inner, current);
 			return await prompt(text, guarded);
 		} finally {
+			restoreFreshness?.();
 			turn.done();
 		}
 	};

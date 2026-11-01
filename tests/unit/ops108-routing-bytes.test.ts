@@ -16,7 +16,10 @@ describe("Ops108 baseline", () => {
 		// turn take the cut-off turn's saved requester inputs (RoleTurnInput.carried, display-only); its diff
 		// changes just the requester import and the collectRequesterInput line, no Ops108 routing line
 		// (causes, ids, forOwner, owner). Was db3c7c90….
-		expect(sha("server/role-replies.ts")).toBe("014cba7d164814f1e7d13b6153b1997d0a659755484a0365f639d739ce0eded7");
+		// Re-pinned by owner-question-coo (Ops #686): carry-on restores only checked host-generated oqc-UUID
+		// receipt ids for COO's turn-end safety net. No Ops108 routing line changed: causes, forOwner,
+		// owner and transport authority are untouched; receipt ids never grant those. Was 014cba7d….
+		expect(sha("server/role-replies.ts")).toBe("9c68ca4aa85a3f44b852014d182227d3b1dcd57311aa79f1e420707f97d2b849");
 		// Re-pinned by reconnect-trace (Ops #157, Ops decision on its plugin route): it only adds
 		// host.connNotices (plugins.ts) and the reconnect-notice handler (telegram); no Ops108 routing line
 		// changed (its diff removes none). Was b3f0f42f… and 9bd0faeb….

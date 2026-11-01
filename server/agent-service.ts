@@ -16,13 +16,7 @@ import "./patch-lazy-boundary-context.js";
 import "./patch-jiti-resolve-cache.js";
 // Logs whatever holds pi's sign-in lock (auth.json) for 60 s or more; logging only (#134).
 import "./auth-lock-trace.js";
-import {
-	mergeRequesterTurn,
-	requesterForAdmission,
-	requesterInputOf,
-	requesterOfTurn,
-	type RequesterTurn,
-} from "./queue-requester.js";
+import { mergeRequesterTurn, requesterForAdmission, requesterInputOf, requesterOfTurn } from "./queue-requester.js";
 import { OwnerContacts, ownerInputIds, type OwnerContactOutcome } from "./owner-contacts.js";
 import type { UiOwnerContact, UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
 import { spawn } from "node:child_process";
@@ -122,7 +116,10 @@ import {
 	wantedStuckAsks,
 } from "./stuck-asks.js";
 import { briefOfAsk, stuckAskBriefs } from "./owner-card-brief.js";
-import { noteOwnerInput } from "./owner-input-time.js";
+import { noteOwnerInput, ownerLastWroteOf } from "./owner-input-time.js";
+import { CooOwnerQuestionDesk, type CardDelivery } from "./owner-question-coo.js";
+import type { OwnerQuestionAsker } from "./owner-question-card.js";
+import { isCooHomeChat, makeOwnerQuestionTool } from "./owner-question-tool.js";
 import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "./owner-question-holds.js";
 import {
 	isQuestionReturned,
@@ -405,7 +402,13 @@ import {
 } from "./role-messages.js";
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { admitRoleMailAtResume, installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
-import { installPromptStartGuard } from "./prompt-start-guard.js";
+import {
+	installPromptStartGuard,
+	promptStartPending,
+	PROMPT_FRESHNESS,
+	STALE_PROMPT_REASON,
+	BUSY_PROMPT_REASON,
+} from "./prompt-start-guard.js";
 import { RolesOverviewReader } from "./roles-overview.js";
 import { ownerAsksFromOverview, WorkPageFile, workFactsFromOverview, type WorkQueueFacts } from "./work-page.js";
 import { ROLES_CONFIG_EVERY_MS, RolesConfigHistory } from "./roles-config-history.js";
@@ -427,6 +430,7 @@ import {
 	type RoleSendResult,
 	type RoleTurnCause,
 	type RoleTurnRecord,
+	type CarriedRoleTurn,
 } from "./role-replies.js";
 import { makeSkillTool, type SkillToolHost } from "./skill-tool.js";
 import { makeScheduleTools, type ScheduleToolHost } from "./schedule-agent-tool.js";
@@ -2136,6 +2140,8 @@ const SERVER_STARTED_AT = Math.round(performance.timeOrigin);
 let roleBoardService: RoleBoard | null = null;
 /** telegram-coo: AgentService hears each run that settles in a chat (role-replies.ts); null until it is made. */
 let roleTurnSettled: ((file: string, rec: RoleTurnRecord) => void) | null = null;
+/** COO's owner-question desk; only its home runtime receives the tool. */
+let ownerQuestionDesk: CooOwnerQuestionDesk | null = null;
 /** owner-contacts (Roles D3): AgentService records the owner's messages to role home chats and their
  *  stages (asked, taken into a turn, settled); null until it is made. Display only. */
 let ownerContacts: {
@@ -2544,6 +2550,10 @@ function atomicWriteFileSync(file: string, data: string): void {
 /** telegram-coo: how a role message or a plugin's send goes into a chat: who sent it (the turn's cause),
  *  the host.roles.send id, and, for a reply to a question asked for the owner, who answered and his
  *  send ids (role-replies.ts forOwner). */
+const ROLE_LAZY_BUSY_REASON = BUSY_PROMPT_REASON;
+const ROLE_LAZY_CHANGED_REASON = STALE_PROMPT_REASON;
+type RoleDeliveryText = string | { compose: () => string | undefined; current: () => boolean };
+
 interface RoleDeliveryHow {
 	/** CI reports need their own turn; do not merge their cause into a running owner's turn. */
 	requireIdle?: boolean;
@@ -2571,7 +2581,7 @@ interface PromptFlow {
 	ownerChannel?: OwnerChannel;
 	/** carry-on: the note carries on a turn a restart cut off: that turn's saved requester inputs
 	 *  (see AgentService.carryOn and RoleTurnInput.carried). */
-	carried?: RequesterTurn;
+	carried?: CarriedRoleTurn;
 	/** pi put the text off until the previous run has settled: its preflight callback answers later. */
 	deferred: boolean;
 	/** pi took the text (its preflight said yes). */
@@ -2580,6 +2590,10 @@ interface PromptFlow {
 	admission: PromptAdmission;
 	/** task-chat-start: a queued task's first prompt (openTaskChat): its gate goes first in pi's preflight. */
 	taskStart?: TaskStartHooks;
+	/** Server-only card text, composed after admission/prework; undefined cancels the card. */
+	lateText?: () => string | undefined;
+	/** Recheck at SDK preflight too, after input hooks/auth/compaction have awaited. */
+	textCurrent?: () => boolean;
 }
 
 /** telegram-coo: pi took a text: the run it starts (pending until agent_start) or the running run it
@@ -6621,6 +6635,7 @@ export class ClientSession {
 					// role-messages: message another role's chat. Registered everywhere; pi-identity offers it only
 					// in chats with a role, and it refuses chats without one and helper chats (subagents).
 					makeMessageRoleTool(this.roleMessageHost(ownerId)),
+					...this.ownerQuestionTools(sessionManager.getSessionFile(), bridgeAnchor),
 					// board: the roles' shared board. Like message_role: registered everywhere, offered by pi-identity
 					// only in chats with a role; the poster is this chat's role as the server knows it.
 					makeBoardTool({
@@ -6792,7 +6807,7 @@ export class ClientSession {
 		sessionFile: string,
 		note: string,
 		beforeResume?: () => Promise<void>,
-		carried?: RequesterTurn,
+		carried?: CarriedRoleTurn,
 	): Promise<boolean> {
 		await this.switchSession(sessionFile);
 		const id = this.conversationIdBySessionFile(sessionFile);
@@ -6860,7 +6875,7 @@ export class ClientSession {
 	 */
 	async deliverRoleMessage(
 		file: string,
-		text: string,
+		text: RoleDeliveryText,
 		ackId: string,
 		receipt: Promise<{ ok: boolean; reason?: string }>,
 		/** telegram-coo: who sent it (default a role), the host.roles.send id, and whether it answers a
@@ -6882,8 +6897,9 @@ export class ClientSession {
 				(conv.sendsInFlight ?? 0) > 0)
 		)
 			return { ok: false, busy: true, error: "the chat is still working" };
-		void this.prompt(text, undefined, true, ackId, {
+		void this.prompt(typeof text === "string" ? text : "", undefined, true, ackId, {
 			source: "extension",
+			...(typeof text !== "string" ? { lateText: text.compose, textCurrent: text.current } : {}),
 			cause: how.cause ?? "role",
 			...(how.sendId ? { sendId: how.sendId } : {}),
 			...(how.forOwner ? { forOwner: how.forOwner } : {}),
@@ -6891,13 +6907,26 @@ export class ClientSession {
 			...(how.requester ? { requester: how.requester } : {}),
 		}).catch(() => {});
 		let timer: ReturnType<typeof setTimeout> | undefined;
-		const answer = await Promise.race([
-			receipt,
-			new Promise<{ ok: boolean; reason?: string }>((r) => {
-				timer = setTimeout(() => r({ ok: false, reason: "the chat didn't take it in time" }), ROLE_MESSAGE_ACK_MS);
-			}),
-		]).finally(() => clearTimeout(timer));
-		if (!answer.ok) return { ok: false, error: answer.reason || "the chat didn't take it" };
+		// A lazy card must not be retried while its first admission can still compose and arrive.
+		// Prompt's finally answers every refusal; ordinary role deliveries retain their old timeout.
+		const answer =
+			typeof text !== "string"
+				? await receipt
+				: await Promise.race([
+						receipt,
+						new Promise<{ ok: boolean; reason?: string }>((r) => {
+							timer = setTimeout(
+								() => r({ ok: false, reason: "the chat didn't take it in time" }),
+								ROLE_MESSAGE_ACK_MS,
+							);
+						}),
+					]).finally(() => clearTimeout(timer));
+		if (!answer.ok)
+			return {
+				ok: false,
+				error: answer.reason || "the chat didn't take it",
+				...(answer.reason === ROLE_LAZY_BUSY_REASON ? { busy: true } : {}),
+			};
 		// In the running list of every window, and kept open when switched away from.
 		conv.listed = true;
 		return { ok: true };
@@ -7390,7 +7419,7 @@ export class ClientSession {
 	 * （上一个 await 恢复点之后、无新 await 处）核对 activeId 后才调用 prompt；
 	 * 修不回（再次被抢）就放弃自动继续 —— 宁可少投，不投错对话。
 	 */
-	private async promptResumedConversation(sessionFile: string, text: string, carried?: RequesterTurn): Promise<void> {
+	private async promptResumedConversation(sessionFile: string, text: string, carried?: CarriedRoleTurn): Promise<void> {
 		for (let attempt = 0; attempt < 2; attempt++) {
 			const targetId = this.conversationIdBySessionFile(sessionFile);
 			if (!targetId) return; // 目标对话已没了（被关/被过户），不投
@@ -7798,7 +7827,10 @@ export class ClientSession {
 	}
 
 	/** telegram-answers: the queued tasks that wait on the user, as asks (stuck-asks.ts), by key. */
-	private static readonly stuckAsks = new Map<string, { askId: string; sig: string; target: string }>();
+	private static readonly stuckAsks = new Map<
+		string,
+		{ askId: string; sig: string; target: string; queueFile?: string }
+	>();
 	private static stuckSeq = 0;
 	/** telegram-answers: answers given from elsewhere (Telegram, the Queue tab) on their way into the
 	 *  chat, by ask id: what was answered and who answered, for when the task moves on. */
@@ -7983,7 +8015,7 @@ export class ClientSession {
 			added = true;
 			const askId = stuckAskId(w, ++ClientSession.stuckSeq);
 			const sig = stuckSig(w);
-			ClientSession.stuckAsks.set(key, { askId, sig, target: w.target });
+			ClientSession.stuckAsks.set(key, { askId, sig, target: w.target, queueFile: w.queueFile });
 			const ask = stuckAsk(
 				askId,
 				{
@@ -9402,6 +9434,38 @@ export class ClientSession {
 		}
 	}
 
+	/** Owner-question cards use the host's loaded chat and native queue metadata, never parsed text. */
+	static ownerQuestionChat(ask: Ask): Conversation | undefined {
+		return [...ClientSession.sharedConvs.values()].find(
+			(c) =>
+				!c.isSubagent &&
+				(ask.sessionFile
+					? samePath(ClientSession.askMetaOf(c).sessionFile, ask.sessionFile)
+					: c.id === ask.conversationId),
+		);
+	}
+
+	static ownerQuestionAsker(ask: Ask): OwnerQuestionAsker {
+		const identities = identityRegistry().identities;
+		const c = ClientSession.ownerQuestionChat(ask);
+		const home = homeChatOf(ask.sessionFile, identities);
+		const queue = c ? ClientSession.taskQueueOfConv(c) : undefined;
+		const card = [...ClientSession.stuckAsks.values()].find((s) => s.askId === ask.id);
+		const queueHome = homeChatOf(card?.queueFile ?? queue?.from?.file, identities);
+		const role = queueHome ?? home ?? (c ? ClientSession.identityOfConv(c) : undefined);
+		const task =
+			ask.task ??
+			(queue?.from && queue.tasks.length === 1
+				? { id: queue.tasks[0]!.id, title: queue.tasks[0]!.plan.title }
+				: undefined);
+		return {
+			...(role ? { role: { id: role.id, title: role.title } } : {}),
+			chat: task || queue?.from ? "task" : home ? "home" : "other",
+			...(task ? { task } : {}),
+			...(ask.conversationTitle ? { title: ask.conversationTitle } : {}),
+		};
+	}
+
 	/** identities: this chat's identity label (server/identities.ts). The last `identity` entry pi-identity
 	 *  wrote on the current branch; with none ever written, the identity whose home chat this is. The walk
 	 *  goes back from the leaf and stops at the first identity entry or at the leaf it saw last time, so an
@@ -10197,6 +10261,26 @@ export class ClientSession {
 	// -----------------------------------------------------------------------
 	// 用户提问桥（标准 pi 引擎 ask_user_question customTool）
 	// -----------------------------------------------------------------------
+
+	/** Restrict registration to the actual home file; re-check runtime ownership at every tool call. */
+	private ownerQuestionTools(file: string | undefined, anchor: { session?: AgentSession }): ToolDefinition[] {
+		if (!isCooHomeChat(file, identityRegistry().identities)) return [];
+		return [
+			makeOwnerQuestionTool({
+				inCooHomeChat: () => {
+					const h = anchor.session ? this.findConversationHome?.(anchor.session) : undefined;
+					const c = h ? h.session.convs.get(h.convId) : undefined;
+					return (
+						!!c &&
+						!c.isSubagent &&
+						c.session === anchor.session &&
+						isCooHomeChat(c.session.sessionFile ?? undefined, identityRegistry().identities)
+					);
+				},
+				desk: () => ownerQuestionDesk ?? undefined,
+			}),
+		];
+	}
 
 	/**
 	 * 桥接工具目标（ask_user_question / browser_page）：**调用瞬间**按 runtime 身份
@@ -12507,9 +12591,12 @@ export class ClientSession {
 			forOwner?: RoleOwnerAnswer;
 			ownerChannel?: OwnerChannel;
 			/** carry-on: server only (see PromptFlow.carried). */
-			carried?: RequesterTurn;
+			carried?: CarriedRoleTurn;
 			/** task-chat-start: server only, openTaskChat's first prompt (see task-chat-start.ts). */
 			taskStart?: TaskStartHooks;
+			/** Server-only late card composition; never set from a browser or plugin request. */
+			lateText?: () => string | undefined;
+			textCurrent?: () => boolean;
 		},
 	): Promise<void> {
 		let conv: Conversation;
@@ -12535,6 +12622,9 @@ export class ClientSession {
 			...(ownerChannelOf(opts?.ownerChannel) ? { ownerChannel: opts!.ownerChannel } : {}),
 			...(opts?.carried ? { carried: opts.carried } : {}),
 			...(opts?.taskStart ? { taskStart: opts.taskStart } : {}),
+			...(opts?.lateText && opts.source === "extension"
+				? { lateText: opts.lateText, textCurrent: opts.textCurrent }
+				: {}),
 			deferred: false,
 			handedOver: false,
 			admission: takePromptAdmission(conv),
@@ -13006,6 +13096,22 @@ export class ClientSession {
 				}
 			};
 
+			// COO cards stay lazy through every await above. A new run wins the race: retry later,
+			// never enqueue a stale card into it. No text left means no prompt and no turn attribution.
+			if (flow.lateText) {
+				if (s !== conv.session || s.isStreaming || s.isCompacting || promptStartPending(s)) {
+					receipt.fail(ROLE_LAZY_BUSY_REASON);
+					return;
+				}
+				const current = flow.lateText();
+				if (current === undefined) {
+					receipt.ok();
+					return;
+				}
+				text = current;
+				conv.pendingTask = truncRun(text.trim(), RUN_TASK_CAP);
+			}
+
 			const durablePort = resolveActiveDurablePort(this);
 			const coordinator =
 				durablePort && typeof this.activePendingRecoveryCoordinator === "function"
@@ -13058,6 +13164,7 @@ export class ClientSession {
 						(s.prompt as (t: string, o?: Record<string, unknown>) => Promise<void>)(text, {
 							streamingBehavior,
 							preflightResult: wrappedPreflightResult,
+							...(flow.textCurrent ? { [PROMPT_FRESHNESS]: flow.textCurrent } : {}),
 							...(receipt.id ? { idempotencyKey, clientMessageId: receipt.id } : {}),
 							...(flow.source ? { source: flow.source, expandPromptTemplates: false } : {}),
 						}),
@@ -13069,6 +13176,7 @@ export class ClientSession {
 					() =>
 						(s.prompt as (t: string, o?: Record<string, unknown>) => Promise<void>)(text, {
 							preflightResult: wrappedPreflightResult,
+							...(flow.textCurrent ? { [PROMPT_FRESHNESS]: flow.textCurrent } : {}),
 							...(receipt.id ? { idempotencyKey, clientMessageId: receipt.id } : {}),
 							...(flow.source ? { source: flow.source, expandPromptTemplates: false } : {}),
 						}),
@@ -13106,6 +13214,10 @@ export class ClientSession {
 			}
 		} catch (err) {
 			conv.activePromptAc = undefined;
+			if (flow.lateText && (err as Error)?.message === ROLE_LAZY_CHANGED_REASON) {
+				receipt.fail(ROLE_LAZY_CHANGED_REASON);
+				return;
+			}
 			this.emit({
 				type: "notice",
 				level: "error",
@@ -18671,11 +18783,30 @@ export class AgentService {
 			holds: () => new OwnerQuestionHolds(join(this.stateStore.dataDir, OWNER_QUESTION_HOLDS_FILE)),
 		});
 		ClientSession.ownerQuestions = this.ownerQuestions;
+		ownerQuestionDesk?.stop();
+		this.cooDesk = new CooOwnerQuestionDesk({
+			routingOn: () => this.ownerQuestions.enabled,
+			hear: (fn) => askHub.observe(fn),
+			heldAsks: () => askHub.heldList(),
+			holdKeyOf: (id) => this.ownerQuestions.holdKeyOf(id),
+			holds: () => this.ownerQuestions.holds(),
+			heldUntil: (id) => this.ownerQuestions.heldUntil(id),
+			release: (id, by, note, rec) => this.ownerQuestions.release(id, by, note, rec),
+			returnToAsker: (id, note) => this.ownerQuestions.returnToAsker(id, note),
+			askerOf: (ask) => ClientSession.ownerQuestionAsker(ask),
+			ownerLastWroteAt: (ask) => {
+				const chat = ClientSession.ownerQuestionChat(ask);
+				return chat ? ownerLastWroteOf(chat, chat.turnRecord ?? chat.turnPending) : undefined;
+			},
+			deliver: (compose, sendId, current) => this.deliverOwnerQuestion(compose, sendId, current),
+		});
+		ownerQuestionDesk = this.cooDesk;
 		this.stopOwnerAskRouted = askHub.observe((ev) => ClientSession.ownerAskRouted(ev));
 	}
 
 	/** owner-question routing (Ops #685): this service's router, and its watch on released and returned asks. */
 	private readonly ownerQuestions: OwnerQuestionRouter;
+	private readonly cooDesk: CooOwnerQuestionDesk;
 	private stopOwnerAskRouted: (() => void) | null = null;
 
 	// -----------------------------------------------------------------------
@@ -18718,6 +18849,7 @@ export class AgentService {
 		this.startStallWatch();
 		// owner-question routing (Ops #685): the safety net's sweep (lets nothing through while the switch is off).
 		this.ownerQuestions.start();
+		this.cooDesk.start();
 	}
 
 	// -----------------------------------------------------------------------
@@ -19532,6 +19664,7 @@ export class AgentService {
 
 	/** telegram-coo: a run settled in the chat with this transcript: a role's home chat hands its reply on. */
 	private roleTurnSettled(file: string, rec: RoleTurnRecord): void {
+		if (isCooHomeChat(file, identityRegistry().identities)) this.cooDesk.turnSettled(rec.ids);
 		if (!this.onRoleReply) return;
 		const reply = roleReplyOf(file, rec, identityRegistry().identities, Date.now());
 		if (reply) this.onRoleReply(reply);
@@ -19567,6 +19700,41 @@ export class AgentService {
 		return res.ok ? { ok: true, id: sendId } : res;
 	}
 
+	/** COO cards use role delivery, not the role-message store or its caps. Wait outside its shared chain. */
+	private async deliverOwnerQuestion(
+		compose: () => string | undefined,
+		sendId: string,
+		current: () => boolean,
+	): Promise<CardDelivery> {
+		let final = false;
+		const result = await sendWhenFree(
+			async () => {
+				if (!this.ownerQuestions.enabled) return { ok: true };
+				const home = roleHomeChat("coo", identityRegistry().identities);
+				if (!home.ok) {
+					final = true;
+					return home;
+				}
+				if (!(await this.chatTranscriptExists(home.file))) {
+					final = true;
+					return { ok: false, error: "COO's home chat transcript is gone" };
+				}
+				const homeCurrent = () =>
+					isCooHomeChat(home.file, identityRegistry().identities) && this.ownerQuestions.enabled;
+				return this.sendRoleMessage(
+					home.file,
+					{
+						compose: () => (homeCurrent() ? compose() : undefined),
+						current: () => homeCurrent() && current(),
+					},
+					{ cause: "role", sendId },
+				);
+			},
+			{ stopped: () => this.quiesced },
+		);
+		return !result.ok && final ? { ...result, final: true } : result;
+	}
+
 	/**
 	 * role-messages: send a role message into the chat with this transcript as a queued user message
 	 * marked as sent by an extension. A closed chat is opened in the background for it (the way a
@@ -19575,7 +19743,7 @@ export class AgentService {
 	 */
 	private sendRoleMessage(
 		file: string,
-		text: string,
+		text: RoleDeliveryText,
 		/** telegram-coo: who sent it (default a role), the host.roles.send id, and whether it answers a
 		 *  question asked for the owner (role-replies.ts). */
 		how: RoleDeliveryHow = {},
@@ -19583,6 +19751,8 @@ export class AgentService {
 		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
 			if (this.quiesced) return { ok: false, error: "the server is restarting" };
+			if (typeof text !== "string" && this.queueChatState(file).state === "working")
+				return { ok: false, busy: true, error: ROLE_LAZY_BUSY_REASON };
 			const transcriptOk =
 				typeof this.chatTranscriptExists === "function" ? await this.chatTranscriptExists(file) : existsSync(file);
 			if (!transcriptOk) return { ok: false, error: "the chat's transcript is gone" };
@@ -21388,6 +21558,8 @@ export class AgentService {
 		this.stopDecisionAnswers = null;
 		this.stopOwnerAskRouted?.();
 		this.stopOwnerAskRouted = null;
+		this.cooDesk.stop();
+		if (ownerQuestionDesk === this.cooDesk) ownerQuestionDesk = null;
 		this.ownerQuestions.dispose();
 		if (ClientSession.ownerQuestions === this.ownerQuestions) ClientSession.ownerQuestions = null;
 		this.participants.dispose();

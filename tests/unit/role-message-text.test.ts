@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { BOARD_CUSTOM_TYPE, type BoardPostRecord, boardNote, boardOrderText } from "../../server/role-board.js";
 import { roleMessageText } from "../../server/role-messages.js";
+import { questionAsk } from "../../server/asks.js";
+import {
+	OWNER_QUESTION_CARD_HEAD,
+	ownerQuestionCardText,
+	type CardQuestion,
+} from "../../server/owner-question-card.js";
 import { statusHint } from "../../server/turn-status.js";
 import {
+	OWNER_QUESTION_LABEL,
 	messageRoleSentOf,
 	parseBoardNoteText,
 	parseBoardOrderText,
 	parseMessageRoleArgs,
+	parseOwnerQuestionText,
 	parseRoleMessageText,
 	roleMessagePreview,
 	roleMessageRowText,
@@ -248,6 +256,106 @@ describe("board: notes and orders fold like role messages", () => {
 		expect(roleMessageViewOf({ role: "custom", customType: "role-message" }, note)).toBeNull();
 		expect(roleMessageViewOf({ role: "custom", customType: BOARD_CUSTOM_TYPE }, "[Board] hello")).toBeNull();
 		expect(roleMessageViewOf({ role: "user" }, "[Board] 1 new post\n\nthe owner typing this")).toBeNull();
+	});
+});
+
+describe("owner-question: the server's cards use the existing folded-message view", () => {
+	const at = Date.UTC(2026, 10, 1, 9);
+	const item: CardQuestion = {
+		handle: "oq-1234abcd",
+		ask: questionAsk(
+			"q-fold",
+			[
+				{
+					id: "port",
+					question: "Which port should the preview use?",
+					options: [{ label: "8080" }, { label: "8090" }],
+					detail: "## Context\nThe usual port is taken.\n\nRestart after moving it.",
+				},
+			],
+			{ conversationTitle: "Fonts work" },
+			at,
+		),
+		asker: { role: { id: "design", title: "Design" }, chat: "home" },
+		reason: "owner-away",
+		goesAt: at + 30 * 60_000,
+	};
+	const card = (items = [item]) => ownerQuestionCardText(items, { tz: "UTC" });
+
+	it("reads the literal owner-question header, never an rm- identity, and preserves every body field", () => {
+		const source = card();
+		expect(`[${OWNER_QUESTION_LABEL}]`).toBe(OWNER_QUESTION_CARD_HEAD);
+		expect(parseOwnerQuestionText(source)).toEqual({
+			id: "oq-1234abcd",
+			kind: "owner-question",
+			from: "Design's home chat",
+			what: "from Design's home chat [oq-1234abcd]",
+			body: source.slice(source.indexOf("\n\n") + 2).trimEnd(),
+		});
+		const view = roleMessageViewOf({ role: "user" }, source);
+		expect(view).toMatchObject({
+			id: "oq-1234abcd",
+			kind: "owner-question",
+			from: "Design's home chat",
+			fromTitle: "",
+			fromChat: "",
+			stamped: true,
+		});
+		expect(view?.text).toContain("Question: Which port should the preview use?");
+		expect(view?.text).toContain("Package:\n> ## Context");
+		expect(view?.text).toContain("never answer for him");
+		expect(view?.text).toContain(statusHint("order"));
+		expect(parseRoleMessageText(source)).toBeNull();
+	});
+
+	it("reads a batch with every handle and keeps all question blocks and guidance in order", () => {
+		const second: CardQuestion = {
+			...item,
+			handle: "oq-5678efab",
+			asker: { chat: "task", task: { id: 12, title: "New fonts" } },
+		};
+		const source = card([item, second]);
+		const parsed = parseOwnerQuestionText(source);
+		expect(parsed).toMatchObject({
+			id: "oq-1234abcd, oq-5678efab",
+			kind: "owner-question",
+			from: "Design's home chat; task #12 “New fonts”",
+			what: "2 questions, from Design's home chat; task #12 “New fonts” [oq-1234abcd, oq-5678efab]",
+		});
+		expect(parsed?.body).toBe(source.slice(source.indexOf("\n\n") + 2).trimEnd());
+		expect(parsed?.body.match(/^Package:/gm)).toHaveLength(2);
+		expect(roleMessageViewOf({ role: "user" }, source)?.text).toBe(parsed?.body);
+		const many = Array.from({ length: 5 }, (_, index) => ({ ...item, handle: `oq-0000000${index}` }));
+		expect(parseOwnerQuestionText(card(many))?.from).toContain("and 2 more");
+	});
+
+	it("also reads cards from an ordinary chat without inventing a sending role", () => {
+		expect(parseOwnerQuestionText(card([{ ...item, asker: { chat: "other", title: "Scratch" } }]))?.from).toBe(
+			"the chat “Scratch”",
+		);
+	});
+
+	it("does not fold quoted cards, foreign message kinds, or incomplete headers", () => {
+		const source = card();
+		for (const message of [
+			{ role: "assistant" },
+			{ role: "toolResult" },
+			{ role: "custom", customType: "role-message" },
+			{ role: "custom", customType: "board" },
+		]) {
+			expect(roleMessageViewOf(message, source)).toBeNull();
+		}
+		for (const invalid of [
+			`Quoted: ${source}`,
+			"[Owner question] from Design's home chat",
+			"[Owner question] from Design's home chat [rm-1234abcd]",
+			"[Owner question] from Design's home chat [oq-invalid]",
+			"[Owner question] from Design's home chat [oq-1234abcd] trailing words",
+			"[Owner question] 2 questions, from Design's home chat [oq-1234abcd, nope]",
+		]) {
+			expect(parseOwnerQuestionText(invalid)).toBeNull();
+			expect(roleMessageViewOf({ role: "user" }, invalid)).toBeNull();
+		}
 	});
 });
 

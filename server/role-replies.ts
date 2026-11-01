@@ -111,6 +111,26 @@ export interface RoleOwnerAnswer {
 	ownerChannel?: OwnerChannel;
 }
 
+/** Carry-on metadata, independent of owner/transport authority and the turn's original cause. */
+export interface CarriedRoleTurn extends RequesterTurn {
+	/** Only host-generated owner-question card receipts survive into the receiving carry-on turn. */
+	ownerQuestionSendIds?: string[];
+}
+
+/** Shape of the host's oqc-UUID receipt; provenance still comes from server-only input admission. */
+export function isOwnerQuestionSendId(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		/^oqc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.exec(value)?.[0] === value
+	);
+}
+
+/** Checked saved receipts: malformed lists are dropped, never interpreted as other send ids. */
+export function ownerQuestionSendIdsOf(raw: unknown): string[] | undefined {
+	if (!Array.isArray(raw) || !raw.length || !raw.every(isOwnerQuestionSendId)) return;
+	return [...new Set(raw)];
+}
+
 /** Server-only accepted-input metadata, not parsed from words or caller tool arguments. */
 export interface RoleTurnInput {
 	/** Display-only, host-derived input origin; never a requester's claimed identity. */
@@ -119,9 +139,9 @@ export interface RoleTurnInput {
 	sendId?: string;
 	ownerChannel?: OwnerChannel;
 	forOwner?: RoleOwnerAnswer;
-	/** carry-on: this text is the note that carries on a turn a restart cut off: the turn takes that
-	 *  turn's saved requester inputs (running-chats.ts) instead of the note's own unknown one. */
-	carried?: RequesterTurn;
+	/** carry-on: the note takes the cut-off turn's saved requester inputs and owner-question receipts
+	 *  (running-chats.ts), never its cause or owner/transport authority. */
+	carried?: CarriedRoleTurn;
 }
 
 /** Shared by prompt admission (pending and joined turns) and metadata-only boundary tests. */
@@ -131,6 +151,9 @@ export function collectRoleInput(rec: RoleTurnRecord, input: RoleTurnInput): voi
 	else collectRequesterInput(rec, input.requester);
 	rec.causes.add(input.cause ?? "other");
 	if (input.sendId) rec.ids.push(input.sendId);
+	for (const id of ownerQuestionSendIdsOf(carried?.ownerQuestionSendIds) ?? []) {
+		if (!rec.ids.includes(id)) rec.ids.push(id);
+	}
 	if (input.forOwner) rec.forOwner = mergeOwnerAnswer(rec.forOwner, input.forOwner);
 	const channel = ownerChannelOf(input.ownerChannel);
 	if (channel) {

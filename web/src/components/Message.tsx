@@ -36,7 +36,8 @@ import { StreamMarkdown } from "./StreamMarkdown";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallBlock, type ToolView } from "./ToolCallBlock";
 import { RoleMessageRow, setRoleMessageOpen, useFocusAfterToggle, useRoleMessageOpen } from "./RoleMessageRow";
-import { roleMessageViewOf, type RoleMessageView } from "../role-message-text";
+import { OWNER_QUESTION_LABEL, roleMessageViewOf, type RoleMessageView } from "../role-message-text";
+import { OwnerQuestionBody } from "./OwnerQuestionBody";
 import { ChatImage } from "./ChatImage";
 import { imageSrc, isShownImage } from "../chat-image";
 import { useT, type Translate } from "../i18n";
@@ -1285,7 +1286,12 @@ export const Message = memo(function Message({
 						{isFileAttachment ? (
 							<AttachmentCard message={message} forceOpen={searchActive} />
 						) : roleMsg ? (
-							<RoleMessageCard roleMessage={roleMsg} msgId={message.id} foldable={roleFoldable} />
+							<RoleMessageCard
+								roleMessage={roleMsg}
+								msgId={message.id}
+								foldable={roleFoldable}
+								forceOpen={searchActive}
+							/>
 						) : skillBlock ? (
 							<>
 								<SkillCard block={skillBlock} forceOpen={searchActive} />
@@ -1655,6 +1661,7 @@ function CompactionCard({
 
 /** role-messages: the chat's label for a role message, e.g. "from ops (Queue #58) \u00b7 fyi". */
 export function roleMessageLabel(m: RoleMessageView, t: Translate): string {
+	if (m.kind === "owner-question") return `${OWNER_QUESTION_LABEL} · ${m.what ?? ""}`;
 	if (m.kind === "report" && m.stall) return t("roleStallLabel", { names: m.stall.names });
 	if (m.kind === "report" && m.poke) return t("rolePokeLabel", { name: m.poke.name });
 	if (m.kind === "report" && m.ci) return t("roleCiLabel", { title: m.ci.title });
@@ -1678,10 +1685,12 @@ function RoleMessageCard({
 	roleMessage: m,
 	msgId,
 	foldable,
+	forceOpen = false,
 }: {
 	roleMessage: RoleMessageView;
 	msgId: string;
 	foldable: boolean;
+	forceOpen?: boolean;
 }) {
 	const t = useT();
 	const foldRef = useRef<HTMLButtonElement>(null);
@@ -1696,7 +1705,12 @@ function RoleMessageCard({
 			<span className="chead-icon rolemsg-icon">
 				<FiMessageSquare />
 			</span>
-			{m.kind === "board" || m.kind === "board-order" ? (
+			{m.kind === "owner-question" ? (
+				<>
+					<span className="chead-title rolemsg-title">{OWNER_QUESTION_LABEL}</span>
+					<span className="rolemsg-from">{m.what}</span>
+				</>
+			) : m.kind === "board" || m.kind === "board-order" ? (
 				// board (task #76): the turn-start note, or an order the board sent directly.
 				<>
 					<span className="chead-title rolemsg-title">
@@ -1775,7 +1789,11 @@ function RoleMessageCard({
 				<div className="chead rolemsg-head">{head}</div>
 			)}
 			<div className="rolemsg-body msg-text">
-				<Markdown text={m.text} hardBreaks />
+				{m.kind === "owner-question" ? (
+					<OwnerQuestionBody text={m.text} forceOpen={forceOpen} />
+				) : (
+					<Markdown text={m.text} hardBreaks />
+				)}
 			</div>
 		</div>
 	);

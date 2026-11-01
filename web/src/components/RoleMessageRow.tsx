@@ -1,7 +1,12 @@
 import { memo, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { FiClock, FiList, FiMail } from "react-icons/fi";
 import { useT, type Translate } from "../i18n";
-import { roleMessagePreview, roleMessageRowText, type RoleMessageView } from "../role-message-text";
+import {
+	OWNER_QUESTION_LABEL,
+	roleMessagePreview,
+	roleMessageRowText,
+	type RoleMessageView,
+} from "../role-message-text";
 
 /**
  * role-message-fold (owner 2026-10-06: "Make the agent to agent messages collapsed by default"):
@@ -79,6 +84,7 @@ export function roleMessageFrom(m: RoleMessageView, t: Translate): string {
 
 /** The row's kind word. */
 export function roleMessageKindWord(m: RoleMessageView, t: Translate): string {
+	if (m.kind === "owner-question") return OWNER_QUESTION_LABEL;
 	if (m.kind === "report" && m.stall) return t("roleMessageFoldStall", { names: m.stall.names });
 	if (m.kind === "report" && m.poke) return t("roleMessageFoldPoke", { name: m.poke.name });
 	if (m.kind === "report" && m.ci) return m.ci.title;

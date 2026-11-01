@@ -41,6 +41,7 @@ import {
 	SUBAGENT_TOOL_NAMES,
 	TERMINAL_TOOL_NAMES,
 } from "../../server/tool-manager.js";
+import { OWNER_QUESTION_TOOL } from "../../server/owner-question-tool.js";
 
 const AGENT_SERVICE_SRC = readFileSync(join(__dirname, "..", "..", "server", "agent-service.ts"), "utf8");
 
@@ -60,6 +61,10 @@ const ROLE_ONLY = new Set([
 /** telegram-coo: read-only tools every chat always has. Not a catalog row: roles_overview only reads the
  *  Roles page's data, so there is nothing to switch off; the owner limits a role's tools in identity.json. */
 const ALWAYS = new Set([ROLES_OVERVIEW_TOOL_NAME]);
+
+/** owner-question-coo (Ops #686): registered only in COO's home chat and refused anywhere else. Not a catalog
+ *  row: the owner's switch is the ownerQuestionsViaCoo setting (off: the tool says routing is off). */
+const COO_HOME_ONLY = new Set([OWNER_QUESTION_TOOL]);
 
 /** 工厂 → 它注册的工具名（与各工厂的 name: 对齐；makeSubagentTools 产出 7 个子代理工具，见 subagents.ts）。 */
 const FACTORY_TOOLS: Record<string, string[]> = {
@@ -90,6 +95,7 @@ const FACTORY_TOOLS: Record<string, string[]> = {
 	makeEvalTool: [EVAL_TOOL_NAME],
 	makePatchTool: [PATCH_TOOL_NAME],
 	makeLspTool: [LSP_TOOL_NAME],
+	makeOwnerQuestionTool: [OWNER_QUESTION_TOOL],
 };
 
 /** agent-service.ts 里实际调用的工厂（去注释、防定义行，只认 `makeXxxTool(` 调用）。 */
@@ -117,7 +123,13 @@ describe("注册→目录", () => {
 		const homeless: string[] = [];
 		for (const [factory, tools] of Object.entries(FACTORY_TOOLS)) {
 			for (const name of tools) {
-				if (!known.has(name) && !INTRINSIC.has(name) && !ROLE_ONLY.has(name) && !ALWAYS.has(name))
+				if (
+					!known.has(name) &&
+					!INTRINSIC.has(name) &&
+					!ROLE_ONLY.has(name) &&
+					!ALWAYS.has(name) &&
+					!COO_HOME_ONLY.has(name)
+				)
 					homeless.push(`${name}（来自 ${factory}）`);
 			}
 		}
@@ -141,5 +153,6 @@ describe("注册→目录", () => {
 		expect([...INTRINSIC].filter((n) => known.has(n))).toEqual([]);
 		expect([...ROLE_ONLY].filter((n) => known.has(n))).toEqual([]);
 		expect([...ALWAYS].filter((n) => known.has(n))).toEqual([]);
+		expect([...COO_HOME_ONLY].filter((n) => known.has(n))).toEqual([]);
 	});
 });

@@ -16,8 +16,9 @@ import {
 	requesterForAdmission,
 	requesterOfTurn,
 } from "../../server/queue-requester.js";
-import { collectRoleInput, newTurnRecord } from "../../server/role-replies.js";
+import { collectRoleInput, newTurnRecord, ownerTurnOf, topCause } from "../../server/role-replies.js";
 import {
+	carriedTurnOf,
 	planCarryOn,
 	readRunningChatsFile,
 	requesterTurnOf,
@@ -37,6 +38,8 @@ const ROLE_FOR_OWNER: UiTaskRequesterInput = {
 	ownerIds: ["rs-feedbeef-0001"],
 };
 const UNKNOWN: UiTaskRequesterInput = { kind: "unknown" };
+const FIRST_RECEIPT = "oqc-9f7b627e-38b5-4a11-80b6-6b1656e4efbd";
+const SECOND_RECEIPT = "oqc-ab12873a-064d-4bf9-8ef1-728b046c1128";
 
 /**
  * The turn the carry-on note starts, as the app builds it: carryOnAfterRestart checks the saved
@@ -108,6 +111,103 @@ describe("running-chats keeps the running turn's requester inputs", () => {
 		expect(readRunningChatsFile(file)?.chats).toEqual([]);
 	});
 
+	it("carries only host owner-question receipts, without restoring old causes or transport authority", () => {
+		const list = new RunningChats(file, () => now);
+		list.start(ref);
+		const turn = newTurnRecord();
+		collectRoleInput(turn, {
+			cause: "telegram",
+			ownerChannel: "telegram",
+			sendId: TELEGRAM.id,
+			requester: TELEGRAM,
+		});
+		turn.ownerLastWroteAt = now;
+		list.setRequester(A, turn);
+		expect(readRunningChatsFile(file)?.chats[0]?.ownerQuestionSendIds).toBeUndefined();
+		for (const sendId of [FIRST_RECEIPT, "rs-0123abcd-4567", FIRST_RECEIPT, "oqc-short", SECOND_RECEIPT]) {
+			collectRoleInput(turn, { cause: "other", requester: UNKNOWN, sendId });
+			list.setRequester(A, turn); // Later receipts change no requester input, but must still be saved.
+		}
+		list.freeze("SIGTERM");
+		list.setRequester(A, newTurnRecord()); // Frozen metadata is not overwritten at shutdown.
+		const prev = readRunningChatsFile(file)!;
+		const saved = prev.chats[0]!;
+		expect(saved.ownerQuestionSendIds).toEqual([FIRST_RECEIPT, SECOND_RECEIPT]);
+		expect(saved).not.toHaveProperty("ids");
+		expect(saved).not.toHaveProperty("causes");
+		expect(saved).not.toHaveProperty("owner");
+		expect(saved).not.toHaveProperty("forOwner");
+		expect(saved).not.toHaveProperty("text");
+
+		const plan = planCarryOn(prev, null, now + 60_000);
+		const next = new RunningChats(file, () => now + 60_000);
+		next.seed(plan.carry.map((item) => ({ ...item.chat, awaiting: true })));
+		next.setRequester(A, newTurnRecord()); // Still waiting for the carry-on note to start its turn.
+		expect(readRunningChatsFile(file)?.chats[0]?.ownerQuestionSendIds).toEqual([FIRST_RECEIPT, SECOND_RECEIPT]);
+		next.list()[0]!.ownerQuestionSendIds!.pop();
+		next.get(A)!.ownerQuestionSendIds!.pop();
+		expect(next.get(A)?.ownerQuestionSendIds).toEqual([FIRST_RECEIPT, SECOND_RECEIPT]);
+
+		const carried = carriedTurnOf(plan.carry[0]!.chat);
+		const restored = newTurnRecord();
+		collectRoleInput(restored, { cause: "other", requester: UNKNOWN, carried });
+		collectRoleInput(restored, { cause: "other", requester: UNKNOWN, carried });
+		expect(restored.ids).toEqual([FIRST_RECEIPT, SECOND_RECEIPT]);
+		expect(topCause(restored.causes)).toBe("other");
+		expect(ownerTurnOf(restored)).toBeNull();
+		expect(ownerInputIds(restored)).toEqual([TELEGRAM.id]); // Actual saved requester evidence is unchanged.
+		expect(requesterOfTurn(restored)).toEqual({ v: 1, inputs: [TELEGRAM, UNKNOWN] });
+		expect(restored.ownerLastWroteAt).toBe(now);
+		next.start(ref);
+		next.setRequester(A, restored);
+		expect(readRunningChatsFile(file)?.chats[0]?.ownerQuestionSendIds).toEqual([FIRST_RECEIPT, SECOND_RECEIPT]);
+		next.finish(A);
+		next.start(ref);
+		next.setRequester(A, newTurnRecord());
+		expect(readRunningChatsFile(file)?.chats[0]?.ownerQuestionSendIds).toBeUndefined();
+	});
+
+	it("rejects malformed receipt metadata on file read, carry-on reconstruction and input admission", () => {
+		const bad: unknown[] = [
+			null,
+			false,
+			FIRST_RECEIPT,
+			{ ids: [FIRST_RECEIPT] },
+			[],
+			[42],
+			[null],
+			[""],
+			["oqc-short"],
+			[`oqc-${"a".repeat(300)}`],
+			[`${FIRST_RECEIPT}\n`],
+			[` ${FIRST_RECEIPT}`],
+			[TELEGRAM.id],
+			[FIRST_RECEIPT, "rs-0123abcd-4567"],
+			[FIRST_RECEIPT, { ownerChannel: "telegram" }],
+		];
+		for (const raw of bad) {
+			const chat = {
+				...ref,
+				startedAt: now,
+				cutoffs: 0,
+				tools: [],
+				requester: { inputs: [UNKNOWN] },
+				ownerQuestionSendIds: raw as string[],
+			};
+			writeFileSync(file, JSON.stringify({ v: 1, pid: 1, chats: [chat] }));
+			const saved = readRunningChatsFile(file)!.chats[0]!;
+			expect(saved.ownerQuestionSendIds).toBeUndefined();
+			expect(saved.requester).toEqual({ inputs: [UNKNOWN] });
+			expect(carriedTurnOf(chat)?.ownerQuestionSendIds).toBeUndefined();
+			const rec = newTurnRecord();
+			collectRoleInput(rec, { carried: { ownerQuestionSendIds: raw as string[] } });
+			expect(rec.ids).toEqual([]);
+			expect(topCause(rec.causes)).toBe("other");
+			expect(ownerTurnOf(rec)).toBeNull();
+			expect(ownerInputIds(rec)).toEqual([]);
+		}
+	});
+
 	it("drops a bad or edited saved record, so the carried-on turn stays unknown", () => {
 		const chat = (n: number, requester: unknown) => ({
 			sessionFile: `/tmp/chats/${n}.jsonl`,
@@ -157,6 +257,30 @@ describe("running-chats keeps the running turn's requester inputs", () => {
 });
 
 describe("the carry-on turn answers the cut-off turn's messages", () => {
+	it("restores receipts with missing or overflowed requesters, without inventing owner evidence", () => {
+		expect(carriedTurnOf({})).toBeUndefined(); // Legacy entries remain unknown.
+		for (const requester of [undefined, { inputs: [] }]) {
+			const carried = carriedTurnOf({ requester, ownerQuestionSendIds: [FIRST_RECEIPT], ownerLastWroteAt: 123 });
+			expect(carried).toEqual({ ownerQuestionSendIds: [FIRST_RECEIPT] });
+			const rec = newTurnRecord();
+			collectRoleInput(rec, { cause: "other", carried });
+			expect(rec.ids).toEqual([FIRST_RECEIPT]);
+			expect(rec.ownerLastWroteAt).toBeUndefined();
+			expect(requesterOfTurn(rec)).toEqual({ v: 1, inputs: [UNKNOWN] });
+			expect(ownerInputIds(rec)).toEqual([]);
+			expect(ownerTurnOf(rec)).toBeNull();
+			expect(topCause(rec.causes)).toBe("other");
+		}
+		const rec = newTurnRecord();
+		collectRoleInput(rec, {
+			carried: carriedTurnOf({ requester: { inputs: [], overflow: true }, ownerQuestionSendIds: [FIRST_RECEIPT] }),
+		});
+		expect(rec.ids).toEqual([FIRST_RECEIPT]);
+		expect(requesterOfTurn(rec)).toBeUndefined();
+		expect(ownerInputIds(rec)).toEqual([]);
+		expect(ownerTurnOf(rec)).toBeNull();
+	});
+
 	it("starts with the saved owner ids and requester, without the note's own unknown input", () => {
 		const rec = carryOnTurn({ inputs: [OWNER, ROLE_FOR_OWNER, TELEGRAM] });
 		expect(ownerInputIds(rec)).toEqual([OWNER.id, TELEGRAM.id]);

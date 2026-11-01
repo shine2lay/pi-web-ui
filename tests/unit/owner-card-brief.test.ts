@@ -13,6 +13,7 @@ import {
 	briefText,
 	hasIdOrPath,
 	OWNER_CARD_KINDS,
+	plainTextFaults,
 	ownerCardBrief,
 	type OwnerCardBriefInput,
 	ownerCardBriefOf,
@@ -124,6 +125,49 @@ describe("hasIdOrPath: what counts as an id or a path", () => {
 			"Go on without it",
 		])
 			expect(hasIdOrPath(s), s).toBe(false);
+	});
+});
+
+// owner-question-routing (Ops #686): COO's note and recommendation reach the owner, so the same helpers check
+// them, and name what isn't plain words: ids and paths as hasIdOrPath finds them, and code.
+describe("plainTextFaults: what in a text isn't plain words, named", () => {
+	it("names each id, path and web address hasIdOrPath catches, with its words", () => {
+		expect(plainTextFaults("Design asked in #686 about it.")).toEqual([{ kind: "id", text: "#686" }]);
+		expect(plainTextFaults("See rm-d2c1f9b2 and commit 3c785b67.")).toEqual([
+			{ kind: "id", text: "rm-d2c1f9b2" },
+			{ kind: "id", text: "3c785b67" },
+		]);
+		expect(plainTextFaults("It lives in server/asks.ts.")).toEqual([{ kind: "path", text: "server/asks.ts" }]);
+		expect(plainTextFaults("Open https://pi.wai2shine.com/x now")).toEqual([
+			{ kind: "path", text: "https://pi.wai2shine.com/x" },
+		]);
+		for (const s of ["under ADR-M4-18", "lock C1", "~/projects/pi-web-ui", "(rule 21)"])
+			expect(plainTextFaults(s).length, s).toBeGreaterThan(0);
+	});
+	it("names code: backticks, names written as code, calls, operators, braces, tags, settings and flags", () => {
+		for (const [s, frag] of [
+			["Run `npm test` first.", "`npm test`"],
+			["It calls askHub before the card.", "askHub"],
+			["Then release() is called.", "release()"],
+			["The ask_user_question tool asked it.", "ask_user_question"],
+			["It checks a === b first.", "==="],
+			["It returns {ok} today.", "{"],
+			["The <details> part is folded.", "<details>"],
+			["Set mode=strict for it.", "mode=strict"],
+			["Land it with --no-verify.", "--no-verify"],
+		])
+			expect(plainTextFaults(s), s).toContainEqual({ kind: "code", text: frag });
+	});
+	it("finds nothing in plain words, and each fault once", () => {
+		for (const s of [
+			"He set the port rule on Tuesday, so pick the usual port.",
+			"Design wants your yes before it spends on the new fonts; it costs about two hundred dollars.",
+			"It's either this week or next, and/or after the trip.",
+			"Owner cards he can answer cold",
+			"",
+		])
+			expect(plainTextFaults(s), s).toEqual([]);
+		expect(plainTextFaults("#686 then #686 again")).toEqual([{ kind: "id", text: "#686" }]);
 	});
 });
 

@@ -11,16 +11,17 @@
 /** board (task #76): "board" is a role chat's turn-start note about new posts on the roles' board (a
  *  custom message "board"); "board-order" is an order the board sent to the chat directly (a steer into a
  *  running turn, or a turn of its own). Both fold like role messages. */
-export type ParsedRoleMessageKind = "question" | "request" | "fyi" | "reply" | "report" | "board" | "board-order";
+export type ParsedRoleMessageKind =
+	"question" | "request" | "fyi" | "reply" | "report" | "board" | "board-order" | "owner-question";
 
 export interface ParsedRoleMessage {
 	id: string;
 	kind: ParsedRoleMessageKind;
-	/** Sending role id (absent for the 6 am report, which the app sends; "owner" or a role for a board order). */
+	/** Sending role id, "owner" for an order, or an owner-question card's human source label. */
 	from?: string;
 	/** A board order the owner gave through a role (COO): that role. */
 	via?: string;
-	/** A board note's head ("2 new posts, 1 ended"); a board order's time. */
+	/** A board note's head, an order's time, or an owner-question header after its label. */
 	what?: string;
 	/** Sending role's title, as the header gives it. */
 	title?: string;
@@ -36,7 +37,7 @@ export interface ParsedRoleMessage {
 	stall?: { names: string };
 	/** ci-alert (Ops #720): the CI watch's alert about a CI run: the header's words (what happened, repo, workflow). */
 	ci?: { title: string };
-	/** What the sender wrote (header and hint lines removed). */
+	/** Body after the header and removable role hint; owner-question guidance stays in the body. */
 	body: string;
 	/** The hint line for the model, when there is one. */
 	hint?: string;
@@ -73,6 +74,11 @@ const BOARD_ORDER_RE =
 const BOARD_NOTE_RE = /^\[Board\] (\d+ new posts?(?:, \d+ ended)?|\d+ posts? ended)$/;
 /** The hint paragraph that ends an order sent directly (server/role-board.ts boardOrderText). */
 const BOARD_ORDER_HINT = "(The owner's order on the roles' board,";
+
+/** Literal label from server/owner-question-card.ts; this is an app card, not an rm- message. */
+export const OWNER_QUESTION_LABEL = "Owner question";
+const OWNER_QUESTION_RE =
+	/^\[Owner question\] (?:\d+ questions, )?from (.+) \[(oq-[0-9a-f]{8}(?:, oq-[0-9a-f]{8})*)\]$/;
 
 function headAndRest(text: string): { head: string; rest: string } {
 	const nl = text.indexOf("\n");
@@ -114,6 +120,16 @@ export function parseBoardNoteText(text: string): ParsedRoleMessage | null {
 	if (!m) return null;
 	const ids = rest.match(/\bbp-[0-9a-f]{8}\b/);
 	return { id: ids ? ids[0] : "board", kind: "board", what: m[1], body: rest };
+}
+
+/** COO's card for one or several held owner questions; keep every field and the final guidance. */
+export function parseOwnerQuestionText(text: string): ParsedRoleMessage | null {
+	const prefix = `[${OWNER_QUESTION_LABEL}] `;
+	if (!text.startsWith(prefix)) return null;
+	const { head, rest } = headAndRest(text);
+	const m = OWNER_QUESTION_RE.exec(head);
+	if (!m) return null;
+	return { id: m[2], kind: "owner-question", from: m[1], what: head.slice(prefix.length), body: rest };
 }
 
 /** The role message in a chat message's text, or null when its first line isn't a whole header. */
@@ -171,9 +187,9 @@ export interface RoleMessageView {
 	ci?: { title: string };
 	/** board: an order the owner gave through a role (COO): that role. */
 	via?: string;
-	/** board: a note's head ("2 new posts"), an order's time. */
+	/** A board note's head, an order's time, or an owner-question header after its label. */
 	what?: string;
-	/** What the sender wrote (no header or hint line). */
+	/** Body after the header and removable role hint; owner-question guidance stays visible. */
 	text: string;
 	stamped: boolean;
 }
@@ -188,17 +204,17 @@ interface ChatMessageLike {
  *  "role-message") can be one; `text` is the message's text, for the ones without a stamp.
  *  board (task #76): a board note (custom message "board") and an order the board sent directly (a user
  *  message) fold the same way. Only the server writes their headers, and the board itself is on the Roles
- *  page, so they count as stamped. */
+ *  page, so they count as stamped. The app's owner-question cards for COO use this same display path. */
 export function roleMessageViewOf(message: ChatMessageLike, text: string): RoleMessageView | null {
 	if (message.role === "custom" && message.customType === "board") {
 		const note = parseBoardNoteText(text);
-		return note ? boardView(note) : null;
+		return note ? appCardView(note) : null;
 	}
 	if (message.role !== "user" && !(message.role === "custom" && message.customType === "role-message")) return null;
 	if (message.roleMessage) return { ...message.roleMessage, stamped: true };
 	if (message.role === "user") {
-		const order = parseBoardOrderText(text);
-		if (order) return boardView(order);
+		const appCard = parseBoardOrderText(text) ?? parseOwnerQuestionText(text);
+		if (appCard) return appCardView(appCard);
 	}
 	const p = parseRoleMessageText(text);
 	if (!p) return null;
@@ -218,7 +234,7 @@ export function roleMessageViewOf(message: ChatMessageLike, text: string): RoleM
 	};
 }
 
-function boardView(p: ParsedRoleMessage): RoleMessageView {
+function appCardView(p: ParsedRoleMessage): RoleMessageView {
 	return {
 		id: p.id,
 		kind: p.kind,

@@ -262,6 +262,20 @@ export class OwnerQuestionRouter {
 		return ask.route.heldAt + HOLD_SAFETY_NET_MS;
 	}
 
+	/** COO's desk shares this router's record key and store; never opens a second store. */
+	holdKeyOf(askId: string): string | undefined {
+		return this.routed.get(askId)?.holdKey;
+	}
+
+	/**
+	 * The one shared store. With routing on it opens it if needed: after a restart COO's turn can settle
+	 * (its saved card receipt) before any ask has reopened the store. Off: the already-open store only,
+	 * so looking at the desk while routing is off never opens or writes one.
+	 */
+	holds(): OwnerQuestionHolds | undefined {
+		return this.enabled ? this.holdStore() : this.store;
+	}
+
 	/** Everything held for COO now, oldest first, with when the safety net lets each through. */
 	heldAsks(): HeldOwnerAsk[] {
 		const out: HeldOwnerAsk[] = [];

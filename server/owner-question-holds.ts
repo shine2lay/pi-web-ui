@@ -18,8 +18,8 @@
 // read is left as it was).
 //
 // The file holds no words of any question: a stuck card's key is a hash of its ask key and
-// signature; a question's, dialog's or approval's is its ask id. Only COO's own note and
-// recommendation are kept, bounded. Mode 0600, written whole, at most HOLDS_MAX records; finished
+// signature; a question's, dialog's or approval's is its ask id. Only COO's own note,
+// recommendation and hold reason are kept, bounded. Mode 0600, written whole, at most HOLDS_MAX records; finished
 // ones go after HOLD_FINISHED_KEEP_MS, or oldest first when it is full.
 //
 // Inert groundwork (Ops #684): nothing creates a store yet. #685/#686 wire it, #687 switches it on.
@@ -39,7 +39,7 @@ export const HOLD_SAFETY_NET_MS = 30 * 60_000;
 export const COO_HOLD_MAX_MS = 2 * 60 * 60_000;
 /** A finished record (released, returned, gone) is kept this long, then pruned at the next write. */
 export const HOLD_FINISHED_KEEP_MS = 14 * 24 * 60 * 60_000;
-/** The most characters of COO's note, or of its recommendation, a record keeps. */
+/** The most characters of COO's note, recommendation or hold reason a record keeps. */
 export const HOLD_TEXT_MAX = 600;
 /** The most records the store keeps. */
 export const HOLDS_MAX = 400;
@@ -65,8 +65,8 @@ export interface OwnerQuestionHold {
 	/** When it was held (ms). */
 	createdAt: number;
 	state: HoldState;
-	/** When it went to COO, and when that COO turn ended. */
-	deliveredToCoo?: { at: number; turnEndedAt?: number };
+	/** When it went to COO, its host delivery id (when known), and when that COO turn ended. */
+	deliveredToCoo?: { at: number; sendId?: string; turnEndedAt?: number };
 	releasedBy?: HoldReleasedBy;
 	/** When it was released, returned or gone. */
 	finishedAt?: number;
@@ -75,6 +75,8 @@ export interface OwnerQuestionHold {
 	recommendation?: string;
 	/** COO holds it until then (at most COO_HOLD_MAX_MS ahead). */
 	holdUntil?: number;
+	/** COO's reason for keeping it held. */
+	holdWhy?: string;
 }
 
 /**
@@ -211,13 +213,14 @@ export class OwnerQuestionHolds {
 		return { action: "hold", deliver: true, hold: copyHold(fresh) };
 	}
 
-	/** It went to COO. False when it isn't held or already went (never deliver it twice), or the store failed. */
-	delivered(key: string): boolean {
-		if (!this.storeOk) return false;
+	/** It went to COO. False if not held, already sent, its optional send id is invalid, or the store failed. */
+	delivered(key: string, sendId?: string): boolean {
+		if (!this.storeOk || (sendId !== undefined && !validKey(sendId))) return false;
 		const i = this.holds.findIndex((h) => h.key === key);
 		const h = this.holds[i];
 		if (!h || h.state !== "held" || h.deliveredToCoo) return false;
-		return this.save(replaceAt(this.holds, i, { ...h, deliveredToCoo: { at: this.now() } }), false);
+		const deliveredToCoo = { at: this.now(), ...(sendId !== undefined ? { sendId } : {}) };
+		return this.save(replaceAt(this.holds, i, { ...h, deliveredToCoo }), false);
 	}
 
 	/** The COO turn that got it ended (COO may have acted in it, or not). True when that's news. */
@@ -232,17 +235,20 @@ export class OwnerQuestionHolds {
 
 	/**
 	 * COO holds it until `until`, at most COO_HOLD_MAX_MS from now (renewable while it is still held
-	 * and not yet due). Returns the time it is held until, or null (not held, already due, a time not
-	 * ahead, or the store failed).
+	 * and not yet due). A non-empty `why` replaces its bounded hold reason. Returns the time it is
+	 * held until, or null (not held, already due, a time not ahead, or the store failed).
 	 */
-	cooHold(key: string, until: number): number | null {
+	cooHold(key: string, until: number, why?: string): number | null {
 		if (!this.storeOk || !Number.isFinite(until)) return null;
 		const now = this.now();
 		const i = this.holds.findIndex((h) => h.key === key);
 		const h = this.holds[i];
 		if (!h || h.state !== "held" || until <= now || holdDue(h, now) !== null) return null;
 		const holdUntil = Math.min(Math.floor(until), now + COO_HOLD_MAX_MS);
-		return this.save(replaceAt(this.holds, i, { ...h, holdUntil }), false) ? holdUntil : null;
+		const holdWhy = boundedHoldText(why);
+		return this.save(replaceAt(this.holds, i, { ...h, holdUntil, ...(holdWhy ? { holdWhy } : {}) }), false)
+			? holdUntil
+			: null;
 	}
 
 	/** Let it through: by COO (with its note and recommendation), the safety net, or his own answer. */
@@ -351,6 +357,7 @@ const HOLD_FIELDS = new Set([
 	"note",
 	"recommendation",
 	"holdUntil",
+	"holdWhy",
 ]);
 
 const sha256 = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
@@ -369,7 +376,7 @@ const copyHold = (h: OwnerQuestionHold): OwnerQuestionHold => ({
 	...(h.deliveredToCoo ? { deliveredToCoo: { ...h.deliveredToCoo } } : {}),
 });
 
-/** Trimmed, at most HOLD_TEXT_MAX characters; "" for nothing. COO's note and recommendation, wherever kept. */
+/** Trimmed, at most HOLD_TEXT_MAX characters; "" for nothing. COO's words, wherever kept. */
 export function boundedHoldText(s: string | undefined): string {
 	const t = typeof s === "string" ? s.trim() : "";
 	if (t.length <= HOLD_TEXT_MAX) return t;
@@ -429,10 +436,16 @@ function holdOf(raw: unknown): OwnerQuestionHold | null {
 	if (!oneOf(STATES, state)) return null;
 	const h: OwnerQuestionHold = { key, kind, reason, createdAt, state };
 	if (d !== undefined) {
-		if (!isPlainObject(d) || Object.keys(d).some((k) => k !== "at" && k !== "turnEndedAt")) return null;
-		const { at, turnEndedAt } = d;
+		if (!isPlainObject(d) || Object.keys(d).some((k) => k !== "at" && k !== "sendId" && k !== "turnEndedAt"))
+			return null;
+		const { at, sendId, turnEndedAt } = d;
 		if (!isTime(at) || (turnEndedAt !== undefined && !isTime(turnEndedAt))) return null;
-		h.deliveredToCoo = { at, ...(turnEndedAt !== undefined ? { turnEndedAt } : {}) };
+		if (sendId !== undefined && !validKey(sendId)) return null;
+		h.deliveredToCoo = {
+			at,
+			...(sendId !== undefined ? { sendId } : {}),
+			...(turnEndedAt !== undefined ? { turnEndedAt } : {}),
+		};
 	}
 	if (releasedBy !== undefined) {
 		if (!oneOf(RELEASED_BY, releasedBy)) return null;
@@ -450,10 +463,14 @@ function holdOf(raw: unknown): OwnerQuestionHold | null {
 		if (!validText(recommendation)) return null;
 		h.recommendation = recommendation;
 	}
-	const { holdUntil } = raw;
+	const { holdUntil, holdWhy } = raw;
 	if (holdUntil !== undefined) {
 		if (!isTime(holdUntil)) return null;
 		h.holdUntil = holdUntil;
+	}
+	if (holdWhy !== undefined) {
+		if (!validText(holdWhy)) return null;
+		h.holdWhy = holdWhy;
 	}
 	// A held one hasn't finished; a finished one says when.
 	const finished = state !== "held";
