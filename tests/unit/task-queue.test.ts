@@ -1822,3 +1822,128 @@ describe("taskQueueLaneUse (queue-answer-frees-slot)", () => {
 		expect(started(alone)).toEqual([]);
 	});
 });
+
+describe("H-QUEUE-REPLAY: incremental replayState", () => {
+	const freshEntries = (ops: Array<Record<string, unknown>>): TaskQueueEntryLike[] =>
+		ops.map((data) => ({ type: "custom", customType: TASK_QUEUE_ENTRY_TYPE, data: structuredClone(data) }));
+
+	it("replays each appended entry once and matches a fresh full replay across in-place appends and getBranch() slices", () => {
+		const ops: Array<Record<string, unknown>> = [
+			{ v: 1, op: "add", id: 1, plan: plan("One"), touches: ["a"], ts: 10 },
+			{ v: 1, op: "add", id: 2, plan: plan("Two"), touches: ["b"], after: [1], ts: 20 },
+			{ v: 1, op: "run", queueId: "q-inc", ts: 30 },
+			{ v: 1, op: "start", id: 1, lane: true, ts: 40 },
+			{ v: 1, op: "chat", id: 1, file: "/sessions/t1.jsonl", title: "Task 1", ts: 50 },
+			{ v: 1, op: "hold", id: 2, why: "wait", ts: 60 },
+			{ v: 1, op: "release", id: 2, ts: 70 },
+			{ v: 1, op: "done", id: 1, summary: "Finished", ts: 80 },
+		];
+		const reads = ops.map(() => 0);
+		const tracked: TaskQueueEntryLike[] = ops.map((op, i) => ({
+			type: "custom",
+			customType: TASK_QUEUE_ENTRY_TYPE,
+			get data() {
+				reads[i]++;
+				return op;
+			},
+		}));
+
+		const stream: TaskQueueEntryLike[] = [];
+		for (let i = 0; i < tracked.length; i++) {
+			stream.push(tracked[i]);
+			if (i % 2 === 1) stream.push({ type: "message", data: { text: `m-${i}` } });
+			const inc = taskQueueAll(stream);
+			const full = taskQueueAll(freshEntries(ops.slice(0, i + 1)));
+			expect(inc).toEqual(full);
+			expect(reads.slice(0, i + 1)).toEqual(new Array(i + 1).fill(1));
+			expect(reads.slice(i + 1)).toEqual(new Array(ops.length - i - 1).fill(0));
+		}
+		// Re-reading without new queue entries does not re-read any entry data.
+		stream.push({ type: "message", data: { text: "after" } });
+		expect(taskQueueAll(stream)).toEqual(taskQueueAll(freshEntries(ops)));
+		expect(reads).toEqual(new Array(ops.length).fill(1));
+
+		// Fresh array wrapper per call (as SessionManager.getBranch() returns): still replays each entry once.
+		const branchReads = ops.map(() => 0);
+		const branchEntries: TaskQueueEntryLike[] = ops.map((op, i) => ({
+			type: "custom",
+			customType: TASK_QUEUE_ENTRY_TYPE,
+			get data() {
+				branchReads[i]++;
+				return op;
+			},
+		}));
+		for (let i = 1; i <= branchEntries.length; i++) {
+			const slice = branchEntries.slice(0, i);
+			const inc = taskQueueFromEntries(slice, true, undefined, undefined, "q-branch");
+			const full = taskQueueFromEntries(freshEntries(ops.slice(0, i)), true, undefined, undefined, "q-branch");
+			expect(inc).toEqual(full);
+			expect(branchReads.slice(0, i)).toEqual(new Array(i).fill(1));
+		}
+	});
+
+	it("falls back to a full replay on branch switches, compaction, truncation and in-place replacement", () => {
+		const baseOps: Array<Record<string, unknown>> = [
+			{ v: 1, op: "add", id: 1, plan: plan("One"), ts: 10 },
+			{ v: 1, op: "add", id: 2, plan: plan("Two"), ts: 20 },
+			{ v: 1, op: "run", queueId: "q-fallback", ts: 30 },
+			{ v: 1, op: "start", id: 1, ts: 40 },
+			{ v: 1, op: "done", id: 1, summary: "Done", ts: 50 },
+		];
+		const base = entries(baseOps);
+		expect(taskQueueAll(base)).toEqual(taskQueueAll(freshEntries(baseOps)));
+
+		// Shorter diverged branch
+		const branchShortOps = [...baseOps.slice(0, 2), { v: 1, op: "drop", id: 2, why: "branched", ts: 30 }];
+		const branchShort = [base[0], base[1], ...entries([{ v: 1, op: "drop", id: 2, why: "branched", ts: 30 }])];
+		expect(taskQueueAll(branchShort)).toEqual(taskQueueAll(freshEntries(branchShortOps)));
+
+		// Longer diverged branch
+		const tailOps: Array<Record<string, unknown>> = [
+			{ v: 1, op: "add", id: 3, plan: plan("Three"), ts: 25 },
+			{ v: 1, op: "add", id: 4, plan: plan("Four"), ts: 26 },
+			{ v: 1, op: "run", queueId: "q-fallback", ts: 30 },
+			{ v: 1, op: "start", id: 3, ts: 35 },
+			{ v: 1, op: "stuck", id: 3, question: "Pick?", choices: ["A", "B"], ts: 40 },
+		];
+		const branchLong = [base[0], ...entries(tailOps)];
+		expect(taskQueueAll(branchLong)).toEqual(taskQueueAll(freshEntries([baseOps[0], ...tailOps])));
+
+		// Compaction (earlier entries replaced by compaction summary entry)
+		const compacted: TaskQueueEntryLike[] = [{ type: "compaction", data: { summary: "compacted" } }, ...base.slice(2)];
+		expect(taskQueueAll(compacted)).toEqual(
+			taskQueueAll([{ type: "compaction", data: { summary: "compacted" } }, ...freshEntries(baseOps.slice(2))]),
+		);
+
+		// In-place truncation and in-place replacement
+		const mutable = base.slice();
+		expect(taskQueueAll(mutable)).toEqual(taskQueueAll(freshEntries(baseOps)));
+		mutable.pop();
+		mutable.pop();
+		expect(taskQueueAll(mutable)).toEqual(taskQueueAll(freshEntries(baseOps.slice(0, 3))));
+		const replacement = entries([{ v: 1, op: "add", id: 9, plan: plan("Nine"), ts: 20 }])[0];
+		mutable[1] = replacement;
+		expect(taskQueueAll(mutable)).toEqual(
+			taskQueueAll(freshEntries([baseOps[0], { v: 1, op: "add", id: 9, plan: plan("Nine"), ts: 20 }, baseOps[2]])),
+		);
+
+		// Non-enumerable `from.id` preserved across incremental worker-chat replays (ownTask).
+		const workerOps: Array<Record<string, unknown>> = [
+			{
+				v: 1,
+				op: "assigned",
+				id: 1,
+				plan: plan("Worker"),
+				from: { file: "/sessions/main.jsonl", title: "Main" },
+				ts: 10,
+			},
+			{ v: 1, op: "start", id: 1, ts: 20 },
+			{ v: 1, op: "done", id: 1, summary: "Done", ts: 30 },
+		];
+		const workerEntries = entries(workerOps);
+		expect(taskQueueFromEntries(workerEntries.slice(0, 2), true)).toEqual(
+			taskQueueFromEntries(freshEntries(workerOps.slice(0, 2)), true),
+		);
+		expect(taskQueueFromEntries(workerEntries, true)).toEqual(taskQueueFromEntries(freshEntries(workerOps), true));
+	});
+});

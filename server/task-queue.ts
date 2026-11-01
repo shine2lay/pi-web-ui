@@ -1108,16 +1108,74 @@ function stateOf(raw: unknown, queueId: string | undefined): State {
  * (canonical-readers), else by apply(), this file's mirror of it. A state pi-queue's replay can't give (it threw on
  * an entry, or holds what this file can't show) is replayed by apply() too.
  */
-function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | undefined): State {
-	const readers = piQueueReaders();
-	if (readers) {
-		try {
-			return stateOf(readers.replay(entries, queueId), queueId);
-		} catch {
-			// apply() below.
+interface ReplaySlot {
+	reader: unknown;
+	prefix: TaskQueueEntryLike[];
+	state: State;
+}
+
+const replayByArray = new WeakMap<object, Map<string, ReplaySlot>>();
+const replayByFirst = new WeakMap<object, Map<string, ReplaySlot[]>>();
+
+function replayKey(queueId: string | undefined): string {
+	return queueId === undefined ? "\0" : `s:${queueId}`;
+}
+
+function cloneReplayState(s: State): State {
+	const c = structuredClone(s);
+	const fromId = (s.from as { id?: number } | undefined)?.id;
+	if (c.from && typeof fromId === "number" && fromId > 0) {
+		Object.defineProperty(c.from, "id", { value: fromId, enumerable: false, configurable: true });
+	}
+	return c;
+}
+
+function isPureAppend(prefix: readonly TaskQueueEntryLike[], arr: readonly TaskQueueEntryLike[]): boolean {
+	if (arr.length < prefix.length) return false;
+	for (let i = 0; i < prefix.length; i++) {
+		if (arr[i] !== prefix[i]) return false;
+	}
+	return true;
+}
+
+function saveReplaySlot(
+	arrRef: object | undefined,
+	firstRef: object | undefined,
+	key: string,
+	slot: ReplaySlot,
+	prevSlot?: ReplaySlot,
+): void {
+	if (arrRef) {
+		let m = replayByArray.get(arrRef);
+		if (!m) {
+			m = new Map();
+			replayByArray.set(arrRef, m);
+		}
+		m.set(key, slot);
+	}
+	if (firstRef) {
+		let m = replayByFirst.get(firstRef);
+		if (!m) {
+			m = new Map();
+			replayByFirst.set(firstRef, m);
+		}
+		let list = m.get(key);
+		if (!list) {
+			list = [slot];
+			m.set(key, list);
+		} else if (!list.includes(slot)) {
+			const idx = prevSlot ? list.indexOf(prevSlot) : -1;
+			if (idx >= 0) list[idx] = slot;
+			else {
+				if (list.length >= 4) list.shift();
+				list.push(slot);
+			}
 		}
 	}
-	const s: State = {
+}
+
+function emptyReplayState(queueId: string | undefined): State {
+	return {
 		tasks: [],
 		running: false,
 		lanes: TASK_QUEUE_DEFAULT_LANES,
@@ -1125,9 +1183,95 @@ function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | u
 		autoStart: false,
 		queueId,
 	};
-	for (const e of entries) {
-		if (e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
+}
+
+function applyEntry(s: State, e: TaskQueueEntryLike): void {
+	if (e && e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) apply(s, e.data);
+}
+
+function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | undefined): State {
+	const readers = piQueueReaders();
+	const readerFn = readers?.replay;
+	const arrRef = typeof entries === "object" && entries !== null ? (entries as object) : undefined;
+	const firstRef =
+		entries.length > 0 && entries[0] && typeof entries[0] === "object" ? (entries[0] as object) : undefined;
+	const key = replayKey(queueId);
+
+	const arraySlot = arrRef ? replayByArray.get(arrRef)?.get(key) : undefined;
+	let slot =
+		arraySlot && arraySlot.reader === readerFn && isPureAppend(arraySlot.prefix, entries) ? arraySlot : undefined;
+	if (!slot && !arraySlot && firstRef) {
+		const list = replayByFirst.get(firstRef)?.get(key);
+		if (list) {
+			for (const cand of list) {
+				if (
+					cand.reader === readerFn &&
+					isPureAppend(cand.prefix, entries) &&
+					(!slot || cand.prefix.length > slot.prefix.length)
+				) {
+					slot = cand;
+				}
+			}
+		}
 	}
+
+	if (slot) {
+		let hasQueueEntry = false;
+		for (let i = slot.prefix.length; i < entries.length; i++) {
+			const e = entries[i];
+			if (e && e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE) {
+				hasQueueEntry = true;
+			}
+		}
+		if (!hasQueueEntry) {
+			for (let i = slot.prefix.length; i < entries.length; i++) slot.prefix.push(entries[i]);
+			saveReplaySlot(arrRef, firstRef, key, slot);
+			return cloneReplayState(slot.state);
+		}
+		if (readers) {
+			try {
+				const s = stateOf(readers.replay(entries, queueId), queueId);
+				for (let i = slot.prefix.length; i < entries.length; i++) slot.prefix.push(entries[i]);
+				slot.state = cloneReplayState(s);
+				saveReplaySlot(arrRef, firstRef, key, slot);
+				return s;
+			} catch {
+				// Fall back to full apply() below.
+			}
+		} else {
+			for (let i = slot.prefix.length; i < entries.length; i++) {
+				applyEntry(slot.state, entries[i]);
+				slot.prefix.push(entries[i]);
+			}
+			saveReplaySlot(arrRef, firstRef, key, slot);
+			return cloneReplayState(slot.state);
+		}
+	}
+
+	if (readers) {
+		try {
+			const s = stateOf(readers.replay(entries, queueId), queueId);
+			saveReplaySlot(
+				arrRef,
+				firstRef,
+				key,
+				{ reader: readerFn, prefix: entries.slice(), state: cloneReplayState(s) },
+				arraySlot,
+			);
+			return s;
+		} catch {
+			// apply() below.
+		}
+	}
+	const s = emptyReplayState(queueId);
+	for (let i = 0; i < entries.length; i++) applyEntry(s, entries[i]);
+	saveReplaySlot(
+		arrRef,
+		firstRef,
+		key,
+		{ reader: undefined, prefix: entries.slice(), state: cloneReplayState(s) },
+		arraySlot,
+	);
 	return s;
 }
 
