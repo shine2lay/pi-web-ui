@@ -173,6 +173,15 @@ Requested by RollCall (rm-3415271c), relayed by Systems (rm-c9936423): a red pus
 - *Wrong if:* any text other than the checked ids and the server's fixed words reaches the chat; an existing alert's text or key changes; an existing test changes its result (other than the one assertion that pinned `push` as refused).
 - *Live sends:* none in this task. The watcher change that sends these fields is the next task, and makes the first real one.
 
+**Result: H-CI-ALERT-PUSH-TESTS HIT.** The checked extension is live; delivery, the header and the dedupe key are unchanged.
+
+- Sealed A/B on `bca34a12`: 14 failed / 35 passed of 49 tests before, 49/49 after. Thirteen new behavior cases fail before; the existing enum-refusal case also fails because its expected list now includes push. The new refusal-preservation control passes before and after. No other existing test changes its result.
+- Build, typecheck, scoped Prettier and PATCHES checks passed. Landing `321-d984d6` rebased and landed `cc9135ba9e6cdd708fa87d867ea2b562922847e1` at 2026-11-01T19:39:32Z. Full selected gate: 108 files passed, 2012 tests passed / 5 skipped; protocol, PATCHES, typecheck, lint and Prettier passed.
+- The unit render uses the open card's actual Markdown component: all fixture ids remain whole in code spans, the unsafe value becomes the fixed placeholder, and only the GitHub run is a link. The route fixture verifies only checked text is stored and a changed test list does not send again. No real chat or model is involved in these tests.
+- Additional sealed browser look: `~/kept-from-tmp/2026-11-01/ops-725-look/` holds the script, log and screenshots. Desktop light and phone dark/light open-card measurements show all three ids intact, one link, no emphasis, and zero body/card/page overflow; axe found no serious or critical issues. **That optional copied suite was not wholly green:** one folded-row assertion still expected the old fixture's repo/workflow, while the observed row correctly showed `failed · shine2lay/rollcall · ci`. This is a fixture-expectation miss, not claimed as a passed suite; the passing unit render and landed gate supply the acceptance proof.
+- Deploy: dry-run then `pi-web-deploy` installed `cc9135ba` at 2026-11-01 11:42 PST. `pi-web-deploy result cc9135ba9e6cdd708fa87d867ea2b562922847e1` exited 0: "live, and the checks all passed". Normal deployment smoke only; no real `ci_alert` sends.
+- Extension undo: stop the watcher's push/test-id alerts, then revert this extension and deploy normally. Stored alerts retain their text and headers; do not remove records. Whole-command undo remains below.
+
 ## Undo
 
 Before any real records exist, revert this patch and deploy through `pi-web-deploy`. After records exist, stop the caller and forward-disable acceptance of `ci_alert` in the control handler, keeping the record types, display and existing delivery path so stored alerts retain their meaning. Existing queued alerts may still finish. Do not delete records or turn on `role_report`. Land and deploy the undo normally; it does not change role traffic, Telegram routing, caps or the 6 am job.
