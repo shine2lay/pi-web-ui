@@ -16,6 +16,12 @@
  *   all share one conversation list per project.
  *   PI_CODING_AGENT_DIR  pi config dir (auth/models/skills) — passed to the SDK
  */
+// SDK startup patches rewrite installed @earendil-works/pi-coding-agent files, so
+// they must run before anything below loads the SDK (the SDK import further down
+// and agent-service.js both do). ESM evaluates imports in order, so these stay
+// first (tests/unit/sdk-patch-load-order.test.ts checks it).
+import "./patch-remote-catalog.js";
+import "./patch-lazy-boundary-context.js";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
