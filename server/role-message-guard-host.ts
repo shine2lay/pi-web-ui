@@ -39,7 +39,7 @@ import {
 } from "node:fs";
 import { basename, join } from "node:path";
 import type { Ask, AskFieldAnswer, AskHub } from "./asks.js";
-import { grantCardBrief } from "./grant-card-brief.js";
+import { grantRequestBrief } from "./grant-card-brief.js";
 import type { UiOwnerCardBriefLine, UiRoleGuardQuestion } from "./protocol.js";
 import { samePath, type IdentityDef } from "./identities.js";
 import { createGuardApprovalAdapters, type GuardApprovalNativePortAny } from "./role-message-guard-approvals.js";
@@ -1861,17 +1861,7 @@ export class RoleMessageGuardHost {
 	 * requester's context). Display only: never part of the owner question, its choices or their digest.
 	 */
 	private briefOf(q: GuardOwnerQuestionAny): UiOwnerCardBriefLine[] {
-		const name = (role: string) => this.def(role)?.title ?? role;
-		const requester = q.binding.requester.role;
-		// The scope names the requester too (so answers can come back); the brief names whom it wants to message.
-		const others = q.binding.scope.recipients.filter((r) => r !== requester);
-		return grantCardBrief({
-			requester: name(requester),
-			recipients: (others.length ? others : q.binding.scope.recipients).map(name),
-			pastMessage: q.binding.causal.nextHop - 1,
-			quantity: q.binding.quantity,
-			context: q.detail,
-		});
+		return grantRequestBrief(q.binding, q.detail, (role) => this.def(role)?.title ?? role);
 	}
 	private async present(q: GuardOwnerQuestionAny, ask: Ask): Promise<GuardTransportResult> {
 		const shown: string[] = [];

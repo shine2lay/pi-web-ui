@@ -115,9 +115,17 @@ export function hasIdOrPath(text: string): boolean {
 	return [URL, ...PATHS, ...IDS].some((re) => new RegExp(re.source, re.flags.replace("g", "")).test(text));
 }
 
+/**
+ * How much of a text the brief reads (Security rm-112648e9, L1): a brief shows at most BRIEF_MAX characters, and
+ * the id, path and tidy patterns take time that grows with the square of a long run, so a 16 KB request context
+ * could hold the server up for seconds on every look at the card.
+ */
+const READ_MAX = 2000;
+
 /** Markdown marks, links, paths and ids taken out, and what they leave behind tidied. */
 export function plainWords(raw: string): string {
 	let s = raw
+		.slice(0, READ_MAX)
 		.replace(/\r\n?/g, "\n")
 		.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
 		.replace(/`([^`]*)`/g, "$1")

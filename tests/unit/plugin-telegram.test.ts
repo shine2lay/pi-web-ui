@@ -1003,11 +1003,14 @@ describe("telegram plugin: how messages look", () => {
 	// grant-card-brief (Ops #683): a continuation-grant card (kind "question") opens with its brief the same way.
 	it("a continuation-grant card with a plain brief: the whole brief first, then its line and question", () => {
 		const brief = [
-			{ label: "Who asks", text: "OPS wants to keep messaging QA & <DOCS>, past message 11 of one chain of messages." },
+			{
+				label: "Who asks",
+				text: "OPS asks to continue a chain with QA & <DOCS> past message 11: up to 5 more messages among them, sent by any of them.",
+			},
 			{ label: "Your answers", text: "\u201CDeny\u201D: no more messages in this chain." },
 		];
 		const briefHtml = [
-			"<b>Who asks:</b> OPS wants to keep messaging QA &amp; &lt;DOCS&gt;, past message 11 of one chain of messages.",
+			"<b>Who asks:</b> OPS asks to continue a chain with QA &amp; &lt;DOCS&gt; past message 11: up to 5 more messages among them, sent by any of them.",
 			"<b>Your answers:</b> \u201CDeny\u201D: no more messages in this chain.",
 		].join("\n");
 		const grant = {

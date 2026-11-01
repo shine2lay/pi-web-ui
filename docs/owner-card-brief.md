@@ -102,27 +102,43 @@ Project `owner-cards-plain-context`, step 2; same owner words (via COO rm-d2c1f9
 
 ### What the grant brief says
 
-Five labelled lines, built by `server/grant-card-brief.ts` (`grantCardBrief`) from the stored request alone (its
-binding and the requester's own context), no model, with #682's plain-words helpers and fit (`plainWords`,
-`plainSentence`, `fitBrief`), so at most 600 characters with ids, paths and rule numbers taken out:
+Five labelled lines, built by `server/grant-card-brief.ts` (`grantRequestBrief`, which reads the binding, and
+`grantCardBrief`) from the stored request alone (its binding and the requester's own context), no model, with #682's
+plain-words helpers and fit (`plainWords`, `plainSentence`, `fitBrief`), so at most 600 characters with ids, paths
+and rule numbers taken out:
 
 | Line | From |
 | --- | --- |
-| Who asks | the requester and the roles it wants to message (by their identity titles; the requester itself, which the scope also names, is left out; more than three: "and N more"), and past which message of the chain |
-| What for | first sentence of the context's `goal` |
-| Why more messages | first sentence of `whyNeeded` |
-| If you allow it | first sentence of `nextStepAndOutcome` |
+| Who asks | the requester, the other roles named in the request (by their identity titles; the requester itself, which the scope also names, is left out; more than three: "and N more"), past which message of the chain, how many more, and who may send under the grant (below) |
+| Its goal | first sentence of the context's `goal` |
+| Its reason | first sentence of `whyNeeded` |
+| Its plan if allowed | first sentence of `nextStepAndOutcome` |
 | Your answers | fixed: "Deny": no more messages in this chain; "Allow one send": one more message; "Allow up to N sends": up to N more, for the hour the grant lasts (named as the card's buttons are; the contract's grant lasts 3,600,000 ms) |
 
+Who may send, from the binding's `scope.task` as the host's grant check (`misfit`) reads it, with
+`scope.recipients` = `scope.participants`:
+
+- asked from the requester's home chat (`kind: "home"`, which names no role): any named role's home chat may send to
+  any other named role, sharing one count. "X asks to continue a chain with A and B past message N: up to Q more
+  messages among them, sent by any of them."
+- asked from one of its tasks (`kind: "task"`): only that task. "X asks from one of its tasks to continue a chain
+  with A and B past message N: up to Q more messages, sent only by that task."
+- asked from another of its chats (`kind: "other"`): only that chat, "sent only from that chat".
+
+The goal, reason and plan are the requester's own words, so their labels say "Its" rather than stating them as
+facts; only "Who asks" and "Your answers" come from the guard itself.
+
 A part with no plain sentence left (only ids or paths, or under two words) says "Not said in plain words." When
-the brief is too long, the next step gives first, then the goal and why, then the names; each is cut after a whole
-word with an ellipsis, down to its floor (24 characters for the three sentences, 12 for a name).
+the brief is too long, the goal, reason and plan give first, in the same turn so the longest is cut first and each
+keeps a fair share; then the names. Each is cut after a whole word with an ellipsis, down to its floor (24
+characters for the three sentences, 12 for a name). `plainWords` reads at most the first 2,000 characters of any
+text, since a brief shows at most 600 (below, Security's L1).
 
 ### Where the grant brief is built and shown
 
-- `server/role-message-guard-host.ts` `briefOf(question)`: the requester and recipients named by `def(role)?.title`,
-  `pastMessage` = `causal.nextHop - 1` (as the card's own line), `quantity` = the binding's, `context` = the owner
-  question's `detail`. Set as `brief` on the card `present` adds to the AskHub (Telegram) and on each
+- `server/role-message-guard-host.ts` `briefOf(question)`: `grantRequestBrief(binding, detail, name)`, roles named by
+  `def(role)?.title`; past message `causal.nextHop - 1` (as the card's own line), the binding's `quantity` and
+  `scope.task` kind, and the owner question's `detail` as the context. Set as `brief` on the card `present` adds to the AskHub (Telegram) and on each
   `openQuestions()` entry (`UiRoleGuardQuestion.brief`, the app's approval dialog). Both are built from the same
   stored request, so they are the same lines.
 - Telegram: `renderBrief` now shows the brief of any card that has one (it took only kind "stuck"); it comes whole
@@ -144,6 +160,28 @@ word with an ellipsis, down to its floor (24 characters for the three sentences,
   the question id, generation, choices and choicesDigest are byte-identical before and after.
 - **Wrong if:** any digest or id changes, or the brief misses a point.
 
+#### Security review and the changes it led to
+
+Security accepted the source of 5b4fe4b5 with no must-fix (rm-112648e9, corrected by rm-51d83b8e) and filed three
+Low findings. All three were taken up before landing (Ops lead's decision for L3: an owner card must say exactly
+what each answer authorizes):
+
+- **L1, availability:** a request's context can be 16 KB, and #682's path and tidy patterns take time that grows
+  with the square of a long run: 0.8 to 2 s per call on Security's worst cases, on every look at a pending card.
+  `plainWords` now reads only the first 2,000 characters (this covers #682's queue cards too). Test: those worst
+  cases, whole, through `plainWords`, `plainSentence` and the grant brief, take under 500 ms together; a long
+  text's first sentence still comes through.
+- **L2, attribution:** the requester's first sentences sat under labels that read like the guard's own facts ("If
+  you allow it"). They are now "Its goal", "Its reason", "Its plan if allowed".
+- **L3, who may send:** "X wants to keep messaging A and B" understated a home-chat grant, under which any named
+  role's home chat may send. The first line now says who may send, for each kind of binding (above), with a test
+  for each.
+- Then, measured on the two real owner-tier requests: the longer first line made the old order (next step gives
+  first) cut COO's plan to "Send one combined…" while its goal kept 160 characters. Hypothesis: letting the goal,
+  reason and plan give in the same turn (longest first) keeps every point readable; wrong if any of the three is
+  cut to its floor while another keeps over 90 characters. Result: HIT, the plan came back whole (97 characters)
+  and the goal was trimmed to 95, 592 characters in all.
+
 #### Result: HIT
 
 - Brief: `tests/unit/grant-card-brief.test.ts` checks every point in order, "Label: text" within 600 characters and
@@ -151,8 +189,8 @@ word with an ellipsis, down to its floor (24 characters for the three sentences,
   Ops #683 from /home/… so grant cards (see server/grant-card-brief.ts) open plainly" becomes "Land Ops from so
   grant cards open plainly."), one with nothing plain ("Not said in plain words." three times) and a very long
   one with five recipients (598, every point still there). Look only, the two real owner-tier requests of Oct 31
-  (the guard's stored state, read only): COO to Temper and Ops, 596 characters; COO to Temper, 530; both with
-  no ids or paths and nothing "not said".
+  (the guard's stored state, read only, both asked from COO's home chat), with the final wording: COO to Temper
+  and Ops, 592 characters; COO to Temper, 562; both with no ids or paths and nothing "not said".
 - Unchanged: the same test runs a real guard host to an owner-tier card. The open question's `ownerQuestion` has
   exactly its contract's keys and no brief, its id, generation, choices and a 64-hex `choicesDigest` are the
   question's, the card's id, field id and option values are too, a second `openQuestions()` is equal, and the

@@ -439,7 +439,10 @@ describe("A finite controls, focus, reconnect and failure", () => {
 		const r = request("awaiting_owner");
 		const view = guardApprovalView({ ...input(r), viewer: "owner", ownerQuestion: ownerQuestion(r) });
 		const brief = [
-			{ label: "Who asks", text: "OPS wants to keep messaging QA, past message 11 of one chain of messages." },
+			{
+				label: "Who asks",
+				text: "OPS asks to continue a chain with QA past message 11: up to 5 more messages among them, sent by any of them.",
+			},
 			{ label: "Your answers", text: "\u201CDeny\u201D: no more messages in this chain. <b>not bold</b>" },
 		];
 		const m = mount(view);

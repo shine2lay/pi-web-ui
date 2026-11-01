@@ -1,22 +1,29 @@
 /**
  * grant-card-brief (Ops #683; owner via COO rm-d2c1f9b2): a continuation-grant card that reaches the owner opens
- * with a plain brief built from the stored request alone: who asks and to whom, what for, why it needs more
- * messages, what happens next if allowed, and what each answer does. At most BRIEF_MAX characters, no ids or paths.
+ * with a plain brief built from the stored request alone: who asks, with whom, who may send under the grant (Security
+ * rm-51d83b8e, L3), the requester's goal, reason and plan as its own (L2), and what each answer does. At most
+ * BRIEF_MAX characters, no ids or paths, and a long context read only as far as a brief needs (L1).
  * Display only: the owner question (its id, generation, choices and choicesDigest) and the card's own fields stay
  * as they were. Hypothesis H-OWNER-CARD-GRANT (docs/owner-card-brief.md).
  */
 import { describe, expect, it } from "vitest";
-import { grantCardBrief, type GrantCardBriefInput } from "../../server/grant-card-brief.js";
-import { BRIEF_MAX, briefText, hasIdOrPath } from "../../server/owner-card-brief.js";
+import {
+	grantCardBrief,
+	grantRequestBrief,
+	type GrantCardBriefInput,
+	type GrantRequestFacts,
+} from "../../server/grant-card-brief.js";
+import { BRIEF_MAX, briefText, hasIdOrPath, plainSentence, plainWords } from "../../server/owner-card-brief.js";
 import type { UiOwnerCardBriefLine } from "../../server/protocol.js";
 import { ask, C, homes, send, useGuardWorld, world } from "./role-message-guard-host-harness.js";
 
-const LABELS = ["Who asks", "What for", "Why more messages", "If you allow it", "Your answers"];
+const LABELS = ["Who asks", "Its goal", "Its reason", "Its plan if allowed", "Your answers"];
 const NOT_SAID = "Not said in plain words.";
 
 const input = (over: Partial<GrantCardBriefInput> = {}): GrantCardBriefInput => ({
 	requester: "ops/tooling",
 	recipients: ["qa"],
+	senders: "any named role",
 	pastMessage: 11,
 	quantity: 5,
 	context: {
@@ -44,14 +51,17 @@ const LONG = (seed: string) =>
 	`${seed} ${"and then it carries on with more words about the same thing ".repeat(40)}`.trim();
 
 describe("the grant card's plain brief", () => {
-	it("says who asks whom, what for, why, what happens next and what each answer does", () => {
+	it("says who asks, with whom, who may send, its goal, reason and plan, and what each answer does", () => {
 		const lines = grantCardBrief(input());
 		expectPlainBrief(lines);
 		expect(lines).toEqual([
-			{ label: "Who asks", text: "ops/tooling wants to keep messaging qa, past message 11 of one chain of messages." },
-			{ label: "What for", text: "finish the hand-off." },
-			{ label: "Why more messages", text: "the last part needs one more exchange." },
-			{ label: "If you allow it", text: "send the result and stop." },
+			{
+				label: "Who asks",
+				text: "ops/tooling asks to continue a chain with qa past message 11: up to 5 more messages among them, sent by any of them.",
+			},
+			{ label: "Its goal", text: "finish the hand-off." },
+			{ label: "Its reason", text: "the last part needs one more exchange." },
+			{ label: "Its plan if allowed", text: "send the result and stop." },
 			{
 				label: "Your answers",
 				text: "\u201CDeny\u201D: no more messages in this chain. \u201CAllow one send\u201D: one more message. \u201CAllow up to 5 sends\u201D: up to 5 more, for the hour the grant lasts.",
@@ -74,7 +84,7 @@ describe("the grant card's plain brief", () => {
 		);
 		expectPlainBrief(lines);
 		expect(lines[0].text).toBe(
-			"ops/tooling wants to keep messaging Product management and System engineering, past message 11 of one chain of messages.",
+			"ops/tooling asks to continue a chain with Product management and System engineering past message 11: up to 3 more messages among them, sent by any of them.",
 		);
 		expect(lines[1].text).toBe("Land Ops from so grant cards open plainly.");
 		expect(lines[2].text).toBe("Security's review of commit needs a second exchange to settle one finding.");
@@ -116,6 +126,72 @@ describe("the grant card's plain brief", () => {
 	it("the same request gives the same brief (no model, nothing random)", () => {
 		expect(grantCardBrief(input())).toEqual(grantCardBrief(input()));
 	});
+
+	it("one more message is said as one", () => {
+		const lines = grantCardBrief(input({ quantity: 1 }));
+		expectPlainBrief(lines);
+		expect(lines[0].text).toBe(
+			"ops/tooling asks to continue a chain with qa past message 11: one more message among them, sent by any of them.",
+		);
+	});
+
+	it("a 16 KB context is read only as far as a brief needs (Security rm-112648e9, L1)", () => {
+		// Worst cases Security timed: the path and tidy patterns took 0.8 to 2 s each on these, whole.
+		const runs = [`${"a-".repeat(8000)}!`, `${"a - ".repeat(3500)}x`];
+		const started = performance.now();
+		for (const raw of runs) {
+			plainWords(raw);
+			plainSentence(raw, 2);
+			grantCardBrief(input({ context: { goal: raw, whyNeeded: raw, nextStepAndOutcome: raw } }));
+		}
+		expect(performance.now() - started).toBeLessThan(500);
+		// What a brief shows is unchanged: the first sentence of a long text still comes through.
+		const long = `Finish the hand-off today. ${"More words about it. ".repeat(900)}`;
+		expect(plainSentence(long, 2)).toBe("Finish the hand-off today.");
+	});
+});
+
+describe("who may send under the grant, by where it was asked (Security rm-51d83b8e, L3)", () => {
+	const binding = (kind: "home" | "task" | "other", quantity = 4): GrantRequestFacts => ({
+		requester: { role: "ops" },
+		// The host's scope names the requester too, so answers can come back.
+		scope: { recipients: ["ops", "qa", "docs"], task: { kind } },
+		causal: { nextHop: 13 },
+		quantity,
+	});
+	const names: Record<string, string> = { ops: "ops/tooling", qa: "QA", docs: "Docs" };
+	const context = input().context;
+	const who = (kind: "home" | "task" | "other", quantity?: number) =>
+		grantRequestBrief(binding(kind, quantity), context, (r) => names[r] ?? r)[0];
+
+	it("asked from its home chat: any of the named roles may send, sharing one count", () => {
+		expect(who("home")).toEqual({
+			label: "Who asks",
+			text: "ops/tooling asks to continue a chain with QA and Docs past message 12: up to 4 more messages among them, sent by any of them.",
+		});
+	});
+
+	it("asked from one of its tasks: only that task may send", () => {
+		expect(who("task")).toEqual({
+			label: "Who asks",
+			text: "ops/tooling asks from one of its tasks to continue a chain with QA and Docs past message 12: up to 4 more messages, sent only by that task.",
+		});
+	});
+
+	it("asked from another of its chats: only that chat may send", () => {
+		expect(who("other", 1)).toEqual({
+			label: "Who asks",
+			text: "ops/tooling asks from one of its chats to continue a chain with QA and Docs past message 12: one more message, sent only from that chat.",
+		});
+	});
+
+	it("each kind keeps the whole brief plain and within its limit", () => {
+		for (const kind of ["home", "task", "other"] as const) {
+			const lines = grantRequestBrief(binding(kind), context, (r) => names[r] ?? r);
+			expectPlainBrief(lines);
+			expect(lines[4].text).toContain("\u201CAllow up to 4 sends\u201D: up to 4 more, for the hour the grant lasts.");
+		}
+	});
 });
 
 describe("the grant card as the host shows it", () => {
@@ -137,7 +213,10 @@ describe("the grant card as the host shows it", () => {
 		// The brief: on the card (web and Telegram) and on the open question (the app's dialog), the same lines.
 		expect(card.brief).toEqual(q.brief);
 		expectPlainBrief(q.brief!);
-		expect(q.brief![0].text).toMatch(/^COO wants to keep messaging BETA, past message \d+ of one chain of messages\.$/);
+		// Asked from COO's home chat: any named role's home chat may send under the grant.
+		expect(q.brief![0].text).toMatch(
+			/^COO asks to continue a chain with BETA past message \d+: (?:one more message|up to \d+ more messages) among them, sent by any of them\.$/,
+		);
 		expect(q.brief!.slice(1, 4).map((l) => l.text)).toEqual([
 			"finish the hand-off.",
 			"the last part needs one more exchange.",
