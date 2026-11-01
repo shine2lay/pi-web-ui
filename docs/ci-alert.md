@@ -112,11 +112,26 @@ Dedupe survives restarts and applies while the record exists. The existing recor
 
 **Landing 314-b1a233: MISS (not deployed).** On rebased commit `b03bee21`, the full selected gate reported 1 failed / 177 passed files, 2 failed / 3488 passed / 3 skipped tests. The complete failure inventory was `tests/unit/locales.test.ts`: `key 与 zh 一一对应（顺序一致）` (five new CI keys absent from the German pack, also absent from all other seven packs) and `无空 value，占位符与中文一致` (`de.roleMessageFoldCiWatch` was undefined). Protocol, PATCHES, typecheck, lint and Prettier all passed. The five later wait-check errors observed this one failed landing, not five test runs. Receipt retained in `wt land-status 314-b1a233` and journal unit `ops-720-ci-alert-land`.
 
-**Corrective hypothesis H-CI-ALERT-LOCALES:** adding the five CI labels only to the English table left the eight downloadable language packs out of sync. Add those same keys with translated wording and unchanged `{title}`/`{id}` placeholders to the existing packs; do not alter delivery, validation or tests. Expected: all eight packs match the English key set and placeholders, and the normal landing gate passes. Wrong if either locale test still fails or another gate failure remains. Corrected focused checks: 4/4 locale and 3/3 notes-list tests passed sealed; build, typecheck, scoped Prettier and PATCHES passed. Full-gate result pending the new land.
+**Corrective hypothesis H-CI-ALERT-LOCALES:** adding the five CI labels only to the English table left the eight downloadable language packs out of sync. Add those same keys with translated wording and unchanged `{title}`/`{id}` placeholders to the existing packs; do not alter delivery, validation or tests. Expected: all eight packs match the English key set and placeholders, and the normal landing gate passes. Wrong if either locale test still fails or another gate failure remains. Corrected focused checks: 4/4 locale and 3/3 notes-list tests passed sealed; build, typecheck, scoped Prettier and PATCHES passed. **HIT:** landing `315-b5cd8a` succeeded at 2026-11-01T16:48:32Z with `3fc4165d` on `mine`.
 
-**Result:** pending landing, deployment and the single live check; not yet a live HIT.
+**Deploy:** `pi-web-deploy` installed `3fc4165d` at 2026-11-01 08:50 PST; `pi-web-deploy result 3fc4165d…` exit 0, "live, and the checks all passed" (server, page, reply, bigchat, log).
 
-**Live receipt:** pending. The permitted fixture is role `ops`, kind `failed`, repo `shine2lay/pi-web-ui`, workflow `ci-alert live check`, runId `live-check-<UTC date>`. No other real sends are part of this task. Deployment's existing throwaway model check is allowed.
+**Live receipt (the one permitted send):** role `ops`, kind `failed`, repo `shine2lay/pi-web-ui`, workflow `ci-alert live check`, runId `live-check-2026-11-01`, sent with node over the control socket at 2026-11-01T16:56:40Z (token read from `app-token`, never printed).
+
+- First request: `{"ok":true,"id":"rm-595e6554","duplicate":false}`. Identical second request 0.2 s later: `{"ok":true,"id":"rm-595e6554","duplicate":true}`.
+- Records with key `shine2lay/pi-web-ui:ci-alert live check:live-check-2026-11-01`: exactly 1 (`rm-595e6554`, kind report, from CI watch, to ops), state delivered, 1 send, delivered 3 s after acceptance.
+- Journal: `rm-595e6554 CI watch -> ops · failed · shine2lay/pi-web-ui · ci-alert live check (…key…)`, then `the same alert again (…), not sent`, then `delivered to ops (home chat)`. The three lines carry no token.
+- Turn: the alert entry landed in Ops' home chat at 16:56:42Z and an assistant turn followed at 16:57:44Z with no other user entry in between. Ops' home chat confirmed it received the fixture and treated it as the delivery check.
+- Look only (`~/kept-from-tmp/2026-11-01/ops-720-live/look.mjs`, own pseudo client, sends held): the row reads "From the CI watch", the repo and the workflow, not a 6 am report; axe found nothing serious or critical in desktop dark, desktop light and phone dark; no page errors.
+
+**Result: H-CI-ALERT-ROUTE HIT.** One record for the key, a turn started in the role's home chat, the repeat returned the first id with `duplicate: true`, and only the server's fixed text reached the chat.
+
+**Found by the look: H-CI-ROW-PHONE.**
+
+- *Problem and evidence:* on a 390 px phone the folded CI row overflows its button (scrollWidth > clientWidth): its kind chip "failed · shine2lay/pi-web-ui · ci-alert live c…" is cut mid-word at the row edge with no ellipsis, and the first words of the message don't show. Cause: `.rolemsg-row-kind` is `flex: none` with `white-space: nowrap`, and a CI alert's kind words (what happened, repo and workflow, up to about 200 characters) are far longer than any other row's kind.
+- *Change:* let the kind chip give way with an ellipsis and take at most half the row (`flex: 0 1 auto; min-width: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis`), so the preview keeps room. The full words stay in the DOM and in the open card's header. Rows whose chip fits in half the row are laid out as before.
+- *Expected and measured by:* the sealed `tests/role-message-fold-test.mjs` gains a CI row and checks that no row's button overflows, in desktop dark and white and phone dark and white; it fails on the old stylesheet at phone width and passes with the change. After deploy the look-only check of `rm-595e6554` reports no overflow on the phone.
+- *Wrong if:* the CI row still overflows at 390 px, or another row's kind chip is cut on the 1280 px desktop.
 
 ## Undo
 

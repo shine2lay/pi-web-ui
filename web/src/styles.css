@@ -2495,8 +2495,14 @@ button.session-item.elsewhere-item.confirm {
 	color: var(--text);
 	white-space: nowrap;
 }
+/* ci-alert (H-CI-ROW-PHONE): a CI alert's kind words (what happened, repo, workflow) can be long;
+   the chip gives way with an ellipsis and leaves room for the preview. Short chips are unchanged. */
 .rolemsg-row-kind {
-	flex: none;
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 50%;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	padding: 0 6px;
 	border: 1px solid var(--border);
 	border-radius: 999px;

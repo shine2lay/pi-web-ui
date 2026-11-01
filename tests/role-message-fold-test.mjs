@@ -2,8 +2,8 @@
  *
  * The owner, 2026-10-06: "Make the agent to agent messages collapsed by default, right now It can take
  * too much space and its not relevant to me most of the time". A seeded chat holds role messages of
- * every shape: a question, a request and an FYI the server's store confirms, a 6 am report request and
- * a reply it doesn't (shown from their first line), a broken header, the queue's "[Queue] …" message, an
+ * every shape: a question, a request and an FYI the server's store confirms, a 6 am report request, a CI
+ * watch alert (Ops #720) and a reply it doesn't (shown from their first line), a broken header, the queue's "[Queue] …" message, an
  * owner message, and two message_role calls (one sent, one held) next to a bash call.
  *  1. Every role message is one folded row (a button, aria-expanded false): who it is from, its kind and
  *     its first words as plain text; no header line, no hint line, no Markdown, and words deep in the
@@ -14,7 +14,7 @@
  *  4. message_role cards are folded with the tool-details switch on (a bash card next to them is open):
  *     "To temper · reply to rm-… · first words" and the id it was sent (or held) under. A click opens one.
  *  5. axe finds nothing serious or critical in the rows and cards; targets are big enough; nothing
- *     scrolls sideways; dark and white, desktop and phone (screenshots with ROLE_FOLD_SHOT=<dir>).
+ *     scrolls sideways or sticks out of its row (H-CI-ROW-PHONE); dark and white, desktop and phone (screenshots with ROLE_FOLD_SHOT=<dir>).
  *  6. No line of the transcripts changed and no message was added (opening a chat may only add the
  *     SDK's thinking-level entry), the model was never called, and the page logged no error.
  * Usage: npm run build && node tests/role-message-fold-test.mjs
@@ -137,12 +137,26 @@ const REPLY = {
 	replyTo: "rm-0000a009",
 	text: `Yes, the screenshots are in. ${LONG}`,
 };
+// ci-alert (Ops #720, H-CI-ROW-PHONE): the CI watch's alert has the longest kind words of any row.
+const CI = {
+	id: "rm-0000a00a",
+	from: { role: "app", title: "the CI watch", chat: "CI watch" },
+	kind: "report",
+	ci: {
+		key: "shine2lay/pi-web-ui:ci-alert live check:live-check-2026-11-01",
+		kind: "failed",
+		repo: "shine2lay/pi-web-ui",
+		workflow: "ci-alert live check",
+		runId: "live-check-2026-11-01",
+	},
+	text: "CI watch: shine2lay/pi-web-ui ci-alert live check, run live-check-2026-11-01 failed.",
+};
 const BROKEN = "[Role message rm-0000a007 from qa (QA), sent from its home chat\n\nA header that never closed.";
 // A task's plan as pi-queue starts it (queue.ts kickoffText): queue-fold (Ops #267) keeps it open.
 const QUEUE =
 	"[Queue] Task #4: Build the thing (the last one in the queue)\n\nThe user planned this task with you and approved the plan. Work it through to the end without stopping to ask, unless only the user can decide something.\n\nThe plan as approved.";
 const STAMPED = [Q, FYI, REQ];
-const ROWS = [Q, FYI, REQ, REPORT, REPLY];
+const ROWS = [Q, FYI, REQ, REPORT, CI, REPLY];
 
 const MR_SENT = {
 	to: "temper",
@@ -193,6 +207,8 @@ function seed({ dataDir, agentDir, workdir }) {
 		assistant("Done."),
 		user(roleMessageText(REPORT)),
 		assistant("Report written."),
+		user(roleMessageText(CI)),
+		assistant("Looking into the run."),
 		user(roleMessageText(REPLY)),
 		assistant("Thanks."),
 		user(BROKEN),
@@ -353,6 +369,8 @@ const measure = (page) =>
 				return !p || p.scrollHeight <= p.clientHeight + 1;
 			}),
 			overflowX: Math.max(root.scrollWidth - root.clientWidth, document.documentElement.scrollWidth - innerWidth),
+			// H-CI-ROW-PHONE: nothing sticks out of a row's own button (a cut chip, a hidden preview).
+			rowOverflow: Math.max(...btns.map((b) => b.scrollWidth - b.clientWidth)),
 		};
 	});
 
@@ -406,6 +424,14 @@ const { context: deskCtx, page } = await openPage({ width: 1280, height: 900 });
 		JSON.stringify(byId[REPORT.id]),
 	);
 	check(
+		"CI alert row: from the CI watch, what happened, repo and workflow",
+		byId[CI.id]?.from === "From the CI watch" &&
+			byId[CI.id]?.kind.startsWith("failed") &&
+			byId[CI.id]?.kind.includes("shine2lay/pi-web-ui") &&
+			byId[CI.id]?.kind.includes("ci-alert live check"),
+		JSON.stringify(byId[CI.id]),
+	);
+	check(
 		"reply row names what it answers",
 		byId[REPLY.id]?.kind === "reply to rm-0000a009" && byId[REPLY.id]?.from === "From qa",
 		JSON.stringify(byId[REPLY.id]),
@@ -441,8 +467,8 @@ const { context: deskCtx, page } = await openPage({ width: 1280, height: 900 });
 	);
 	const m = await measure(page);
 	check(
-		"rows are one line, at least 24 px high, nothing scrolls sideways",
-		m.oneLine && m.minHeight >= 24 && m.overflowX <= 1,
+		"rows are one line, at least 24 px high, nothing scrolls sideways or out of its row",
+		m.oneLine && m.minHeight >= 24 && m.overflowX <= 1 && m.rowOverflow <= 1,
 		JSON.stringify(m),
 	);
 	await shot(page, "desktop-dark-folded", rowSel(Q.id));
@@ -594,8 +620,8 @@ for (const [tag, opts] of [
 	const m = await measure(p);
 	const minTarget = opts.phone ? 44 : 24;
 	check(
-		`${tag}: rows one line, targets at least ${minTarget} px, nothing sideways`,
-		m.oneLine && m.minHeight >= minTarget && m.overflowX <= 1,
+		`${tag}: rows one line, targets at least ${minTarget} px, nothing sideways or out of its row`,
+		m.oneLine && m.minHeight >= minTarget && m.overflowX <= 1 && m.rowOverflow <= 1,
 		JSON.stringify(m),
 	);
 	await shot(p, `${tag}-folded`, rowSel(FYI.id));
