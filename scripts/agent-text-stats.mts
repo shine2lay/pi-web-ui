@@ -8,18 +8,29 @@
  *        [--data ~/.pi-web-ui] [--at-least N] [--or-after <ISO>]
  *
  * --first and check mode (scripts/stats-window.mts) count role messages. Prints one JSON line of lengths
- * and counts; no text is printed or stored (rule 11). role-messages.json keeps the newest 1,000 messages:
+ * and counts, including exclusive lexical class counts/medians/shares by kind and sender; no text is
+ * printed or stored (rule 11). Class precedence is reported; earlier retained records seed repetition
+ * before window selection. Shares are aggregate characters, not shares of medians. Missing history
+ * undercounts repetition. Board text excludes title/ownerWords to preserve #688's denominator.
+ * role-messages.json keeps the newest 1,000 messages:
  * the output says when its oldest is newer than --since.
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { agentTextSummary, boardPostSizes, roleMessageSizes, sizesInWindow } from "../server/agent-text-stats.ts";
+import { CLASS_NAMES } from "../server/agent-text-classes.ts";
 import { checkExitOf, runStats, statsWindowOf } from "./stats-window.mts";
 
 function listIn(file: string, key: string): unknown[] {
-	const doc = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-	const list = doc[key];
+	let doc: Record<string, unknown>;
+	try {
+		doc = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+	} catch {
+		// JSON.parse diagnostics may quote message text. Never expose them.
+		throw new Error("Cannot read agent-text store (unreadable file or invalid JSON)");
+	}
+	const list = doc?.[key];
 	if (!Array.isArray(list)) throw new Error(`${file} has no ${key} list`);
 	return list;
 }
@@ -36,6 +47,9 @@ await runStats(async () => {
 	process.stdout.write(
 		`${JSON.stringify({
 			script: "agent-text-stats",
+			classPrecedence: CLASS_NAMES,
+			classShareUnit: "fraction of UTF-16 characters; lexical classes do not establish removability",
+			oldestAgentMessageAt: oldest === undefined ? null : new Date(oldest).toISOString(),
 			since: new Date(w.since).toISOString(),
 			until: new Date(w.until).toISOString(),
 			first: w.first ?? null,
