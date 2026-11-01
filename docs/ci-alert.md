@@ -129,9 +129,16 @@ Dedupe survives restarts and applies while the record exists. The existing recor
 **Found by the look: H-CI-ROW-PHONE.**
 
 - *Problem and evidence:* on a 390 px phone the folded CI row overflows its button (scrollWidth > clientWidth): its kind chip "failed · shine2lay/pi-web-ui · ci-alert live c…" is cut mid-word at the row edge with no ellipsis, and the first words of the message don't show. Cause: `.rolemsg-row-kind` is `flex: none` with `white-space: nowrap`, and a CI alert's kind words (what happened, repo and workflow, up to about 200 characters) are far longer than any other row's kind.
-- *Change:* let the kind chip give way with an ellipsis and take at most half the row (`flex: 0 1 auto; min-width: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis`), so the preview keeps room. The full words stay in the DOM and in the open card's header. Rows whose chip fits in half the row are laid out as before.
+- *Change:* let the kind chip give way with an ellipsis and take at most half the row (`flex: 0 1 auto; min-width: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis`), so the preview keeps room. The full words stay in the DOM and in the open card's header. Rows whose chip fits in half the row are laid out as before. (The preview keeps room on the desktop, not on the phone: see the result.)
 - *Expected and measured by:* the sealed `tests/role-message-fold-test.mjs` gains a CI row and checks that no row's button overflows, in desktop dark and white and phone dark and white; it fails on the old stylesheet at phone width and passes with the change. After deploy the look-only check of `rm-595e6554` reports no overflow on the phone.
 - *Wrong if:* the CI row still overflows at 390 px, or another row's kind chip is cut on the 1280 px desktop.
+
+**Result: H-CI-ROW-PHONE HIT** on its bar, with one limit found.
+
+- Sealed A/B of `tests/role-message-fold-test.mjs` with its new CI row: on the old stylesheet phone dark and phone white failed (row overflow 35 px, page overflow 20 px; every desktop check passed); with the change all checks passed in all four views. Landed as `aa4a6bca` (land `316-da4687`, 2026-11-01 09:49 PST).
+- Deploy: `pi-web-deploy` installed `aa4a6bca` at 09:50 PST; `pi-web-deploy result aa4a6bca…` exit 0, "live, and the checks all passed".
+- Live look only at `rm-595e6554` (same kit, no sends): on the 390 px phone the CI row's button overflows 0 px (35 px before) and its kind chip ends in an ellipsis at 138 px (the old row ran off the edge with no closing border). On the desktop view (1400 px window, 1196 px row) the chip is 238 px and not cut, and the preview is 652 px. Across the three folded rows in Ops' home chat: none overflows and no chip is cut on the desktop. On the phone the only cut chip is the CI row's own. axe found nothing serious or critical in desktop dark, desktop light and phone dark; no page errors.
+- Limit: on the phone the CI row's preview gets 0 px, because the sender name, the chip and the turn chip fill the row; the rationale "so the preview keeps room" holds on the desktop only. Not changed further: for a CI alert the preview repeats the chip's words (what happened, repo, workflow), and the open card shows all of it. A later change that wants a preview on phone rows with long kinds needs its own hypothesis.
 
 ## Undo
 
