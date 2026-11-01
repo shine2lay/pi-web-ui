@@ -3,8 +3,9 @@
  * the before/after report (tests/tools/phone-measure.mjs). Every result is a layout or timing fact;
  * the only chat text read is the made-up text of the seeded chat and the stand-in model.
  */
-import { linesSentNow, newReplyTag, streamState } from "./phone-chat.mjs";
-import { tapTargets } from "./phone.mjs";
+import os from "node:os";
+import { hookSocket, linesSentNow, newReplyTag, streamState } from "./phone-chat.mjs";
+import { openPhone, PHONE_412, tapTargets } from "./phone.mjs";
 
 export const TA = ".inputbox textarea";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -367,13 +368,9 @@ export async function measureTargets(phone, { shots = "" } = {}) {
 	const { page } = phone;
 	const main = [".btn.send"];
 	const res = {};
-	res.chat = await tapTargets(
-		page,
-		[".topbar", ".inputbox", ".statusbar", ".goal-bar, [class*='goal-pill']"],
-		{
-			mainSelectors: main,
-		},
-	);
+	res.chat = await tapTargets(page, [".topbar", ".inputbox", ".statusbar", ".goal-bar, [class*='goal-pill']"], {
+		mainSelectors: main,
+	});
 	res.messageActions = await tapTargets(page, [".messages .msg:last-of-type"], {});
 	if (shots) await page.screenshot({ path: `${shots}-chat.png` });
 	const more = page.locator(".plugin-topbar-more > button").first();
@@ -562,4 +559,459 @@ export async function measureTyping(phone) {
 	await page.keyboard.press("Escape");
 	await ta.fill("");
 	return res;
+}
+
+function quantile(values, q) {
+	const sorted = [...values].filter((v) => typeof v === "number" && Number.isFinite(v)).sort((a, b) => a - b);
+	if (sorted.length === 0) return null;
+	const pos = (sorted.length - 1) * q;
+	const lo = Math.floor(pos);
+	const hi = Math.ceil(pos);
+	const val = lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+	return Math.round(val * 10) / 10;
+}
+
+export function statsSummary(values) {
+	const clean = values.filter((v) => typeof v === "number" && Number.isFinite(v));
+	if (clean.length === 0) return { n: 0, median: null, p95: null, min: null, max: null };
+	return {
+		n: clean.length,
+		median: quantile(clean, 0.5),
+		p95: quantile(clean, 0.95),
+		min: quantile(clean, 0),
+		max: quantile(clean, 1),
+	};
+}
+
+export function summarizeCpuProfile(profile, topN = 30) {
+	const nodesById = new Map();
+	const parentById = new Map();
+	for (const node of profile.nodes ?? []) {
+		nodesById.set(node.id, node);
+		for (const childId of node.children ?? []) parentById.set(childId, node.id);
+	}
+	const selfUs = new Map();
+	const totalUs = new Map();
+	const samples = profile.samples ?? [];
+	const deltas = profile.timeDeltas ?? [];
+	let sumUs = 0;
+	for (let i = 0; i < samples.length; i++) {
+		const dt = deltas[i] ?? 0;
+		if (dt <= 0) continue;
+		sumUs += dt;
+		const leafId = samples[i];
+		selfUs.set(leafId, (selfUs.get(leafId) ?? 0) + dt);
+		const seen = new Set();
+		let cur = leafId;
+		while (cur != null && !seen.has(cur)) {
+			seen.add(cur);
+			totalUs.set(cur, (totalUs.get(cur) ?? 0) + dt);
+			cur = parentById.get(cur);
+		}
+	}
+	const byKey = new Map();
+	const seenTotalPerSample = new Map();
+	for (let i = 0; i < samples.length; i++) {
+		const dt = deltas[i] ?? 0;
+		if (dt <= 0) continue;
+		const leaf = nodesById.get(samples[i]);
+		if (!leaf) continue;
+		const keyOf = (n) => {
+			const cf = n.callFrame ?? {};
+			const fn = cf.functionName || "(anonymous)";
+			const url = (cf.url || "").replace(/^https?:\/\/[^/]+/, "");
+			return `${fn} @ ${url}:${cf.lineNumber ?? 0}:${cf.columnNumber ?? 0}`;
+		};
+		const lk = keyOf(leaf);
+		const entry = byKey.get(lk) ?? { key: lk, selfUs: 0, totalUs: 0 };
+		entry.selfUs += dt;
+		byKey.set(lk, entry);
+		const seenKeys = new Set();
+		let cur = samples[i];
+		const visitedIds = new Set();
+		while (cur != null && !visitedIds.has(cur)) {
+			visitedIds.add(cur);
+			const node = nodesById.get(cur);
+			if (node) {
+				const k = keyOf(node);
+				if (!seenKeys.has(k)) {
+					seenKeys.add(k);
+					const e = byKey.get(k) ?? { key: k, selfUs: 0, totalUs: 0 };
+					e.totalUs += dt;
+					byKey.set(k, e);
+				}
+			}
+			cur = parentById.get(cur);
+		}
+	}
+	void seenTotalPerSample;
+	const totalMs = Math.round(sumUs / 100) / 10;
+	const list = [...byKey.values()].map((e) => ({
+		fn: e.key,
+		selfMs: Math.round(e.selfUs / 100) / 10,
+		selfPct: sumUs > 0 ? Math.round((e.selfUs / sumUs) * 1000) / 10 : 0,
+		totalMs: Math.round(e.totalUs / 100) / 10,
+		totalPct: sumUs > 0 ? Math.round((e.totalUs / sumUs) * 1000) / 10 : 0,
+	}));
+	return {
+		totalProfiledMs: totalMs,
+		topSelf: [...list].sort((a, b) => b.selfMs - a.selfMs).slice(0, topN),
+		topTotal: [...list].sort((a, b) => b.totalMs - a.totalMs).slice(0, topN),
+	};
+}
+
+/**
+ * Measure the browser's own snapshot-to-newest-messages-painted span on a phone (4x CPU by default).
+ * Matches Ops's chat-open render span:
+ * - Pinner page keeps `file` loaded on the sealed server so `switch_session` sends the `snapshot`
+ *   frame directly (without a cold disk read or preview).
+ * - Each sample opens a ready phone page, holds the app's `switch_session` request until the initial
+ *   blank-chat attach has settled, releases `switch_session`, and times from the target `snapshot`
+ *   frame arriving on the WebSocket (`snapshotAt`) to the rAF where the newest `.msg` / `.quiet-turn-row`
+ *   is painted inside the viewport with no blocking overlay (`paintAt`).
+ */
+export async function measureSnapshotRender(
+	kit,
+	browser,
+	{
+		file,
+		samples = 20,
+		size = PHONE_412,
+		cpu = 4,
+		settleMs = 800,
+		profileOut = null,
+		screenshotPath = null,
+		log = () => {},
+	} = {},
+) {
+	const chatUrl = `${kit.link.http}/?chat=${encodeURIComponent(file)}`;
+	kit.link.setSpeed(null);
+	// Pin `file` open on the sealed server in a background tab so it stays in the server's
+	// shared running-conversations map (`viewedElsewhere === true`) and every measured phone
+	// open receives the full `snapshot` frame directly (the loaded-chat path, no switch_preview).
+	const pin = await openPhone(browser, { size, cpu: 1 });
+	await hookSocket(pin.page);
+	await pin.page.goto(kit.link.http);
+	await pin.page.waitForFunction(() => window.__frameAt?.ready != null, null, { timeout: 60_000, polling: 50 });
+	await sleep(300);
+	await pin.page.goto(chatUrl, { waitUntil: "commit" });
+	await pin.page.waitForFunction(() => window.__frameAt?.switch_done != null, null, {
+		timeout: 240_000,
+		polling: 100,
+	});
+	await sleep(200);
+	log("pin loaded");
+
+	const rows = [];
+	let profileSummary = null;
+	try {
+		for (let i = 0; i < samples; i++) {
+			const phone = await openPhone(browser, { size, cpu });
+			try {
+				await phone.page.addInitScript(() => {
+					const S = (window.__snapRender = {
+						firstSnapAt: null,
+						lastFrameAt: 0,
+						released: false,
+						heldSend: null,
+						openSentAt: null,
+						snapshotAt: null,
+						snapshotHandledAt: null,
+						snapshotBytes: 0,
+						switchDoneAt: null,
+						paintAt: null,
+						events: [],
+						paintRows: 0,
+						collapsedAtPaint: 0,
+						domNodesAtPaint: 0,
+						placeholdersAtPaint: 0,
+						placeholdersAfterSettle: 0,
+						scrollBottomGapAtPaint: null,
+						lastRowBottomAtPaint: null,
+						maxPostPaintDriftPx: 0,
+					});
+					window.__releaseSnapOpen = () => {
+						S.released = true;
+						const fn = S.heldSend;
+						S.heldSend = null;
+						if (fn) fn();
+					};
+					const Base = window.WebSocket;
+					const origSend = Base.prototype.send;
+					Base.prototype.send = function (data) {
+						window.__ws = this;
+						const s = String(data);
+						if (s.includes('"type":"switch_session"') && S.openSentAt === null) {
+							const sendNow = () => {
+								S.openSentAt = performance.now();
+								return origSend.call(this, data);
+							};
+							if (!S.released) {
+								S.heldSend = sendNow;
+								return;
+							}
+							return sendNow();
+						}
+						return origSend.call(this, data);
+					};
+					const desc = Object.getOwnPropertyDescriptor(Base.prototype, "onmessage");
+					Object.defineProperty(Base.prototype, "onmessage", {
+						configurable: true,
+						enumerable: desc.enumerable,
+						get() {
+							return desc.get.call(this);
+						},
+						set(fn) {
+							if (typeof fn !== "function") return desc.set.call(this, fn);
+							const wrapped = function (ev) {
+								const s = String(ev.data);
+								const t = performance.now();
+								S.lastFrameAt = t;
+								const isSnap = s.startsWith('{"type":"snapshot"');
+								if (isSnap && S.firstSnapAt === null) S.firstSnapAt = t;
+								if (this.__q === undefined && s.startsWith('{"type":"ready"')) {
+									const cr = s.includes('"commandRecovery":1') && s.includes('"recoveryGeneration":');
+									this.__q = cr ? [] : null;
+								}
+								if (this.__q) {
+									this.__q.push(ev);
+									if (s.startsWith('{"type":"session_initialized"')) {
+										const q = this.__q;
+										this.__q = null;
+										for (const item of q) fn.call(this, item);
+									}
+									return;
+								}
+								const isTargetSnap = isSnap && S.openSentAt !== null && !s.includes('"messages":[]');
+								if (isTargetSnap && S.snapshotAt === null) {
+									S.snapshotAt = t;
+									S.snapshotBytes = s.length;
+								}
+								try {
+									return fn.call(this, ev);
+								} finally {
+									const tAfter = performance.now();
+									const type = /^\{"type":"([\w-]+)"/.exec(s)?.[1] ?? "other";
+									S.events.push({
+										type,
+										bytes: s.length,
+										t: Math.round(t),
+										ms: Math.round((tAfter - t) * 10) / 10,
+										afterOpen: S.openSentAt !== null,
+									});
+									if (isTargetSnap && S.snapshotHandledAt === null) S.snapshotHandledAt = tAfter;
+									if (S.openSentAt !== null && s.startsWith('{"type":"switch_done"') && S.switchDoneAt === null) {
+										S.switchDoneAt = tAfter;
+									}
+								}
+							};
+							return desc.set.call(this, wrapped);
+						},
+					});
+
+					const tick = () => {
+						const t = performance.now();
+						if (S.snapshotAt !== null) {
+							const list = document.querySelector(".messages");
+							const msgRows = document.querySelectorAll(".messages .msg, .messages .quiet-turn-row");
+							const blocking = document.querySelector(".switch-overlay:not(.switch-overlay-preview)");
+							if (msgRows.length > 0 && !blocking) {
+								const r = msgRows[msgRows.length - 1].getBoundingClientRect();
+								if (S.paintAt === null && r.bottom > 0 && r.top < window.innerHeight) {
+									S.paintAt = t;
+									S.paintRows = msgRows.length;
+									S.collapsedAtPaint = document.querySelectorAll(".messages .exchange-collapsed").length;
+									S.domNodesAtPaint = list ? list.querySelectorAll("*").length : 0;
+									S.placeholdersAtPaint = document.querySelectorAll(".messages .msg-lazy-ph").length;
+									S.lastRowBottomAtPaint = Math.round(r.bottom);
+									if (list) {
+										S.scrollBottomGapAtPaint = Math.round(list.scrollHeight - list.scrollTop - list.clientHeight);
+									}
+								} else if (S.paintAt !== null && S.lastRowBottomAtPaint !== null) {
+									const drift = Math.abs(Math.round(r.bottom) - S.lastRowBottomAtPaint);
+									if (drift > S.maxPostPaintDriftPx) S.maxPostPaintDriftPx = drift;
+								}
+							}
+						}
+						requestAnimationFrame(tick);
+					};
+					requestAnimationFrame(tick);
+				});
+
+				await phone.page.goto(chatUrl, { waitUntil: "commit" });
+				await phone.page.waitForFunction(
+					() => {
+						const S = window.__snapRender;
+						if (!S) return false;
+						const now = performance.now();
+						return (S.heldSend !== null || S.openSentAt !== null) && now - S.lastFrameAt >= 300;
+					},
+					null,
+					{ timeout: 15_000, polling: 50 },
+				);
+				log("heldSend ready, releasing");
+				await phone.page.evaluate(() => document.fonts?.ready).catch(() => {});
+
+				const captureProfile = Boolean(profileOut && i === 0);
+				if (captureProfile) {
+					await phone.cdp.send("Profiler.enable");
+					await phone.cdp.send("Profiler.setSamplingInterval", { interval: 200 });
+					await phone.cdp.send("Profiler.start");
+				}
+
+				await phone.page.evaluate(() => window.__releaseSnapOpen());
+				try {
+					await phone.page.waitForFunction(
+						() => window.__snapRender?.paintAt !== null && window.__snapRender?.switchDoneAt !== null,
+						null,
+						{ timeout: 25_000, polling: 20 },
+					);
+				} catch (err) {
+					const dbg = await phone.page.evaluate(() => ({
+						S: window.__snapRender,
+						msgs: document.querySelectorAll(".messages .msg, .messages .quiet-turn-row").length,
+						overlay: Boolean(document.querySelector(".switch-overlay:not(.switch-overlay-preview)")),
+					}));
+					log(`WAIT TIMEOUT dbg=${JSON.stringify(dbg)}`);
+					throw err;
+				}
+
+				if (captureProfile) {
+					const { profile } = await phone.cdp.send("Profiler.stop");
+					await phone.cdp.send("Profiler.disable");
+					profileSummary = summarizeCpuProfile(profile);
+					profileOut(profile, profileSummary);
+				}
+
+				await sleep(settleMs);
+				if (screenshotPath && i === 0) {
+					await phone.page.screenshot({ path: screenshotPath });
+				}
+				const sample = await phone.page.evaluate(() => {
+					const S = window.__snapRender;
+					const msgRows = document.querySelectorAll(".messages .msg, .messages .quiet-turn-row");
+					const phRows = document.querySelectorAll(".messages .msg-lazy-ph");
+					return {
+						renderMs: Math.round((S.paintAt - S.snapshotAt) * 10) / 10,
+						handleMs: Math.round((S.snapshotHandledAt - S.snapshotAt) * 10) / 10,
+						afterHandleMs: Math.round((S.paintAt - S.snapshotHandledAt) * 10) / 10,
+						snapshotBytes: S.snapshotBytes,
+						paintRows: S.paintRows,
+						collapsedAtPaint: S.collapsedAtPaint,
+						domNodesAtPaint: S.domNodesAtPaint,
+						placeholdersAtPaint: S.placeholdersAtPaint,
+						rowsAfterSettle: msgRows.length,
+						placeholdersAfterSettle: phRows.length,
+						scrollBottomGapAtPaint: S.scrollBottomGapAtPaint,
+						maxPostPaintDriftPx: S.maxPostPaintDriftPx,
+						openSentAt: Math.round(S.openSentAt),
+						snapshotAt: Math.round(S.snapshotAt),
+						paintAt: Math.round(S.paintAt),
+						switchDoneAt: Math.round(S.switchDoneAt),
+						events: S.events,
+					};
+				});
+				if (i === 0) {
+					// On-screen interactive checks on sample 1 (after timing & screenshot are already recorded):
+					// 1) Jump to an older question via .qn-rail -> target mounts and flashes in viewport.
+					// 2) Scroll to top and click .load-older button -> earlier exchanges/messages load without losing anchor.
+					// 3) Open search (Control+f) -> placeholders drop to 0 and matches highlight; Escape closes.
+					const qnCount = await phone.page.evaluate(() => document.querySelectorAll(".qn-rail .qn-bar").length);
+					let jumpOk = false;
+					if (qnCount > 0) {
+						await phone.page.evaluate(() => {
+							const bars = document.querySelectorAll(".qn-rail .qn-bar");
+							const target = bars.length >= 2 ? bars[bars.length - 2] : bars[0];
+							target?.click();
+						});
+						jumpOk = await phone.page
+							.waitForFunction(
+								() => {
+									const flashed = document.querySelector(".messages .msg-flash");
+									if (!flashed || flashed.classList.contains("msg-lazy-ph")) return false;
+									const r = flashed.getBoundingClientRect();
+									return r.bottom > 0 && r.top < window.innerHeight;
+								},
+								null,
+								{ timeout: 5000, polling: 50 },
+							)
+							.then(() => true)
+							.catch(() => false);
+					}
+					await phone.page.evaluate(() => {
+						const el = document.querySelector(".messages");
+						if (el) el.scrollTop = 0;
+					});
+					await sleep(150);
+					let loadOlderOk = false;
+					const hasLoadBtn = await phone.page.evaluate(() =>
+						Boolean(document.querySelector(".messages .load-older button")),
+					);
+					if (hasLoadBtn) {
+						const beforeTotal = await phone.page.evaluate(
+							() => document.querySelectorAll(".messages [data-msg-id], .messages .exchange-digest").length,
+						);
+						await phone.page.evaluate(() => document.querySelector(".messages .load-older button")?.click());
+						loadOlderOk = await phone.page
+							.waitForFunction(
+								(prev) =>
+									document.querySelectorAll(".messages [data-msg-id], .messages .exchange-digest").length > prev,
+								beforeTotal,
+								{ timeout: 8000, polling: 50 },
+							)
+							.then(() => true)
+							.catch(() => false);
+					}
+					await phone.page.evaluate(() => {
+						if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+						window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }));
+					});
+					const searchOk = await phone.page
+						.waitForFunction(
+							() =>
+								Boolean(document.querySelector(".search-bar input")) &&
+								document.querySelectorAll(".messages .msg-lazy-ph").length === 0,
+							null,
+							{ timeout: 5000, polling: 50 },
+						)
+						.then(() => true)
+						.catch(() => false);
+					if (searchOk) {
+						await phone.page.locator(".search-bar input").fill("a");
+						await sleep(150);
+						await phone.page.keyboard.press("Escape");
+					}
+					sample.screenChecks = { jumpOk, loadOlderOk, searchOk };
+				}
+				sample.i = i + 1;
+				sample.load1 = Math.round(os.loadavg()[0] * 10) / 10;
+				rows.push(sample);
+				log(`events=${JSON.stringify(sample.events)}`);
+				log(
+					`sample ${sample.i}/${samples}: render=${sample.renderMs}ms (handle=${sample.handleMs}ms + paint=${sample.afterHandleMs}ms) rows=${sample.paintRows} collapsed=${sample.collapsedAtPaint} dom=${sample.domNodesAtPaint} ph=${sample.placeholdersAtPaint}->${sample.placeholdersAfterSettle} drift=${sample.maxPostPaintDriftPx}px load1=${sample.load1}`,
+				);
+			} finally {
+				await phone.close().catch(() => {});
+			}
+		}
+	} finally {
+		await pin.close().catch(() => {});
+	}
+
+	return {
+		n: rows.length,
+		snapshotKB: rows[0] ? Math.round(rows[0].snapshotBytes / 1024) : 0,
+		renderMs: statsSummary(rows.map((r) => r.renderMs)),
+		handleMs: statsSummary(rows.map((r) => r.handleMs)),
+		afterHandleMs: statsSummary(rows.map((r) => r.afterHandleMs)),
+		load1: statsSummary(rows.map((r) => r.load1)),
+		paintRows: rows[0]?.paintRows ?? 0,
+		placeholdersAtPaint: rows[0]?.placeholdersAtPaint ?? 0,
+		placeholdersAfterSettle: rows[0]?.placeholdersAfterSettle ?? 0,
+		maxScrollBottomGapAtPaint: Math.max(0, ...rows.map((r) => Math.abs(r.scrollBottomGapAtPaint ?? 0))),
+		maxPostPaintDriftPx: Math.max(0, ...rows.map((r) => r.maxPostPaintDriftPx ?? 0)),
+		screenChecks: rows[0]?.screenChecks ?? null,
+		profileSummary,
+		samples: rows,
+	};
 }

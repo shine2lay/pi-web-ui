@@ -6,6 +6,8 @@ import {
 	getPlaceholderHeight,
 	pickAlways,
 	planWindow,
+	syncInitialHidden,
+	visibleTextLength,
 	type HeightEntry,
 	type WinRect,
 } from "../../web/src/lazy-window.js";
@@ -113,14 +115,43 @@ describe("pickAlways", () => {
 	it("空消息集返回空集合", () => {
 		expect(pickAlways([], new Map(), 1600).size).toBe(0);
 	});
+
+	it("未实测的长正文消息按正文长度估算高度，不在首屏常驻区挂载过多长消息", () => {
+		const longText = "x".repeat(2400); // ~800px each
+		const always = pickAlways(
+			[
+				{ id: "m1", role: "assistant", content: [{ type: "text", text: longText }] },
+				{ id: "m2", role: "assistant", content: [{ type: "text", text: longText }] },
+				{ id: "m3", role: "assistant", content: [{ type: "text", text: longText }] },
+				{ id: "m4", role: "assistant", content: [{ type: "text", text: longText }] },
+			],
+			new Map(),
+			1600,
+		);
+		// m4 (~800px) + m3 (~800px) = 1600px 达到预算，不再继续把 m2/m1 拉进首帧常驻区
+		expect([...always]).toEqual(["m4", "m3"]);
+	});
 });
 
-describe("estimateMessageHeight", () => {
+describe("estimateMessageHeight & visibleTextLength", () => {
 	it("按角色给出量级正确的估算", () => {
 		expect(estimateMessageHeight("user")).toBeLessThan(estimateMessageHeight("assistant"));
 		expect(estimateMessageHeight("toolResult")).toBeLessThan(estimateMessageHeight("user"));
 		expect(estimateMessageHeight("custom", "file")).toBeGreaterThan(estimateMessageHeight("user"));
 		expect(estimateMessageHeight("system")).toBeGreaterThan(0);
+	});
+
+	it("长正文按字数抬高估算，折叠的 thinking/toolCall 不计入可见正文长度", () => {
+		expect(estimateMessageHeight("assistant", undefined, 2400)).toBeGreaterThan(estimateMessageHeight("assistant"));
+		expect(
+			visibleTextLength({
+				content: [
+					{ type: "thinking", thinking: "t".repeat(5000) },
+					{ type: "toolCall", argumentsText: "a".repeat(5000) },
+					{ type: "text", text: "hello" },
+				],
+			}),
+		).toBe(5);
 	});
 });
 
@@ -167,5 +198,52 @@ describe("getPlaceholderHeight", () => {
 		expect(getPlaceholderHeight("m1", 9, c, 280)).toBe(280);
 		c.set("m1", { h: 2400, len: 9 }); // 新内容实测后恢复
 		expect(getPlaceholderHeight("m1", 9, c, 280)).toBe(2400);
+	});
+});
+
+describe("syncInitialHidden", () => {
+	it("大会话首次打开时，常驻区外的消息在首帧即进入 hidden（先画最新消息）", () => {
+		const seen = new Set<string>();
+		const hidden = new Set<string>();
+		const res = syncInitialHidden(["m1", "m2", "m3", "m4"], true, new Set(["m3", "m4"]), new Set(), seen, hidden);
+		expect(res.seeded).toBe(true);
+		expect([...res.hidden]).toEqual(["m1", "m2"]);
+		expect([...seen]).toEqual(["m1", "m2", "m3", "m4"]);
+	});
+
+	it("后续已被 sweep 恢复显示的消息不会在重渲染时被重新塞回 hidden", () => {
+		const seen = new Set(["m1", "m2", "m3", "m4"]);
+		const hiddenAfterSweep = new Set(["m1"]); // m2 已被 sweep 恢复显示
+		const res = syncInitialHidden(
+			["m1", "m2", "m3", "m4"],
+			true,
+			new Set(["m3", "m4"]),
+			new Set(),
+			seen,
+			hiddenAfterSweep,
+		);
+		expect(res.seeded).toBe(false);
+		expect(res.hidden).toBe(hiddenAfterSweep);
+	});
+
+	it("切换到另一会话后再切回，旧会话 id 被清理并重新按首屏常驻区种入 hidden", () => {
+		const seen = new Set(["a1", "a2"]);
+		const hidden = new Set<string>(); // 之前滚到顶把 a1 也展开了
+		// 切到会话 B
+		const b = syncInitialHidden(["b1", "b2"], true, new Set(["b2"]), new Set(), seen, hidden);
+		expect([...b.hidden]).toEqual(["b1"]);
+		// 再切回会话 A：a1 不再保留展开态，重新作为首帧占位
+		const aAgain = syncInitialHidden(["a1", "a2"], true, new Set(["a2"]), new Set(), seen, b.hidden);
+		expect(aAgain.seeded).toBe(true);
+		expect([...aAgain.hidden]).toEqual(["a1"]);
+	});
+
+	it("virtualOn=false（搜索打开或短会话）时清空 hidden 并记录当前已挂载 id", () => {
+		const seen = new Set(["m1", "m2"]);
+		const hidden = new Set(["m1"]);
+		const off = syncInitialHidden(["m1", "m2", "m3"], false, new Set(["m3"]), new Set(), seen, hidden);
+		expect(off.seeded).toBe(false);
+		expect(off.hidden.size).toBe(0);
+		expect([...seen]).toEqual(["m1", "m2", "m3"]);
 	});
 });

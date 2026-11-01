@@ -31,6 +31,8 @@ import {
 	getPlaceholderHeight,
 	pickAlways,
 	planWindow,
+	syncInitialHidden,
+	visibleTextLength,
 	type HeightEntry,
 	type WinRect,
 } from "../lazy-window";
@@ -99,7 +101,7 @@ const USER_SCROLL_INTENT_MS = 500;
 const LAZY_MARGIN = 1200;
 /** 底部常驻区高度预算（px）：贴底滚动 / 流式输出区域零占位延迟，
  *  但按累计高度截断——单条巨型消息不允许把常驻区撑成半个文档。 */
-const ALWAYS_BUDGET = 1600;
+const ALWAYS_BUDGET = 960;
 
 /** 压缩进行中的常驻进度条：toast 会自动消失，而摘要 LLM 调用可能持续
  *  数十秒——这里跟随快照 compaction 字段常驻显示，并用 startedAt 滴答
@@ -886,42 +888,105 @@ export function MessageList({
 	/** 所有受管外层元素（sweep 测量用；挂载时注册，消息移除时清理）。 */
 	const elsRef = useRef(new Map<string, HTMLDivElement>());
 	const sweepRafRef = useRef(0);
-	/** 每条消息的当前内容指纹（id → fingerprint，随 state.messages 重算）。 */
+	/** 已完成初始可见/占位判定的消息 id（首次出现且不在 alwaysSet 的消息默认先占位）。 */
+	const seenLazyRef = useRef(new Set<string>());
+	/** 首帧种入占位后，把缓冲带展开推迟一帧到首屏绘制之后。 */
+	const deferSweepRef = useRef(false);
+	/** 每条消息的当前内容指纹（id → fingerprint，随 state.messages / state.exchanges 重算）。 */
 	const fingerprints = useMemo(() => {
 		const m = new Map<string, number>();
+		for (const d of state.exchanges ?? []) {
+			for (const msg of d.head) m.set(msg.id, contentFingerprint(msg));
+			for (const msg of d.answers) m.set(msg.id, contentFingerprint(msg));
+			for (const msg of d.after) m.set(msg.id, contentFingerprint(msg));
+		}
 		for (const msg of state.messages) m.set(msg.id, contentFingerprint(msg));
 		return m;
-	}, [state.messages]);
+	}, [state.exchanges, state.messages]);
 	// 镜像供 sweep（rAF 回调）读取而不重建依赖
 	const fpRef = useRef(fingerprints);
 	fpRef.current = fingerprints;
-	// 镜像最新值，供 rAF 回调 / 事件处理器读取而不重建（沿用 questionsRef 模式）
+	// hiddenRef 由 syncInitialHidden（渲染期）与 sweep（测量期）唯一维护，不从 state 反向覆盖
 	const hiddenRef = useRef(hidden);
-	hiddenRef.current = hidden;
 	/** 短会话与搜索打开期间不做窗口化（全量渲染，行为与旧版一致）。 */
 	const virtualOn = state.messages.length > COLLAPSE_MIN && !searchOpen;
 	const virtualOnRef = useRef(virtualOn);
 	virtualOnRef.current = virtualOn;
 	// 底部常驻区（永不占位）：随每次渲染按预算重算（读取最新实测高度），
 	// 首次全量测量后巨型消息会被预算挤出常驻区、参与正常窗口化。
-	// exchange-fold：折起来的消息不渲染，不该占常驻区的预算
-	const foldVisible = useMemo(() => state.messages.filter((m) => !foldHides(m.id)), [state.messages, foldHides]);
+	// exchange-fold / quiet-turns / oldRow / exchange-digest：折起或不进 LazyMount 的消息不占常驻区预算
+	const foldVisible = useMemo(() => {
+		const out: UiMessage[] = [];
+		for (const d of state.exchanges ?? []) {
+			const q = d.quiet;
+			let msgs: UiMessage[];
+			if (q && quietUnder(q, quietSw)) {
+				const key = q.rowId ?? d.head[0]?.id;
+				if (key && !searchOpen && !isRoleMessageOpen(key)) {
+					msgs = q.outside ? d.after.slice(-q.outside) : [];
+				} else {
+					msgs = [...d.head, ...d.answers, ...d.after];
+				}
+			} else {
+				msgs = [...d.head, ...d.answers, ...d.after];
+			}
+			for (const m of msgs) {
+				if (queueReportFold(m) !== null && !searchOpen && !expanded.has(m.id)) continue;
+				out.push(m);
+			}
+		}
+		for (let i = 0; i < state.messages.length; i++) {
+			const m = state.messages[i];
+			if (
+				m.role !== "system" &&
+				!quietPlan.place.has(m.id) &&
+				!foldHides(m.id) &&
+				!(oldRow(i, m) && !expanded.has(m.id))
+			) {
+				out.push(m);
+			}
+		}
+		return out;
+	}, [state.exchanges, state.messages, quietSw, searchOpen, isRoleMessageOpen, quietPlan, foldHides, oldRow, expanded]);
 	const alwaysSet = pickAlways(foldVisible, heightsRef.current, ALWAYS_BUDGET);
 	const alwaysRef = useRef(alwaysSet);
 	alwaysRef.current = alwaysSet;
+	const lazyIds = useMemo(() => foldVisible.map((m) => m.id), [foldVisible]);
+	const keepShown = useMemo(() => {
+		if (pinned.size === 0) return expanded;
+		if (expanded.size === 0) return pinned;
+		const s = new Set(pinned);
+		for (const id of expanded) s.add(id);
+		return s;
+	}, [pinned, expanded]);
+	const syncedHidden = syncInitialHidden(
+		lazyIds,
+		virtualOn,
+		alwaysSet,
+		keepShown,
+		seenLazyRef.current,
+		hiddenRef.current,
+	);
+	hiddenRef.current = syncedHidden.hidden;
+	if (syncedHidden.seeded) deferSweepRef.current = true;
 
 	/** 全量测量受管元素 → 窗口计划（rAF 节流调用；也用于初始与特殊迁移后）。 */
 	const sweep = useCallback(() => {
 		const root = scrollRef.current;
 		if (!root) return;
 		if (!virtualOnRef.current) {
-			setHidden((prev) => (prev.size ? new Set<string>() : prev));
+			if (hiddenRef.current.size) {
+				const empty = new Set<string>();
+				hiddenRef.current = empty;
+				setHidden(empty);
+			}
 			return;
 		}
 		const rootRect = root.getBoundingClientRect();
+		const margin = stickRef.current ? 0 : LAZY_MARGIN;
 		const viewport = {
-			top: rootRect.top - LAZY_MARGIN,
-			bottom: rootRect.bottom + LAZY_MARGIN,
+			top: rootRect.top - margin,
+			bottom: rootRect.bottom + margin,
 		};
 		const items: WinRect[] = [];
 		for (const [id, el] of elsRef.current) {
@@ -944,21 +1009,36 @@ export function MessageList({
 			const el = elsRef.current.get(id);
 			if (el) recordMeasured(id, el.offsetHeight, fpRef.current.get(id));
 		}
-		setHidden((prev) => applyPlan(prev, plan));
+		const next = applyPlan(hiddenRef.current, plan);
+		if (next !== hiddenRef.current) {
+			hiddenRef.current = next;
+			setHidden(next);
+		}
 	}, []);
 
 	const scheduleSweep = useCallback(() => {
 		if (sweepRafRef.current) return;
 		sweepRafRef.current = requestAnimationFrame(() => {
+			if (deferSweepRef.current) {
+				deferSweepRef.current = false;
+				sweepRafRef.current = requestAnimationFrame(() => {
+					sweepRafRef.current = 0;
+					sweep();
+				});
+				return;
+			}
 			sweepRafRef.current = 0;
 			sweep();
 		});
 	}, [sweep]);
 
-	// 初始挂载：首帧绘制前就把远端内容换成占位（大会话 attach 不再全量布局绘制）
+	// 初始挂载与消息集变更：首帧先按 syncInitialHidden 只挂载底部常驻区，首屏绘制后再补做缓冲带 sweep
 	useLayoutEffect(() => {
-		sweep();
+		if (!deferSweepRef.current) sweep();
 	}, [sweep]);
+	useEffect(() => {
+		scheduleSweep();
+	}, [lazyIds, virtualOn, scheduleSweep]);
 
 	// 搜索关闭瞬间重新收起远端内容（打开期间强制全渲染以兼容 DOM 高亮/Range 收集）
 	const prevSearchRef = useRef(searchOpen);
@@ -1355,6 +1435,13 @@ export function MessageList({
 		}
 	}, [state.isStreaming]);
 
+	useLayoutEffect(() => {
+		const el = scrollRef.current;
+		if (el && stickRef.current) {
+			el.scrollTop = el.scrollHeight;
+		}
+	}, [messages, state.isStreaming, liveOutputs, hidden]);
+
 	useEffect(() => {
 		const el = scrollRef.current;
 		if (el && stickRef.current) {
@@ -1590,33 +1677,49 @@ export function MessageList({
 		if (queueReport && !searchOpen && !expanded.has(m.id))
 			return <CollapsedMessage key={m.id} message={m} onExpand={expand} />;
 		const qIdx = m.role === "user" ? qnIndex.get(m.id) : undefined;
+		const show = !virtualOn || alwaysSet.has(m.id) || pinned.has(m.id) || !hiddenRef.current.has(m.id);
 		return (
-			<Message
-				uiMessageActions={uiMessageActions}
-				uiContextMessage={uiContextMessage}
-				uiContextToolCall={uiContextToolCall}
-				onUiAction={onUiAction}
+			<LazyMount
 				key={m.id}
-				message={m}
-				qnIndex={qIdx}
-				qnActive={qIdx !== undefined ? qIdx === activeIdx : undefined}
-				onJump={jumpTo}
-				toolResults={toolResults}
-				liveOutputs={EMPTY_LIVE}
-				toolStatuses={toolStatuses}
-				streaming={false}
-				onKillBash={onKillBash}
-				toolsWrap={toolsWrap}
-				toolImages={toolImages}
-				thinkingWrap={thinkingWrap}
-				isLast={false}
-				onEdit={onEdit}
-				onEditAdmit={onEditAdmit}
-				editContextKey={messageEditContextKey}
-				questionAttachments={digestAttachments.get(m.id)}
-				onCollapse={queueReport && expanded.has(m.id) ? collapse : undefined}
-				searchActive={searchOpen}
-			/>
+				id={m.id}
+				show={show}
+				height={getPlaceholderHeight(
+					m.id,
+					fingerprints.get(m.id) ?? -1,
+					heightMetaRef.current,
+					estimateMessageHeight(m.role, m.customType, visibleTextLength(m)),
+				)}
+				containerRef={scrollRef}
+				onMeasured={storeHeight}
+				lazyRef={attachEl}
+			>
+				<Message
+					uiMessageActions={uiMessageActions}
+					uiContextMessage={uiContextMessage}
+					uiContextToolCall={uiContextToolCall}
+					onUiAction={onUiAction}
+					key={m.id}
+					message={m}
+					qnIndex={qIdx}
+					qnActive={qIdx !== undefined ? qIdx === activeIdx : undefined}
+					onJump={jumpTo}
+					toolResults={toolResults}
+					liveOutputs={EMPTY_LIVE}
+					toolStatuses={toolStatuses}
+					streaming={false}
+					onKillBash={onKillBash}
+					toolsWrap={toolsWrap}
+					toolImages={toolImages}
+					thinkingWrap={thinkingWrap}
+					isLast={false}
+					onEdit={onEdit}
+					onEditAdmit={onEditAdmit}
+					editContextKey={messageEditContextKey}
+					questionAttachments={digestAttachments.get(m.id)}
+					onCollapse={queueReport && expanded.has(m.id) ? collapse : undefined}
+					searchActive={searchOpen}
+				/>
+			</LazyMount>
 		);
 	};
 	/** quiet-turns: the one row of a quiet turn. Its starter is a role message or Board order -> the #75 row
@@ -1855,7 +1958,7 @@ export function MessageList({
 						return withRow(rowEl, <CollapsedMessage key={m.id} message={shown} onExpand={expand} />);
 					}
 					const qIdx = m.role === "user" ? qnIndex.get(m.id) : undefined;
-					const show = !virtualOn || alwaysSet.has(m.id) || pinned.has(m.id) || !hidden.has(m.id);
+					const show = !virtualOn || alwaysSet.has(m.id) || pinned.has(m.id) || !hiddenRef.current.has(m.id);
 					return withRow(
 						rowEl,
 						<LazyMount
@@ -1866,7 +1969,7 @@ export function MessageList({
 								m.id,
 								fingerprints.get(m.id) ?? -1,
 								heightMetaRef.current,
-								estimateMessageHeight(m.role, m.customType),
+								estimateMessageHeight(m.role, m.customType, visibleTextLength(shown)),
 							)}
 							containerRef={scrollRef}
 							onMeasured={storeHeight}

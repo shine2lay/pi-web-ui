@@ -32,6 +32,7 @@ function codeRanges(text: string): [number, number][] {
 /** Supports the approved Label|Prompt form and upstream's Label,prompt=Text form.
  * Markers shown as code are examples, not actions. No eval, HTML or URL execution. */
 export function parseActionSuggestions(text: string): { text: string; actions: ActionSuggestion[] } {
+	if (!text.includes("[[action:suggest:")) return { text, actions: [] };
 	const actions: ActionSuggestion[] = [];
 	const seen = new Set<string>();
 	const code = codeRanges(text);

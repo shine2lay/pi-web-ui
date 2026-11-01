@@ -74,7 +74,7 @@ export function applyPlan(prev: ReadonlySet<string>, plan: WindowPlan): Set<stri
  * 本模块要优化的对象；按高度预算保证常驻区始终有界。
  */
 export function pickAlways(
-	msgs: readonly { id: string; role: string; customType?: string }[],
+	msgs: readonly { id: string; role: string; customType?: string; content?: readonly FingerprintBlock[] }[],
 	heights: ReadonlyMap<string, number>,
 	budget: number,
 ): Set<string> {
@@ -84,21 +84,24 @@ export function pickAlways(
 		if (i < msgs.length - 1 && acc >= budget) break;
 		const m = msgs[i];
 		out.add(m.id);
-		acc += heights.get(m.id) ?? estimateMessageHeight(m.role, m.customType);
+		acc += heights.get(m.id) ?? estimateMessageHeight(m.role, m.customType, visibleTextLength(m));
 	}
 	return out;
 }
 
 /**
- * 从未被渲染过的消息没有实测高度，按角色给一个粗估占位高度。
+ * 从未被渲染过的消息没有实测高度，按角色与正文长度给一个粗估占位高度。
  * 只求量级正确（首次向上滚动不跳太多）；一旦真实渲染过，测量值会覆盖估算值。
  */
-export function estimateMessageHeight(role: string, customType?: string): number {
+export function estimateMessageHeight(role: string, customType?: string, textLen = 0): number {
+	let base: number;
 	switch (role) {
 		case "user":
-			return 72;
+			base = 72;
+			break;
 		case "assistant":
-			return 280;
+			base = 280;
+			break;
 		case "toolResult":
 			return 8; // 内容折叠进 toolCall 卡片，本体近乎零高
 		case "custom":
@@ -106,6 +109,62 @@ export function estimateMessageHeight(role: string, customType?: string): number
 		default:
 			return 60;
 	}
+	if (textLen <= 0) return base;
+	// 按约 55 字符折算一行（~0.45px/char），使底部常驻预算既覆盖完整首屏视口，又不把视口上方的长消息一并拉入首帧。
+	const byText = (role === "user" ? 56 : 80) + Math.ceil(textLen * 0.45);
+	return Math.min(3600, Math.max(base, byText));
+}
+
+/** 默认展开可见的正文字符数（仅计 text 块；折叠的 thinking / toolCall / bash 不撑高首屏）。 */
+export function visibleTextLength(m: { content?: readonly FingerprintBlock[] }): number {
+	let n = 0;
+	for (const b of m.content ?? []) {
+		if (b.type === "text" && typeof b.text === "string") n += b.text.length;
+	}
+	return n;
+}
+
+/**
+ * 同步虚拟窗口的初始隐藏集：
+ * - virtualOn 为 false（短会话或搜索打开）时，所有消息均已真实挂载，清空 hidden 并把当前 id 记入 seen；
+ * - virtualOn 为 true 时，清理已不在当前列表中的旧会话 id，并将首次出现且不在 always / keepShown
+ *   中的消息直接记入 hidden（首帧即以占位块渲染，避免全量 Markdown 阻塞首屏）。
+ */
+export function syncInitialHidden(
+	ids: readonly string[],
+	virtualOn: boolean,
+	always: ReadonlySet<string>,
+	keepShown: ReadonlySet<string>,
+	seen: Set<string>,
+	hidden: Set<string>,
+): { hidden: Set<string>; seeded: boolean } {
+	if (!virtualOn) {
+		seen.clear();
+		for (const id of ids) seen.add(id);
+		return { hidden: hidden.size === 0 ? hidden : new Set(), seeded: false };
+	}
+	const current = new Set(ids);
+	let next: Set<string> | null = null;
+	for (const id of seen) {
+		if (!current.has(id)) seen.delete(id);
+	}
+	for (const id of hidden) {
+		if (!current.has(id) || always.has(id) || keepShown.has(id)) {
+			if (!next) next = new Set(hidden);
+			next.delete(id);
+		}
+	}
+	let seeded = false;
+	for (const id of ids) {
+		if (seen.has(id)) continue;
+		seen.add(id);
+		if (!always.has(id) && !keepShown.has(id) && !(next ?? hidden).has(id)) {
+			if (!next) next = new Set(hidden);
+			next.add(id);
+			seeded = true;
+		}
+	}
+	return { hidden: next ?? hidden, seeded };
 }
 
 /** 实测高度缓存条目：高度 + 记录时的内容指纹。指纹不匹配（消息被编辑）时

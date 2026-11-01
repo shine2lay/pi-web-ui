@@ -18,6 +18,7 @@ import {
 	measureCatchup,
 	measureKeyboard,
 	measureLoad,
+	measureSnapshotRender,
 	measureStream,
 	measureTargets,
 	measureTyping,
@@ -25,8 +26,14 @@ import {
 } from "../lib/phone-checks.mjs";
 
 const out = process.argv[2];
-if (!out) throw new Error("usage: phone-measure.mjs <out dir> [--real] [--only=a,b]");
+if (!out)
+	throw new Error(
+		"usage: phone-measure.mjs <out dir> [--real] [--chat=<match>] [--samples=<n>] [--profile] [--only=a,b]",
+	);
 const real = process.argv.includes("--real");
+const chatMatch = (process.argv.find((a) => a.startsWith("--chat=")) ?? "").slice(7);
+const samplesArg = Number((process.argv.find((a) => a.startsWith("--samples=")) ?? "").slice(10)) || 0;
+const wantProfile = process.argv.includes("--profile");
 const only = (process.argv.find((a) => a.startsWith("--only=")) ?? "").slice(7).split(",").filter(Boolean);
 const want = (k) => only.length === 0 || only.includes(k);
 mkdirSync(out, { recursive: true });
@@ -102,33 +109,62 @@ try {
 	}
 
 	if (real && want("real")) {
-		log("real: opening a copy of the biggest real chat (timing only)");
+		log(
+			`real: opening a copy of ${chatMatch ? `real chat matching ${chatMatch}` : "the biggest real chat"} (timing only)`,
+		);
 		const { cloneRealChat } = await import("../lib/real-chat-clone.mjs");
-		const copy = cloneRealChat({ into: kit.sessionsDir });
-		// Point the copy at the test server's folder, so opening it doesn't look into the real home.
+		const copy = cloneRealChat({
+			into: kit.sessionsDir,
+			minBytes: chatMatch ? 1024 : undefined,
+			pick: chatMatch ? (chats) => chats.find((c) => c.path.includes(chatMatch)) : undefined,
+		});
+		// Point the copy at an empty subfolder of the test server's folder, so opening it doesn't look
+		// into the real home and a fresh page attach starts on a blank chat rather than adopting the copy.
+		const realCwd = join(kit.srv.workdir, "real-chat-cwd");
+		mkdirSync(realCwd, { recursive: true });
 		const raw = readFileSync(copy.file);
 		const nl = raw.indexOf(10);
 		const head = JSON.parse(raw.subarray(0, nl).toString("utf8"));
-		head.cwd = kit.srv.workdir;
+		head.cwd = realCwd;
 		writeFileSync(copy.file, Buffer.concat([Buffer.from(JSON.stringify(head)), raw.subarray(nl)]));
 		try {
-			kit.link.setSpeed({});
-			const phone = await openPhone(browser, { size: PHONE_412, cpu: 4 });
-			await hookSocket(phone.page);
-			await installTimers(phone.page);
-			await phone.page.goto(kit.link.http);
-			await phone.page.waitForTimeout(3000);
-			const r = await measureLoad(kit, phone, {
-				url: chatUrl(copy.file),
-				marker: "",
-				cold: false,
-				settleMs: 500,
-				fullWaitMs: 240_000,
-			});
-			delete r.files;
-			r.socketsAfter = await phone.page.evaluate(() => window.__sockets);
-			result.realChat = { megabytes: Math.round(copy.bytes / 1e6), ...r };
-			await phone.close();
+			if (samplesArg > 0 || wantProfile) {
+				const n = samplesArg > 0 ? samplesArg : 1;
+				log(`real: measuring snapshot->paint across ${n} sample(s) at 4x CPU`);
+				const rr = await measureSnapshotRender(kit, browser, {
+					file: copy.file,
+					samples: n,
+					size: PHONE_412,
+					cpu: 4,
+					profileOut: wantProfile
+						? (profile, summary) => {
+								writeFileSync(join(out, "real-open.cpuprofile"), JSON.stringify(profile));
+								writeFileSync(join(out, "real-open.profile-summary.json"), JSON.stringify(summary, null, 2));
+							}
+						: null,
+					screenshotPath: join(out, "real-open-412.png"),
+					log,
+				});
+				result.realRender = { megabytes: Math.round(copy.bytes / 1e6), ...rr };
+			} else {
+				kit.link.setSpeed({});
+				const phone = await openPhone(browser, { size: PHONE_412, cpu: 4 });
+				await hookSocket(phone.page);
+				await installTimers(phone.page);
+				await phone.page.goto(kit.link.http);
+				await phone.page.waitForTimeout(3000);
+				const r = await measureLoad(kit, phone, {
+					url: chatUrl(copy.file),
+					marker: "",
+					cold: false,
+					settleMs: 500,
+					fullWaitMs: 240_000,
+				});
+				delete r.files;
+				r.socketsAfter = await phone.page.evaluate(() => window.__sockets);
+				result.realChat = { megabytes: Math.round(copy.bytes / 1e6), ...r };
+				await phone.close();
+			}
 		} finally {
 			rmSync(copy.file, { force: true });
 			rmSync(`${copy.file}.acp.json`, { force: true });
@@ -189,6 +225,21 @@ const brief = {
 		mb: result.realChat.megabytes,
 		usable: result.realChat.usableMs,
 		full: result.realChat.fullChatMs,
+	},
+	realRender: result.realRender && {
+		mb: result.realRender.megabytes,
+		snapshotKB: result.realRender.snapshotKB,
+		n: result.realRender.n,
+		renderMs: result.realRender.renderMs,
+		handleMs: result.realRender.handleMs,
+		afterHandleMs: result.realRender.afterHandleMs,
+		load1: result.realRender.load1,
+		paintRows: result.realRender.paintRows,
+		placeholdersAtPaint: result.realRender.placeholdersAtPaint,
+		placeholdersAfterSettle: result.realRender.placeholdersAfterSettle,
+		maxScrollBottomGapAtPaint: result.realRender.maxScrollBottomGapAtPaint,
+		maxPostPaintDriftPx: result.realRender.maxPostPaintDriftPx,
+		screenChecks: result.realRender.screenChecks,
 	},
 	stream: result.stream && {
 		maxGap: result.stream.maxGapMs,

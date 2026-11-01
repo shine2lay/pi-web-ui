@@ -46,8 +46,8 @@ export const LazyMount = memo(function LazyMount({
 		const delta = h - height;
 		if (delta !== 0) {
 			const wrap = inner.parentElement;
-			if (wrap && wrap.getBoundingClientRect().bottom <= root.getBoundingClientRect().top) {
-				// 内容整体在视口上方：占位换真身导致下方内容位移，回滚之。
+			if (wrap && wrap.getBoundingClientRect().bottom - Math.max(0, delta) <= root.getBoundingClientRect().top) {
+				// 内容展开前整体在视口上方：占位换真身导致下方内容位移，回滚之。
 				root.scrollTop += delta;
 			}
 		}
