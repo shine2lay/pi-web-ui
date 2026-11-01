@@ -3,7 +3,8 @@
 #
 #   scripts/check.sh            # 全量（含构建）
 #   scripts/check.sh --fast     # 跳过构建与真 PTY 冒烟（改前端时够用）; Prettier only on the changed files
-#                               # (docs/gate-prettier-changed.md)
+#                               # (docs/gate-prettier-changed.md), and only the unit tests the change can affect
+#                               # (docs/gate-selected-tests.md)
 #   scripts/check.sh --notes    # only the checks that read notes (docs/**/*.md, PATCHES.md): what wt land
 #                               # runs for a change that touches nothing else (agent-tools docs/wt-notes-check.md)
 set -euo pipefail
@@ -28,6 +29,14 @@ esac
 # (scripts/sealed.sh; it just runs the command when we are already inside a sealed run).
 export TZ=UTC
 if [ -z "${PI_SEALED:-}" ]; then
+	if [ "${1:-}" = "--fast" ]; then
+		# gate-selected-tests (docs/gate-selected-tests.md): pick the unit tests before sealing
+		# swaps HOME and drops WT_BASE/WT_HEAD; pass the list into the sealed run.
+		selected_file="$(mktemp "${TMPDIR:-/tmp}/pi-selected-tests-XXXXXX")"
+		node scripts/select-tests.mjs --for-check >"$selected_file" || : >"$selected_file"
+		exec scripts/sealed.sh env "PI_SELECTED_TESTS_FILE=$selected_file" \
+			${WT_BASE+"WT_BASE=$WT_BASE"} ${WT_HEAD+"WT_HEAD=$WT_HEAD"} "$0" "$@"
+	fi
 	exec scripts/sealed.sh "$0" "$@"
 fi
 
@@ -68,7 +77,7 @@ on_exit() {
 	# Anything still running here means the script stopped early (an error or a signal): stop it.
 	local child
 	for child in $(pgrep -P $$ 2>/dev/null); do kill_tree "$child"; done
-	rm -rf "$quick_dir"
+	rm -rf "$quick_dir" ${PI_SELECTED_TESTS_FILE:+"$PI_SELECTED_TESTS_FILE"}
 }
 trap on_exit EXIT
 quick() { # quick <name> <heading> <command> [args…]: start one quick step in the background
@@ -103,7 +112,30 @@ fi
 echo "== 单测（vitest，含本 fork 的 terminal-view / global-history / 徽章用例）"
 tests_start=$SECONDS
 tests_code=0
-npm test || tests_code=$?
+if $fast; then
+	selected_lines=()
+	if [ -n "${PI_SELECTED_TESTS_FILE:-}" ] && [ -f "$PI_SELECTED_TESTS_FILE" ]; then
+		mapfile -t selected_lines <"$PI_SELECTED_TESTS_FILE"
+		rm -f "$PI_SELECTED_TESTS_FILE"
+		unset PI_SELECTED_TESTS_FILE
+	else
+		mapfile -t selected_lines < <(node scripts/select-tests.mjs --for-check || true)
+	fi
+	if [ "${#selected_lines[@]}" -eq 0 ]; then
+		echo "unit tests: all (selector failed)"
+		npm test || tests_code=$?
+	else
+		echo "${selected_lines[0]}"
+		selected_tests=("${selected_lines[@]:1}")
+		if [ "${#selected_tests[@]}" -eq 0 ]; then
+			npm test || tests_code=$?
+		else
+			npm test -- "${selected_tests[@]}" || tests_code=$?
+		fi
+	fi
+else
+	npm test || tests_code=$?
+fi
 tests_secs=$((SECONDS - tests_start))
 
 failed=()

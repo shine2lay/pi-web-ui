@@ -35,6 +35,8 @@ export default defineConfig({
 		include: ["tests/unit/**/*.test.ts"],
 		environment: "node",
 		setupFiles: [
+			// Ops #693 (docs/gate-selected-tests.md): records the read map, only when scripts/test-read-map.mjs runs.
+			"tests/lib/record-file-reads.ts",
 			"tests/unit/setup-temp-pi-dirs.ts",
 			"tests/unit/setup-chrome-i18n.ts",
 			"tests/unit/setup-hang-guards.ts",

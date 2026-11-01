@@ -13,6 +13,7 @@
  * the same Prettier with the same settings, which still leaves out what .prettierignore and .gitignore name.
  * It checks every file, with `npm run format:check` itself, when there is no merge-base with mine, or when a
  * change may have changed Prettier's settings or version (SETTINGS_ANYWHERE, SETTINGS_AT_TOP).
+ * The changed paths come from scripts/changed-files.mjs, which the unit-test selection shares (Ops #693).
  *
  * Usage:
  *   node scripts/prettier-scope.mjs           what --check would check: "ALL: <why>", or the files, one per line
@@ -20,10 +21,11 @@
  * A whole check at any time: npm run format:check, or scripts/check.sh without --fast.
  */
 import { spawnSync } from "node:child_process";
-import { lstatSync, realpathSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { changedFiles, gitTop, mergeBase } from "./changed-files.mjs";
+import { isMainModule } from "./is-main-module.mjs";
 
 /** The branch work lands on (agent-tools wt.yaml): what is on it passed the check. */
 const BASE_BRANCH = "mine";
@@ -63,42 +65,31 @@ const inRoots = ROOTS.map((root) => {
 	return (path) => glob.test(path);
 });
 
-function git(cwd, ...args) {
-	const r = spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
-	return { code: r.status ?? 1, out: r.stdout ?? "", err: (r.stderr ?? "").trim() };
-}
-
 /**
  * What the Prettier step has to check in the git checkout around `cwd`:
  * { all: why } for every file, or { root, base, files } (paths from the top, sorted; maybe none).
  */
 export function prettierScope(cwd = process.cwd()) {
-	const top = git(cwd, "rev-parse", "--show-toplevel");
-	if (top.code !== 0) return { all: `not in a git checkout (${top.err || "git rev-parse failed"})` };
-	const root = top.out.trim();
-	const mergeBase = git(root, "merge-base", "HEAD", BASE_BRANCH);
-	if (mergeBase.code !== 0)
-		return { all: `no merge-base with ${BASE_BRANCH}${mergeBase.err ? ` (${mergeBase.err})` : ""}` };
-	const base = mergeBase.out.trim();
+	const top = gitTop(cwd);
+	if (top.error !== undefined) return { all: `not in a git checkout (${top.error || "git rev-parse failed"})` };
+	const { root } = top;
+	const found = mergeBase(root, "HEAD", BASE_BRANCH);
+	if (found.error !== undefined)
+		return { all: `no merge-base with ${BASE_BRANCH}${found.error ? ` (${found.error})` : ""}` };
+	const { base } = found;
 	// Against the base: the commits since, and what isn't committed yet. A rename counts as a deletion and an addition.
-	const diff = git(root, "diff", "--name-status", "--no-renames", "--no-color", "-z", base, "--");
-	const untracked = git(root, "ls-files", "--others", "--exclude-standard", "-z");
-	if (diff.code !== 0 || untracked.code !== 0)
-		return { all: `git couldn't list the changes (${diff.err || untracked.err})` };
-	const words = diff.out.split("\0");
-	const changed = new Map(); // path -> deleted?
-	for (let i = 0; i + 1 < words.length; i += 2) changed.set(words[i + 1], words[i] === "D");
-	for (const path of untracked.out.split("\0").filter(Boolean)) changed.set(path, false);
-	for (const path of changed.keys()) {
+	const changes = changedFiles(root, base);
+	if (changes.error !== undefined) return { all: `git couldn't list the changes (${changes.error})` };
+	for (const { path } of changes.files) {
 		if (SETTINGS_AT_TOP.has(path) || SETTINGS_ANYWHERE.test(basename(path))) {
 			return { all: `${path} changed (it may change Prettier's settings or version)` };
 		}
 	}
-	const files = [...changed]
+	const files = changes.files
 		.filter(
-			([path, deleted]) => !deleted && inRoots.some((matches) => matches(path)) && isRegularFile(join(root, path)),
+			({ path, deleted }) => !deleted && inRoots.some((matches) => matches(path)) && isRegularFile(join(root, path)),
 		)
-		.map(([path]) => path)
+		.map(({ path }) => path)
 		.sort();
 	return { root, base, files };
 }
@@ -150,16 +141,7 @@ function run(command, args, cwd) {
 	return r.status ?? 1;
 }
 
-/** Run as a command, not imported (by its test): compared as real paths, so a symbolic link to it still runs it. */
-function isMain() {
-	try {
-		return realpathSync(process.argv[1] ?? "") === realpathSync(fileURLToPath(import.meta.url));
-	} catch {
-		return false;
-	}
-}
-
-if (isMain()) {
+if (isMainModule(import.meta.url)) {
 	const args = process.argv.slice(2);
 	if (args.length > 1 || (args.length === 1 && args[0] !== "--check")) {
 		console.error("usage: node scripts/prettier-scope.mjs [--check]");
