@@ -347,6 +347,15 @@ function outsideOf(raw: unknown, old: UiTaskQueueRef[] | undefined): UiTaskQueue
 export function taskRefLabel(r: { name: string; id: number }): string {
 	return r.name ? `${r.name} #${r.id}` : `#${r.id}`;
 }
+
+/**
+ * R6d: taskRefLabel in text that leaves the queue's department (roles_overview): task numbers repeat across queues,
+ * so a task of this queue reads "ops #12" with the queue's role id (pi-queue's roleRefLabel). Another queue's task
+ * reads as taskRefLabel says, and so does every task of a queue without a role.
+ */
+export function roleTaskRefLabel(r: { name: string; id: number }, role: string | undefined): string {
+	return taskRefLabel(!r.name && role ? { name: role, id: r.id } : r);
+}
 /** 当前任务：正在做或卡住的那个（最多一个）。搁着等的任务不算当前任务，别的任务可以接着做。
  *  queue-lanes: tasks running in chats of their own don't count (they run side by side).
  *  queue-main-chat: asking counts like stuck. */

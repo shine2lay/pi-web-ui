@@ -123,12 +123,14 @@ describe("formatRolesOverview", () => {
 		expect(text).toContain("## temper (TEMPER): needs the owner, home chat working now");
 		expect(text).toContain('Home chat: /s/temper.jsonl ("temper home")');
 		expect(text).toContain("Last activity: 2026-10-06 07:30 (30 min ago)");
-		expect(text).toContain("- 2026-10-06 07:55 (5 min ago): Need your pick on the deploy [needs the owner, task #7]");
+		expect(text).toContain(
+			"- 2026-10-06 07:55 (5 min ago): Need your pick on the deploy [needs the owner, task temper #7]",
+		);
 		// Short: 3 TL;DR lines, then a note about the rest.
 		expect(text).toContain("- (3 older lines not shown)");
-		expect(text).toContain("- question in task #7, since 2026-10-06 07:50 (10 min ago): Which port?");
+		expect(text).toContain("- question in task temper #7, since 2026-10-06 07:50 (10 min ago): Which port?");
 		expect(text).toContain("Queue: running; 2 active, 1 waiting to start, 40 done");
-		expect(text).toContain("- #7 asking (working now): Deploy the thing; waits on: the owner's pick");
+		expect(text).toContain("- temper #7 asking (working now): Deploy the thing; waits on: the owner's pick");
 		expect(text).not.toContain("Later work");
 		expect(text).toContain("Open requests to it: 2 (newest: request from qa,");
 		expect(text).not.toContain("6 am report");
@@ -141,7 +143,7 @@ describe("formatRolesOverview", () => {
 		const text = formatRolesOverview(view([busy, role("qa")]), { role: "temper", now: NOW });
 		expect(text).toContain("line 4");
 		expect(text).not.toContain("older lines not shown");
-		expect(text).toContain("- #9 ready: Later work");
+		expect(text).toContain("- temper #9 ready: Later work");
 		expect(text).not.toContain("## qa");
 		expect(text).not.toContain("By status");
 	});
@@ -161,7 +163,7 @@ describe("formatRolesOverview", () => {
 		expect(short).toContain("Queue: running; 2 active, 1 waiting to start, 40 done, 1 dropped by the lead");
 		expect(short).not.toContain("Old work");
 		const full = formatRolesOverview(view([lead]), { role: "temper", now: NOW });
-		expect(full).toContain("- #4 dropped by the lead: Old work; why: Superseded by #9");
+		expect(full).toContain("- temper #4 dropped by the lead: Old work; why: Superseded by #9");
 		// None dropped: the line reads as before.
 		expect(formatRolesOverview(view([busy]), { now: NOW })).toContain("1 waiting to start, 40 done\n");
 	});
@@ -197,11 +199,24 @@ describe("formatRolesOverview", () => {
 			"Queue: running, the whole queue paused by you (since 2026-10-06 07:00 (1 h ago): pressed Pause in the Queue panel); 1 active, 1 waiting to start, 0 done",
 		);
 		expect(text).toContain(
-			"- #1 blocked: Grade the boards; Paused by you (since 2026-10-06 06:00 (2 h ago): owner on Telegram: save Claude limits)",
+			"- frontend #1 blocked: Grade the boards; Paused by you (since 2026-10-06 06:00 (2 h ago): owner on Telegram: save Claude limits)",
 		);
 		expect(text).toContain(
-			"- #2 ready: Next one; Paused by you (since 2026-10-06 07:00 (1 h ago): pressed Pause in the Queue panel)",
+			"- frontend #2 ready: Next one; Paused by you (since 2026-10-06 07:00 (1 h ago): pressed Pause in the Queue panel)",
 		);
+	});
+
+	// R6d: task numbers repeat across departments, and this text gets copied out of the role's section.
+	it("names every task as <role> #N: its queue's tasks and the task chats its TL;DR and questions come from", () => {
+		for (const text of [
+			formatRolesOverview(view([busy, role("qa")]), { now: NOW }),
+			formatRolesOverview(view([busy]), { role: "temper", now: NOW }),
+		]) {
+			expect(text).toMatch(/^- temper #7 asking/m);
+			expect(text).toMatch(/\[needs the owner, task temper #7\]/);
+			expect(text).toMatch(/^- question in task temper #7, /m);
+			expect(text).not.toMatch(/(?:^- |task )#\d/m);
+		}
 	});
 
 	it("a role that isn't there: a plain error naming the roles", () => {

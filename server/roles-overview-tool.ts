@@ -20,6 +20,7 @@ import type {
 } from "./protocol.js";
 import { ROLES_OVERVIEW_TOOL_NAME } from "./tool-manager.js";
 import { audienceOf, BOARD_FIRST_NEWS_DAYS } from "./role-board.js";
+import { roleTaskRefLabel } from "./task-queue.js";
 
 export { ROLES_OVERVIEW_TOOL_NAME };
 
@@ -82,17 +83,20 @@ export function whenText(ms: number | undefined, tz: string, now: number): strin
 	return `${stamp} (${ago})`;
 }
 
-const whereText = (c: UiRoleChatRef | undefined): string =>
-	!c ? "" : c.where === "home" ? "home chat" : `task #${c.where}`;
+/** R6d: a task chat as "task <role> #N" (`role`: the role whose section it is), since this text gets copied out. */
+const whereText = (c: UiRoleChatRef | undefined, role: string): string =>
+	!c ? "" : c.where === "home" ? "home chat" : `task ${roleTaskRefLabel({ name: "", id: c.where }, role)}`;
 
 /** queue-paused: "Paused by you (since <when>: <why>)". */
 const pausedText = (h: { at: number; why: string }, tz: string, now: number): string =>
 	`Paused by you (since ${whenText(h.at, tz, now)}: ${clip(h.why, 160)})`;
 
-function taskLine(t: UiRoleTask, tz: string, now: number, lim: Limits): string {
+function taskLine(t: UiRoleTask, role: string, tz: string, now: number, lim: Limits): string {
 	// queue-drop: a dropped task says who ended it, then why.
 	const status = t.status === "dropped" ? "dropped by the lead" : t.status;
-	const bits = [`#${t.id} ${status}${t.busy ? " (working now)" : ""}: ${clip(t.title, 120)}`];
+	const bits = [
+		`${roleTaskRefLabel({ name: "", id: t.id }, role)} ${status}${t.busy ? " (working now)" : ""}: ${clip(t.title, 120)}`,
+	];
 	// queue-paused: the owner paused it (or its whole queue): it doesn't need him while paused.
 	if (t.paused) bits.push(pausedText(t.paused, tz, now));
 	if (t.waitsOn) bits.push(`waits on: ${clip(t.waitsOn, 160)}`);
@@ -101,9 +105,9 @@ function taskLine(t: UiRoleTask, tz: string, now: number, lim: Limits): string {
 	return `- ${bits.join("; ")}`;
 }
 
-function askLine(a: UiRoleAsk, tz: string, now: number, lim: Limits): string {
+function askLine(a: UiRoleAsk, role: string, tz: string, now: number, lim: Limits): string {
 	const since = a.since ? `, since ${whenText(a.since, tz, now)}` : "";
-	return `- ${a.kind} in ${whereText(a.chat)}${since}: ${clip(a.text, lim.lineMax)}`;
+	return `- ${a.kind} in ${whereText(a.chat, role)}${since}: ${clip(a.text, lim.lineMax)}`;
 }
 
 /** One role's lines. */
@@ -128,7 +132,7 @@ export function roleText(r: UiRoleOverview, tz: string, now: number, lim: Limits
 		for (const l of r.tldr.slice(0, lim.tldr)) {
 			const marks = [
 				l.needsYou && !l.answered ? "needs the owner" : "",
-				l.chat.where === "home" ? "" : whereText(l.chat),
+				l.chat.where === "home" ? "" : whereText(l.chat, r.id),
 			]
 				.filter(Boolean)
 				.join(", ");
@@ -138,7 +142,7 @@ export function roleText(r: UiRoleOverview, tz: string, now: number, lim: Limits
 	}
 	if (r.asks.length) {
 		out.push(`Waiting on the owner (${r.asks.length}):`);
-		for (const a of r.asks.slice(0, lim.asks)) out.push(askLine(a, tz, now, lim));
+		for (const a of r.asks.slice(0, lim.asks)) out.push(askLine(a, r.id, tz, now, lim));
 		if (r.asks.length > lim.asks) out.push(`- (${r.asks.length - lim.asks} more)`);
 	}
 	if (r.queue) {
@@ -151,11 +155,11 @@ export function roleText(r: UiRoleOverview, tz: string, now: number, lim: Limits
 				q.counts.dropped ? `, ${q.counts.dropped} dropped by the lead` : ""
 			}`,
 		);
-		for (const t of q.active.slice(0, lim.tasks)) out.push(taskLine(t, tz, now, lim));
+		for (const t of q.active.slice(0, lim.tasks)) out.push(taskLine(t, r.id, tz, now, lim));
 		if (q.active.length > lim.tasks) out.push(`- (${q.active.length - lim.tasks} more active)`);
-		for (const t of q.queued.slice(0, lim.queued)) out.push(taskLine(t, tz, now, lim));
+		for (const t of q.queued.slice(0, lim.queued)) out.push(taskLine(t, r.id, tz, now, lim));
 		// queue-drop: the newest tasks its lead dropped, with why (full view only).
-		for (const t of (q.dropped ?? []).slice(0, lim.queued)) out.push(taskLine(t, tz, now, lim));
+		for (const t of (q.dropped ?? []).slice(0, lim.queued)) out.push(taskLine(t, r.id, tz, now, lim));
 	}
 	if (r.requests.open) {
 		const n = r.requests.newest;
