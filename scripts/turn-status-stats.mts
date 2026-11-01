@@ -12,44 +12,14 @@
  * text is printed or stored (rule 11). Check mode (scripts/stats-window.mts): exit 0 once the window holds
  * --at-least turns or --or-after has passed, 1 while not, 2 on an error.
  */
-import { createReadStream, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 import { type RoleTurn, roleTurnsOf, turnStatusSummary, turnsInWindow } from "../server/turn-status-stats.ts";
+import { entriesOf, transcriptsIn } from "./session-transcripts.mts";
 import { checkExitOf, runStats, statsWindowOf } from "./stats-window.mts";
 
 /** Lines older than this before --since are skipped unread: no role-started turn runs this long. */
 const LOOKBACK_MS = 6 * 3_600_000;
-const HEAD_TIME = /"timestamp":"([^"]+)"/;
-
-function transcriptsIn(dir: string, since: number): string[] {
-	const out: string[] = [];
-	for (const d of readdirSync(dir, { withFileTypes: true })) {
-		const p = join(dir, d.name);
-		if (d.isDirectory()) out.push(...transcriptsIn(p, since));
-		else if (d.isFile() && d.name.endsWith(".jsonl") && statSync(p).mtimeMs >= since) out.push(p);
-	}
-	return out.sort();
-}
-
-async function entriesOf(file: string, from: number): Promise<unknown[]> {
-	const entries: unknown[] = [];
-	const lines = createInterface({ input: createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity });
-	for await (const line of lines) {
-		if (!line) continue;
-		const head = HEAD_TIME.exec(line.slice(0, 200));
-		const old = head && Date.parse(head[1]!) < from;
-		// the chat's identity is near its start: keep it even when the lines around it are skipped
-		if (old && !line.slice(0, 200).includes('"customType":"identity"')) continue;
-		try {
-			entries.push(JSON.parse(line));
-		} catch {
-			// a torn last line of a chat being written: not a turn yet
-		}
-	}
-	return entries;
-}
 
 await runStats(async () => {
 	const w = statsWindowOf(process.argv.slice(2));
