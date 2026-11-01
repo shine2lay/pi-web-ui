@@ -22,6 +22,7 @@
 // first (tests/unit/sdk-patch-load-order.test.ts checks it).
 import "./patch-remote-catalog.js";
 import "./patch-lazy-boundary-context.js";
+import "./patch-jiti-resolve-cache.js";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";

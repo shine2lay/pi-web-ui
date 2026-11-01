@@ -1,6 +1,7 @@
 /**
- * SDK startup patches (server/patch-remote-catalog.ts, server/patch-lazy-boundary-context.ts) rewrite
- * installed @earendil-works/pi-coding-agent files. A rewrite only takes effect if it runs before the
+ * SDK startup patches (server/patch-remote-catalog.ts, server/patch-lazy-boundary-context.ts,
+ * server/patch-jiti-resolve-cache.ts) rewrite installed @earendil-works/pi-coding-agent files (or, for
+ * the last, the SDK's jiti dependency). A rewrite only takes effect if it runs before the
  * SDK module is first evaluated; otherwise the running server keeps the old code until its next
  * restart (Ops #697: server/index.ts imported the SDK before agent-service.js, which imported the
  * patches, so the first start after a deploy ran the unpatched turn-end code).
@@ -17,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SDK = "@earendil-works/pi-coding-agent";
-const PATCH_MODULES = ["patch-remote-catalog.ts", "patch-lazy-boundary-context.ts"];
+const PATCH_MODULES = ["patch-remote-catalog.ts", "patch-lazy-boundary-context.ts", "patch-jiti-resolve-cache.ts"];
 const SERVER_ENTRY = resolve(dirname(fileURLToPath(import.meta.url)), "../../server/index.ts");
 
 /** Runtime import specifiers of one TypeScript module, in source order (type-only imports skipped). */

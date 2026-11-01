@@ -2,12 +2,14 @@
  * Shared startup file-patch helper for installed node_modules packages.
  *
  * Used by server/patch-remote-catalog.ts, server/patch-node-pty.ts,
- * server/patch-lazy-boundary-context.ts, and subsequent startup SDK patches so
+ * server/patch-lazy-boundary-context.ts, server/patch-jiti-resolve-cache.ts (which
+ * patches the SDK's jiti dependency), and subsequent startup SDK patches so
  * the read / single-occurrence match / all-or-nothing rewrite / idempotency /
  * startup guard logic lives in one module.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -90,6 +92,31 @@ export function resolvePiSdkFile(...segments: string[]): string | null {
 	try {
 		const entry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
 		return join(dirname(entry), ...segments);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Resolves a path inside an installed package that `@earendil-works/pi-coding-agent` depends on, as
+ * the SDK itself finds that package (Node resolution from the SDK's `dist/index.js`): `segments` are
+ * relative to the package's root (the nearest directory above its entry whose `package.json` has
+ * that name). Returns `null` if the SDK or the package cannot be resolved.
+ */
+export function resolveSdkDependencyFile(dependency: string, ...segments: string[]): string | null {
+	const sdkEntry = resolvePiSdkFile("index.js");
+	if (!sdkEntry) return null;
+	try {
+		let dir = dirname(createRequire(sdkEntry).resolve(dependency));
+		for (;;) {
+			const manifest = join(dir, "package.json");
+			if (existsSync(manifest) && JSON.parse(readFileSync(manifest, "utf8")).name === dependency) {
+				return join(dir, ...segments);
+			}
+			const up = dirname(dir);
+			if (up === dir) return null;
+			dir = up;
+		}
 	} catch {
 		return null;
 	}

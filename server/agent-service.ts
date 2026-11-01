@@ -13,6 +13,7 @@
 // MUST be the first imports: rewrite installed SDK files before @earendil-works/pi-coding-agent loads.
 import "./patch-remote-catalog.js";
 import "./patch-lazy-boundary-context.js";
+import "./patch-jiti-resolve-cache.js";
 // Logs whatever holds pi's sign-in lock (auth.json) for 60 s or more; logging only (#134).
 import "./auth-lock-trace.js";
 import {
