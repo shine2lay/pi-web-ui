@@ -37,17 +37,31 @@ Ops decided this switch (lead, technical, rule 21) after H-PATCHES-UNION-1's mea
 - `tests/unit/patches-union.test.ts`: all three cases as expected (no attribute, a conflict; attribute and driver, both entries whole and `git merge-tree` clean; attribute without the driver, a normal conflict). `tests/unit/check-patches-md.test.ts`: passes this PATCHES.md, fails a twice-used and a glued heading, naming each.
 - Still to check, at the next touch: no wt land failing on a PATCHES.md conflict over the day after landing (land logs).
 
+## H-PATCHES-UNION-3
+
+Ops #715 (lead Ops; plan approved in Ops lead, Nov 1). Entries now also go at the end of the file, and two at once there broke the land's check.
+
+**Wrong, and the evidence.** On Nov 1 wt batch 289-7c0e78 (lands 290, 291, 292) fell back: its check failed, and with land 290 (Ops #682, owner-card-brief) on `mine`, lands 292 (Ops #712, role-task-labels) and 295 (Ops #713, queue-replay-shared-frozen) were set to fail too (found by Ops #711). All three add their entry at the end of PATCHES.md. owner-card-brief's addition starts with a blank line and ends without one; the other two start with their heading and end with a blank line. The diff3 union keeps both additions whole, one after the other, so role-task-labels' heading comes straight after owner-card-brief's Undo line: `check-patches-md` fails with "line 8372: ## role-task-labels: …" (replayed on the real files: the base 55f2d565 or 0b349141, `mine` at bf6b9b0a, the branches' heads 4c33de7b, 43a70f0a and 3d27a022). Each such fallback costs a second check, 30-45 minutes with the wait for a slot.
+
+**One change, and why it should fix it.** The driver becomes `scripts/patches-union-merge.mjs`: the same `git merge-file --union --diff3 -q`, then a blank line before any "## " heading that has none, and nothing else. The glue is only ever a missing blank line between two whole blocks, and the step uses the check's own rule, so what the driver writes passes the check's blank-line rule. The check itself is unchanged: it still fails a glued heading from anywhere else. The setting names the main folder's copy (`node $PWD/...`, run in the main folder): Git runs a driver from the top of the worktree it merges in, and worktrees branched before this landed have no script of their own, while the main folder is always at `mine`.
+
+**Expected result, and how it is measured.** `tests/unit/patches-union.test.ts` replays the real bytes (`tests/fixtures/patches-union/`: the base's last entry and the four entries added after it) as the lands went: board-read-marks on `mine`, owner-card-brief rebased onto it (land 290), then role-task-labels or queue-replay-shared-frozen rebased onto that (land 292 or 295). With the new driver: the result is every entry byte for byte, in landing order, with one blank line added before the later heading, and the check passes; `git merge-tree` is clean. The union alone, on the same replay: the heading glued and the check failing, naming it. The tail fixtures stand for the whole files: on the whole files the same merges end with the same bytes. Live: lands 292 and 295, and later ones adding at the end, pass their check (wt land logs).
+
+**What would prove it wrong.** The replay of 290+292 or 290+295 still failing the check, or any entry's text changing.
+
+**Result: HIT, at the replay (Nov 1, before landing).** Both replays come out whole and pass the check; with the union alone both glue and fail (the test's "union alone" cases). The three Oct 18 cases pass unchanged with the new driver. Still to check: lands 292 and 295 with the new setting (wt land logs).
+
 ## Switching it on, and the undo
 
-`.gitattributes` is in the tree, so every checkout of `mine` has the attribute. The driver is one setting in the repo's git config (`.git/config` of the main folder, shared by all its worktrees), set once on Oct 18 from a worktree:
+`.gitattributes` is in the tree, so every checkout of `mine` has the attribute. The driver is one setting in the repo's git config (`.git/config` of the main folder, shared by all its worktrees). Run in the main folder, once `scripts/patches-union-merge.mjs` is on `mine` there (set on Nov 1, Ops #715):
 
 ```sh
 git config merge.patches-union.name "PATCHES.md whole-entry union"
-git config merge.patches-union.driver "git merge-file --union --diff3 -q %A %O %B"
+git config merge.patches-union.driver "node $PWD/scripts/patches-union-merge.mjs %A %O %B"
 ```
 
-A new clone needs the same two commands, run once inside it. Until then, PATCHES.md conflicts as it did before; it is never merged garbled.
+From Oct 18 to Nov 1 the driver was `git merge-file --union --diff3 -q %A %O %B` (H-PATCHES-UNION-2). A new clone needs the same two commands, run once in its main folder. Until then, PATCHES.md conflicts as it did before; it is never merged garbled. Where `node` or the script is missing, the driver fails and Git reports a conflict, never a garbled merge.
 
-Undo: revert this change's commit, then `git config --remove-section merge.patches-union`. Either half alone is harmless: without the attribute the driver is never used, and without the driver Git merges normally.
+Undo: revert this change's commit, then `git config --remove-section merge.patches-union`. Either half alone is harmless: without the attribute the driver is never used, and without the driver Git merges normally. To undo only the blank-line step (H-PATCHES-UNION-3): first `git config merge.patches-union.driver "git merge-file --union --diff3 -q %A %O %B"`, then revert its commit.
 
 Don't use `merge.conflictStyle` for this, and don't use Git's plain `merge=union` (H-PATCHES-UNION-1). No other file merges by union.
