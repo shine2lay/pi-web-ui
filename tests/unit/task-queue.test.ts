@@ -14,6 +14,7 @@ import {
 	normAfter,
 	normChoices,
 	normTouches,
+	resetTaskQueueReplayCounts,
 	TASK_QUEUE_DEFAULT_SHAREABLE,
 	TASK_QUEUE_DROP_WHY_MAX,
 	TASK_QUEUE_ENTRY_TYPE,
@@ -23,6 +24,7 @@ import {
 	taskQueueCommandLine,
 	taskQueueFromEntries,
 	taskQueueLaneUse,
+	taskQueueReplayCounts,
 	taskQueueShareableFrom,
 	taskQueueShareableOf,
 	taskQueueShareableSetting,
@@ -2026,5 +2028,165 @@ describe("H-QUEUE-REPLAY-2: reads share one frozen replayed state", () => {
 		expect(view.tasks.find((t) => t.id === 1)?.block?.on?.[0]).toMatchObject({ id: 3, title: "Three, again" });
 		expect(view).toEqual(taskQueueFromEntries(copiesOf(stream), true));
 		expect(beforeView.tasks.find((t) => t.id === 1)?.block?.on?.[0]).toMatchObject({ id: 3, title: "Three" });
+	});
+});
+
+// H-QUEUE-REPLAY-3 (Ops #718): a read finds the state its entries replayed to by its queue session, its entry count
+// and its last entry (a session header in front doesn't count), whatever array it comes in; taskQueueReplayCounts()
+// says how each read went.
+describe("H-QUEUE-REPLAY-3: reads find their kept state by queue session, entry count and last entry", () => {
+	const ops: Array<Record<string, unknown>> = [
+		{ v: 1, op: "add", id: 1, plan: plan("One"), touches: ["a"], ts: 10 },
+		{ v: 1, op: "add", id: 2, plan: plan("Two"), touches: ["b"], after: [1], ts: 20 },
+		{ v: 1, op: "run", queueId: "q-718", ts: 30 },
+		{ v: 1, op: "start", id: 1, lane: true, ts: 40 },
+		{ v: 1, op: "chat", id: 1, file: "/sessions/t1.jsonl", title: "Task 1", ts: 50 },
+		{ v: 1, op: "done", id: 1, summary: "Done", ts: 60 },
+	];
+	// The op behind each counted entry, so a plain copy is made without reading (and counting) its data.
+	const opOf = new WeakMap<TaskQueueEntryLike, Record<string, unknown>>();
+	/** Queue entries whose data counts its reads: a replay reads each queue entry's data once. */
+	const counted = (prefix: string) => {
+		const reads = ops.map(() => 0);
+		const list: TaskQueueEntryLike[] = ops.map((op, i) => {
+			const e: TaskQueueEntryLike = {
+				type: "custom",
+				customType: TASK_QUEUE_ENTRY_TYPE,
+				id: `${prefix}${i}`,
+				get data() {
+					reads[i]++;
+					return op;
+				},
+			};
+			opOf.set(e, op);
+			return e;
+		});
+		return { list, reads };
+	};
+	/** The same entries as new objects (a full replay of them reads no counted entry). */
+	const plainOf = (list: TaskQueueEntryLike[]): TaskQueueEntryLike[] =>
+		list.map((e) => {
+			const copy: TaskQueueEntryLike = { type: e.type, data: structuredClone(opOf.get(e) ?? e.data) };
+			if (e.customType !== undefined) copy.customType = e.customType;
+			if (e.id !== undefined) copy.id = e.id;
+			return copy;
+		});
+	const message = (id: string): TaskQueueEntryLike => ({ type: "message", id, data: { text: id } });
+	const other = (id: string, op: Record<string, unknown>): TaskQueueEntryLike => ({
+		type: "custom",
+		customType: TASK_QUEUE_ENTRY_TYPE,
+		id,
+		data: op,
+	});
+	const onBranch = (list: TaskQueueEntryLike[], key: string) =>
+		taskQueueFromEntries(list, true, undefined, undefined, key);
+	/** Which counts one read of a branch added ("<source> <outcome>"), checking it equals a full replay. */
+	const outcome = (list: TaskQueueEntryLike[], key: string): string[] => {
+		const before = taskQueueReplayCounts();
+		const got = onBranch(list, key);
+		const after = taskQueueReplayCounts();
+		expect(got).toEqual(onBranch(plainOf(list), key));
+		return Object.keys(after).filter((k) => after[k] !== (before[k] ?? 0));
+	};
+
+	it("queue entries behind a fresh session header each read (queue-entries-tail) find their kept state: nothing replayed again, an appended entry applied alone", () => {
+		const { list, reads } = counted("f");
+		const key = "q-718-file";
+		// A new array and a new header object on every read, as queue-entries-tail's answer() hands them out.
+		const read = (n: number) => taskQueueAll([{ type: "session", id: key }, ...list.slice(0, n)]);
+		resetTaskQueueReplayCounts();
+		const first = read(4);
+		expect(read(4).tasks).toBe(first.tasks);
+		expect(reads).toEqual([1, 1, 1, 1, 0, 0]);
+		const next = read(5);
+		expect(reads).toEqual([1, 1, 1, 1, 1, 0]);
+		expect(read(5).tasks).toBe(next.tasks);
+		expect(taskQueueReplayCounts()).toEqual({ "file no-slot": 1, "file unchanged": 2, "file appended": 1 });
+		expect(first).toEqual(taskQueueAll([{ type: "session", id: key }, ...plainOf(list.slice(0, 4))]));
+		expect(next).toEqual(taskQueueAll([{ type: "session", id: key }, ...plainOf(list.slice(0, 5))]));
+	});
+
+	it("a scan's queue list (roles-overview: pushed in place), read again as it is or through a fresh array, finds its kept state", () => {
+		const { list, reads } = counted("s");
+		const key = "q-718-scan";
+		const read = (queue: TaskQueueEntryLike[]) =>
+			taskQueueFromEntries(queue, true, Number.MAX_SAFE_INTEGER, undefined, key);
+		const queue = list.slice(0, 3);
+		resetTaskQueueReplayCounts();
+		const first = read(queue);
+		expect(read(queue)).toEqual(first);
+		expect(read(queue.slice())).toEqual(first);
+		queue.push(list[3]);
+		const next = read(queue);
+		expect(reads).toEqual([1, 1, 1, 1, 0, 0]);
+		expect(taskQueueReplayCounts()).toEqual({ "scan no-slot": 1, "scan unchanged": 2, "scan appended": 1 });
+		expect(next).toEqual(read(plainOf(queue)));
+	});
+
+	it("a session branch (getBranch(): a fresh array each read) finds its kept state; other entries appended change nothing", () => {
+		const { list, reads } = counted("b");
+		const key = "q-718-branch";
+		const branch = [message("m0"), list[0], list[1], message("m1"), list[2]];
+		resetTaskQueueReplayCounts();
+		const first = onBranch(branch.slice(), key);
+		expect(onBranch(branch.slice(), key)).toEqual(first);
+		branch.push(message("m2"));
+		expect(onBranch(branch.slice(), key)).toEqual(first);
+		branch.push(list[3]);
+		const next = onBranch(branch.slice(), key);
+		expect(reads).toEqual([1, 1, 1, 1, 0, 0]);
+		expect(taskQueueReplayCounts()).toEqual({ "branch no-slot": 1, "branch unchanged": 1, "branch appended": 2 });
+		expect(next).toEqual(onBranch(plainOf(branch), key));
+	});
+
+	it("a branch switch, compaction, truncation or a replaced entry replays from the first entry, equal to a full replay", () => {
+		const root = message("r");
+		resetTaskQueueReplayCounts();
+
+		// Branch switch, as long as before: another last entry.
+		let { list } = counted("x");
+		expect(outcome([root, ...list.slice(0, 4)], "q-switch")).toEqual(["branch no-slot"]);
+		const switched = [root, ...list.slice(0, 3), other("x", { v: 1, op: "drop", id: 2, why: "branched", ts: 41 })];
+		expect(outcome(switched, "q-switch")).toEqual(["branch other-entries"]);
+
+		// Branch switch to a shorter branch.
+		({ list } = counted("y"));
+		expect(outcome([root, ...list.slice(0, 4)], "q-short")).toEqual(["branch no-slot"]);
+		const shorter = [root, list[0], other("y", { v: 1, op: "drop", id: 1, why: "branched", ts: 21 })];
+		expect(outcome(shorter, "q-short")).toEqual(["branch fewer"]);
+
+		// Compaction: earlier entries replaced by a summary.
+		({ list } = counted("c"));
+		expect(outcome([root, ...list.slice(0, 5)], "q-compact")).toEqual(["branch no-slot"]);
+		const compacted = [{ type: "compaction", id: "k", data: { summary: "compacted" } }, ...list.slice(3, 5)];
+		expect(outcome(compacted, "q-compact")).toEqual(["branch fewer"]);
+
+		// Truncation in place.
+		({ list } = counted("t"));
+		const mutable = [root, ...list.slice(0, 5)];
+		expect(outcome(mutable, "q-mutable")).toEqual(["branch no-slot"]);
+		mutable.pop();
+		expect(outcome(mutable, "q-mutable")).toEqual(["branch fewer"]);
+
+		// The last entry replaced in place.
+		expect(outcome(mutable, "q-mutable")).toEqual(["branch unchanged"]);
+		mutable[mutable.length - 1] = other("z", { v: 1, op: "hold", id: 2, why: "replaced", ts: 51 });
+		expect(outcome(mutable, "q-mutable")).toEqual(["branch other-entries"]);
+
+		// An earlier entry replaced in place, the last one kept: the kept entries are compared one by one.
+		expect(outcome(mutable, "q-mutable")).toEqual(["branch unchanged"]);
+		mutable[2] = other("w", { v: 1, op: "add", id: 9, plan: plan("Replaced"), ts: 22 });
+		expect(outcome(mutable, "q-mutable")).toEqual(["branch other-entries"]);
+	});
+
+	it("the same entries read anew as new objects (a chat loaded again, a file read again) replay from the first entry, counted as re-read", () => {
+		const key = "q-718-reread";
+		const { list } = counted("a");
+		const first = [message("r"), ...list.slice(0, 4)];
+		resetTaskQueueReplayCounts();
+		expect(outcome(first, key)).toEqual(["branch no-slot"]);
+		const anew = plainOf(first);
+		expect(outcome(anew, key)).toEqual(["branch re-read"]);
+		expect(outcome(anew.slice(), key)).toEqual(["branch unchanged"]);
 	});
 });

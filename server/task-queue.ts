@@ -1139,7 +1139,9 @@ function stateOf(raw: unknown, queueId: string | undefined): State {
  * only when a queue entry is appended; a reader that has to change it changes its own copy (taskQueueFromEntries).
  */
 interface ReplaySlot {
+	/** The replay that made `out`: pi-queue's, or undefined for apply(). */
 	reader: unknown;
+	/** The entries replayed so far, after the session header when the reads begin with one (H-QUEUE-REPLAY-3). */
 	prefix: TaskQueueEntryLike[];
 	/** apply()'s state, which later entries change in place (only without pi-queue's replay); never handed out. */
 	raw?: State;
@@ -1147,8 +1149,72 @@ interface ReplaySlot {
 	out: State;
 }
 
-const replayByArray = new WeakMap<object, Map<string, ReplaySlot>>();
-const replayByFirst = new WeakMap<object, Map<string, ReplaySlot[]>>();
+/**
+ * H-QUEUE-REPLAY-3 (Ops #718): the kept states, by the last entry each replayed (a session header isn't one) and its
+ * queue session (replayKey), as pi-queue's replay keeps its own. A read walks back from its own last entry to the
+ * first one keeping a state of its queue session at the same place (as many entries up to it as that state replayed),
+ * then compares the kept entries one by one (isPureAppend), so a read whose earlier entries changed in place replays
+ * from the first entry. A new array, or a new header object in front (queue-entries-tail hands out both on every
+ * read), still finds its state; a read with entries appended walks back only over those. Weak by entry: a kept state
+ * goes with its entries.
+ */
+const replayByLast = new WeakMap<object, Map<string, ReplaySlot>>();
+
+/**
+ * H-QUEUE-REPLAY-3: the last read's entry count and last entry id, by source and queue session (not for reads without
+ * one), only to tell why a read replayed from the first entry (missReason); the most recently read LAST_READS_KEPT.
+ */
+const lastReadOf = new Map<string, { count: number; lastId: string | undefined }>();
+const LAST_READS_KEPT = 4096;
+
+/**
+ * H-QUEUE-REPLAY-3 (Ops #718): how replayState's reads went, in memory only (no log line), counted under
+ * "<source> <outcome>": source = what the entries are (replaySource), outcome = "unchanged" or "appended" (a kept
+ * state served it), else why it replayed from the first entry (missReason): "no-slot" (the first read of this queue
+ * session from this source; every miss of a read without a queue session), "fewer" (fewer entries than the last
+ * read), "re-read" (as many entries or more, with the last read's last entry id at its place, but new objects: the
+ * entries were read anew), "other-entries" (other entries where the last read's were, or a kept entry changed in
+ * place), "reader" (the kept state came from another replay: pi-queue loaded, or loaded again, since), "threw"
+ * (pi-queue's replay threw or gave a state this file can't show, so apply() replayed it), "empty" (no entries).
+ * On globalThis like cgroup-split's stats, so a look through the inspector reads it; tests read it too.
+ */
+const REPLAY_COUNTS_KEY = Symbol.for("pi-web-ui.task-queue.replay-counts.v1");
+
+function replayCountsRecord(): Record<string, number> {
+	const g = globalThis as Record<symbol, unknown>;
+	let c = g[REPLAY_COUNTS_KEY] as Record<string, number> | undefined;
+	if (!c) {
+		c = {};
+		g[REPLAY_COUNTS_KEY] = c;
+	}
+	return c;
+}
+
+function countReplay(source: string, outcome: string): void {
+	const c = replayCountsRecord();
+	const k = `${source} ${outcome}`;
+	c[k] = (c[k] ?? 0) + 1;
+}
+
+/** H-QUEUE-REPLAY-3: a copy of replayState's counts so far. */
+export function taskQueueReplayCounts(): Record<string, number> {
+	return { ...replayCountsRecord() };
+}
+
+/** H-QUEUE-REPLAY-3: start replayState's counts again (tests). */
+export function resetTaskQueueReplayCounts(): void {
+	const c = replayCountsRecord();
+	for (const k of Object.keys(c)) delete c[k];
+}
+
+/**
+ * H-QUEUE-REPLAY-3: what kind of entries a read got: "file" = a chat file's queue entries after its session header
+ * (queueEntriesOf with the header), "scan" = queue entries alone (a scan's list), "branch" = a session's branch.
+ */
+function replaySource(entries: readonly TaskQueueEntryLike[]): "file" | "scan" | "branch" {
+	if (entries[0]?.type === "session") return "file";
+	return isQueueEntry(entries[0]) ? "scan" : "branch";
+}
 
 function replayKey(queueId: string | undefined): string {
 	return queueId === undefined ? "\0" : `s:${queueId}`;
@@ -1163,47 +1229,99 @@ function cloneReplayState(s: State): State {
 	return c;
 }
 
-function isPureAppend(prefix: readonly TaskQueueEntryLike[], arr: readonly TaskQueueEntryLike[]): boolean {
-	if (arr.length < prefix.length) return false;
+/** Whether entries, from `start` on, begin with the kept entries (the same objects). */
+function isPureAppend(
+	prefix: readonly TaskQueueEntryLike[],
+	entries: readonly TaskQueueEntryLike[],
+	start = 0,
+): boolean {
+	if (entries.length - start < prefix.length) return false;
 	for (let i = 0; i < prefix.length; i++) {
-		if (arr[i] !== prefix[i]) return false;
+		if (entries[start + i] !== prefix[i]) return false;
 	}
 	return true;
 }
 
-function saveReplaySlot(
-	arrRef: object | undefined,
-	firstRef: object | undefined,
+/** H-QUEUE-REPLAY-3: where a read's entries start: after its session header, when it begins with one. */
+function bodyStart(entries: readonly TaskQueueEntryLike[]): number {
+	return entries[0]?.type === "session" ? 1 : 0;
+}
+
+function entryIdOf(e: TaskQueueEntryLike | undefined): string | undefined {
+	return typeof e?.id === "string" ? e.id : undefined;
+}
+
+/** H-QUEUE-REPLAY-3: why a kept state at a read's place was passed over (see REPLAY_COUNTS_KEY). */
+type PassedOver = "other-entries" | "reader";
+
+/**
+ * H-QUEUE-REPLAY-3: the kept state these entries go on from, made by `reader`, walking back from the last entry (see
+ * replayByLast); `passed` says why the nearest kept state at its place was passed over: an earlier entry changed in
+ * place ("other-entries") or another replay made it ("reader").
+ */
+function findReplaySlot(
+	entries: readonly TaskQueueEntryLike[],
+	start: number,
 	key: string,
-	slot: ReplaySlot,
-	prevSlot?: ReplaySlot,
-): void {
-	if (arrRef) {
-		let m = replayByArray.get(arrRef);
-		if (!m) {
-			m = new Map();
-			replayByArray.set(arrRef, m);
-		}
-		m.set(key, slot);
+	reader: unknown,
+): { slot?: ReplaySlot; passed?: PassedOver } {
+	let passed: PassedOver | undefined;
+	for (let i = entries.length - 1; i >= start; i--) {
+		const e = entries[i];
+		if (!e || typeof e !== "object") continue;
+		const slot = replayByLast.get(e)?.get(key);
+		if (!slot || slot.prefix.length !== i - start + 1) continue;
+		if (!isPureAppend(slot.prefix, entries, start)) passed ??= "other-entries";
+		else if (slot.reader !== reader) passed ??= "reader";
+		else return { slot, passed };
 	}
-	if (firstRef) {
-		let m = replayByFirst.get(firstRef);
-		if (!m) {
-			m = new Map();
-			replayByFirst.set(firstRef, m);
+	return { passed };
+}
+
+/** H-QUEUE-REPLAY-3: keep the state under its last entry, and no longer under `formerLast` once it has gone past it. */
+function keepReplaySlot(key: string, slot: ReplaySlot, formerLast?: TaskQueueEntryLike): void {
+	const last = slot.prefix[slot.prefix.length - 1];
+	if (formerLast && formerLast !== last && typeof formerLast === "object") {
+		const m = replayByLast.get(formerLast);
+		if (m?.get(key) === slot) {
+			m.delete(key);
+			if (m.size === 0) replayByLast.delete(formerLast);
 		}
-		let list = m.get(key);
-		if (!list) {
-			list = [slot];
-			m.set(key, list);
-		} else if (!list.includes(slot)) {
-			const idx = prevSlot ? list.indexOf(prevSlot) : -1;
-			if (idx >= 0) list[idx] = slot;
-			else {
-				if (list.length >= 4) list.shift();
-				list.push(slot);
-			}
-		}
+	}
+	if (!last || typeof last !== "object") return;
+	let m = replayByLast.get(last);
+	if (!m) {
+		m = new Map();
+		replayByLast.set(last, m);
+	}
+	m.set(key, slot);
+}
+
+/** H-QUEUE-REPLAY-3: why a read found no kept state to go on from (see REPLAY_COUNTS_KEY). */
+function missReason(
+	read: string | undefined,
+	entries: readonly TaskQueueEntryLike[],
+	start: number,
+	passed: PassedOver | undefined,
+): string {
+	const count = entries.length - start;
+	if (count === 0) return "empty";
+	if (passed) return passed;
+	const last = read === undefined ? undefined : lastReadOf.get(read);
+	if (!last) return "no-slot";
+	if (count < last.count) return "fewer";
+	if (last.lastId !== undefined && entryIdOf(entries[start + last.count - 1]) === last.lastId) return "re-read";
+	return "other-entries";
+}
+
+/** H-QUEUE-REPLAY-3: remember a read's entry count and last entry id for missReason (reads with entries only). */
+function noteRead(read: string | undefined, entries: readonly TaskQueueEntryLike[], start: number): void {
+	if (read === undefined || entries.length === start) return;
+	lastReadOf.delete(read);
+	lastReadOf.set(read, { count: entries.length - start, lastId: entryIdOf(entries[entries.length - 1]) });
+	if (lastReadOf.size > LAST_READS_KEPT) {
+		const oldest = lastReadOf.keys().next();
+		if (!oldest.done) lastReadOf.delete(oldest.value);
 	}
 }
 
@@ -1230,73 +1348,70 @@ function applyEntry(s: State, e: TaskQueueEntryLike): void {
 function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | undefined): State {
 	const readers = piQueueReaders();
 	const readerFn = readers?.replay;
-	const arrRef = typeof entries === "object" && entries !== null ? (entries as object) : undefined;
-	const firstRef =
-		entries.length > 0 && entries[0] && typeof entries[0] === "object" ? (entries[0] as object) : undefined;
+	const start = bodyStart(entries);
 	const key = replayKey(queueId);
+	const source = replaySource(entries);
+	const read = queueId === undefined ? undefined : `${source} ${key}`;
 
-	const arraySlot = arrRef ? replayByArray.get(arrRef)?.get(key) : undefined;
-	let slot =
-		arraySlot && arraySlot.reader === readerFn && isPureAppend(arraySlot.prefix, entries) ? arraySlot : undefined;
-	if (!slot && !arraySlot && firstRef) {
-		const list = replayByFirst.get(firstRef)?.get(key);
-		if (list) {
-			for (const cand of list) {
-				if (
-					cand.reader === readerFn &&
-					isPureAppend(cand.prefix, entries) &&
-					(!slot || cand.prefix.length > slot.prefix.length)
-				) {
-					slot = cand;
-				}
-			}
-		}
-	}
-
+	const found = findReplaySlot(entries, start, key, readerFn);
+	const slot = found.slot;
 	if (slot) {
+		const kept = slot.prefix.length;
+		const formerLast = slot.prefix[kept - 1];
+		const outcome = entries.length - start > kept ? "appended" : "unchanged";
 		let hasQueueEntry = false;
-		for (let i = slot.prefix.length; i < entries.length; i++) {
+		for (let i = start + kept; i < entries.length; i++) {
 			if (isQueueEntry(entries[i])) hasQueueEntry = true;
 		}
 		if (!hasQueueEntry) {
-			for (let i = slot.prefix.length; i < entries.length; i++) slot.prefix.push(entries[i]);
-			saveReplaySlot(arrRef, firstRef, key, slot);
+			for (let i = start + kept; i < entries.length; i++) slot.prefix.push(entries[i]);
+			keepReplaySlot(key, slot, formerLast);
+			countReplay(source, outcome);
+			noteRead(read, entries, start);
 			return slot.out;
 		}
 		if (readers) {
 			try {
 				const out = deepFreeze(stateOf(readers.replay(entries, queueId), queueId));
-				for (let i = slot.prefix.length; i < entries.length; i++) slot.prefix.push(entries[i]);
+				for (let i = start + kept; i < entries.length; i++) slot.prefix.push(entries[i]);
 				slot.out = out;
-				saveReplaySlot(arrRef, firstRef, key, slot);
+				keepReplaySlot(key, slot, formerLast);
+				countReplay(source, outcome);
+				noteRead(read, entries, start);
 				return out;
 			} catch {
 				// Fall back to full apply() below.
 			}
 		} else if (slot.raw) {
-			for (let i = slot.prefix.length; i < entries.length; i++) {
+			for (let i = start + kept; i < entries.length; i++) {
 				applyEntry(slot.raw, entries[i]);
 				slot.prefix.push(entries[i]);
 			}
 			slot.out = deepFreeze(cloneReplayState(slot.raw));
-			saveReplaySlot(arrRef, firstRef, key, slot);
+			keepReplaySlot(key, slot, formerLast);
+			countReplay(source, outcome);
+			noteRead(read, entries, start);
 			return slot.out;
 		}
 	}
 
+	const missed = slot ? "threw" : missReason(read, entries, start, found.passed);
+	noteRead(read, entries, start);
 	if (readers) {
 		try {
 			const out = deepFreeze(stateOf(readers.replay(entries, queueId), queueId));
-			saveReplaySlot(arrRef, firstRef, key, { reader: readerFn, prefix: entries.slice(), out }, arraySlot);
+			keepReplaySlot(key, { reader: readerFn, prefix: entries.slice(start), out });
+			countReplay(source, missed);
 			return out;
 		} catch {
 			// apply() below.
 		}
 	}
+	countReplay(source, readers ? "threw" : missed);
 	const raw = emptyReplayState(queueId);
 	for (let i = 0; i < entries.length; i++) applyEntry(raw, entries[i]);
 	const out = deepFreeze(cloneReplayState(raw));
-	saveReplaySlot(arrRef, firstRef, key, { reader: undefined, prefix: entries.slice(), raw, out }, arraySlot);
+	keepReplaySlot(key, { reader: undefined, prefix: entries.slice(start), raw, out });
 	return out;
 }
 
