@@ -937,6 +937,58 @@ export async function measureSnapshotRender(
 							)
 							.then(() => true)
 							.catch(() => false);
+						if (!jumpOk) {
+							const dbg = await phone.page.evaluate(() => {
+								const f = document.querySelector(".messages .msg-flash");
+								const el = document.querySelector(".messages");
+								return {
+									bars: document.querySelectorAll(".qn-rail .qn-bar").length,
+									flash: !!f,
+									flashPh: f ? f.classList.contains("msg-lazy-ph") : null,
+									flashTop: f ? Math.round(f.getBoundingClientRect().top) : null,
+									st: el ? Math.round(el.scrollTop) : null,
+									sh: el ? el.scrollHeight : null,
+									ph: document.querySelectorAll(".messages .msg-lazy-ph").length,
+									active: document.querySelector(".qn-rail .qn-bar.active, .qn-rail [aria-current]")?.className ?? null,
+								};
+							});
+							log(`jump failed dbg=${JSON.stringify(dbg)}`);
+						}
+					}
+					// 2) Visit placeholders newest first, as a reader or a page search does (scrollIntoView):
+					// each must turn into its real row and stay in view, not be pulled back to the bottom.
+					// Every placeholder of the loaded window, exchange digests above it included; a placeholder
+					// that scrolled back out of view becomes one again, so remember the ones already visited.
+					let visitOk = true;
+					const visited = [];
+					for (let v = 0; v < 60; v++) {
+						const id = await phone.page.evaluate((done) => {
+							const ph = [...document.querySelectorAll(".messages .msg-lazy-ph[data-lazy-id]")].findLast(
+								(n) => !done.includes(n.getAttribute("data-lazy-id")),
+							);
+							ph?.scrollIntoView({ block: "center" });
+							return ph?.getAttribute("data-lazy-id") ?? null;
+						}, visited);
+						if (id) visited.push(id);
+						if (!id) break;
+						const ok = await phone.page
+							.waitForFunction(
+								(lazyId) => {
+									const n = document.querySelector(`.messages [data-lazy-id="${lazyId}"]`);
+									if (!n || n.classList.contains("msg-lazy-ph")) return false;
+									const r = n.getBoundingClientRect();
+									return r.bottom > 0 && r.top < window.innerHeight;
+								},
+								id,
+								{ timeout: 5000, polling: 50 },
+							)
+							.then(() => true)
+							.catch(() => false);
+						if (!ok) {
+							visitOk = false;
+							break;
+						}
+						await sleep(300);
 					}
 					await phone.page.evaluate(() => {
 						const el = document.querySelector(".messages");
@@ -981,7 +1033,7 @@ export async function measureSnapshotRender(
 						await sleep(150);
 						await phone.page.keyboard.press("Escape");
 					}
-					sample.screenChecks = { jumpOk, loadOlderOk, searchOk };
+					sample.screenChecks = { jumpOk, visitOk, placeholdersVisited: visited.length, loadOlderOk, searchOk };
 				}
 				sample.i = i + 1;
 				sample.load1 = Math.round(os.loadavg()[0] * 10) / 10;

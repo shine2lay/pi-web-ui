@@ -1072,6 +1072,9 @@ export function MessageList({
 	// （依赖用服务端缓存的消息数组——引用稳定，流式增量不会每帧重跑）
 	useEffect(() => {
 		const ids = new Set(state.messages.map((m) => m.id));
+		// Exchange digests above the loaded window are lazy rows too: forgetting their elements here
+		// would leave their placeholders out of every sweep, never to mount again.
+		for (const d of state.exchanges ?? []) for (const m of [...d.head, ...d.answers, ...d.after]) ids.add(m.id);
 		for (const id of elsRef.current.keys()) {
 			if (ids.has(id)) continue;
 			elsRef.current.delete(id);
@@ -1086,7 +1089,7 @@ export function MessageList({
 				else changed = true;
 			return changed ? next : prev;
 		});
-	}, [state.messages, expanded]);
+	}, [state.messages, state.exchanges, expanded]);
 
 	useEffect(() => () => cancelAnimationFrame(sweepRafRef.current), []);
 
@@ -1233,6 +1236,10 @@ export function MessageList({
 				}
 				return;
 			}
+			// 跳到提问 = 主动离开底部：先解除吸底，否则本轮及随后 sweep 的提交会把视口吸回底部
+			// （phone-chat-open-newest-first 的吸底 layout effect 在 stickRef 为真时每次提交都贴底）。
+			stickRef.current = false;
+			setStickBottom(false);
 			// 占位中的目标先同步恢复真实渲染（折叠行同步展开），再滚动定位——
 			// flushSync 保证本轮 commit 后 DOM 即为最终形态。
 			flushSync(() => {
@@ -1249,6 +1256,9 @@ export function MessageList({
 					// Clear the flash from any previously jumped-to message, then
 					// restart the highlight animation on the target.
 					scrollRef.current?.querySelectorAll(".msg-flash").forEach((n) => n.classList.remove("msg-flash"));
+					// flushSync 的提交可能触发高度补偿 scroll，onScroll 见到贴底又把吸底打开；
+					// 滚动前再解除一次，否则 scroll 事件到达前的下一次提交会把视口吸回底部。
+					stickRef.current = false;
 					el.scrollIntoView({ block: "start" });
 					el.classList.remove("msg-flash");
 					void el.offsetWidth; // restart the highlight animation
@@ -1437,8 +1447,11 @@ export function MessageList({
 
 	useLayoutEffect(() => {
 		const el = scrollRef.current;
-		if (el && stickRef.current) {
+		// A scroll that onScroll hasn't seen yet (a jump, a scrollIntoView, a find) is not ours to
+		// undo: its scroll event decides the stick. Only pin while the list is where onScroll last saw it.
+		if (el && stickRef.current && Math.abs(el.scrollTop - prevStRef.current) <= 1) {
 			el.scrollTop = el.scrollHeight;
+			prevStRef.current = el.scrollTop;
 		}
 	}, [messages, state.isStreaming, liveOutputs, hidden]);
 
