@@ -17,7 +17,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { DecisionRecord, UpdateFields } from "../server/decision-records.ts";
+import type { DecisionRecord, KeptRecord, UpdateFields } from "../server/decision-records.ts";
 import type { DecisionEntry } from "../server/decision-store.ts";
 import { isolatedDecisionModel } from "../server/decision-model.ts";
 import {
@@ -67,8 +67,9 @@ function readRecords(): DecisionRecord[] {
 	for (const line of raw.split("\n")) {
 		if (!line.trim()) continue;
 		try {
-			const r = JSON.parse(line) as DecisionRecord;
-			if (r && typeof r.source === "string" && typeof r.ref === "string") out.push(r);
+			const r = JSON.parse(line) as KeptRecord;
+			// Ops #711: a message's delivery is no decision material; the live check (DecisionRecords.list()) never sees it.
+			if (r && typeof r.source === "string" && typeof r.ref === "string" && r.source !== "delivery") out.push(r);
 		} catch {
 			/* a line cut off by a crash */
 		}

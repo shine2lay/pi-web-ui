@@ -13,6 +13,10 @@
  *   - tldr:    a chat's TL;DR line (pi-tldr's "tldr" entries, read by the same scan; task #85), kept only
  *              when it files to an initiative the progress feed covers.
  *   - update:  an initiative lead's progress update (the initiative_update tool; task #85).
+ *   - delivery: when a role message arrived and in which chat, or that it failed for good and why, once its
+ *              delivery settles (role-messages.ts; Ops #711, audit R6a). No text: its message record (same ref)
+ *              has that. The live store keeps arrival only for its last 1,000 messages; this keeps it for good.
+ *              Not decision material: a DeliveryRecord, read with deliveries(), never by list().
  * A backfill reads the same things from what is kept (role-messages.json, role-board.json and the
  * transcripts) from a day on. Transcripts are only ever read here.
  */
@@ -57,7 +61,10 @@ export function checkInitiative(raw: unknown): { ok: true; value?: string } | { 
 // Records
 // ---------------------------------------------------------------------------
 
+/** The decision material: what the pages, the Progress feed and the decision reader read (list()). */
 export type DecisionSource = "message" | "board" | "answer" | "plan" | "tldr" | "update";
+/** Everything records.jsonl keeps: the decision material, and each role message's delivery (Ops #711). */
+export type RecordSource = DecisionSource | "delivery";
 
 /** An initiative lead's progress update (task #85): the three parts the owner reads, then the optional
  *  fields a decision needs ("not given" on the page when missing). */
@@ -159,6 +166,47 @@ export interface DecisionRecord {
 
 export type NewDecisionRecord = Omit<DecisionRecord, "v" | "id" | "seen" | "how"> & { how?: DecisionRecord["how"] };
 
+/** Ops #711 (audit R6a): a role message's delivery, kept once it settled: when it arrived and in which chat, or that
+ *  it failed for good and why. No text: its message record (source "message", the same ref) has that. */
+export interface DeliveryRecord {
+	v: 1;
+	/** "dr-" + a hash of "delivery" and the message's id. */
+	id: string;
+	source: "delivery";
+	/** When it arrived (the same as deliveredAt), or when it failed for good. */
+	at: number;
+	/** The sending role. */
+	from: string;
+	/** The receiving role. */
+	to: string;
+	/** The message's id (rm-): its message record has the same ref. */
+	ref: string;
+	/** The message's kind: question, request, fyi or reply. */
+	kind: string;
+	how: "live";
+	/** When this line was written. */
+	seen: number;
+	outcome: "delivered" | "failed";
+	/** delivered: when it arrived in the chat (the live store's deliveredAt). */
+	deliveredAt?: number;
+	/** The chat it went to: "home chat", or a reply's asking chat ("Queue #N" and the like). None when it failed
+	 *  before it had one. */
+	chat?: string;
+	/** That chat's transcript (basename). */
+	file?: string;
+	/** The sends that got into the chat (one that never landed is sent again). */
+	sends: number;
+	/** The sends that failed (the chat couldn't be opened, the server was restarting, and so on). */
+	attempts: number;
+	/** failed: why. */
+	error?: string;
+}
+
+export type NewDeliveryRecord = Omit<DeliveryRecord, "v" | "id" | "seen" | "how"> & { how?: "live" };
+
+/** One line of records.jsonl. */
+export type KeptRecord = DecisionRecord | DeliveryRecord;
+
 export function recordId(source: string, ref: string): string {
 	return `dr-${createHash("sha1").update(`${source}\0${ref}`).digest("hex").slice(0, 12)}`;
 }
@@ -202,12 +250,12 @@ export class DecisionRecords {
 		if (raw.length > 0 && !raw.endsWith("\n")) appendFileSync(this.file, "\n");
 	}
 
-	private remember(r: DecisionRecord): void {
+	private remember(r: KeptRecord): void {
 		this.keys.add(keyOf(r.source, r.ref));
 		if (r.source === "message" && r.initiative) this.messageInitiative.set(r.ref, r.initiative);
 	}
 
-	has(source: DecisionSource, ref: string): boolean {
+	has(source: RecordSource, ref: string): boolean {
 		this.load();
 		return this.keys.has(keyOf(source, ref));
 	}
@@ -219,29 +267,31 @@ export class DecisionRecords {
 	}
 
 	/** Keep it, unless the same (source, ref) is kept already. True when it was added. */
-	append(rec: NewDecisionRecord): boolean {
+	append(rec: NewDecisionRecord | NewDeliveryRecord): boolean {
 		this.load();
 		const key = keyOf(rec.source, rec.ref);
 		if (this.keys.has(key)) return false;
-		const full: DecisionRecord = {
+		const full = {
 			v: 1,
 			id: recordId(rec.source, rec.ref),
 			...stripEmpty(rec),
 			how: rec.how ?? "live",
 			seen: this.now(),
-		} as DecisionRecord;
+		} as KeptRecord;
 		mkdirSync(this.dir, { recursive: true });
 		appendFileSync(this.file, JSON.stringify(full) + "\n");
 		this.remember(full);
 		return true;
 	}
 
-	/** Everything kept that fits, oldest first (by `at`). */
+	/** The decision material kept that fits, oldest first (by `at`). Never the deliveries (Ops #711; deliveries()):
+	 *  they say only when a message arrived, and share their message's ref. */
 	list(filter: RecordFilter = {}): DecisionRecord[] {
 		if (!existsSync(this.file)) return [];
 		const seen = new Set<string>();
 		const out: DecisionRecord[] = [];
 		for (const r of parseLines(readFileSync(this.file, "utf8"))) {
+			if (r.source === "delivery") continue;
 			const k = keyOf(r.source, r.ref);
 			if (seen.has(k)) continue;
 			seen.add(k);
@@ -249,6 +299,19 @@ export class DecisionRecords {
 			if (filter.initiative && r.initiative !== filter.initiative) continue;
 			if (filter.since !== undefined && r.at < filter.since) continue;
 			if (filter.until !== undefined && r.at >= filter.until) continue;
+			out.push(r);
+		}
+		return out.sort((a, b) => a.at - b.at);
+	}
+
+	/** Ops #711: the kept deliveries (the first per message), oldest first (by `at`). */
+	deliveries(): DeliveryRecord[] {
+		if (!existsSync(this.file)) return [];
+		const seen = new Set<string>();
+		const out: DeliveryRecord[] = [];
+		for (const r of parseLines(readFileSync(this.file, "utf8"))) {
+			if (r.source !== "delivery" || seen.has(r.ref)) continue;
+			seen.add(r.ref);
 			out.push(r);
 		}
 		return out.sort((a, b) => a.at - b.at);
@@ -266,12 +329,12 @@ export class DecisionRecords {
 	}
 }
 
-function parseLines(raw: string): DecisionRecord[] {
-	const out: DecisionRecord[] = [];
+function parseLines(raw: string): KeptRecord[] {
+	const out: KeptRecord[] = [];
 	for (const line of raw.split("\n")) {
 		if (!line.trim()) continue;
 		try {
-			const r = JSON.parse(line) as DecisionRecord;
+			const r = JSON.parse(line) as KeptRecord;
 			if (r && typeof r.source === "string" && typeof r.ref === "string") out.push(r);
 		} catch {
 			/* a line cut off by a crash: skipped */
@@ -320,6 +383,30 @@ export function messageRecord(r: RoleMessageRecord, how: DecisionRecord["how"] =
 		...(r.replyTo ? { replyTo: r.replyTo } : {}),
 		...(r.from.chat ? { chat: r.from.chat } : {}),
 		...(r.initiative ? { initiative: r.initiative } : {}),
+	};
+}
+
+/** Ops #711 (audit R6a): a role message's delivery once it settled: when it arrived (its deliveredAt) and in which
+ *  chat, or that it failed for good (at `settledAt`) and why, with its sends. No text: its message record (same ref)
+ *  has that. Undefined while it is still on its way. */
+export function deliveryRecord(r: RoleMessageRecord, settledAt: number): NewDeliveryRecord | undefined {
+	const failed = r.state === "failed";
+	const at = failed ? settledAt : r.deliveredAt;
+	if (at === undefined) return undefined;
+	return {
+		source: "delivery",
+		at,
+		from: r.from.role,
+		to: r.to.role,
+		ref: r.id,
+		kind: r.kind,
+		outcome: failed ? "failed" : "delivered",
+		...(failed ? {} : { deliveredAt: at }),
+		...(r.targetChat ? { chat: r.targetChat } : {}),
+		...(r.target ? { file: basename(r.target) } : {}),
+		sends: r.sends,
+		attempts: r.attempts,
+		...(failed && r.error ? { error: r.error } : {}),
 	};
 }
 

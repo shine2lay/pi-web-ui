@@ -55,7 +55,7 @@ the next day and the page says so. A rate-limit refusal rests that Claude accoun
 
 | File | Holds |
 | --- | --- |
-| `records.jsonl` | #83's records (messages, Board posts, answers, queue plans) |
+| `records.jsonl` | #83's records (messages, Board posts, answers, queue plans); each role message's delivery (`delivery`, Ops #711: when and where it arrived, or why it failed; never shown, not decision material) |
 | `decisions.json` | decisions, changes, sources, owner fields, who added each |
 | `initiatives.json` | `[{ id, name, markers, lead, leadSet }]` (lead: task #85) |
 | `settings.json` | the reader's settings (above) and the feed's (`feedInitiatives`, ...) |

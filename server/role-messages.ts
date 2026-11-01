@@ -337,6 +337,10 @@ export interface RoleMessageHost {
 	changed?(): void;
 	/** decision-records: a role message was just sent (report requests aren't). */
 	sent?(record: RoleMessageRecord): void;
+	/** decision-records (Ops #711, audit R6a): a sent role message's delivery settled at `at`: it arrived (state
+	 *  delivered or replied, deliveredAt) or failed for good (state failed, error). Report requests aren't, as for
+	 *  `sent`. Once per message: both are final. */
+	deliverySettled?(record: RoleMessageRecord, at: number): void;
 	/** decision-records: the initiative a message carries even when role-messages.json no longer has it. */
 	initiativeOf?(id: string): string | undefined;
 	log?(line: string): void;
@@ -1943,6 +1947,17 @@ export class RoleMessages {
 		this.inFlight.delete(r.id);
 		this.save();
 		this.log(`${r.id} failed: ${error}`);
+		this.deliverySettled(r, this.now());
+	}
+
+	/** decision-records (Ops #711): the host keeps a sent message's arrival or failure; that never stops a delivery. */
+	private deliverySettled(r: RoleMessageRecord, at: number): void {
+		if (r.kind === "report") return;
+		try {
+			this.host.deliverySettled?.(r, at);
+		} catch (err) {
+			this.log(`${r.id}: couldn't keep its delivery record (${(err as Error).message})`);
+		}
 	}
 
 	/** Where a message goes: the reply's asking chat (if still there and not a finished task's), else
@@ -2005,6 +2020,7 @@ export class RoleMessages {
 			this.log(
 				`${r.id} delivered to ${r.to.role} (${r.targetChat ?? "?"})${noTurn(r) ? ", added without a turn" : ""}`,
 			);
+			this.deliverySettled(r, now);
 			return;
 		}
 		const state = this.host.chatState(target);

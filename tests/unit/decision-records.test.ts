@@ -1,6 +1,7 @@
 /**
- * decision-records (task #83): the store (server/decision-records.ts), each live hook (role message sent,
- * Board post, the owner's answer, the queue scanner), the initiative tag, and the backfill on fixtures.
+ * decision-records (task #83): the store (server/decision-records.ts), each live hook (role message sent, its
+ * delivery settled (Ops #711), Board post, the owner's answer, the queue scanner), the initiative tag, and the
+ * backfill on fixtures.
  */
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +15,7 @@ import {
 	checkInitiative,
 	dayStart,
 	DecisionRecords,
+	deliveryRecord,
 	messageRecord,
 	parseDeliveredRoleMessage,
 	planRecord,
@@ -27,6 +29,8 @@ import { RoleBoard, type BoardHost } from "../../server/role-board.js";
 import { makeBoardTool } from "../../server/board-tool.js";
 import { makeMessageRoleTool } from "../../server/role-message-tool.js";
 import {
+	ROLE_MESSAGE_CUSTOM_TYPE,
+	ROLE_MESSAGES_KEEP,
 	RoleMessages,
 	roleMessageText,
 	type RoleMessageHost,
@@ -149,17 +153,57 @@ describe("the initiative tag", () => {
 // Hook 1: a role message, when it is sent
 // ---------------------------------------------------------------------------
 
-function messages(store: DecisionRecords): { s: RoleMessages; A: string; B: string } {
+interface MessagesOptions {
+	/** Ops #711: each send lands in the chat (as pi appends it), so its delivery settles. Default: it gets in, never
+	 *  lands. */
+	lands?: boolean;
+	/** Every send fails with this error. */
+	fail?: string;
+	/** More roles than alpha and beta. */
+	roles?: IdentityDef[];
+	/** The delivery hook throws this. */
+	hookThrows?: string;
+	log?: (line: string) => void;
+}
+/** The chat took it: a user message (deliver) or an FYI added without a turn (note), as pi appends them. */
+function landed(file: string, text: string, via: "deliver" | "note"): void {
+	line(
+		file,
+		via === "deliver"
+			? { type: "message", message: { role: "user", content: [{ type: "text", text }] } }
+			: {
+					type: "custom_message",
+					customType: ROLE_MESSAGE_CUSTOM_TYPE,
+					content: [{ type: "text", text }],
+					display: true,
+				},
+	);
+}
+
+function messages(store: DecisionRecords, o: MessagesOptions = {}): { s: RoleMessages; A: string; B: string } {
 	const A = chat("alpha-home");
 	const B = chat("beta-home");
+	const send =
+		(via: "deliver" | "note"): RoleMessageHost["deliver"] =>
+		async (file, text) => {
+			if (o.fail) return { ok: false, error: o.fail };
+			if (o.lands) landed(file, text, via);
+			return { ok: true };
+		};
 	const host: RoleMessageHost = {
-		roles: () => [role("alpha", A), role("beta", B)],
+		roles: () => [role("alpha", A), role("beta", B), ...(o.roles ?? [])],
 		chatState: () => "closed",
-		deliver: async () => ({ ok: true }),
-		note: async () => ({ ok: true }),
+		deliver: send("deliver"),
+		note: send("note"),
 		sent: (r) => store.append(messageRecord(r)),
+		// Ops #711: as AgentService wires it (its keepDecision skips undefined).
+		deliverySettled: (r, at) => {
+			if (o.hookThrows) throw new Error(o.hookThrows);
+			const rec = deliveryRecord(r, at);
+			if (rec) store.append(rec);
+		},
 		initiativeOf: (id) => store.messageInitiativeOf(id),
-		log: () => {},
+		log: o.log ?? (() => {}),
 	};
 	const s = new RoleMessages(join(dir, "data", "role-messages.json"), host, clock);
 	stops.push(s);
@@ -232,6 +276,245 @@ describe("hook: role message sent", () => {
 		)("call", { to: "beta", kind: "fyi", text: "Store is live.", initiative: "decisions-page" });
 		expect(res.details.initiative).toBe("decisions-page");
 		expect(store.list()[0]).toMatchObject({ ref: res.details.id, initiative: "decisions-page" });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Hook 1b (Ops #711, audit R6a): a role message's delivery, once it settled
+// ---------------------------------------------------------------------------
+
+/** The delivery lines in records.jsonl, read straight from the file: what outlives the live store. */
+function deliveryLines(store: DecisionRecords): Array<Record<string, unknown>> {
+	return readFileSync(store.file, "utf8")
+		.split("\n")
+		.filter((l) => l.trim())
+		.map((l) => JSON.parse(l) as Record<string, unknown>)
+		.filter((r) => r.source === "delivery");
+}
+const sent = (res: ReturnType<RoleMessages["send"]>): RoleMessageRecord => {
+	if (!res.ok) throw new Error(res.error);
+	return res.record;
+};
+
+describe("hook: role message delivery settled (Ops #711)", () => {
+	it("keeps when and where it arrived, and its sends, after the live store dropped it past its 1,000", async () => {
+		const store = new DecisionRecords(join(dir, "decisions"), { now: clock });
+		const O = chat("ops-home");
+		const { s, A } = messages(store, { lands: true, roles: [role("ops", O)] });
+		const m = sent(s.send(sender("alpha", A), { to: "beta", kind: "fyi", text: "Store is live." }));
+		now += 5_000;
+		await s.tick();
+		const arrived = now;
+		expect(s.byId(m.id)).toMatchObject({ state: "delivered", deliveredAt: arrived, sends: 1 });
+		// More than the live store keeps, an hour on (a capped role's message stays for its hour).
+		now += 2 * 3_600_000;
+		for (let n = 0; n < ROLE_MESSAGES_KEEP; n++) {
+			const f = sent(s.send(sender("ops", O), { to: "beta", kind: "fyi", text: `ops ${n}` }));
+			f.state = "delivered"; // trimming looks at the state only
+		}
+		expect(s.byId(m.id)).toBeUndefined();
+		expect(readFileSync(join(dir, "data", "role-messages.json"), "utf8")).not.toContain(m.id);
+		const kept = deliveryLines(store);
+		expect(kept).toEqual([
+			{
+				v: 1,
+				id: recordId("delivery", m.id),
+				source: "delivery",
+				at: arrived,
+				from: "alpha",
+				to: "beta",
+				ref: m.id,
+				kind: "fyi",
+				outcome: "delivered",
+				deliveredAt: arrived,
+				chat: "home chat",
+				file: "beta-home.jsonl",
+				sends: 1,
+				attempts: 0,
+				how: "live",
+				seen: arrived,
+			},
+		]);
+		expect(JSON.stringify(kept)).not.toContain("Store is live.");
+		expect(store.deliveries()).toEqual(kept);
+		// Not decision material: the pages, the Progress feed and the reader still see the messages only.
+		expect(store.list()).toHaveLength(ROLE_MESSAGES_KEEP + 1);
+		expect(store.list().every((r) => r.source === "message")).toBe(true);
+		const days = Object.values(store.counts());
+		expect(days.flatMap((d) => Object.keys(d))).toEqual(days.map(() => "message"));
+		expect(days.reduce((n, d) => n + (d.message ?? 0), 0)).toBe(ROLE_MESSAGES_KEEP + 1);
+	}, 60_000);
+
+	it("keeps a failure too: where it went, its sends and why (never landed after 5 sends)", async () => {
+		const store = new DecisionRecords(join(dir, "decisions"), { now: clock });
+		const { s, A } = messages(store); // each send gets in but never lands
+		const m = sent(s.send(sender("alpha", A), { to: "beta", kind: "question", text: "Which store?" }));
+		for (let i = 0; i < 12 && s.byId(m.id)?.state === "waiting"; i++) {
+			now += 31_000;
+			await s.tick();
+		}
+		expect(s.byId(m.id)).toMatchObject({ state: "failed", sends: 5 });
+		expect(deliveryLines(store)).toEqual([
+			expect.objectContaining({
+				ref: m.id,
+				kind: "question",
+				outcome: "failed",
+				at: now,
+				chat: "home chat",
+				file: "beta-home.jsonl",
+				sends: 5,
+				attempts: 0,
+				error: "sent 5 times but it never landed in the chat",
+			}),
+		]);
+		expect(deliveryLines(store)[0]).not.toHaveProperty("deliveredAt");
+	});
+
+	it("keeps a failure after a day of failed sends, with its attempts, and one with no chat to go to", async () => {
+		const store = new DecisionRecords(join(dir, "decisions"), { now: clock });
+		const { s, A } = messages(store, {
+			fail: "couldn't open the chat",
+			roles: [role("gamma", join(dir, "gone-home.jsonl"))],
+		});
+		const m = sent(s.send(sender("alpha", A), { to: "beta", kind: "fyi", text: "x" }));
+		const g = sent(s.send(sender("alpha", A), { to: "gamma", kind: "fyi", text: "y" }));
+		await s.tick();
+		expect(s.byId(m.id)).toMatchObject({ state: "waiting", attempts: 1 });
+		expect(deliveryLines(store)).toEqual([
+			expect.objectContaining({
+				ref: g.id,
+				to: "gamma",
+				outcome: "failed",
+				at: now,
+				sends: 0,
+				attempts: 0,
+				error: "gamma's home chat transcript is missing",
+			}),
+		]);
+		expect(deliveryLines(store)[0]).not.toHaveProperty("chat");
+		expect(deliveryLines(store)[0]).not.toHaveProperty("file");
+		now += 25 * 3_600_000;
+		await s.tick();
+		expect(deliveryLines(store)[1]).toMatchObject({
+			ref: m.id,
+			outcome: "failed",
+			at: now,
+			chat: "home chat",
+			file: "beta-home.jsonl",
+			sends: 0,
+			attempts: 1,
+			error: "not delivered within a day (last error: couldn't open the chat)",
+		});
+	});
+
+	it("keeps nothing while held by the owner's pause; once it lands after the resume, that arrival", async () => {
+		const store = new DecisionRecords(join(dir, "decisions"), { now: clock });
+		const { s, A } = messages(store, { lands: true });
+		s.setPaused(true);
+		const res = s.send(sender("alpha", A), { to: "beta", kind: "fyi", text: "held" });
+		expect(res).toMatchObject({ ok: true, paused: true });
+		const m = sent(res);
+		now += 30 * 3_600_000; // held longer than a day: no give-up while paused
+		await s.tick();
+		expect(s.rows()[0]).toMatchObject({ state: "held" });
+		expect(deliveryLines(store)).toEqual([]);
+		now += 60_000;
+		s.setPaused(false);
+		await s.tick();
+		expect(deliveryLines(store)).toEqual([
+			expect.objectContaining({ ref: m.id, outcome: "delivered", at: now, deliveredAt: now, sends: 1 }),
+		]);
+	});
+
+	it("a reply's goes to the chat that asked; once per message, however often it is looked at", async () => {
+		const store = new DecisionRecords(join(dir, "decisions"), { now: clock });
+		const T = chat("alpha-task");
+		const { s, B } = messages(store, { lands: true });
+		const q = sent(
+			s.send({ ...sender("alpha", T), chat: "Queue #7" }, { to: "beta", kind: "question", text: "Which store?" }),
+		);
+		await s.tick();
+		now += 60_000;
+		const r = sent(s.send(sender("beta", B), { to: "alpha", kind: "reply", replyTo: q.id, text: "jsonl" }));
+		await s.tick();
+		now += 3_600_000;
+		await s.tick();
+		expect(s.byId(q.id)?.state).toBe("replied");
+		expect(deliveryLines(store)).toEqual([
+			expect.objectContaining({ ref: q.id, kind: "question", chat: "home chat", file: "beta-home.jsonl" }),
+			expect.objectContaining({
+				ref: r.id,
+				kind: "reply",
+				from: "beta",
+				to: "alpha",
+				chat: "Queue #7",
+				file: "alpha-task.jsonl",
+			}),
+		]);
+		const again = deliveryRecord(s.byId(r.id)!, now);
+		expect(again && store.append(again)).toBe(false);
+		expect(deliveryLines(store)).toHaveLength(2);
+	});
+
+	it("a hook that throws never stops the delivery: it is logged", async () => {
+		const store = new DecisionRecords(join(dir, "decisions"), { now: clock });
+		const logs: string[] = [];
+		const { s, A } = messages(store, { lands: true, hookThrows: "disk full", log: (l) => logs.push(l) });
+		const m = sent(s.send(sender("alpha", A), { to: "beta", kind: "fyi", text: "x" }));
+		await s.tick();
+		expect(s.byId(m.id)).toMatchObject({ state: "delivered", deliveredAt: now });
+		expect(logs).toContain(`[role-messages] ${m.id}: couldn't keep its delivery record (disk full)`);
+		expect(deliveryLines(store)).toEqual([]);
+	});
+
+	it("deliveryRecord: nothing while on its way; an arrival (a replied one too) or a failure, never the text", () => {
+		const store = new DecisionRecords(join(dir, "decisions"), { now: clock });
+		const { s, A, B } = messages(store);
+		const m = sent(s.send(sender("alpha", A), { to: "beta", kind: "question", text: "Secret words" }));
+		expect(deliveryRecord(m, now)).toBeUndefined();
+		const arrived: RoleMessageRecord = {
+			...m,
+			state: "replied",
+			deliveredAt: 5,
+			target: B,
+			targetChat: "home chat",
+			sends: 2,
+		};
+		expect(deliveryRecord(arrived, 9)).toEqual({
+			source: "delivery",
+			at: 5,
+			from: "alpha",
+			to: "beta",
+			ref: m.id,
+			kind: "question",
+			outcome: "delivered",
+			deliveredAt: 5,
+			chat: "home chat",
+			file: "beta-home.jsonl",
+			sends: 2,
+			attempts: 0,
+		});
+		const failed = deliveryRecord({ ...m, state: "failed", error: "the role beta is gone", attempts: 3 }, 9);
+		expect(failed).toEqual({
+			source: "delivery",
+			at: 9,
+			from: "alpha",
+			to: "beta",
+			ref: m.id,
+			kind: "question",
+			outcome: "failed",
+			sends: 0,
+			attempts: 3,
+			error: "the role beta is gone",
+		});
+		expect(JSON.stringify([deliveryRecord(arrived, 9), failed])).not.toContain("Secret words");
+		// The store: kept once per message, read by deliveries() (oldest first), never by list() or counts().
+		expect(store.append(failed!)).toBe(true);
+		expect(store.append(deliveryRecord(arrived, 9)!)).toBe(false);
+		expect(store.has("delivery", m.id)).toBe(true);
+		expect(store.deliveries()).toEqual([expect.objectContaining({ ref: m.id, outcome: "failed", at: 9 })]);
+		expect(store.list().map((r) => r.source)).toEqual(["message"]);
+		expect(Object.values(store.counts())).toEqual([{ message: 1 }]);
 	});
 });
 

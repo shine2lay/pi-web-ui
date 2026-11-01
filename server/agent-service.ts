@@ -566,8 +566,10 @@ import {
 	DECISIONS_DIR,
 	type DecisionRecord,
 	DecisionRecords,
+	deliveryRecord,
 	messageRecord,
 	type NewDecisionRecord,
+	type NewDeliveryRecord,
 	QueueScanner,
 	recordId,
 	SCAN_STATE_FILE,
@@ -18401,6 +18403,8 @@ export class AgentService {
 			note: (file, text) => this.noteRoleMessage(file, text),
 			changed: () => this.onRoleMessagesChanged?.(),
 			sent: (record) => this.keepDecision(messageRecord(record)),
+			// Ops #711 (audit R6a): when it arrived (or failed for good), kept past the live store's 1,000 messages.
+			deliverySettled: (record, at) => this.keepDecision(deliveryRecord(record, at)),
 			initiativeOf: (id) => this.decisions.messageInitiativeOf(id),
 			log: (line) => console.log(line),
 		});
@@ -18595,7 +18599,7 @@ export class AgentService {
 	private decisionBackfill: BackfillProgress | null = null;
 
 	/** Keep one record; a failure is logged, never thrown at the sender. */
-	private keepDecision(rec: NewDecisionRecord | undefined): void {
+	private keepDecision(rec: NewDecisionRecord | NewDeliveryRecord | undefined): void {
 		if (!rec) return;
 		try {
 			this.decisions.append(rec);
