@@ -1000,6 +1000,48 @@ describe("telegram plugin: how messages look", () => {
 		expect(renderAsk({ ...ask(stop), brief: [{ label: 1 }] }, st()).text).toBe(renderAsk(older, st()).text);
 	});
 
+	// grant-card-brief (Ops #683): a continuation-grant card (kind "question") opens with its brief the same way.
+	it("a continuation-grant card with a plain brief: the whole brief first, then its line and question", () => {
+		const brief = [
+			{ label: "Who asks", text: "OPS wants to keep messaging QA & <DOCS>, past message 11 of one chain of messages." },
+			{ label: "Your answers", text: "\u201CDeny\u201D: no more messages in this chain." },
+		];
+		const briefHtml = [
+			"<b>Who asks:</b> OPS wants to keep messaging QA &amp; &lt;DOCS&gt;, past message 11 of one chain of messages.",
+			"<b>Your answers:</b> \u201CDeny\u201D: no more messages in this chain.",
+		].join("\n");
+		const grant = {
+			...base,
+			kind: "question",
+			title: "Message continuation: Owner decision",
+			body: "ops asks to continue a chain of role messages past message 11.",
+			brief,
+			fields: [
+				{
+					id: "1",
+					text: "Allow this finite communication continuation?",
+					detail: `{"goal": "${"g ".repeat(400)}"}`,
+					options: [
+						{ value: "deny", label: "Deny", description: "No additional business message." },
+						{ value: "one_send", label: "Allow one send", description: "One send." },
+					],
+					multi: false,
+					allowText: false,
+				},
+			],
+		};
+		const text = renderAsk(grant, st()).text;
+		const at = text.indexOf(briefHtml);
+		expect(at).toBeGreaterThan(0);
+		for (const later of ["ops asks to continue", "Allow this finite communication continuation?", "Allow one send"])
+			expect(at, later).toBeLessThan(text.indexOf(later));
+		// The requester's whole context is still cut as before; the brief stays whole.
+		expect(text).not.toContain("g ".repeat(260));
+		// Without a brief (an older server) the card looks as it did.
+		const { brief: _brief, ...older } = grant;
+		expect(renderAsk(older, st()).text).toBe(text.replace(`${briefHtml}\n\n`, ""));
+	});
+
 	it("a permission prompt: the command as code (in a collapsed quote when long), and the reason once", () => {
 		const approval = (command: string) => ({
 			...base,

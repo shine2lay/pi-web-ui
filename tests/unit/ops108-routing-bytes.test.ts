@@ -31,6 +31,9 @@ describe("Ops108 baseline", () => {
 		// Re-pinned by owner-card-brief (Ops #682, owner via COO rm-d2c1f9b2): it only adds the display-only
 		// renderBrief and puts its lines first in renderAsk's message and short form; its diff removes only renderAsk's
 		// doc comment and the two joined part lists (now with the brief); no Ops108 routing line changed. Was 91637612….
-		expect(sha("plugins/telegram/index.mjs")).toBe("f33f4073e39ade08a23d4b10a26e968d2aba8f4cc30da9987e202410d1baf488");
+		// Re-pinned by grant-card-brief (Ops #683, owner via COO rm-d2c1f9b2): renderBrief, display only, shows the
+		// brief of any card that has one (continuation-grant cards too), not only a stuck task's; its diff changes only
+		// that line and renderBrief's doc comment; no Ops108 routing line changed. Was f33f4073….
+		expect(sha("plugins/telegram/index.mjs")).toBe("af8c8cceb9545b6a5f0a8bfc25b09d6658446195988415c113e09c6e3998c3df");
 	});
 });

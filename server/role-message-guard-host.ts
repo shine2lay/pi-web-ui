@@ -39,7 +39,8 @@ import {
 } from "node:fs";
 import { basename, join } from "node:path";
 import type { Ask, AskFieldAnswer, AskHub } from "./asks.js";
-import type { UiRoleGuardQuestion } from "./protocol.js";
+import { grantCardBrief } from "./grant-card-brief.js";
+import type { UiOwnerCardBriefLine, UiRoleGuardQuestion } from "./protocol.js";
 import { samePath, type IdentityDef } from "./identities.js";
 import { createGuardApprovalAdapters, type GuardApprovalNativePortAny } from "./role-message-guard-approvals.js";
 import type {
@@ -1855,12 +1856,30 @@ export class RoleMessageGuardHost {
 		const r = state?.requests.find((x) => guardDigest(x.binding) === q.bindingDigest && x.binding.tier === "owner");
 		return r ? verified(r) : refused("unavailable", "the request is gone");
 	}
+	/**
+	 * grant-card-brief (Ops #683): the card's plain brief, from the stored request alone (its binding and the
+	 * requester's context). Display only: never part of the owner question, its choices or their digest.
+	 */
+	private briefOf(q: GuardOwnerQuestionAny): UiOwnerCardBriefLine[] {
+		const name = (role: string) => this.def(role)?.title ?? role;
+		const requester = q.binding.requester.role;
+		// The scope names the requester too (so answers can come back); the brief names whom it wants to message.
+		const others = q.binding.scope.recipients.filter((r) => r !== requester);
+		return grantCardBrief({
+			requester: name(requester),
+			recipients: (others.length ? others : q.binding.scope.recipients).map(name),
+			pastMessage: q.binding.causal.nextHop - 1,
+			quantity: q.binding.quantity,
+			context: q.detail,
+		});
+	}
 	private async present(q: GuardOwnerQuestionAny, ask: Ask): Promise<GuardTransportResult> {
 		const shown: string[] = [];
 		const requesterRole = q.binding.requester.role;
 		const full: Ask = {
 			...ask,
 			body: `${requesterRole} asks to continue a chain of role messages past message ${q.binding.causal.nextHop - 1}.`,
+			brief: this.briefOf(q),
 		};
 		if (this.o.askHub) {
 			// Telegram: only the authorised Telegram plugin's answer counts here (never a plugin claiming "browser").
@@ -1918,10 +1937,13 @@ export class RoleMessageGuardHost {
 				generation: q.generation,
 				requesterRole: r.binding.requester.role,
 			};
-			if (guardRequestRevisionValid(r, "role-message-guard/v1"))
-				out.push({ ...identity, request: r, ownerQuestion: this.questionOf(r, q) });
-			else if (guardRequestRevisionValid(r, "role-message-guard/v2"))
-				out.push({ ...identity, request: r, ownerQuestion: this.questionOf(r, q) });
+			if (guardRequestRevisionValid(r, "role-message-guard/v1")) {
+				const ownerQuestion = this.questionOf(r, q);
+				out.push({ ...identity, request: r, ownerQuestion, brief: this.briefOf(ownerQuestion) });
+			} else if (guardRequestRevisionValid(r, "role-message-guard/v2")) {
+				const ownerQuestion = this.questionOf(r, q);
+				out.push({ ...identity, request: r, ownerQuestion, brief: this.briefOf(ownerQuestion) });
+			}
 		}
 		return out;
 	}

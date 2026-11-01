@@ -4,6 +4,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { GuardRoleChoice } from "../../../server/role-message-guard-contract.js";
 import type { GuardApprovalView } from "../role-message-guard-view.js";
+import type { UiOwnerCardBriefLine } from "../types";
+import { OwnerCardBrief } from "./OwnerCardBrief";
 export interface GuardApprovalIntent {
 	readonly requestId: string;
 	readonly generation: string;
@@ -13,10 +15,13 @@ export interface GuardApprovalIntent {
 }
 export function RoleMessageGuardApproval({
 	view,
+	brief,
 	onDecision,
 	onClose,
 }: {
 	readonly view: GuardApprovalView;
+	/** grant-card-brief (Ops #683): the card's plain brief, shown first under its title (whole, or not at all). */
+	readonly brief?: readonly UiOwnerCardBriefLine[];
 	readonly onDecision: (intent: GuardApprovalIntent) => Promise<void>;
 	readonly onClose: () => void;
 }) {
@@ -103,6 +108,7 @@ export function RoleMessageGuardApproval({
 						{view.close}
 					</button>
 				</header>
+				<OwnerCardBrief lines={brief} />
 				<p className="role-guard-tier">{view.tier}</p>
 				<div id={`${id}-status`} className="role-guard-status" role="status" aria-live="polite" aria-atomic="true">
 					<strong>{view.status}</strong>

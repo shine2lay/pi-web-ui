@@ -83,7 +83,8 @@ export interface Ask {
 	/** A queued task that needs you (kind "stuck"): its number and title. */
 	task?: { id: number; title: string };
 	/** owner-card-brief (Ops #682): kind "stuck": the plain brief every surface shows first, whole (made with the
-	 *  ask, refreshed for the web; Telegram sends the one it was made with). */
+	 *  ask, refreshed for the web; Telegram sends the one it was made with). grant-card-brief (Ops #683): also a
+	 *  continuation-grant card (kind "question"), made once with it. */
 	brief?: UiOwnerCardBriefLine[];
 	/** decision-records: kind "question": the ask_user_question tool call it came from. */
 	toolCallId?: string;

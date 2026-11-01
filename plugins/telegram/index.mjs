@@ -1023,11 +1023,12 @@ const BRIEF_LABEL_MAX = 40;
 const BRIEF_TEXT_MAX = 2000;
 
 /**
- * owner-card-brief (Ops #682): a queue card's plain brief as Telegram HTML, a bold label on each line. Always
+ * owner-card-brief (Ops #682): a card's plain brief as Telegram HTML, a bold label on each line. Always
  * whole: the server keeps it short, and nothing here cuts it. A broken shape is left out rather than shown half.
+ * Any kind of card that has one (grant-card-brief, Ops #683: continuation-grant cards too); only the server makes it.
  */
 export function renderBrief(ask) {
-	const lines = ask?.kind === "stuck" && Array.isArray(ask.brief) ? ask.brief : [];
+	const lines = Array.isArray(ask?.brief) ? ask.brief : [];
 	if (!lines.length || lines.length > BRIEF_LINES_MAX) return "";
 	const out = [];
 	for (const line of lines) {

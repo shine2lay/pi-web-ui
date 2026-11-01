@@ -1,4 +1,4 @@
-# Owner card brief (Ops #682)
+# Owner card brief (Ops #682, #683)
 
 Every queue card that reaches the owner ("Task #N needs you") opens with a short plain brief built from the
 records, so he can answer it without knowing the project's details. Owner, Oct 31 ~12:10 PDT (via COO
@@ -93,3 +93,80 @@ there is one.
 
 Revert the commit and `pi-web-deploy` the previous commit. Nothing is stored: the brief lives only on the live ask
 and in what is sent to the browser; the queue's saved ops are untouched (pi-web-ui only reads `card` / `in_short`).
+
+## Continuation-grant cards (Ops #683)
+
+The other card that reaches the owner: a role asks to keep messaging another role past the chain's free limit
+(`role_message` approval request) and the request climbs to him. It opens with the same kind of plain brief.
+Project `owner-cards-plain-context`, step 2; same owner words (via COO rm-d2c1f9b2).
+
+### What the grant brief says
+
+Five labelled lines, built by `server/grant-card-brief.ts` (`grantCardBrief`) from the stored request alone (its
+binding and the requester's own context), no model, with #682's plain-words helpers and fit (`plainWords`,
+`plainSentence`, `fitBrief`), so at most 600 characters with ids, paths and rule numbers taken out:
+
+| Line | From |
+| --- | --- |
+| Who asks | the requester and the roles it wants to message (by their identity titles; the requester itself, which the scope also names, is left out; more than three: "and N more"), and past which message of the chain |
+| What for | first sentence of the context's `goal` |
+| Why more messages | first sentence of `whyNeeded` |
+| If you allow it | first sentence of `nextStepAndOutcome` |
+| Your answers | fixed: "Deny": no more messages in this chain; "Allow one send": one more message; "Allow up to N sends": up to N more, for the hour the grant lasts (named as the card's buttons are; the contract's grant lasts 3,600,000 ms) |
+
+A part with no plain sentence left (only ids or paths, or under two words) says "Not said in plain words." When
+the brief is too long, the next step gives first, then the goal and why, then the names; each is cut after a whole
+word with an ellipsis, down to its floor (24 characters for the three sentences, 12 for a name).
+
+### Where the grant brief is built and shown
+
+- `server/role-message-guard-host.ts` `briefOf(question)`: the requester and recipients named by `def(role)?.title`,
+  `pastMessage` = `causal.nextHop - 1` (as the card's own line), `quantity` = the binding's, `context` = the owner
+  question's `detail`. Set as `brief` on the card `present` adds to the AskHub (Telegram) and on each
+  `openQuestions()` entry (`UiRoleGuardQuestion.brief`, the app's approval dialog). Both are built from the same
+  stored request, so they are the same lines.
+- Telegram: `renderBrief` now shows the brief of any card that has one (it took only kind "stuck"); it comes whole
+  before the card's line and question, while the requester's context is still cut to 500 characters as before.
+- The app: `RoleGuardOwnerQuestions` passes `briefLines(q.brief)` to `RoleMessageGuardApproval`, which draws it with
+  `OwnerCardBrief` under the dialog's title. `briefLines` drops a brief that isn't whole and plain.
+- Unchanged (display only): the owner question (`questionId`, `generation`, `choices`, `choicesDigest`, `detail`,
+  `binding`), the card's id, field id, options, title and line, the request, its digests, admission, grants and
+  answer handling. `server/role-message-guard-core.ts`, `-contract.ts` and `-approvals.ts` are untouched.
+
+### Hypothesis H-OWNER-CARD-GRANT (rule 20)
+
+- **Wrong now:** the card had one line, "<role> asks to continue a chain of role messages past message N", then
+  the requester's whole context as the detail. Telegram cuts that detail at 500 characters, and the answers
+  deny / one_send / requested_quantity aren't explained.
+- **Change:** fill the `brief` slot #682 added, from the stored request only: who asks whom, what for, why more
+  messages, what happens next, what each answer does; ids and paths taken out; #682's module reused.
+- **Expected:** fixture tests show a brief of at most 600 characters, with no ids or paths, covering each point;
+  the question id, generation, choices and choicesDigest are byte-identical before and after.
+- **Wrong if:** any digest or id changes, or the brief misses a point.
+
+#### Result: HIT
+
+- Brief: `tests/unit/grant-card-brief.test.ts` checks every point in order, "Label: text" within 600 characters and
+  `hasIdOrPath` false on each line, for a plain request (380 characters), one full of ids and paths (496; "Land
+  Ops #683 from /home/… so grant cards (see server/grant-card-brief.ts) open plainly" becomes "Land Ops from so
+  grant cards open plainly."), one with nothing plain ("Not said in plain words." three times) and a very long
+  one with five recipients (598, every point still there). Look only, the two real owner-tier requests of Oct 31
+  (the guard's stored state, read only): COO to Temper and Ops, 596 characters; COO to Temper, 530; both with
+  no ids or paths and nothing "not said".
+- Unchanged: the same test runs a real guard host to an owner-tier card. The open question's `ownerQuestion` has
+  exactly its contract's keys and no brief, its id, generation, choices and a 64-hex `choicesDigest` are the
+  question's, the card's id, field id and option values are too, a second `openQuestions()` is equal, and the
+  answer still settles it. A/B, old code against new on the same harness run: the open questions and the card,
+  less the new `brief`, were identical once each run's random folder, message ids and digests were replaced in
+  order of appearance (two runs can't match byte for byte: the digests hash each run's random ids). The brief is
+  made from the finished question and never goes into it, its digest or the card's fields.
+- Surfaces: `tests/unit/plugin-telegram.test.ts` (a grant card's brief whole and first; the context still cut;
+  without a brief the message is as before) and `tests/unit/role-message-guard-view.test.ts` (the dialog draws the
+  brief under its title; none without one).
+- The new tests failed on the old code (module missing; Telegram showed no brief for a non-stuck card; the dialog
+  drew none) and pass after.
+
+### Undo (Ops #683)
+
+Revert the commit and `pi-web-deploy` the previous commit. Nothing is stored: the brief is made each time a card
+is shown or the open questions are listed; the guard's state and records are untouched.

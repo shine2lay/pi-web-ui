@@ -116,7 +116,7 @@ export function hasIdOrPath(text: string): boolean {
 }
 
 /** Markdown marks, links, paths and ids taken out, and what they leave behind tidied. */
-function plainWords(raw: string): string {
+export function plainWords(raw: string): string {
 	let s = raw
 		.replace(/\r\n?/g, "\n")
 		.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
@@ -165,7 +165,7 @@ function firstSentence(s: string): string {
 const words = (s: string) => s.split(/\s+/).filter((w) => /\p{L}{2,}/u.test(w)).length;
 
 /** The first sentence of a record's text in plain words, or "" when taking ids and paths out leaves no sentence. */
-function plainSentence(raw: string | undefined, minWords = 4): string {
+export function plainSentence(raw: string | undefined, minWords = 4): string {
 	if (!raw?.trim()) return "";
 	const s = firstSentence(plainWords(raw));
 	return words(s) >= minWords ? s : "";
@@ -182,7 +182,7 @@ function capWords(s: string, max: number): string {
 }
 
 /** Ends like a sentence. */
-const closed = (s: string) => (!s || /[.!?\u2026]["'\u201D\u2019)]*$/.test(s) ? s : `${s}.`);
+export const closed = (s: string) => (!s || /[.!?\u2026]["'\u201D\u2019)]*$/.test(s) ? s : `${s}.`);
 const unclosed = (s: string) => s.replace(/[.!]+$/, "");
 const quoted = (s: string) => `\u201C${s}\u201D`;
 
@@ -311,24 +311,53 @@ export interface OwnerCardBriefInput {
  * One part of a line that can be shortened to fit, down to its floor (0: it may go). Parts give in turn: what
  * the brief can best do without first (the goal and the project's outcome), the pi-queue's own words last.
  */
-interface Flex {
+export interface Flex {
 	text: string;
 	cap: number;
 	floor: number;
 	turn: number;
 }
 
-const GIVES_FIRST = 0;
-const GIVES_SECOND = 1;
-const GIVES_THIRD = 2;
+export const GIVES_FIRST = 0;
+export const GIVES_SECOND = 1;
+export const GIVES_THIRD = 2;
 const GIVES_LAST = 3;
-const flex = (text: string, floor: number, turn: number): Flex => ({
+export const flex = (text: string, floor: number, turn: number): Flex => ({
 	text,
 	cap: text.length,
 	floor: Math.min(floor, text.length),
 	turn,
 });
-const shown = (f: Flex) => capWords(f.text, f.cap);
+/** A part as it is shown now: cut to its cap after a whole word. */
+export const shown = (f: Flex) => capWords(f.text, f.cap);
+/** A part shown as a sentence, or "" once cutting leaves less than `min` characters of it. */
+function shownSentence(f: Flex, min = 24): string {
+	const s = shown(f);
+	return s.length >= Math.min(min, f.text.length) ? s : "";
+}
+
+/**
+ * Fit a brief within BRIEF_MAX: the longest part that can still give (in turn) is shortened a little at a time and
+ * the lines made again, until the whole brief fits. When no part can give, `loosen` may make room another way
+ * (true: it did). Any id or path left in a line's fixed words is taken out last.
+ */
+export function fitBrief(
+	parts: readonly Flex[],
+	lines: () => UiOwnerCardBriefLine[],
+	loosen: () => boolean = () => false,
+): UiOwnerCardBriefLine[] {
+	const size = (f: Flex) => Math.min(f.cap, f.text.length);
+	let out = lines();
+	for (let over = briefText(out).length - BRIEF_MAX, guard = 0; over > 0 && guard < 1000; guard++) {
+		const give = parts.filter((f) => size(f) > f.floor).sort((a, b) => a.turn - b.turn || size(b) - size(a))[0];
+		if (give)
+			give.cap = Math.max(give.floor, size(give) - Math.max(4, Math.ceil(over / 2), Math.ceil(size(give) * 0.15)));
+		else if (!loosen()) break;
+		out = lines();
+		over = briefText(out).length - BRIEF_MAX;
+	}
+	return out.map((l) => (hasIdOrPath(l.text) ? { ...l, text: plainWords(l.text) } : l));
+}
 
 /** The lines of the plain brief, at most BRIEF_MAX characters as "Label: text" lines. */
 export function ownerCardBrief(input: OwnerCardBriefInput): UiOwnerCardBriefLine[] {
@@ -360,11 +389,7 @@ export function ownerCardBrief(input: OwnerCardBriefInput): UiOwnerCardBriefLine
 		}))
 		.filter((a) => a.name.text);
 	let named = 2;
-
-	const sentence = (f: Flex, min = 24) => {
-		const s = shown(f);
-		return s.length >= Math.min(min, f.text.length) ? s : "";
-	};
+	const sentence = shownSentence;
 	const projectText = (): string => {
 		if (project === null) return "Not part of a project.";
 		if (project === undefined) return "Its project's record couldn't be found.";
@@ -410,18 +435,8 @@ export function ownerCardBrief(input: OwnerCardBriefInput): UiOwnerCardBriefLine
 		...waiters.flatMap((w) => (w.queue ? [w.title, w.queue] : [w.title])),
 		...answers.flatMap((a) => [a.name, a.meaning]),
 	];
-	const size = (f: Flex) => Math.min(f.cap, f.text.length);
-	let out = lines();
-	for (let over = briefText(out).length - BRIEF_MAX, guard = 0; over > 0 && guard < 1000; guard++) {
-		const give = parts.filter((f) => size(f) > f.floor).sort((a, b) => a.turn - b.turn || size(b) - size(a))[0];
-		if (give)
-			give.cap = Math.max(give.floor, size(give) - Math.max(4, Math.ceil(over / 2), Math.ceil(size(give) * 0.15)));
-		else if (named > 1) named = 1;
-		else break;
-		out = lines();
-		over = briefText(out).length - BRIEF_MAX;
-	}
-	return out.map((l) => (hasIdOrPath(l.text) ? { ...l, text: plainWords(l.text) } : l));
+	// When no part can give any more, name one waiting task instead of two.
+	return fitBrief(parts, lines, () => named > 1 && ((named = 1), true));
 }
 
 /** A waiting ask's brief to put on a record the browser gets (nothing when it has none). */

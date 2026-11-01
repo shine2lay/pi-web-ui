@@ -128,6 +128,8 @@ export type UiRoleGuardQuestion = {
 	questionId: string;
 	generation: string;
 	requesterRole: string;
+	/** grant-card-brief (Ops #683): the card's plain brief, shown first; display only, not part of the question. */
+	brief?: UiOwnerCardBriefLine[];
 } & (
 	| {
 			request: import("./role-message-guard-contract.js").GuardRequest;

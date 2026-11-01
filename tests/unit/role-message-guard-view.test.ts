@@ -433,6 +433,33 @@ describe("A finite controls, focus, reconnect and failure", () => {
 		expect(m.container.textContent).toContain("<img");
 		expect(m.onDecision).not.toHaveBeenCalled();
 	});
+	// grant-card-brief (Ops #683): the owner's grant card opens with its plain brief, under the title and before the
+	// status, the context and the choices; shown literally; a card without one looks as before.
+	it("grant card: the plain brief first, under the title; none without one", () => {
+		const r = request("awaiting_owner");
+		const view = guardApprovalView({ ...input(r), viewer: "owner", ownerQuestion: ownerQuestion(r) });
+		const brief = [
+			{ label: "Who asks", text: "OPS wants to keep messaging QA, past message 11 of one chain of messages." },
+			{ label: "Your answers", text: "\u201CDeny\u201D: no more messages in this chain. <b>not bold</b>" },
+		];
+		const m = mount(view);
+		expect(m.container.querySelector(".owner-card-brief")).toBeNull();
+		act(() => {
+			root!.render(
+				createElement(RoleMessageGuardApproval, { view, brief, onDecision: m.onDecision, onClose: m.onClose }),
+			);
+		});
+		const dl = m.container.querySelector("dl.owner-card-brief")!;
+		expect([...dl.querySelectorAll("dt")].map((d) => d.textContent)).toEqual(["Who asks:", "Your answers:"]);
+		expect(dl.querySelector("b")).toBeNull();
+		expect(dl.textContent).toContain("<b>not bold</b>");
+		const text = m.container.textContent!;
+		const at = text.indexOf("Who asks:");
+		expect(at).toBeGreaterThan(text.indexOf(view.title));
+		for (const later of [view.tier, view.status, context.goal, view.legend])
+			expect(at, later).toBeLessThan(text.indexOf(later));
+		expect(m.onDecision).not.toHaveBeenCalled();
+	});
 	it.each(["denied", "expired", "held", "rate_limited", "unknown"] as const)(
 		"%s has honest status and no interactive approval",
 		(state) => {

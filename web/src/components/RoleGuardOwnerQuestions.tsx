@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import "../role-message-guard.css";
 import { answerRoleGuard, dismissRoleGuard, useRoleGuard } from "../role-guard-state";
 import { guardApprovalView } from "../role-message-guard-view";
+import { briefLines } from "../roles-useful-model";
 import { RoleMessageGuardApproval } from "./RoleMessageGuardApproval";
 
 export function RoleGuardOwnerQuestions({ connected, language }: { connected: boolean; language: "en" | "zh" }) {
@@ -31,6 +32,7 @@ export function RoleGuardOwnerQuestions({ connected, language }: { connected: bo
 	return (
 		<RoleMessageGuardApproval
 			view={view}
+			brief={briefLines(q.brief)}
 			onDecision={(intent) => answerRoleGuard(q.questionId, q.generation, intent.choice)}
 			onClose={() => dismissRoleGuard(q.questionId)}
 		/>
