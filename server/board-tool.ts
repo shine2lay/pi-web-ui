@@ -53,7 +53,7 @@ function toWords(p: BoardPostRecord): string {
 	return p.to === "all" ? "all roles" : p.to.join(", ");
 }
 
-/** One line per open post for a role (board read without an id). */
+/** One line per open post for a role (board read without an id; titles only, so it marks nothing read). */
 export function boardListText(board: RoleBoard, role: string): string {
 	const posts = board.openFor(role);
 	if (!posts.length) return "Nothing open on the board for you.";
@@ -165,12 +165,9 @@ export function makeBoardTool(host: BoardToolHost): ToolDefinition {
 			if (action === "read") {
 				const id = (p.id ?? "").trim();
 				if (!id) {
-					const text = boardListText(board, role);
-					board.markRead(
-						role,
-						board.openFor(role).map((x) => x.id),
-					);
-					return { content: [{ type: "text", text }], details: { action } };
+					// Ops #710 (audit R6c): a role's read marks are the posts it was shown in full. A list shows
+					// titles only, so it marks nothing; board read <id> marks the one it shows.
+					return { content: [{ type: "text", text: boardListText(board, role) }], details: { action } };
 				}
 				const post = board.byId(id);
 				if (!post) throw new Error(`No post ${id} on the board.`);

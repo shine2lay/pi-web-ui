@@ -203,6 +203,12 @@ const chatOf = (r: string, isHome: boolean, mark?: BoardMark, got: string[] = []
 	got,
 });
 
+/** A chat's mark as its transcript gives it back: the note's details saved as JSON, read by boardChatState. */
+const markOf = (details: BoardNoteDetails): BoardMark | undefined =>
+	boardChatState([
+		{ type: "custom_message", customType: BOARD_CUSTOM_TYPE, details: JSON.parse(JSON.stringify(details)) as unknown },
+	]).mark;
+
 // ---------------------------------------------------------------------------
 
 describe("the owner's routing rule: directly only when something waits", () => {
@@ -642,6 +648,55 @@ describe("what a chat sees at the start of a turn", () => {
 		expect(n.text).toContain("… and 2 more: board read");
 	});
 
+	// Ops #710 (audit R6c): a role's read marks are the posts it was shown in full. A note's mark covers only
+	// what it shows; the posts it leaves out ("… and N more") come in full in the next note, marked then.
+	it("25 posts: the first note shows and marks 20, the next the other 5, none twice (R6c)", async () => {
+		const f = three();
+		const b = new RoleBoard(store, f.host, clock);
+		// News older than 3 days: a chat's first turn skips it, and a later note must not bring it back.
+		const old = await b.post({ owner: true }, { kind: "news", to: ["gamma"], title: "old news", text: "x" });
+		if (!old.ok) throw new Error(old.error);
+		now += 4 * DAY;
+		const ids: string[] = [];
+		for (let i = 0; i < 25; i++) {
+			const res = await b.post({ owner: true }, { kind: "order", to: ["gamma"], title: `o${i}`, text: "x" });
+			if (!res.ok) throw new Error(res.error);
+			ids.push(res.post.id);
+		}
+		const readBy = () => ids.filter((id) => b.byId(id)?.reads?.gamma !== undefined);
+		const n1 = b.turnNote(chatOf("gamma", true));
+		expect(n1?.details.ids).toEqual(ids.slice(0, BOARD_NOTE_POSTS_MAX));
+		expect(n1?.text).toContain("… and 5 more: board read");
+		expect(readBy()).toEqual(ids.slice(0, BOARD_NOTE_POSTS_MAX));
+		const n2 = b.turnNote(chatOf("gamma", true, markOf(n1!.details)));
+		expect(n2?.details.ids).toEqual(ids.slice(BOARD_NOTE_POSTS_MAX));
+		expect(n2?.text.startsWith("[Board] 5 new posts\n\n")).toBe(true);
+		expect(n2?.text).not.toContain("more: board read");
+		expect(readBy()).toEqual(ids);
+		expect(b.turnNote(chatOf("gamma", true, markOf(n2!.details)))).toBeUndefined();
+		expect(b.byId(old.post.id)?.reads).toBeUndefined();
+	});
+
+	it("a left-out post closed, or got directly, before the next note isn't shown there, nor as ended (R6c)", async () => {
+		const f = three();
+		const b = new RoleBoard(store, f.host, clock);
+		const ids: string[] = [];
+		for (let i = 0; i < BOARD_NOTE_POSTS_MAX + 3; i++) {
+			const res = await b.post({ owner: true }, { kind: "order", to: ["gamma"], title: `o${i}`, text: "x" });
+			if (!res.ok) throw new Error(res.error);
+			ids.push(res.post.id);
+		}
+		const n1 = b.turnNote(chatOf("gamma", false));
+		const [closed, got, rest] = ids.slice(BOARD_NOTE_POSTS_MAX);
+		b.close({ owner: true }, closed, "over");
+		const n2 = b.turnNote(chatOf("gamma", false, markOf(n1!.details), [got]));
+		expect(n2?.details.ids).toEqual([rest]);
+		expect(n2?.ended).toEqual([]);
+		expect(n2?.text).not.toContain(closed);
+		expect(n2?.details.open).toContain(got);
+		expect(b.turnNote(chatOf("gamma", false, markOf(n2!.details)))).toBeUndefined();
+	});
+
 	it("boardNote is pure: it marks nothing; the empty board makes no note", () => {
 		const n = boardNote({ epoch: "e", seq: 0, posts: [] }, chatOf("gamma", true), now);
 		expect(n).toBeUndefined();
@@ -886,7 +941,8 @@ describe("the board tool", () => {
 		const list = await beta.run({ action: "read" });
 		expect(list.content[0].text).toContain(`order ${id} · from owner (via alpha)`);
 		expect(list.content[0].text).toContain("you: not done yet");
-		expect(b.byId(id)?.reads?.beta).toBe(now);
+		// Ops #710 (audit R6c): a list shows titles only, so it marks nothing read.
+		expect(b.byId(id)?.reads?.beta).toBeUndefined();
 		expect((await beta.run({ action: "ack", id, note: "paused" })).content[0].text).toBe(
 			`Marked ${id} done for beta. Nothing is sent to the poster; the board shows it.`,
 		);
@@ -898,5 +954,25 @@ describe("the board tool", () => {
 		const news = await alpha.run({ action: "post", kind: "news", to: ["all"], title: "N", text: "x" });
 		expect(news.content[0].text).toContain("It wakes nobody");
 		await expect(alpha.run({ action: "shout" })).rejects.toThrow("action must be");
+	});
+
+	it("25 open posts: the list marks none read; board read <id> marks that one (R6c)", async () => {
+		const f = three();
+		const b = new RoleBoard(store, f.host, clock);
+		const ids: string[] = [];
+		for (let i = 0; i < 25; i++) {
+			const res = await b.post({ owner: true }, { kind: "order", to: ["beta"], title: `o${i}`, text: "x" });
+			if (!res.ok) throw new Error(res.error);
+			ids.push(res.post.id);
+		}
+		const readBy = () => ids.filter((id) => b.byId(id)?.reads?.beta !== undefined);
+		const beta = tool(b, { role: "beta" });
+		const list = (await beta.run({ action: "read" })).content[0].text;
+		expect(list).toContain("Open on the board for you (25), newest first:");
+		expect(list).toContain("… and 5 older");
+		expect(readBy()).toEqual([]);
+		const one = (await beta.run({ action: "read", id: ids[3] })).content[0].text;
+		expect(one).toContain(`Order ${ids[3]} · from owner`);
+		expect(readBy()).toEqual([ids[3]]);
 	});
 });

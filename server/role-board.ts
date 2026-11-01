@@ -20,9 +20,10 @@
 // What a chat sees at the start of a turn is one "[Board]" note: a shown custom message (customType
 // "board") saved in its transcript; the system prompt is left alone, so the prompt cache stays. The
 // note's details carry the chat's "seen up to" mark, so the mark survives reloads. Orders are shown in
-// full, news cut at about 600 characters. An order the chat got directly counts as seen there; a post
-// closed after the chat saw it is shown there once as ended. A chat's first turn (no mark yet) sees only
-// open orders, plus, in a home chat, news from the last 3 days.
+// full, news cut at about 600 characters. A note shows at most 20 posts: its mark keeps the ones it left
+// out ("… and N more"), and the next note shows them (Ops #710, audit R6c). An order the chat
+// got directly counts as seen there; a post closed after the chat saw it is shown there once as ended. A
+// chat's first turn (no mark yet) sees only open orders, plus, in a home chat, news from the last 3 days.
 //
 // Roles mark an order done with board ack (once per role; a second ack replaces the note); nothing is
 // sent to the poster: the poster, COO (roles_overview) and the Board view see who is done. The author or
@@ -114,10 +115,13 @@ interface BoardFile {
 export interface BoardMark {
 	v: 1;
 	epoch: string;
-	/** Every post up to this seq has been through this chat (shown, or not for it). */
+	/** Every post up to this seq has been through this chat (shown, not for it, or left for later). */
 	upTo: number;
 	/** Posts it saw that were open then (an ended one is shown once, then dropped). */
 	open: string[];
+	/** Ops #710 (audit R6c): posts the note left out ("… and N more"), not yet seen here: the next note
+	 *  shows them. Absent when it left none out. */
+	later?: string[];
 }
 
 /** What a "[Board]" note's details hold: the mark, and what this note showed. */
@@ -377,7 +381,14 @@ export function boardMarkOf(details: unknown): BoardMark | undefined {
 	if (!d || d.v !== 1 || typeof d.epoch !== "string" || typeof d.upTo !== "number" || !Array.isArray(d.open)) {
 		return undefined;
 	}
-	return { v: 1, epoch: d.epoch, upTo: d.upTo, open: d.open.filter((x): x is string => typeof x === "string") };
+	const later = Array.isArray(d.later) ? d.later.filter((x): x is string => typeof x === "string") : [];
+	return {
+		v: 1,
+		epoch: d.epoch,
+		upTo: d.upTo,
+		open: d.open.filter((x): x is string => typeof x === "string"),
+		...(later.length ? { later } : {}),
+	};
 }
 
 /** What a chat's transcript says about the board: its newest note's mark and the orders it got directly
@@ -419,20 +430,23 @@ export function boardNote(
 		const p = byId.get(id);
 		if (p?.closed) ended.push(p);
 	}
-	// New: open posts for this chat it hasn't seen.
+	// New: open posts for this chat it hasn't seen, with the ones its last note left out.
 	const newsFrom = now - BOARD_FIRST_NEWS_DAYS * 24 * 3600_000;
+	const leftBefore = new Set(mark?.later ?? []);
 	const fresh = store.posts
 		.filter((p) => {
 			if (p.closed || got.has(p.id) || !postShownIn(p, chat.role, chat.isHome)) return false;
-			if (mark) return p.seq > mark.upTo && !mark.open.includes(p.id);
+			if (mark) return (p.seq > mark.upTo || leftBefore.has(p.id)) && !mark.open.includes(p.id);
 			return p.kind === "order" || p.at >= newsFrom;
 		})
 		.sort((a, b) => (a.kind === b.kind ? a.seq - b.seq : a.kind === "order" ? -1 : 1));
 	if (!fresh.length && !ended.length) return undefined;
 	const shown = fresh.slice(0, BOARD_NOTE_POSTS_MAX);
-	const more = fresh.length - shown.length;
+	// Ops #710 (audit R6c): the mark covers only what this note shows; the rest wait in `later` for the next.
+	const leftOut = fresh.slice(shown.length);
+	const more = leftOut.length;
 	const endedIds = new Set(ended.map((p) => p.id));
-	const open = [...new Set([...seen, ...fresh.map((p) => p.id)])].filter((id) => byId.has(id) && !endedIds.has(id));
+	const open = [...new Set([...seen, ...shown.map((p) => p.id)])].filter((id) => byId.has(id) && !endedIds.has(id));
 	const n = shown.length;
 	const head = n
 		? `${BOARD_NOTE_PREFIX} ${n} new post${n === 1 ? "" : "s"}${ended.length ? `, ${ended.length} ended` : ""}`
@@ -447,6 +461,7 @@ export function boardNote(
 			epoch: store.epoch,
 			upTo: store.seq,
 			open,
+			...(leftOut.length ? { later: leftOut.map((p) => p.id) } : {}),
 			ids: shown.map((p) => p.id),
 			...(ended.length ? { ended: ended.map((p) => p.id) } : {}),
 		},
