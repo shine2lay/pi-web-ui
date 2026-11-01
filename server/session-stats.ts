@@ -13,6 +13,31 @@ export interface StatsSession<T> {
 	getSessionStats(): T;
 }
 
+export interface ContextWindowModel {
+	readonly contextWindow?: unknown;
+}
+
+export interface ContextWindowSession {
+	readonly model?: ContextWindowModel | null;
+	readonly routedModel?: { readonly model?: ContextWindowModel | null } | null;
+}
+
+/** Current model context window in tokens (0 when unknown).
+ *  SDK getSessionStats().contextUsage.contextWindow is `_limitsModel().contextWindow`
+ *  (`routedModel?.model ?? model`) whenever > 0, and undefined when the model is absent
+ *  or has no positive contextWindow. Reading the model directly avoids getSessionStats()'s
+ *  whole-transcript entry walk and buildSessionProjection() on every bindSession(). */
+export function contextWindowOf(session: ContextWindowSession | null | undefined): number {
+	try {
+		const routed = session?.routedModel?.model?.contextWindow;
+		if (typeof routed === "number" && routed > 0) return Math.floor(routed);
+		const def = session?.model?.contextWindow;
+		return typeof def === "number" && def > 0 ? Math.floor(def) : 0;
+	} catch {
+		return 0;
+	}
+}
+
 interface CachedStats {
 	entries: unknown[] | undefined;
 	length: number;

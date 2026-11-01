@@ -8,13 +8,17 @@ function serviceWith(settings: { softCapTokens: number; softCapByModel: Record<s
 	return { settingsSvc: { current: settings }, convs };
 }
 
-function fakeSession(model: { provider: string; id: string } | null, window: number) {
+function fakeSession(model: { provider: string; id: string; contextWindow?: number } | null, window: number) {
 	const applyOverrides = vi.fn();
+	const getSessionStats = vi.fn(() => ({
+		contextUsage: window > 0 ? { tokens: 1000, contextWindow: window, percent: 1 } : undefined,
+	}));
 	return {
-		model,
-		getSessionStats: () => ({ contextUsage: { tokens: 1000, contextWindow: window, percent: 1 } }),
+		model: model ? { ...(window > 0 ? { contextWindow: window } : {}), ...model } : null,
+		getSessionStats,
 		settingsManager: { applyOverrides },
 		_captured: applyOverrides,
+		_stats: getSessionStats,
 	};
 }
 
@@ -59,6 +63,44 @@ describe("applyCompactionOverrides", () => {
 		const svc = serviceWith({ softCapTokens: 100000, softCapByModel: {} }, [bad, good]);
 		expect(() => ClientSession.prototype.applyCompactionOverrides.call(svc)).not.toThrow();
 		expect(good._captured).toHaveBeenCalledWith({ compaction: { reserveTokens: 100000 } });
+	});
+	it("bindSession applies compaction overrides from model contextWindow without calling getSessionStats", async () => {
+		const s = fakeSession({ provider: "xai", id: "grok-4" }, 500000);
+		const session = {
+			...s,
+			agent: { followUp: vi.fn(), clearFollowUpQueue: vi.fn() },
+			prompt: vi.fn(async () => {}),
+			sendCustomMessage: vi.fn(async () => {}),
+			isStreaming: false,
+			bindExtensions: vi.fn(async () => {}),
+			subscribe: vi.fn(() => () => {}),
+		};
+		const conv = {
+			id: "c0",
+			isEphemeral: false,
+			dialogs: { cancelExcept: vi.fn() },
+			runtime: { session },
+			session,
+		};
+		const svc = {
+			conv,
+			convs: new Map([["c0", conv]]),
+			settingsSvc: { current: { softCapTokens: 190000, softCapByModel: {} } },
+			attachConversationUsage: vi.fn(),
+			makeExtensionErrorReporter: vi.fn(() => () => {}),
+			onEvent: vi.fn(),
+			applyRetryOverrides: vi.fn(),
+			applyCompactionOverrides: ClientSession.prototype.applyCompactionOverrides,
+			scheduleSnapshot: vi.fn(),
+			webUi: { refresh: vi.fn() },
+			startWidgetsTimer: vi.fn(),
+			startStallTimer: vi.fn(),
+			restoreChatModelChoice: vi.fn(async () => false),
+		};
+		const bindSession = (ClientSession.prototype as unknown as { bindSession(c: unknown): Promise<void> }).bindSession;
+		await bindSession.call(svc, conv);
+		expect(s._captured).toHaveBeenCalledWith({ compaction: { reserveTokens: 310000 } });
+		expect(s._stats).not.toHaveBeenCalled();
 	});
 });
 

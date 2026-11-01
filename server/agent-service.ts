@@ -126,7 +126,7 @@ import { describeError, errorMessage, planForLostActive } from "./crash-guard.js
 // list-freeze: message counts without getSessionStats() (which re-projects the whole context).
 import { messageCountOf } from "./message-count.js";
 import { pickWindowStart, readMessageWindowConfig } from "./message-window.js";
-import { invalidateSessionStats, sessionStatsOf } from "./session-stats.js";
+import { contextWindowOf, invalidateSessionStats, sessionStatsOf } from "./session-stats.js";
 import type { UsageAccountingView } from "./usage-accounting-host.js";
 import { attachUsageLedger, recordUsageLedgerEntry } from "./usage-accounting-ledger.js";
 // new-chat-default: the global default model is what every new chat starts on.
@@ -2823,21 +2823,6 @@ function modelKeyOf(session: { model?: { provider?: unknown; id?: unknown } | nu
 	const m = session?.model;
 	if (!m || typeof m.provider !== "string" || typeof m.id !== "string") return null;
 	return `${m.provider}/${m.id}`;
-}
-
-/** 会话当前模型的上下文窗口（未知时 0）：live 统计优先，模型定义回落。 */
-function contextWindowOf(session: {
-	getSessionStats?: () => { contextUsage?: { contextWindow?: unknown } | null };
-	model?: { contextWindow?: unknown } | null;
-}): number {
-	try {
-		const live = session?.getSessionStats?.()?.contextUsage?.contextWindow;
-		if (typeof live === "number" && live > 0) return Math.floor(live);
-	} catch {
-		// 会话未就绪 → 回落模型定义。
-	}
-	const def = (session as { model?: { contextWindow?: unknown } | null })?.model?.contextWindow;
-	return typeof def === "number" && def > 0 ? Math.floor(def) : 0;
 }
 
 /** issue #145：跨客户端同会话持有者（AgentService.clients 全局查重的结果）。

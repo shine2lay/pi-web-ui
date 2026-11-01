@@ -1,6 +1,7 @@
+import { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClientSession } from "../../server/agent-service.js";
-import { invalidateSessionStats } from "../../server/session-stats.js";
+import { contextWindowOf, invalidateSessionStats } from "../../server/session-stats.js";
 
 interface Stats {
 	sequence: number;
@@ -239,5 +240,139 @@ describe("bigchat-stats shared revision cache through ClientSession", () => {
 		vi.advanceTimersByTime(1);
 		readStats.call(window);
 		expect(getStats).toHaveBeenCalledTimes(2);
+	});
+});
+
+function oldContextWindowOf(session: {
+	getSessionStats?: () => { contextUsage?: { contextWindow?: unknown } | null };
+	model?: { contextWindow?: unknown } | null;
+}): number {
+	try {
+		const live = session?.getSessionStats?.()?.contextUsage?.contextWindow;
+		if (typeof live === "number" && live > 0) return Math.floor(live);
+	} catch {
+		// fall back to model definition
+	}
+	const def = session?.model?.contextWindow;
+	return typeof def === "number" && def > 0 ? Math.floor(def) : 0;
+}
+
+function sdkSession(
+	sessionManager: SessionManager,
+	messages: unknown[],
+	model: { contextWindow?: unknown } | null | undefined,
+	routedModel?: { model?: { contextWindow?: unknown } | null } | null,
+) {
+	const rawStats = AgentSession.prototype.getSessionStats;
+	const getSessionStats = vi.fn(function (this: unknown) {
+		return rawStats.call(this);
+	});
+	const session = Object.create(AgentSession.prototype, {
+		sessionManager: { value: sessionManager, configurable: true },
+		agent: { value: { state: { messages, model } }, configurable: true },
+		routedModel: { value: routedModel, configurable: true },
+		getSessionStats: { value: getSessionStats, configurable: true },
+	});
+	return { session, getSessionStats };
+}
+
+describe("contextWindowOf", () => {
+	it("matches old getSessionStats-based value across empty/new and populated SDK sessions for models with and without contextWindow", () => {
+		const emptySm = SessionManager.inMemory("/tmp/context-window-empty");
+		const populatedSm = SessionManager.inMemory("/tmp/context-window-populated");
+		populatedSm.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "hi" }],
+			timestamp: 1,
+		} as never);
+		populatedSm.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "hello" }],
+			api: "messages",
+			provider: "anthropic",
+			model: "claude",
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 2,
+		} as never);
+
+		const models: Array<{
+			label: string;
+			model: { contextWindow?: unknown } | null | undefined;
+			routed?: { model?: { contextWindow?: unknown } | null } | null;
+			expected: number;
+			expectContextUsageNull: boolean;
+		}> = [
+			{
+				label: "model with contextWindow",
+				model: { contextWindow: 200000 },
+				expected: 200000,
+				expectContextUsageNull: false,
+			},
+			{
+				label: "fractional contextWindow",
+				model: { contextWindow: 32768.9 },
+				expected: 32768,
+				expectContextUsageNull: false,
+			},
+			{ label: "model without contextWindow", model: {}, expected: 0, expectContextUsageNull: true },
+			{
+				label: "model with zero contextWindow",
+				model: { contextWindow: 0 },
+				expected: 0,
+				expectContextUsageNull: true,
+			},
+			{
+				label: "model with negative contextWindow",
+				model: { contextWindow: -1 },
+				expected: 0,
+				expectContextUsageNull: true,
+			},
+			{ label: "undefined model", model: undefined, expected: 0, expectContextUsageNull: true },
+			{ label: "null model", model: null, expected: 0, expectContextUsageNull: true },
+			{
+				label: "routedModel overrides model",
+				model: { contextWindow: 200000 },
+				routed: { model: { contextWindow: 1000000 } },
+				expected: 1000000,
+				expectContextUsageNull: false,
+			},
+			{
+				label: "routedModel without contextWindow falls back to model",
+				model: { contextWindow: 200000 },
+				routed: { model: {} },
+				expected: 200000,
+				expectContextUsageNull: true,
+			},
+		];
+
+		for (const { sm, msgs } of [
+			{ sm: emptySm, msgs: [] },
+			{ sm: populatedSm, msgs: [{ role: "user" }, { role: "assistant" }] },
+		]) {
+			for (const c of models) {
+				const { session, getSessionStats } = sdkSession(sm, msgs, c.model, c.routed);
+				const actual = contextWindowOf(session);
+				expect(getSessionStats, c.label).not.toHaveBeenCalled();
+				const stats = session.getSessionStats();
+				if (c.expectContextUsageNull) {
+					expect(stats.contextUsage, c.label).toBeUndefined();
+				} else {
+					expect(stats.contextUsage?.contextWindow, c.label).toBe(
+						(c.routed?.model?.contextWindow ?? c.model?.contextWindow) as number,
+					);
+				}
+				const legacy = oldContextWindowOf(session);
+				expect(actual, c.label).toBe(legacy);
+				expect(actual, c.label).toBe(c.expected);
+			}
+		}
 	});
 });
