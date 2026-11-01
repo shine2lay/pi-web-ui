@@ -2,8 +2,8 @@
 
 Ops #684 (project owner-cards-plain-context, lead Ops) laid the groundwork: the routing rule, the durable hold store
 with its safety-net clock, and AskHub's held state. Ops #685 wires every owner ask through it behind a switch,
-`ownerQuestionsViaCoo`, which is **off** until #687 turns it on: while it is off nothing changes for any chat or
-surface. #686 adds COO's card and tool to let a held ask through or hand it back.
+`ownerQuestionsViaCoo`; while it is off nothing changes for any chat or surface. #686 adds COO's card and tool to let
+a held ask through or hand it back. #687 switches it on: on by default, off only when turned off in Settings.
 
 ## Why
 
@@ -160,9 +160,11 @@ Also through: a clock set back before the hold (`clock-moved-back`), or one that
 ## The wiring (#685)
 
 **The switch.** `ownerQuestionsViaCoo` in pi-web-ui's settings (Settings, "Questions for you go through COO first";
-`server/client-state.ts`, `server/settings-service.ts`), **off** by default. Off is exactly as before #685: no ask is
-routed, nothing is held or written, and every card looks as it did. Turning it off again is the undo, with no revert:
-new asks go as before, and the next sweep (within 30 seconds) lets everything held through.
+`server/client-state.ts`, `server/settings-service.ts`), **on** by default since #687: nothing stored means on, and
+turning it off in Settings stores `false`, which other settings saves and restarts keep. (It landed off with #685 and
+#686.) Off is exactly as before #685: no ask is routed, nothing is held or written, and every card looks as it did.
+Turning it off is the undo, with no revert: new asks go as before, and the next sweep (within 30 seconds) lets
+everything held through.
 
 **His last input's time** (`server/owner-input-time.ts`). Admission collects each accepted input into the chat's turn
 record (`noteTurnCause` in agent-service, `collectRoleInput`); when it recorded the input as his (an owner requester:
@@ -279,7 +281,10 @@ answers an ask: the tool has no way to.
 
 It is not a row in Settings' tool switches: its switch is `ownerQuestionsViaCoo` (`tests/unit/tool-registration.test.ts`
 classifies it as COO-home-only). pi-identity's tool limits still apply to it: if COO's identity gives an allow list,
-`owner_question` has to be on it, and that file is the owner's. #687 checks this before switching on.
+`owner_question` has to be on it, and that file is the owner's. #687 could not read it: COO's folder is closed to
+other roles' chats. Either way nothing stays held: without the tool, COO's turn ends with no action and the safety
+net lets the question through at once, without COO's note. A release by `coo` in the hold records shows the tool
+works there.
 
 ### The safety net on COO's side
 
@@ -356,6 +361,17 @@ callback; rejecting there would lose notes. The freshness check therefore runs a
 guard's loadout boundary and restores only the drained notes on refusal. A real-SDK fixed-response regression
 checks no stale turn, no lost note and one valid next-turn delivery. No provider request is read.
 
+**H-OWNER-ROUTE-ON (#687).** Wrong now: the routing, COO's card and the safety net are installed but switched off
+(#685 and #686 live), so every owner question still reaches him at once on every surface, whoever started the turn
+(the evidence in "Why"). The change: one default, `ownerQuestionsViaCoo` on unless turned off
+(`tests/unit/owner-question-switch-default.test.ts`). Expected within a day of switching on: the hold records show at
+least one real question that was held, delivered to COO and released, by COO or by the safety net, with its route
+reason and times; no held record was released later than the safety-net rules allow (30 minutes after it was held,
+or the end of the COO turn that got it, or the end of a COO hold, each plus one 30-second sweep); asks from turns he
+started went direct when he had written there within 30 minutes, and through COO (owner-away) otherwise; and a
+look-only check of the Roles page shows a held question as "with COO first until HH:MM", if one is held at that
+moment. Wrong if any of these fails. **Result: pending** (the live check, after the install).
+
 ## Checks
 
 - `tests/unit/owner-question-route.test.ts` (52 tests): the case table, its order and sides, the window constant, no
@@ -401,6 +417,9 @@ checks no stale turn, no lost note and one valid next-turn delivery. No provider
   copy isolation and no owner/Telegram authority. `tests/unit/owner-question-body.test.ts` checks the package fold
   in the rendered component and its search behavior; `tests/unit/role-message-text.test.ts` checks the card header.
   `tests/unit/tool-registration.test.ts` classifies `owner_question` as a COO-home-only tool, not a catalog row.
+- #687, `tests/unit/owner-question-switch-default.test.ts` (5 tests): on with nothing stored and with stored settings
+  that never had the key (the live file's shape), kept on and stored as on by another save, and off once turned off,
+  through other saves and a restart, until turned on again. On #686's code the three "on" cases fail.
 
 ## Undo
 

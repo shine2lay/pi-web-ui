@@ -18775,7 +18775,8 @@ export class AgentService {
 			},
 		};
 		rolesOverviewSource = () => this.readRolesOverview();
-		// owner-question routing (Ops #685): the switch is read at each ask; off (the default) routes nothing.
+		// owner-question routing (Ops #685): the switch is read at each ask; on by default since Ops #687,
+		// off routes nothing.
 		ClientSession.ownerQuestions?.dispose();
 		this.ownerQuestions = new OwnerQuestionRouter({
 			enabled: () => this.stateStore.getSettings("").ownerQuestionsViaCoo === true,

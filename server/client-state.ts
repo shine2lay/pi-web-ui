@@ -273,7 +273,8 @@ export interface ClientSettings {
 	quietStallPokes?: boolean;
 	quietScheduledWakes?: boolean;
 	/** owner-question routing (Ops #685, docs/owner-question-routing.md): the owner's questions go
-	 *  through COO first (default off = every ask reaches him at once, as before). Not in presets. */
+	 *  through COO first. On by default since Ops #687 (absent = on); only a stored false turns it off
+	 *  (every ask reaches him at once, as before). Not in presets. */
 	ownerQuestionsViaCoo?: boolean;
 	/** skill 全文注入名单（默认空 = 名录模式）。名单里的技能 {{skills}} 展开正文
 	 *  （oh-my-pi 式全文注入；单文件 8KB、总量 32KB 封顶，超限回落名录）。
@@ -902,7 +903,7 @@ export class ClientStateStore {
 			quietQueueWakes: stored?.quietQueueWakes === true,
 			quietStallPokes: stored?.quietStallPokes === true,
 			quietScheduledWakes: stored?.quietScheduledWakes === true,
-			ownerQuestionsViaCoo: stored?.ownerQuestionsViaCoo === true,
+			ownerQuestionsViaCoo: stored?.ownerQuestionsViaCoo !== false,
 			skillsFullText: normalizeSkillList(stored?.skillsFullText),
 			visionBridgeEnabled: stored?.visionBridgeEnabled ?? true,
 			visionBridgeModel: stored?.visionBridgeModel ?? null,
@@ -966,7 +967,7 @@ export class ClientStateStore {
 			quietQueueWakes: settings.quietQueueWakes ?? cur.quietQueueWakes ?? false,
 			quietStallPokes: settings.quietStallPokes ?? cur.quietStallPokes ?? false,
 			quietScheduledWakes: settings.quietScheduledWakes ?? cur.quietScheduledWakes ?? false,
-			ownerQuestionsViaCoo: settings.ownerQuestionsViaCoo ?? cur.ownerQuestionsViaCoo ?? false,
+			ownerQuestionsViaCoo: settings.ownerQuestionsViaCoo ?? cur.ownerQuestionsViaCoo ?? true,
 			skillsFullText: normalizeSkillList(settings.skillsFullText ?? cur.skillsFullText),
 			visionBridgeEnabled: settings.visionBridgeEnabled ?? cur.visionBridgeEnabled ?? true,
 			// 按键存在性合并：null 是合法值（清除语义），`null ?? cur` 会把旧值

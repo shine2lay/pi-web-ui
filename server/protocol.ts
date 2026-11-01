@@ -1735,7 +1735,7 @@ export type ClientCommand =
 			quietQueueWakes?: boolean;
 			quietStallPokes?: boolean;
 			quietScheduledWakes?: boolean;
-			/** owner-question routing (Ops #685): the owner's questions go through COO first (default off). */
+			/** owner-question routing (Ops #685): the owner's questions go through COO first (default on since Ops #687). */
 			ownerQuestionsViaCoo?: boolean;
 			/** skill 全文注入名单（默认空 = 名录模式）。名单里的技能 {{skills}} 展开正文。 */
 			skillsFullText?: string[];
@@ -4710,7 +4710,8 @@ export interface UiSettingsState {
 	quietStallPokes?: boolean;
 	quietScheduledWakes?: boolean;
 	/** owner-question routing (Ops #685, docs/owner-question-routing.md): the owner's questions go
-	 *  through COO first. Off (absent) = every ask reaches him at once, as before. */
+	 *  through COO first. Sent as true while on (the default since Ops #687); off (absent) = every ask
+	 *  reaches him at once, as before. */
 	ownerQuestionsViaCoo?: boolean;
 	/** skill 全文注入名单（默认空 = 名录模式）：名单里的技能 {{skills}} 展开正文。 */
 	skillsFullText: string[];
