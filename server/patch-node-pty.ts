@@ -27,9 +27,9 @@
  * read-only node_modules or a different node-pty version just skips the patch
  * (the runtime console.warn filter in terminals.ts still guards the flood).
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { patchFile } from "./sdk-file-patch.js";
 
 const require = createRequire(import.meta.url);
 
@@ -44,14 +44,9 @@ function ptyPackageDir(): string | null {
 }
 
 /** Idempotently replace one code fragment in a node-pty source file. */
-function patchFile(pkgDir: string, rel: string, find: string, replace: string): void {
+function patchNodePtyFile(pkgDir: string, rel: string, find: string, replace: string): void {
 	try {
-		const file = join(pkgDir, rel);
-		if (!existsSync(file)) return;
-		const src = readFileSync(file, "utf8");
-		if (src.includes(replace)) return; // already patched
-		if (!src.includes(find)) return; // unexpected content — leave alone
-		writeFileSync(file, src.replace(find, replace), "utf8");
+		patchFile(join(pkgDir, rel), [{ old: find, new: replace }]);
 	} catch {
 		// best-effort — the runtime console.warn filter still guards the flood
 	}
@@ -61,7 +56,7 @@ function applyPatches(): void {
 	const pkgDir = ptyPackageDir();
 	if (!pkgDir) return;
 	// 1. ConoutConnection: ignore unknown worker messages instead of warning.
-	patchFile(
+	patchNodePtyFile(
 		pkgDir,
 		"lib/windowsConoutConnection.js",
 		"console.warn('Unexpected ConoutWorkerMessage', message);",
@@ -70,7 +65,7 @@ function applyPatches(): void {
 	// 2. windowsPtyAgent kill path: only accept a real console-list reply
 	//    (watch messages arrive first on the fork channel and carry no
 	//    consoleProcessList — previously resolved undefined and crashed).
-	patchFile(
+	patchNodePtyFile(
 		pkgDir,
 		"lib/windowsPtyAgent.js",
 		"agent.on('message', function (message) {\n                clearTimeout(timeout);\n                resolve(message.consoleProcessList);\n            });",
@@ -86,7 +81,7 @@ function applyPatches(): void {
 	);
 	// 3. conpty_console_list_agent: tolerate dead shell PID (AttachConsole failed)
 	//    when process already exited or was killed — return [] instead of crashing.
-	patchFile(
+	patchNodePtyFile(
 		pkgDir,
 		"lib/conpty_console_list_agent.js",
 		"var consoleProcessList = getConsoleProcessList(shellPid);\nprocess.send({ consoleProcessList: consoleProcessList });\nprocess.exit(0);",

@@ -10,10 +10,9 @@
  * snapshots. The frontend is snapshot-driven (server is the source of truth),
  * so reconnects just re-request a snapshot.
  */
-// MUST be the first import: rewrites the SDK's installed remote-catalog
-// provider so built-in model lists follow the official pi.dev catalog
-// wholesale (no union merge / no stale built-in leftovers).
+// MUST be the first imports: rewrite installed SDK files before @earendil-works/pi-coding-agent loads.
 import "./patch-remote-catalog.js";
+import "./patch-lazy-boundary-context.js";
 // Logs whatever holds pi's sign-in lock (auth.json) for 60 s or more; logging only (#134).
 import "./auth-lock-trace.js";
 import {

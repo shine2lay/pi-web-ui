@@ -25,12 +25,17 @@
  * patch can't be skipped silently. MUST be imported before the SDK modules are
  * first loaded (agent-service.ts imports this first).
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import {
+	patchFile,
+	patchSource,
+	resolvePiSdkFile,
+	type FilePatchStatus,
+	type SourcePatchResult,
+	type SourceReplacement,
+} from "./sdk-file-patch.js";
 
 /** The SDK's union fragments (one occurrence each) and their whole-replace versions. */
-export const REMOTE_CATALOG_REPLACEMENTS: ReadonlyArray<{ old: string; new: string }> = [
+export const REMOTE_CATALOG_REPLACEMENTS: ReadonlyArray<SourceReplacement> = [
 	{
 		old: 'getModels: () => mergeModels(provider.getModels(), dynamicModels.filter((model) => isModelType(model, "chat"))),',
 		new: 'getModels: () => ((chat) => (chat.length > 0 ? chat : provider.getModels()))(dynamicModels.filter((model) => isModelType(model, "chat"))),',
@@ -41,52 +46,21 @@ export const REMOTE_CATALOG_REPLACEMENTS: ReadonlyArray<{ old: string; new: stri
 	},
 ];
 
-export type CatalogPatchResult =
-	/** The source matched and was rewritten. */
-	| { status: "patched"; source: string }
-	/** Every replacement is in place already. */
-	| { status: "already"; source: string }
-	/** The SDK source no longer matches: `missing` lists the fragments not found. */
-	| { status: "mismatch"; source: string; missing: string[] };
+export type CatalogPatchResult = SourcePatchResult;
 
 /** Rewrites remote-catalog-provider.js source (pure; no file access). */
 export function patchRemoteCatalogSource(source: string): CatalogPatchResult {
-	let next = source;
-	const missing: string[] = [];
-	for (const r of REMOTE_CATALOG_REPLACEMENTS) {
-		if (next.includes(r.new)) continue;
-		const at = next.indexOf(r.old);
-		if (at < 0 || next.indexOf(r.old, at + 1) >= 0) {
-			missing.push(r.old);
-			continue;
-		}
-		next = next.replace(r.old, r.new);
-	}
-	// All or nothing: half a patch would leave getModels and getAllModels disagreeing.
-	if (missing.length > 0) return { status: "mismatch", source, missing };
-	return { status: next === source ? "already" : "patched", source: next };
+	return patchSource(source, REMOTE_CATALOG_REPLACEMENTS);
 }
 
 /** Absolute path of the installed remote-catalog-provider.js, or null. */
 export function remoteCatalogFile(): string | null {
-	try {
-		// import.meta.resolve honors the package "exports" (import condition) → dist/index.js;
-		// remote-catalog-provider.js lives next to it in dist/core/.
-		const entry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
-		return join(dirname(entry), "core", "remote-catalog-provider.js");
-	} catch {
-		return null;
-	}
+	return resolvePiSdkFile("core", "remote-catalog-provider.js");
 }
 
 /** Patches the installed file. Returns what happened ("missing" = no SDK file found). */
-export function patchRemoteCatalogFile(
-	file: string | null = remoteCatalogFile(),
-): CatalogPatchResult["status"] | "missing" {
-	if (!file || !existsSync(file)) return "missing";
-	const result = patchRemoteCatalogSource(readFileSync(file, "utf8"));
-	if (result.status === "patched") writeFileSync(file, result.source, "utf8");
-	return result.status;
+export function patchRemoteCatalogFile(file: string | null = remoteCatalogFile()): FilePatchStatus {
+	return patchFile(file, REMOTE_CATALOG_REPLACEMENTS);
 }
 
 function applyPatch(): void {
