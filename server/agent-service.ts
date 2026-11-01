@@ -7434,10 +7434,10 @@ export class ClientSession {
 
 	/** chat-open-speed: emit and wait until the windows really have it (at most `capMs`).
 	 *
-	 *  A frame over 16 KB is squeezed before it goes out (`perMessageDeflate`), and the squeezing
-	 *  answers on the event loop — so a big frame sent right before a second of blocking work
-	 *  (reading a 267 MB chat) sits in the queue until that work is done, which is exactly what the
-	 *  preview is there to avoid. Waiting for the socket costs a few ms. */
+	 *  The part of a frame the socket can't take at once goes out from the event loop, so a big frame
+	 *  sent right before a second of blocking work (reading a 267 MB chat) could sit in the queue
+	 *  until that work is done, which is exactly what the preview is there to avoid. Waiting for the
+	 *  socket costs a few ms. */
 	private emitAndFlush(msg: ServerMessage, capMs = 250): Promise<void> {
 		if (this.disposed) return Promise.resolve();
 		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
@@ -13950,8 +13950,8 @@ export class ClientSession {
 			draft: null,
 		};
 		// Wait until it has really left: the caller blocks the event loop for a second or more right
-		// after this (reading the file with the SDK), and a big frame is squeezed on the loop before
-		// it goes out — without the wait the preview would land together with the snapshot.
+		// after this (reading the file with the SDK), and the part of a big frame the socket can't take at
+		// once goes out from the loop — without the wait the preview could land together with the snapshot.
 		await this.emitAndFlush({ type: "switch_preview", target, state });
 	}
 

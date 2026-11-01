@@ -222,10 +222,10 @@ try {
 	);
 	check("the preview arrives before switch_done", preview.__i < done.__i);
 
-	// A big chat: the preview must LEAVE the server while the file is still being read. Frames over
-	// 16 KB are squeezed before they go out, and squeezing needs the same thread as the reading, so
-	// without waiting for the frame to be gone, the preview lands together with the snapshot and the
-	// whole point is lost. The gap is what proves it left early.
+	// A big chat: the preview must LEAVE the server while the file is still being read. The part of a
+	// big frame the socket can't take at once goes out from the same thread as the reading, so
+	// without waiting for the frame to be gone, the preview can land together with the snapshot and
+	// the whole point is lost. The gap is what proves it left early.
 	const t4 = Date.now();
 	c.send({ type: "switch_session", path: big4File });
 	const pv4 = await c.waitFor("switch_preview", (m) => m.state?.sessionFile === big4File, 60000);

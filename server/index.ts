@@ -35,7 +35,8 @@ import { describeError, errorMessage, guardCalls, installProcessGuards } from ".
 import type { BusyConversation, NewChatOutcome } from "./agent-service.js";
 import type { ParticipantTarget } from "./participant-lifecycle.js";
 import { chatImageHeaders, parseChatImageAddress, type ChatImage } from "./chat-image.js";
-import { WS_MAX_PAYLOAD_BYTES, isAbsoluteWirePath, wireToAbs } from "./files-service.js";
+import { isAbsoluteWirePath, wireToAbs } from "./files-service.js";
+import { WS_SERVER_OPTIONS } from "./ws-server-options.js";
 import { httpHostAllowed } from "./host-guard.js";
 import { registerFileTransferRoutes } from "./file-transfer-routes.js";
 import { initAttachmentStore, readAttachment } from "./attachment-store.js";
@@ -932,17 +933,8 @@ if (existsSync(webDist)) {
 }
 
 const httpServer = createServer(app);
-const wss = new WebSocketServer({
-	noServer: true,
-	// 右键上传走单帧 base64（100MB 文件 → ~133MB 文本）：上限与
-	// files-service 的上传 cap 对齐（base64 上限 + 1MB 包络余量），
-	// 超限帧由 ws 层直接拒收，不进 handler 再分配 Buffer。
-	maxPayload: WS_MAX_PAYLOAD_BYTES,
-	// Per-message deflate: big-session snapshots serialize to multi-MB JSON
-	// strings; wire-level compression cuts that several-fold. threshold keeps
-	// tiny messages (notices/heartbeats) uncompressed to save CPU.
-	perMessageDeflate: { threshold: 16 * 1024 },
-});
+// Upload-sized frame cap, and no per-message compression (ws-deflate-off): see ws-server-options.ts.
+const wss = new WebSocketServer(WS_SERVER_OPTIONS);
 
 // ---------------------------------------------------------------------------
 // Origin / Host admission for WebSocket upgrades.

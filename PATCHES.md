@@ -19,6 +19,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: the two moved guard files, typecheck, the base/branch build comparison, the landing gate, then `pi-web-deploy` and the live Roles data.
 - Undo: revert this commit and deploy with `pi-web-deploy`; nothing at runtime used these modules and no stored state changes. At the next upstream sync the retired patches' commits can be dropped together with this commit's deletions; keep its two guard files and its docs and PATCHES changes.
 
+## ws-deflate-off: the WebSocket server sends every frame uncompressed
+
+- `local` (Ops #696, chat opens fix 1, H-WS-DEFLATE-OFF): `server/ws-server-options.ts` `WS_SERVER_OPTIONS` holds the options of the app's one WebSocketServer (`server/index.ts` builds it from them) and sets `perMessageDeflate: false` (was `{ threshold: 16 * 1024 }`). Why: ws 8.21.3 honours the threshold only when server_no_context_takeover is negotiated (`lib/sender.js`), and Chrome never asks for it, so every frame, pings included, was compressed; each compression is several zlib thread-pool round trips, each waiting for a turn of the ~99% busy main thread. Measured live by #689 (paired, same load): a chat's snapshot left in 0.21-0.24 s plain vs 2.34-3.47 s compressed (median), a ping 116 ms vs 774 ms. Cost: big snapshots go out at full size.
+- Test: `tests/unit/ws-server-options.test.ts` opens a raw socket with Chrome's offer (`permessage-deflate; client_max_window_bits`): the handshake answer carries no `sec-websocket-extensions`, and a pong-sized and a 64 KB frame both arrive with RSV1 clear. On the old option it fails (extension negotiated; both frames compressed, 17 and 109 bytes on the wire).
+- Comments that described the compression corrected (`server/agent-service.ts` `emitAndFlush` and the preview send, `tests/chat-open-preview-test.mjs`, `docs/architecture-core.md`). Hypothesis, before/after numbers and HIT/MISS: `~/kept-from-tmp/2026-10-31/chat-open-time/fixes/ws-deflate/RESULT.md`.
+- Undo: set `perMessageDeflate` back to `{ threshold: 16 * 1024 }` in `server/ws-server-options.ts` and deploy with `pi-web-deploy`; windows renegotiate on reconnect, nothing is stored.
+
 ## role-message-policy-v2-activate: select the doubled role-message limits
 
 - `local` (Ops HOME, owner's switch-on 2026-10-31, dr-2b5b1af439f0): `server/role-message-limits.ts` selects `GUARD_POLICY_V2` (40/hour, 12 free, lower grants 13–22, Owner from 23, grants up to 10). Retained V1 records keep their own bounds; Owner question copy shows the current hourly limit without widening a V1 grant. Tests: `tests/unit/role-message-policy*.test.ts`, `tests/unit/role-message-guard-approvals.test.ts`.
@@ -4144,7 +4151,9 @@ messages appear while the rest loads, and a healthy file is read once.
    left the server once the load was done (measured on the server: built at 0.6 s, arrived at 1.5-1.7 s,
    140 ms before the snapshot). The open now waits (at most 250 ms) until the socket reports the frame
    gone: sinks take an optional `onSent`, the socket passes it to `ws.send`, and every early return
-   (closed socket, back-pressure drop) still answers so an open can never hang on it.
+   (closed socket, back-pressure drop) still answers so an open can never hang on it. Since
+   `ws-deflate-off` no frame is squeezed; the wait still covers the part of a big frame the socket
+   can't take at once.
 5. **Writing before the chat is open**: a message written during a preview is held in the window
    (`heldSendsRef`), shown faded as "Sending" by the optimistic-send patch, and sent the moment
    `switch_done` arrives. It carries `forSession`, and the server refuses a prompt whose chat is not the
