@@ -281,10 +281,9 @@ answers an ask: the tool has no way to.
 
 It is not a row in Settings' tool switches: its switch is `ownerQuestionsViaCoo` (`tests/unit/tool-registration.test.ts`
 classifies it as COO-home-only). pi-identity's tool limits still apply to it: if COO's identity gives an allow list,
-`owner_question` has to be on it, and that file is the owner's. #687 could not read it: COO's folder is closed to
-other roles' chats. Either way nothing stays held: without the tool, COO's turn ends with no action and the safety
-net lets the question through at once, without COO's note. A release by `coo` in the hold records shows the tool
-works there.
+`owner_question` has to be on it, and that file is the owner's. COO confirmed in rm-474c8d9c that its identity has
+no allow list and does not deny this tool; #687's real releases by `coo` confirm it works. Without the tool, COO's
+turn ends with no action and the safety net lets the question through at once, without COO's note.
 
 ### The safety net on COO's side
 
@@ -370,7 +369,46 @@ reason and times; no held record was released later than the safety-net rules al
 or the end of the COO turn that got it, or the end of a COO hold, each plus one 30-second sweep); asks from turns he
 started went direct when he had written there within 30 minutes, and through COO (owner-away) otherwise; and a
 look-only check of the Roles page shows a held question as "with COO first until HH:MM", if one is held at that
-moment. Wrong if any of these fails. **Result: pending** (the live check, after the install).
+moment. Wrong if any of these fails. **Result: MISS — live qualification incomplete.** The switch-on works, but
+a native question was admitted twice when its binding disappeared; the owner-started 30-minute paths were not
+observed live. This is not a claim that every routing path is qualified.
+
+**Installed and observed (#687, November 1).** Land 319-c776d9 put `ef45fa8b` on mine; deployment at 11:23 PST
+passed server/page/reply/bigchat/log checks (`pi-web-deploy result ef45fa8b`, exit 0). The stored switch was absent,
+so default true applied. By 12:24 PST five released hold records represented **four distinct questions**, all
+queued-work and released by COO within the safety-net deadline. The first three waited 223.409, 216.344 and
+202.618 seconds from admission (about 141.7 seconds from delivery). The fourth distinct question waited 12.149
+seconds on its first admission. The Roles page at 11:30 PST showed three "Came through COO" labels on desktop
+light/dark and phone; no question was held then, so the conditional held-until screenshot was not applicable.
+Screenshots and sanitized observations: `/home/shinelay/kept-from-tmp/2026-11-01/owner-route-on/` (`RESULT.md`,
+`look.json`, `desktop-dark-route.png`, `desktop-light-route.png`). No real question was answered, held, released,
+cancelled or reissued by this check. COO rollout FYI: rm-29c4339e. Rules 21 and 24 in
+`/home/shinelay/.pi/agent/AGENTS.md` were edited with the owner's dated words, his 30-minute choice and the
+continuation-grant exception; a before/after comparison excluding those rules confirmed no other text changed.
+
+**Duplicate identity finding.** Ops task 658 question 2 has native timestamp 1793560871886, revision 0,
+escalation r2166f055580e. Native worker/home queue events contain one ask and escalation, with no subsequent
+replacement, recall or owner answer at the check. Question, choices and detail match. Applying `stuckSig` and
+`holdKeyOfStuck` with that binding reproduces `stuck:88f970234353146cfdd10e5606ba0f38` / `oq-44306df7`;
+omitting only the binding reproduces `stuck:0f30d7bcf0433fde506fd3150d671ba7` / `oq-2b34c3e3`. Admissions were
+11:32:13.850 and 11:43:02.294 PST, each released by COO on time. They are one real sample, not two. The hold
+store did not rehold an identical key: the signature changed from bound to unbound. The lifecycle cause of the
+missing native binding remains unproven; COO release is not an owner answer.
+
+**Follow-up hypothesis H-OWNER-HOLD-IDENTITY.** Evidence above predicts that preserving verified native occurrence
+identity across missing-binding and worker/home-source transitions prevents duplicate COO delivery. The bounded
+repair must trace `nativeOwnerQuestionBinding`, reuse the native identity/stuck reconciliation path, and test
+bound → missing → bound plus worker → home-copy on fixed synthetic inputs. An unchanged verified occurrence
+must retain its release state and clock; changed question number, revision, escalation or package must remain
+distinct. A second delivery for the same verified occurrence, or conflation of changed occurrences, falsifies it.
+No text-only deduplication, weakened answer/recall fence or live-card mutation is permitted. Remaining live
+owner-started 30-minute coverage belongs in follow-up qualification. Owner disposition in #687: "Queue repair;
+finish #687 MISS". The repair must be linked in the queue completion record before this task closes.
+
+**Why kept on despite MISS.** Real questions reached COO and the owner's visible list within the deadline; the
+observed defect is duplicate admission, not evidence of a lost or fabricated answer. The owner chose the repair
+successor and MISS closure. Keep the records and use forward-disable in Settings if routing becomes unsafe;
+no rollback to older readers.
 
 ## Checks
 
