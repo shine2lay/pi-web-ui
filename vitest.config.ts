@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 import { HANG_GUARD_MS } from "./tests/unit/load-independent.js";
+import { localVitestWorkers } from "./scripts/vitest-workers.mjs";
 
 // Ops #230 (docs/test-speed.md): the slowest test files start first, so they never wait behind the larger files
 // (vitest's own order puts larger files first when it has no timings from an earlier run, as in a land's fresh copy).
@@ -19,6 +20,8 @@ class SlowestFirst extends BaseSequencer {
 
 export default defineConfig({
 	test: {
+		// Ops #746: local default ten; no new CI default, explicit diagnostic overrides still win.
+		maxWorkers: localVitestWorkers(),
 		sequence: { sequencer: SlowestFirst },
 		// Ops #639 (docs/gate-time.md): a test's time limit is only a hang guard, never its verdict. vitest's
 		// defaults (5 s a test, 10 s a hook) failed tests that were merely sharing a busy machine; 5 minutes is

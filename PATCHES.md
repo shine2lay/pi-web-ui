@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## local-test-workers: default local Vitest runs to ten workers
+
+- `local` (Ops #746; owner m84920/m84932; H-LOCAL-WORKERS-WEB). `vitest.config.ts` uses the focused `scripts/vitest-workers.mjs` selector: ten when CI and the worker override are absent, no new default when CI is defined, explicit canonical ASCII `VITEST_MAX_WORKERS=1` through `10` first. Invalid environment values fail with a fixed redacted error before Vitest's permissive integer parsing; normal CLI option precedence is unchanged.
+- `scripts/sealed.sh` widens only its existing worker allowlist from 1–4 to 1–10. Unset stays absent; the configuration owns the local default. Nested sealing, privacy fences, temporary homes, dummy model, cleanup and all other environment exclusions stay unchanged. The independent coupled proof retains `fileParallelism: false`; no state-dependent test is parallelized.
+- Checks: `tests/unit/vitest-workers.test.ts` (selection, installed configuration, CI baseline, npm aliases, diagnostic precedence, serial coupled config) and expanded `tests/unit/sealed-fence.test.ts` (all ten values, local/CI defaults, nested reuse, fixed invalid inputs before allocation and all existing isolation assertions), then the normal gate. Contract, hypothesis and undo: `docs/local-test-workers.md`.
+- Source only: no remote CI workflow, browser-suite job scheduler, shared wt setting, CPU ceiling, slot count, required test list, app deployment or performance claim. Undo: use an accepted lower override for diagnosis, or revert through a gated land; restore any subsequently raised shared launcher setting before restoring the old four-worker seal.
+
 ## gate-selected-tests: the landing check runs only the unit tests a change can affect
 
 - `local` (Ops #693, for Systems rm-c24ccd7a; the owner's request via COO rm-f6106b33 that lands stop running test suites a change can't affect). The range `WT_BASE..WT_HEAD` comes from wt (Ops #691); keeping the read map fresh is Ops #694. Rules, read map, fallbacks, hypotheses H-SELECT-SAFE, H-SELECT-SPEED, H-SELECT-ASSETS and H-SELECT-BUILT, numbers and HIT/MISS: `docs/gate-selected-tests.md`.
@@ -315,6 +322,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 ## sealed-vitest-workers: preserve only an explicit canonical one-to-four Vitest worker limit
 
+- Historical 1–4 contract below is extended by `local-test-workers` (Ops #746) to 1–10 and a local configuration default of ten; the environment fence and nested fast path are unchanged.
 - `local` (Ops #331, prerequisite for #311; H-SEALED-FANOUT-1). Crowded unit-test fan-out can exhaust an unchanged collector time guard; whole-process CPU affinity also starves the other gate steps. `scripts/sealed.sh` preserves explicitly inherited `VITEST_MAX_WORKERS` only when it is exactly ASCII `1`, `2`, `3` or `4`; unset remains absent. Any other value, including empty, fails with a fixed redacted diagnostic before temporary-home allocation. No other runner variable survives, and the already-sealed fast path, mandatory Node fence, isolated folders, dummy model, secret/live-setting stripping and cleanup stay unchanged.
 - Checks: `tests/unit/sealed-fence.test.ts` resolves the installed Vitest configuration for unset and all four valid values, checks continued environment isolation and cleanup, and rejects fixed invalid/shell-text cases before allocation, command execution or interpolation. Old-code inherited-value counterfactual, then the unchanged sealed normal gate and ordinary detached `wt land` hooks with `VITEST_MAX_WORKERS=4`, real HOME and normal CPU availability. This proves runner passthrough, not #311's collector gate; #311 must rebase and pass that separately, without changing its 100 ms guard or numeric checks.
 - Undo: revert this patch; alternatively omit the variable to retain the existing default. No app install or restart.

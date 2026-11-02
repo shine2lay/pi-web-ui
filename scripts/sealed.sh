@@ -11,7 +11,7 @@
 #     made in memory (/dev/shm) when it has 8 GB free, else under ${TMPDIR:-/tmp};
 #     PI_SEALED_TMP_PARENT=<folder> picks the folder instead (PI_SEALED_TMP_PARENT=/tmp: on disk, as before);
 #   - a clean environment: only PATH, locale, terminal variables and an explicitly bounded Vitest
-#     worker count (VITEST_MAX_WORKERS=1, 2, 3 or 4) survive. No model keys or
+#     worker count (VITEST_MAX_WORKERS=1 through 10, canonical ASCII) survive. No model keys or
 #     tokens, and none of the live server's PI_WEB_PORT / PI_WEB_DATA_DIR (a chat's shell has them);
 #   - the temp pi folder gets a stand-in model that can't be reached (provider "fastfail" at
 #     127.0.0.1:1, a dummy key, automatic retry off): tests were written on machines where pi is set
@@ -64,13 +64,14 @@ if [ $# -eq 0 ]; then
 	exit 2
 fi
 
-# Opt-in runner limit only: reject noncanonical values before allocating a temporary home.
+# Explicit runner limit only: reject noncanonical values before allocating a temporary home.
+# Vitest's config owns the local default; leave unset absent so CI keeps its previous behavior.
 # Keep this after the already-sealed fast path; do not inherit any other VITEST_* settings.
 vitest_env=()
 if [ "${VITEST_MAX_WORKERS+x}" = x ]; then
 	case "$VITEST_MAX_WORKERS" in
-	1 | 2 | 3 | 4) vitest_env+=("VITEST_MAX_WORKERS=$VITEST_MAX_WORKERS") ;;
-	*) echo "[sealed] VITEST_MAX_WORKERS must be exactly 1, 2, 3 or 4" >&2; exit 2 ;;
+	1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10) vitest_env+=("VITEST_MAX_WORKERS=$VITEST_MAX_WORKERS") ;;
+	*) echo "[sealed] VITEST_MAX_WORKERS must be a canonical integer from 1 to 10" >&2; exit 2 ;;
 	esac
 fi
 

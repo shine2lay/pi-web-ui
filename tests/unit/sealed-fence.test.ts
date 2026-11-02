@@ -448,16 +448,28 @@ describe("scripts/sealed.sh", { timeout: HANG_GUARD_MS }, () => {
 		expect(JSON.parse(r.stdout.trim().split("\n")[0])).toEqual([]);
 	});
 
-	describe("its explicit Vitest worker limit", () => {
+	describe("its local default and explicit Vitest worker limit", () => {
 		let scratch: string;
 		beforeAll(() => {
 			scratch = mkdtempSync(join(tmpdir(), "sealed-workers-test-"));
 		});
 		afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-		it.each([undefined, "1", "2", "3", "4"])(
-			"passes only inherited Vitest worker %s to the installed Vitest configuration",
-			(workers) => {
+		const workerCases = [
+			...[undefined, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"].map((workers) => ({
+				workers,
+				ci: undefined,
+				nested: false,
+			})),
+			...[undefined, "1", "2", "10"].map((workers) => ({ workers, ci: "true", nested: false })),
+			{ workers: undefined, ci: "", nested: false },
+			...[undefined, "1", "2", "10"].map((workers) => ({ workers, ci: undefined, nested: true })),
+			{ workers: undefined, ci: "true", nested: true },
+			{ workers: "10", ci: "true", nested: true },
+		];
+		it.each(workerCases)(
+			"resolves worker=$workers CI=$ci nested=$nested with the same isolation",
+			({ workers, ci, nested }) => {
 				const code = `
 					import fs from "node:fs";
 					import { createVitest } from "vitest/node";
@@ -470,7 +482,9 @@ describe("scripts/sealed.sh", { timeout: HANG_GUARD_MS }, () => {
 						console.log(JSON.stringify({
 							workers: process.env.VITEST_MAX_WORKERS ?? null,
 							maxWorkers: ctx.config.maxWorkers ?? null,
-							otherVitest: process.env.VITEST_MIN_WORKERS ?? null,
+							ci: process.env.CI ?? null,
+							outerRoot: process.env.SEALED_TEST_OUTER_ROOT ?? null,
+							otherVitest: Object.keys(process.env).filter((key) => key.startsWith("VITEST_") && key !== "VITEST_MAX_WORKERS"),
 							sealed: process.env.PI_SEALED,
 							fenced: !!globalThis[Symbol.for("pi.sealed.fence")],
 							nodeOptions: process.env.NODE_OPTIONS,
@@ -488,9 +502,22 @@ describe("scripts/sealed.sh", { timeout: HANG_GUARD_MS }, () => {
 						}));
 					} finally { await ctx.close(); }
 				`;
+				const nestedCode = `
+					import { spawnSync } from "node:child_process";
+					const child = spawnSync("bash", ${JSON.stringify([join(repo, "scripts", "sealed.sh"), process.execPath, "--input-type=module", "-e", code])}, {
+						env: { ...process.env, SEALED_TEST_OUTER_ROOT: process.env.PI_SEALED_ROOT }, stdio: "inherit",
+					});
+					process.exitCode = child.status ?? 1;
+				`;
 				const r = spawnSync(
 					"bash",
-					[join(repo, "scripts", "sealed.sh"), process.execPath, "--input-type=module", "-e", code],
+					[
+						join(repo, "scripts", "sealed.sh"),
+						process.execPath,
+						"--input-type=module",
+						"-e",
+						nested ? nestedCode : code,
+					],
 					{
 						cwd: repo,
 						env: {
@@ -498,7 +525,10 @@ describe("scripts/sealed.sh", { timeout: HANG_GUARD_MS }, () => {
 							PI_SEALED: "",
 							PI_SEALED_TMP_PARENT: scratch,
 							...(workers === undefined ? {} : { VITEST_MAX_WORKERS: workers }),
+							...(ci === undefined ? {} : { CI: ci }),
 							VITEST_MIN_WORKERS: "123",
+							VITEST_POOL_ID: "caller-pool",
+							VITEST_SECRET_SENTINEL: "fake-secret",
 							NODE_OPTIONS: "--require /nonexistent/caller-hook.cjs",
 							PI_WEB_PORT: "8787",
 							PI_WEB_DATA_DIR: "/nonexistent/live-data",
@@ -518,8 +548,10 @@ describe("scripts/sealed.sh", { timeout: HANG_GUARD_MS }, () => {
 				};
 				expect(seen).toMatchObject({
 					workers: workers ?? null,
-					maxWorkers: workers === undefined ? null : Number(workers),
-					otherVitest: null,
+					maxWorkers: workers === undefined ? (ci === undefined ? 10 : null) : Number(workers),
+					ci: ci ?? null,
+					outerRoot: nested ? seen.root : null,
+					otherVitest: [],
 					sealed: "1",
 					fenced: true,
 					nodeOptions: `--require ${FENCE}`,
@@ -540,7 +572,9 @@ describe("scripts/sealed.sh", { timeout: HANG_GUARD_MS }, () => {
 			"allocation-control",
 			"",
 			"0",
-			"5",
+			"11",
+			"100",
+			"010",
 			"04",
 			"+4",
 			"-1",
@@ -554,6 +588,7 @@ describe("scripts/sealed.sh", { timeout: HANG_GUARD_MS }, () => {
 			"4 ",
 			"\t4",
 			"4\n",
+			"10\n",
 			"\n4",
 			"٤",
 			"４",
@@ -612,7 +647,7 @@ describe("scripts/sealed.sh", { timeout: HANG_GUARD_MS }, () => {
 				expect(r.stderr).toBe(
 					input === "allocation-control"
 						? `[sealed] can't make the temp home in ${roots}; it goes under ${roots}\n`
-						: "[sealed] VITEST_MAX_WORKERS must be exactly 1, 2, 3 or 4\n",
+						: "[sealed] VITEST_MAX_WORKERS must be a canonical integer from 1 to 10\n",
 				);
 				expect(existsSync(allocation)).toBe(input === "allocation-control");
 				expect(existsSync(command)).toBe(false);
