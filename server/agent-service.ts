@@ -6078,6 +6078,7 @@ export class ClientSession {
 			},
 			pushModels: async () => this.listModels(),
 			onOAuthActivated: (provider) => this.stateStore.deleteProviderEverywhere(provider),
+			onOAuthLoginSucceeded: (provider) => ClientSession.oauthLoginSucceeded?.(provider),
 		});
 		// Prune dead background tasks every 30s (only spawns netstat/lsof while
 		// the list is non-empty). unref: must not keep the process alive.
@@ -7859,6 +7860,9 @@ export class ClientSession {
 		((binding: QuestionBinding, text: string, from: string) => Promise<QuestionCommitResult>) | null = null;
 	/** Actual generic dialog acceptance; metadata fence only, never a queue answer/record relay. */
 	static observeUnboundOwnerAnswer: ((source: PendingQuestionEntry["nativeSource"]) => void) | null = null;
+	/** oauth-limits-refresh: an OAuth sign-in in Settings -> Providers succeeded, in any window (AgentService
+	 *  forwards index.ts's hook: the Limits box re-checks every subscription). */
+	static oauthLoginSucceeded: ((provider: string) => void) | null = null;
 
 	private static questionBindingOf(conv: Conversation, id: number): QuestionBinding | undefined {
 		return nativeOwnerQuestionBinding(conv.session, id);
@@ -18814,6 +18818,14 @@ export class AgentService {
 	private readonly roleGuard: RoleMessageGuardHost;
 	/** index.ts: the open Owner questions changed (pushed to every window). */
 	onRoleGuardChanged: (() => void) | null = null;
+
+	/** oauth-limits-refresh: index.ts's hook for a successful OAuth sign-in in any window. */
+	get onOAuthLogin(): ((provider: string) => void) | null {
+		return ClientSession.oauthLoginSucceeded;
+	}
+	set onOAuthLogin(fn: ((provider: string) => void) | null) {
+		ClientSession.oauthLoginSucceeded = fn;
+	}
 
 	/** role-message-ladder: the open Owner questions, for A's approval dialog. */
 	roleGuardQuestions(): Promise<UiRoleGuardQuestion[]> {

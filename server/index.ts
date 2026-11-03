@@ -1489,6 +1489,8 @@ export interface EngineService {
 	): Promise<{ ok: boolean; error?: string }>;
 	/** role-message-ladder (pi engine): set by index.ts; the open Owner questions changed. */
 	onRoleGuardChanged?: (() => void) | null;
+	/** oauth-limits-refresh (pi engine): set by index.ts; an OAuth sign-in in Settings -> Providers succeeded. */
+	onOAuthLogin?: ((provider: string) => void) | null;
 	/** roles-overview (pi engine): every role's state for the Roles page. */
 	readRolesOverview?(): Promise<UiRolesOverview>;
 	/** usage-accounting (pi engine, Ops #322): set by index.ts once design B's pass runs; the Roles page reads it. */
@@ -4693,6 +4695,11 @@ service.onRoleGuardChanged = () => pushRoleGuard();
 service.onDecisionsChanged = () => initiativesWatch.poke();
 // subs-limits-box: the channel pi-multi-pass joins when a chat loads it (and the file, until then).
 subsLimits.start();
+// oauth-limits-refresh: a new OAuth sign-in re-checks every subscription, so the Limits box shows it at once.
+service.onOAuthLogin = (provider) =>
+	void subsLimits.refresh().then((reason) => {
+		if (reason) console.log(`[subs-limits] after OAuth sign-in to ${provider}: ${reason}`);
+	});
 
 httpServer.listen(PORT, HOST, () => {
 	// session-index: History and Recent chats are ready for the windows that reconnect.

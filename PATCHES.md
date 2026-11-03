@@ -5537,6 +5537,15 @@ error?}` from the server (`error` only to the window whose press couldn't run). 
    reason a check failed, "checked N min ago", and a dot on the open chat's account (`currentProvider` = the chat's
    model's provider). Plain under 75%, amber from 75%, red from 90% or limited. Before the first press:
    "Not checked yet".
+4. **A sign-in re-checks** (Ops #755, 2026-11-02; `model-admin.ts`, `agent-service.ts`, `index.ts`): after a
+   successful OAuth sign-in in Settings -> Providers (any provider), `ModelAdminService` calls the host's
+   `onOAuthLoginSucceeded` once the new credentials are live; `ClientSession.oauthLoginSucceeded` (set through
+   `AgentService.onOAuthLogin` by `index.ts`) runs `subsLimits.refresh()`, so the box shows the new account
+   without a press. Owner, 2026-11-02, after re-signing in left the box stale. A failing hook is logged and
+   never turns the sign-in into a failure; a failed sign-in triggers nothing.
+   Checked by `tests/unit/model-admin-oauth.test.ts` ("calls onOAuthLoginSucceeded once ...", "does not
+   call ... when the sign-in fails", "still reports the sign-in as succeeded when the follow-up hook
+   throws"; the first and third fail without the change).
 
 ### How it was checked
 

@@ -27,7 +27,7 @@ function makeHost(runtime: ModelRuntime) {
 		invalidatePiConfig: () => {},
 		pushModels: async () => {},
 	} satisfies ModelAdminHost;
-	return { host, messages };
+	return { host: host as ModelAdminHost, messages };
 }
 
 describe("ModelAdminService OAuth provider capabilities", () => {
@@ -330,6 +330,83 @@ describe("ModelAdminService OAuth interaction bridge", () => {
 			keys: [{ name: "旧密钥", apiKey: "unused-key" }],
 		});
 		expect(onOAuthActivated).toHaveBeenCalledWith("openai-codex");
+	});
+
+	// oauth-limits-refresh: the Limits box re-checks the subscriptions after a sign-in, never after a failed one.
+	it("calls onOAuthLoginSucceeded once after a successful sign-in, after the credentials are live", async () => {
+		const order: string[] = [];
+		const provider = { id: "openai-codex", name: "OpenAI Codex", auth: { oauth: { name: "OpenAI ChatGPT" } } };
+		const runtime = {
+			getProvider: () => provider,
+			getProviders: () => [provider],
+			getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
+			isUsingOAuth: () => true,
+			login: async () => ({ type: "oauth" as const, access: "a", refresh: "r", expires: Date.now() + 3_600_000 }),
+		} as unknown as ModelRuntime;
+		const { host, messages } = makeHost(runtime);
+		host.pushModels = async () => {
+			order.push("pushModels");
+		};
+		const onOAuthLoginSucceeded = vi.fn((p: string) => order.push(`succeeded:${p}`));
+		host.onOAuthLoginSucceeded = onOAuthLoginSucceeded;
+		const service = new ModelAdminService(host);
+
+		service.startProviderOAuth("openai-codex");
+		await vi.waitFor(() => {
+			expect(messages).toContainEqual(expect.objectContaining({ type: "provider_oauth_result", ok: true }));
+		});
+
+		expect(onOAuthLoginSucceeded).toHaveBeenCalledTimes(1);
+		expect(onOAuthLoginSucceeded).toHaveBeenCalledWith("openai-codex");
+		expect(order).toEqual(["pushModels", "succeeded:openai-codex"]);
+	});
+
+	it("does not call onOAuthLoginSucceeded when the sign-in fails", async () => {
+		const runtime = {
+			getProvider: () => ({ id: "openai", name: "OpenAI", auth: { oauth: { name: "OpenAI (ChatGPT Subscription)" } } }),
+			login: async () => {
+				throw new Error("denied");
+			},
+		} as unknown as ModelRuntime;
+		const { host, messages } = makeHost(runtime);
+		const onOAuthLoginSucceeded = vi.fn();
+		host.onOAuthLoginSucceeded = onOAuthLoginSucceeded;
+		const service = new ModelAdminService(host);
+
+		service.startProviderOAuth("openai");
+		await vi.waitFor(() => {
+			expect(messages).toContainEqual(expect.objectContaining({ type: "provider_oauth_result", ok: false }));
+		});
+
+		expect(onOAuthLoginSucceeded).not.toHaveBeenCalled();
+	});
+
+	it("still reports the sign-in as succeeded when the follow-up hook throws", async () => {
+		const provider = { id: "openai", name: "OpenAI", auth: { oauth: { name: "OpenAI (ChatGPT Subscription)" } } };
+		const runtime = {
+			getProvider: () => provider,
+			getProviders: () => [provider],
+			getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
+			isUsingOAuth: () => true,
+			login: async () => ({ type: "oauth" as const, access: "a", refresh: "r", expires: Date.now() + 3_600_000 }),
+		} as unknown as ModelRuntime;
+		const { host, messages } = makeHost(runtime);
+		host.onOAuthLoginSucceeded = () => {
+			throw new Error("hook broke");
+		};
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const service = new ModelAdminService(host);
+			const flowId = service.startProviderOAuth("openai");
+			await vi.waitFor(() => {
+				expect(messages).toContainEqual({ type: "provider_oauth_result", flowId, provider: "openai", ok: true });
+			});
+			expect(logged).toHaveBeenCalledWith(
+				expect.stringContaining("after OAuth sign-in to openai: follow-up failed: hook broke"),
+			);
+		} finally {
+			logged.mockRestore();
+		}
 	});
 
 	it("通过 SDK logout 登出 OAuth 并重推未登录状态", async () => {

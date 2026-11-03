@@ -39,6 +39,8 @@ export interface ModelAdminHost {
 	pushModels: () => Promise<void>;
 	/** OAuth becomes authoritative, so project-scoped API-key choices must not restore over it. */
 	onOAuthActivated?: (provider: string) => void;
+	/** An OAuth sign-in finished and its credentials are live (the Limits box re-checks the subscriptions). */
+	onOAuthLoginSucceeded?: (provider: string) => void;
 }
 
 /** One models.json overlay row graduated to the official catalog. */
@@ -374,6 +376,14 @@ export class ModelAdminService {
 		await this.listProviders();
 		this.listProviderKeys();
 		this.host.flushSnapshot();
+		// The sign-in itself succeeded: a failing follow-up hook is logged, never reported as a failed login.
+		try {
+			this.host.onOAuthLoginSucceeded?.(provider);
+		} catch (error) {
+			console.error(
+				`[model-admin] after OAuth sign-in to ${provider}: follow-up failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 	}
 
 	// ---------------------------------------------------------------------------
