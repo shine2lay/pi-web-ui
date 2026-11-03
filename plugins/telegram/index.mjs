@@ -1900,6 +1900,13 @@ export function createBridge({
 			const liveKeys = new Set(live.map(keyOf));
 			for (const e of [...entries.values()]) {
 				if (liveKeys.has(e.key)) continue;
+				if (!e.sending && e.messageId && String(e.askId ?? "").startsWith("stuck-")) {
+					if (!e.closedAt) {
+						e.closedAt = now();
+						save();
+					}
+					if (now() - e.closedAt < GONE_IDENTITY_TTL_MS) continue;
+				}
 				if (e.closedAt && now() - e.closedAt < GONE_IDENTITY_TTL_MS) continue;
 				if (!e.sending && e.identity && e.messageId) rememberGone(e);
 				else if (e.sending && e.identity) forgetGone(e.identity);

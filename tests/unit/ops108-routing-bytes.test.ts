@@ -49,6 +49,6 @@ describe("Ops108 baseline", () => {
 		// to plugins/telegram/question-identity.mjs, matches ask entries in createBridge by stable question identity across
 		// restarts/chat reopens and silent unanswered repeats, and logs question identity hashes and notice sender/length;
 		// no Ops108 routing line (replyMayGoToTelegram, createChat, onRoleTurnEnd) changed. Was 5a065c5c….
-		expect(sha("plugins/telegram/index.mjs")).toBe("b8d0216543efa5f71d67fcb32c194a324a7e4013c01bf8b5b1c69a3c15188374");
+		expect(sha("plugins/telegram/index.mjs")).toBe("fc40ca098faeb854129dc948f70f123eae810487a83917363c92fad282ee9239");
 	});
 });

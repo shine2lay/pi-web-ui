@@ -773,10 +773,15 @@ describe("telegram plugin: send each owner question once (H-TG-ONCE-1)", () => {
 		expect(first.logs.some((l) => l.includes(`(id=${idHash}, new)`))).toBe(true);
 		expect(first.logs.some((l) => l.includes("Use port 8080?"))).toBe(false);
 
-		// Simulate pi-web-ui restart: same storage, live ask rebuilt with a new createdAt and stuck-N id.
+		// Simulate pi-web-ui restart: resync("pi restarted") runs at activation before chats reopen,
+		// then the chat reopens seconds later with a new createdAt and stuck-N id.
 		const after = setup(first.storage.all());
-		after.asks.add(stuckAskFixture({ id: "stuck-2", createdAt: 9000, conversationId: "c4" }));
 		await after.bridge.resync("pi restarted");
+		await after.settle();
+		expect(after.tg.of("sendMessage")).toHaveLength(0);
+		expect(after.tg.of("editMessageText")).toHaveLength(0);
+
+		after.asks.add(stuckAskFixture({ id: "stuck-2", createdAt: 9000, conversationId: "c4" }));
 		await after.settle();
 
 		expect(after.tg.of("sendMessage")).toHaveLength(0);
