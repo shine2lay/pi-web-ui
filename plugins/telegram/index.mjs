@@ -13,6 +13,28 @@
  * The host uses the default export; the tests use the named exports.
  */
 
+import {
+	GONE_IDENTITY_TTL_MS,
+	TELEGRAM_DELETE_MAX_AGE_MS,
+	askScope,
+	isChatCloseGone,
+	questionIdentity,
+	questionIdentityHash,
+	renderSignature,
+	stuckTask,
+} from "./question-identity.mjs";
+
+export {
+	GONE_IDENTITY_TTL_MS,
+	TELEGRAM_DELETE_MAX_AGE_MS,
+	askScope,
+	isChatCloseGone,
+	questionIdentity,
+	questionIdentityHash,
+	renderSignature,
+	stuckTask,
+};
+
 export const PLUGIN_ID = "telegram";
 export const API_BASE_DEFAULT = "https://api.telegram.org";
 /** Tests (and only tests) point the plugin at a fake Telegram with this. */
@@ -825,14 +847,6 @@ function describeAnswer(ask, index, answers) {
 // Messages
 // ---------------------------------------------------------------------------
 
-/** Which queued task a "stuck" ask is about: { id, title } (id 0 when it doesn't say). */
-export function stuckTask(ask) {
-	const t = ask?.task;
-	if (t && Number(t.id) > 0) return { id: Number(t.id), title: String(t.title ?? "") };
-	const m = /^Task #(\d+) needs you(?::\s*([\s\S]*))?$/.exec(String(ask?.title ?? ""));
-	return m ? { id: Number(m[1]), title: m[2] ?? "" } : { id: 0, title: "" };
-}
-
 /** About how many characters one line of a Telegram message holds on a phone. */
 const PHONE_LINE = 36;
 
@@ -1270,21 +1284,80 @@ export function createBridge({
 	log = ignore,
 	sleep,
 	chat = null,
+	now = Date.now,
 }) {
 	const owner = String(ownerId);
 	const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
 	const entries = new Map(Object.entries(storage.get("sent", {}) ?? {}));
+	const gone = new Map(Object.entries(storage.get("gone", {}) ?? {}));
 	let nextRef = Number(storage.get("nextRef", 0)) || Math.floor(Date.now() / 1000);
 	const pendingSends = new Set();
 	let chain = Promise.resolve();
 	let closed = false;
 
 	const save = () => storage.set("sent", Object.fromEntries(entries));
+	const saveGone = () => storage.set("gone", Object.fromEntries(gone));
 	const byRef = (ref) => {
 		for (const e of entries.values()) if (String(e.ref) === String(ref)) return e;
 		return null;
 	};
-	const liveAsk = (e) => asks.list().find((a) => a.id === e.askId && a.createdAt === e.createdAt) ?? null;
+	const liveAsk = (e) =>
+		asks.list().find((a) => a.id === e.askId && a.createdAt === e.createdAt) ??
+		(e.identity ? asks.list().find((a) => questionIdentity(a) === e.identity) : null);
+
+	function pruneGone() {
+		const cutoff = now() - GONE_IDENTITY_TTL_MS;
+		let changed = false;
+		for (const [id, g] of gone) {
+			if (!(Number(g?.goneAt) > cutoff)) {
+				gone.delete(id);
+				changed = true;
+			}
+		}
+		if (changed) saveGone();
+	}
+
+	function rememberGone(e, fallbackAsk = null) {
+		pruneGone();
+		const id = e.identity || (fallbackAsk ? questionIdentity(fallbackAsk) : "");
+		if (!id || !e.messageId) return;
+		gone.set(id, {
+			messageId: e.messageId,
+			copies: [...(e.copies ?? [])],
+			line: lineOfEntry(e),
+			link: e.link ?? null,
+			sentAt: Number(e.sentAt) || Number(e.createdAt) || now(),
+			goneAt: now(),
+		});
+		saveGone();
+	}
+
+	function takeGone(id) {
+		pruneGone();
+		const g = gone.get(id) ?? null;
+		if (g) {
+			gone.delete(id);
+			saveGone();
+		}
+		return g;
+	}
+
+	function forgetGone(id) {
+		if (id && gone.delete(id)) saveGone();
+	}
+
+	function findEntryByIdentity(ask) {
+		const id = questionIdentity(ask);
+		for (const e of entries.values()) {
+			if (e.identity && e.identity === id) return e;
+		}
+		const link = chatLink(webAppAddress, ask.sessionFile);
+		const line = renderLine(ask, link);
+		for (const e of entries.values()) {
+			if (!e.identity && e.line === line && (e.link ?? null) === link) return e;
+		}
+		return null;
+	}
 
 	function enqueue(job) {
 		const run = chain
@@ -1357,7 +1430,78 @@ export function createBridge({
 
 	async function rerender(e, ask, extra) {
 		const { text, reply_markup } = renderAsk(ask, e, extra);
+		e.renderHash = renderSignature({ text, reply_markup });
+		save();
 		await edit(e, text, reply_markup);
+	}
+
+	async function adoptEntry(e, live) {
+		const newKey = keyOf(live);
+		const id = questionIdentity(live);
+		const idHash = questionIdentityHash(id);
+		const rekeyed =
+			e.key !== newKey ||
+			e.askId !== live.id ||
+			e.createdAt !== live.createdAt ||
+			!e.identity ||
+			Boolean(e.closedAt);
+		if (e.key !== newKey) {
+			entries.delete(e.key);
+			e.key = newKey;
+			entries.set(newKey, e);
+		}
+		e.askId = live.id;
+		e.createdAt = live.createdAt;
+		e.identity = id;
+		const taskId = live.kind === "stuck" ? stuckTask(live).id : 0;
+		if (taskId > 0) e.taskScope = `${askScope(live)}#${taskId}`;
+		delete e.closedAt;
+		const link = chatLink(webAppAddress, live.sessionFile);
+		e.link = link;
+		e.line = renderLine(live, link);
+		e.step = Math.max(0, nextStep(live, e.answers));
+		const { text, reply_markup } = renderAsk(live, e);
+		const nextRender = renderSignature({ text, reply_markup });
+		const prevRender = e.renderHash;
+		e.renderHash = nextRender;
+		save();
+		if (e.messageId && prevRender && prevRender !== nextRender) {
+			await edit(e, text, reply_markup);
+		}
+		if (rekeyed && e.messageId) {
+			log(
+				"info",
+				`telegram: kept ${live.kind === "approval" ? "permission prompt" : "question"} ${live.id} on message ${e.messageId} (id=${idHash}, kept)`,
+			);
+		}
+	}
+
+	async function replaceGoneMessage(prevGone, e) {
+		const oldIds = [prevGone.messageId, ...(prevGone.copies ?? [])].filter((m) => Number(m) > 0);
+		const ageMs = Math.max(0, now() - (Number(prevGone.sentAt) || Number(prevGone.goneAt) || 0));
+		const canDelete = ageMs < TELEGRAM_DELETE_MAX_AGE_MS;
+		for (const msgId of oldIds) {
+			if (msgId === e.messageId) continue;
+			let deleted = false;
+			if (canDelete) {
+				try {
+					await call("deleteMessage", { chat_id: owner, message_id: msgId });
+					deleted = true;
+				} catch {
+					deleted = false;
+				}
+			}
+			if (!deleted) {
+				const pointer = e.messageId ? `asked again in message #${e.messageId}` : "asked again below";
+				await callHtml("editMessageText", {
+					chat_id: owner,
+					message_id: msgId,
+					text: renderGone(prevGone.line || lineOfEntry(e), pointer),
+					link_preview_options: { is_disabled: true },
+					reply_markup: { inline_keyboard: [] },
+				}).catch(ignore);
+			}
+		}
 	}
 
 	/** Send ask's message, unless it has one. The entry is kept before sending, so a failed send
@@ -1368,17 +1512,42 @@ export function createBridge({
 		pendingSends.add(key);
 		enqueue(async () => {
 			try {
-				const live = asks.list().find((a) => keyOf(a) === key);
+				pruneGone();
+				const targetId = questionIdentity(ask);
+				const live =
+					asks.list().find((a) => keyOf(a) === key) ??
+					asks.list().find((a) => questionIdentity(a) === targetId);
 				if (!live) return;
-				let e = entries.get(key);
-				if (e?.messageId) return;
+				const liveKey = keyOf(live);
+				let e = entries.get(liveKey) ?? findEntryByIdentity(live);
+				if (e?.messageId) {
+					await adoptEntry(e, live);
+					return;
+				}
+				const id = questionIdentity(live);
+				const idHash = questionIdentityHash(id);
+				if (live.kind === "stuck") {
+					const taskId = stuckTask(live).id;
+					const scope = askScope(live);
+					if (taskId > 0) {
+						for (const other of [...entries.values()]) {
+							if (other.closedAt && other.identity !== id && other.taskScope === `${scope}#${taskId}`) {
+								rememberGone(other);
+								await finish(other, renderGone(lineOfEntry(other), "the question changed"));
+							}
+						}
+					}
+				}
 				if (!e) {
 					const link = chatLink(webAppAddress, live.sessionFile);
+					const taskId = live.kind === "stuck" ? stuckTask(live).id : 0;
 					e = {
-						key,
+						key: liveKey,
 						ref: nextRef++,
 						askId: live.id,
 						createdAt: live.createdAt,
+						identity: id,
+						...(taskId > 0 ? { taskScope: `${askScope(live)}#${taskId}` } : {}),
 						messageId: 0,
 						step: 0,
 						answers: {},
@@ -1390,16 +1559,35 @@ export function createBridge({
 					};
 					storage.set("nextRef", nextRef);
 					e.step = Math.max(0, nextStep(live, e.answers));
-					entries.set(key, e);
+					entries.set(liveKey, e);
+					save();
+				} else if (e.key !== liveKey || !e.identity) {
+					entries.delete(e.key);
+					e.key = liveKey;
+					e.askId = live.id;
+					e.createdAt = live.createdAt;
+					e.identity = id;
+					entries.set(liveKey, e);
 					save();
 				}
+				const prevGone = gone.get(id) ?? null;
+				const silentRepeat = Boolean(prevGone);
 				const { text, reply_markup } = renderAsk(live, e);
-				const msg = await send(text, { reply_markup });
+				const msg = await send(text, {
+					reply_markup,
+					...(silentRepeat ? { disable_notification: true } : {}),
+				});
 				e.messageId = Number(msg?.message_id) || 0;
+				e.sentAt = now();
+				e.renderHash = renderSignature({ text, reply_markup });
 				save();
+				if (prevGone) {
+					takeGone(id);
+					await replaceGoneMessage(prevGone, e);
+				}
 				log(
 					"info",
-					`telegram: sent ${live.kind === "approval" ? "permission prompt" : "question"} ${live.id} as message ${e.messageId}`,
+					`telegram: sent ${live.kind === "approval" ? "permission prompt" : "question"} ${live.id} as message ${e.messageId} (id=${idHash}, ${silentRepeat ? "silent repeat" : "new"})`,
 				);
 			} finally {
 				pendingSends.delete(key);
@@ -1415,11 +1603,32 @@ export function createBridge({
 		}
 		const key = keyOf(ev.ask);
 		enqueue(async () => {
-			const e = entries.get(key);
+			const id = questionIdentity(ev.ask);
+			const e = entries.get(key) ?? findEntryByIdentity(ev.ask);
+			if (ev.type === "answered") {
+				forgetGone(id);
+				if (e?.identity) forgetGone(e.identity);
+				if (!e) return;
+				const line = renderLine(ev.ask, e.link);
+				await finish(e, renderAnswered(line, ev.summary, ev.from));
+				return;
+			}
 			if (!e) return;
+			const stillLive = asks.list().find((a) => questionIdentity(a) === (e.identity || id));
+			if (stillLive) {
+				await adoptEntry(e, stillLive);
+				return;
+			}
+			if (isChatCloseGone(ev.ask, ev.reason)) {
+				e.identity ||= id;
+				e.closedAt = now();
+				save();
+				return;
+			}
+			e.identity ||= id;
+			if (!e.sending && e.messageId) rememberGone(e, ev.ask);
 			const line = renderLine(ev.ask, e.link);
-			const text = ev.type === "answered" ? renderAnswered(line, ev.summary, ev.from) : renderGone(line, ev.reason);
-			await finish(e, text);
+			await finish(e, renderGone(line, ev.reason));
 		});
 	}
 
@@ -1682,10 +1891,18 @@ export function createBridge({
 	/** Old messages whose ask is gone get their final words; waiting asks without a message get one. */
 	function resync(reason = "it went away") {
 		return enqueue(async () => {
+			pruneGone();
 			const live = asks.list();
+			for (const a of live) {
+				const existing = entries.get(keyOf(a)) ?? findEntryByIdentity(a);
+				if (existing) await adoptEntry(existing, a);
+			}
 			const liveKeys = new Set(live.map(keyOf));
 			for (const e of [...entries.values()]) {
 				if (liveKeys.has(e.key)) continue;
+				if (e.closedAt && now() - e.closedAt < GONE_IDENTITY_TTL_MS) continue;
+				if (!e.sending && e.identity && e.messageId) rememberGone(e);
+				else if (e.sending && e.identity) forgetGone(e.identity);
 				await finish(
 					e,
 					e.sending
@@ -2580,6 +2797,10 @@ export async function sendOwnerNotice({ api, ownerId, webAppAddress = "", log = 
 		log("warn", `telegram: a notice to the owner failed: ${why}`);
 		return { ok: false, error: `Telegram refused it: ${why}`, ...(messageIds.length ? { messageIds } : {}) };
 	}
+	log(
+		"info",
+		`telegram: sent notice from ${from || "unknown"} (${text.length} characters) as message ${messageIds.join(", ")}`,
+	);
 	return { ok: true, messageId: messageIds[0], messageIds };
 }
 
@@ -2697,6 +2918,7 @@ export default {
 				host.storage.set("bot", botId);
 				host.storage.delete("offset");
 				host.storage.delete("sent");
+				host.storage.delete("gone");
 				host.storage.delete("chat");
 				chatStore = loadChatStore(host.storage);
 			}
@@ -2733,6 +2955,7 @@ export default {
 				webAppAddress,
 				log,
 				chat,
+				now,
 			});
 			const c = { bridge, chat, notice: { api, ownerId, webAppAddress, log } };
 			current = c;

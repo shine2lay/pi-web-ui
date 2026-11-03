@@ -45,6 +45,10 @@ describe("Ops108 baseline", () => {
 		// display-only renderRoute (which way an ask came, COO's note and recommendation) and puts it after the head in
 		// renderAsk's message; its diff removes only renderAsk's doc comment and its joined part list (now with the
 		// route); no Ops108 routing line changed. Was af8c8cce….
-		expect(sha("plugins/telegram/index.mjs")).toBe("5a065c5c16163882724b5ca0c6c51252854390eccb656f938a4d2955a7714b79");
+		// Re-pinned by telegram-once (Ops #763, owner in Ops home chat 2026-11-03 ~00:15 PST): it only moves stuckTask
+		// to plugins/telegram/question-identity.mjs, matches ask entries in createBridge by stable question identity across
+		// restarts/chat reopens and silent unanswered repeats, and logs question identity hashes and notice sender/length;
+		// no Ops108 routing line (replyMayGoToTelegram, createChat, onRoleTurnEnd) changed. Was 5a065c5c….
+		expect(sha("plugins/telegram/index.mjs")).toBe("b8d0216543efa5f71d67fcb32c194a324a7e4013c01bf8b5b1c69a3c15188374");
 	});
 });

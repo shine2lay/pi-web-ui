@@ -73,8 +73,9 @@ sends or edits its own messages. Nothing has to reach this machine from the inte
 
 ## Install and update
 
-Copy `manifest.json`, `index.mjs` and `README.md` into `~/.pi-web-ui/plugins/telegram/`, then
-restart pi-web-ui. Update the same way: copy the three files over, then restart.
+Copy `manifest.json`, `index.mjs`, `question-identity.mjs` and `README.md` into
+`~/.pi-web-ui/plugins/telegram/`, then restart pi-web-ui. Update the same way: copy the four
+files over, then restart.
 Don't reinstall with `pi-web-ui install --force`: it keeps only `config.json`, so the stored token
 and the plugin's memory of its messages are lost.
 
@@ -209,6 +210,77 @@ It only ever goes to the Telegram id in the settings.
 `text` is markdown or plain text (a long one goes in up to 3 messages). `from` shows in italics
 above it. `url` is an `http(s)://` address or a path starting with `/`, which goes on the
 "Web app address" setting; it shows at the end as a link named `linkLabel` (default "Open").
+
+## Sending each owner question once (Ops #763, H-TG-ONCE-1)
+
+Each owner question has a stable identity (`plugins/telegram/question-identity.mjs`,
+`questionIdentity` / `questionIdentityHash`) built only from what does not change across server
+restarts or chat reopens:
+
+- `kind` (`question`, `custom_ui`, `permission`, `stuck`);
+- the chat or queue file it belongs to (`queueFile` for `stuck` asks, else `sessionFile` or
+  `conversationId` + `cwd`);
+- the task number (`taskId`) for `stuck` asks;
+- the question's own fields (`id`, `header`, `text`, `multi`, `allowText`, and each option's
+  `value`, `label`, `description`).
+
+It never uses `createdAt` or the host's `stuck-N` counter. Two different questions never share an
+identity.
+
+### How restarts, chat reopens and repeats behave
+
+- **Restart or rebuild (`resync` and `appeared`)**: live asks are matched to stored waiting entries
+  by identity first (and for legacy stored entries without an `identity` field, by task header or
+  rendered question line). The matching entry is adopted in place: `key`, `askId` and `createdAt`
+  are updated, and the existing Telegram message is edited only if its rendered words changed. No
+  new message is sent and no `"no longer waiting (pi restarted)"` edit is made.
+- **Chat close then reopen (`stuck` asks)**: `stuck` asks exist in the host only while their chat is
+  open. When a chat closes (`gone` with `"the chat was closed"`, or `resync("it went away")`), a
+  waiting `stuck` entry stays in `entries` so reopening the chat adopts the existing Telegram
+  message without buzzing or editing it. If the task's question changed while closed, the old entry
+  is closed with `"the question changed"` and the new question is sent normally with sound.
+- **Re-raise after gone, unanswered**: when an unanswered question stops waiting for another reason
+  (such as a timeout or cancellation), its identity and old message id are kept in `goneIdentities`
+  for 7 days (`GONE_IDENTITY_TTL_MS`). If the same question is asked again within 7 days, it is
+  sent with `disable_notification: true` (silent repeat, no buzz), and its old Telegram message is
+  deleted when less than 48 hours old (`TELEGRAM_DELETE_MAX_AGE_MS`), or edited to point to the new
+  message (`"asked again in message #<id>"`) when Telegram no longer allows deletion. That leaves
+  one live message per question.
+- **Answered questions**: when a question is answered (on Telegram or in the browser), its stored
+  entry and any `goneIdentities` record for its identity are cleared. Asking the same question
+  again later sends normally with sound.
+- **Logging (no text)**: each question send or adoption logs the question `ask.id`, the 16-hex
+  identity hash, and whether it was `new`, `kept`, or `silent repeat`. Each `telegram:send` /
+  `sendOwnerNotice` call logs the sender role and character length, never the text.
+
+### Hypothesis H-TG-ONCE-1
+
+- **What was wrong (2026-10-27 to 2026-11-02 PDT, `pi-web-ui` journal)**: 441 question messages went
+  to Telegram (~63/day; 85–120 total Telegram messages/day, 85–95% questions). `pi-web-ui`
+  restarted 69 times; 163 question sends (37%) came within 3 minutes of a restart. 10 task
+  questions with stable ids were sent 87 times (38 repeats not near a restart).
+- **Cause**: `plugins/telegram/index.mjs` keyed questions solely as `${ask.id}@${ask.createdAt}`,
+  while `server/asks.ts` rebuilt every stuck ask with `createdAt = now` (and `server/stuck-asks.ts`
+  assigned a fresh `stuck-${sequence}` id to unbound ones), and stuck asks disappeared and
+  reappeared whenever their chat closed and reopened.
+- **The one change**: match questions by content-based identity (`plugins/telegram/question-identity.mjs`)
+  across `resync`, `onAskEvent` and `sendAsk`, keep waiting `stuck` entries across chat close/reopen,
+  and send unanswered re-raises within 7 days silently while deleting (or linking) the old message.
+- **Expected**:
+  - After deploy, sends within 3 minutes of a restart for questions already sent = 0.
+  - Every repeat of a question is silent.
+  - Question messages per day drop by at least 40% compared with 63/day at similar question load.
+- **Wrong if (MISS)**:
+  - Any restart or reopen re-sends, with sound, a question that was already sent and is still waiting; or
+  - Notifying sends stay above 1.1 messages per question identity.
+- **Undo**: revert the plugin commit, copy the reverted `manifest.json`, `index.mjs` and `README.md`
+  into `~/.pi-web-ui/plugins/telegram/` (removing `question-identity.mjs`), and redeploy with
+  `pi-web-deploy`. Stored entries in `storage.json` keep the original `key` field and `sent` map
+  structure (`identity`, `identityHash`, `sentAt`, and top-level `goneIdentities` are additive only),
+  so the old plugin reads them without migration or loss.
+- **72 h live receipt**: pending 72 h live look-only window after deploy (will record near-restart
+  sends of already-sent questions, notifying sends per question identity, silent repeats, question
+  messages per day, notices per sender role, and final HIT or MISS verdict).
 
 ## Not included
 

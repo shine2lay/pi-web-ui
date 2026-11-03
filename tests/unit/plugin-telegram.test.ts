@@ -44,6 +44,10 @@ import telegramPlugin, {
 	sendOwnerNotice,
 	SEND_TOOL,
 	SEND_TOPIC,
+	GONE_IDENTITY_TTL_MS,
+	TELEGRAM_DELETE_MAX_AGE_MS,
+	questionIdentity,
+	questionIdentityHash,
 } from "../../plugins/telegram/index.mjs";
 
 const OWNER = "8778288252";
@@ -217,10 +221,11 @@ const say = (text: string, replyTo?: number, from = OWNER, chat: Any = null) => 
 	},
 });
 
-function setup(storageInit: Record<string, unknown> = {}) {
+function setup(storageInit: Record<string, unknown> = {}, extra: { now?: () => number; logs?: string[] } = {}) {
 	const tg = fakeTelegram();
 	const asks = fakeAsks();
 	const storage = memStorage(storageInit);
+	const logs = extra.logs ?? [];
 	const bridge = createBridge({
 		api: tg.api,
 		asks,
@@ -228,6 +233,8 @@ function setup(storageInit: Record<string, unknown> = {}) {
 		ownerId: OWNER,
 		webAppAddress: ADDRESS,
 		sleep: async () => {},
+		now: extra.now,
+		log: (_level: string, msg: string) => logs.push(msg),
 	});
 	asks.on((ev) => bridge.onAskEvent(ev));
 	/** Wait until everything queued (including what that queued) has run. */
@@ -242,7 +249,7 @@ function setup(storageInit: Record<string, unknown> = {}) {
 		await bridge.handleUpdate(update);
 		await settle();
 	};
-	return { tg, asks, storage, bridge, settle, send };
+	return { tg, asks, storage, bridge, settle, send, logs };
 }
 
 const buttons = (call: Call | undefined) =>
@@ -722,6 +729,252 @@ describe("telegram plugin: answered elsewhere, gone, strangers", () => {
 		await send(say("/start"));
 		const hello = tg.of("sendMessage").find((c) => String(c.params.text).startsWith("Hi!"));
 		expect(hello?.params.text).toContain("Waiting now: 1.");
+	});
+});
+
+function stuckAskFixture(over: Record<string, unknown> = {}) {
+	seq++;
+	return {
+		id: `stuck-${seq}`,
+		kind: "stuck",
+		createdAt: 1000 + seq,
+		conversationId: "c1",
+		conversationTitle: "Ops lead",
+		cwd: `${process.env.HOME}/projects/demo`,
+		sessionFile: SESSION,
+		title: "Task #26 needs you: Deploy",
+		task: { id: 26, title: "Deploy" },
+		fields: [
+			{
+				id: "answer",
+				header: "Task #26",
+				text: "Use port 8080?",
+				options: [
+					{ value: "Use port 8080", label: "Use port 8080" },
+					{ value: "Pick another port", label: "Pick another port" },
+				],
+				multi: false,
+				allowText: true,
+			},
+		],
+		...over,
+	};
+}
+
+describe("telegram plugin: send each owner question once (H-TG-ONCE-1)", () => {
+	it("(a) restart: adopts a stored entry when the live ask is rebuilt with a new createdAt and stuck-N id", async () => {
+		const first = setup();
+		const initialAsk = stuckAskFixture({ id: "stuck-1", createdAt: 1000 });
+		first.asks.add(initialAsk);
+		await first.settle();
+		const msg = first.tg.last("sendMessage") as Call;
+		expect(first.tg.of("sendMessage")).toHaveLength(1);
+		const idHash = questionIdentityHash(initialAsk);
+		expect(first.logs.some((l) => l.includes(`(id=${idHash}, new)`))).toBe(true);
+		expect(first.logs.some((l) => l.includes("Use port 8080?"))).toBe(false);
+
+		// Simulate pi-web-ui restart: same storage, live ask rebuilt with a new createdAt and stuck-N id.
+		const after = setup(first.storage.all());
+		after.asks.add(stuckAskFixture({ id: "stuck-2", createdAt: 9000, conversationId: "c4" }));
+		await after.bridge.resync("pi restarted");
+		await after.settle();
+
+		expect(after.tg.of("sendMessage")).toHaveLength(0);
+		expect(after.tg.of("editMessageText")).toHaveLength(0);
+		expect(after.bridge.entries.get("stuck-2@9000")?.messageId).toBe(msg.result.message_id);
+		expect(
+			after.logs.some((l) => l.includes(`question stuck-2 on message ${msg.result.message_id} (id=${idHash}, kept)`)),
+		).toBe(true);
+
+		// If the rebuilt ask's rendered words changed (e.g. a brief was added), resync edits in place without sending a new message.
+		const withBrief = setup(after.storage.all());
+		const rebuiltWithBrief = stuckAskFixture({
+			id: "stuck-3",
+			createdAt: 12000,
+			brief: [{ label: "In short", text: "Pick the port for the service." }],
+		});
+		withBrief.asks.add(rebuiltWithBrief);
+		await withBrief.bridge.resync("pi restarted");
+		await withBrief.settle();
+		expect(withBrief.tg.of("sendMessage")).toHaveLength(0);
+		expect(withBrief.tg.of("editMessageText")).toHaveLength(1);
+		expect(withBrief.tg.last("editMessageText")?.params.message_id).toBe(msg.result.message_id);
+
+		await withBrief.send(tap(dataOf(msg, "Use port 8080"), msg.result.message_id));
+		expect(withBrief.asks.answered).toEqual([
+			{ id: "stuck-3", answers: [{ id: "answer", selected: ["Use port 8080"] }] },
+		]);
+	});
+
+	it("(b) chat close then reopen: keeps the existing message across gone and appeared events", async () => {
+		const { tg, asks, bridge, send, settle, logs } = setup();
+		const a1 = asks.add(stuckAskFixture({ id: "stuck-10", createdAt: 1000 }));
+		await settle();
+		const msg = tg.last("sendMessage") as Call;
+		expect(tg.of("sendMessage")).toHaveLength(1);
+
+		asks.goAway(a1.id, "the chat was closed");
+		await settle();
+		// Even if periodic resync runs while the chat is closed, the stuck question stays waiting.
+		await bridge.resync("it went away");
+		await settle();
+		asks.add(stuckAskFixture({ id: "stuck-11", createdAt: 5000, conversationId: "c7" }));
+		await settle();
+
+		expect(tg.of("sendMessage")).toHaveLength(1);
+		expect(tg.of("editMessageText")).toHaveLength(0);
+		expect(bridge.entries.get("stuck-11@5000")?.messageId).toBe(msg.result.message_id);
+		expect(logs.some((l) => l.includes("question stuck-11") && l.includes("kept)"))).toBe(true);
+
+		await send(tap(dataOf(msg, "Pick another port"), msg.result.message_id));
+		expect(asks.answered).toEqual([{ id: "stuck-11", answers: [{ id: "answer", selected: ["Pick another port"] }] }]);
+	});
+
+	it("(c) re-raise after gone, unanswered: sends silently with disable_notification true and deletes the old message (or edits it after 48 h)", async () => {
+		let clock = 1_000_000;
+		const { tg, asks, settle, logs } = setup({}, { now: () => clock });
+		const a1 = asks.add(question({ id: "q-100", createdAt: 1000 }));
+		await settle();
+		const firstMsg = tg.last("sendMessage") as Call;
+		expect(firstMsg.params.disable_notification).toBeUndefined();
+		const idHash = questionIdentityHash(a1);
+
+		asks.goAway(a1.id, "timed out");
+		await settle();
+		expect(tg.last("editMessageText")?.params.text).toContain("no longer waiting (timed out)");
+
+		clock += 60_000;
+		asks.add(question({ id: "q-101", createdAt: 4000 }));
+		await settle();
+		expect(tg.of("sendMessage")).toHaveLength(2);
+		const secondMsg = tg.last("sendMessage") as Call;
+		expect(secondMsg.params.disable_notification).toBe(true);
+		expect(tg.of("deleteMessage").map((c) => c.params.message_id)).toEqual([firstMsg.result.message_id]);
+		expect(logs.some((l) => l.includes(`(id=${idHash}, silent repeat)`))).toBe(true);
+		expect(logs.some((l) => l.includes("Which colour?"))).toBe(false);
+
+		// If the old message is >= 48 h old when re-raised, Telegram won't let bots delete it: edit it to point to the new one.
+		asks.goAway("q-101", "timed out");
+		await settle();
+		clock += TELEGRAM_DELETE_MAX_AGE_MS + 1_000;
+		asks.add(question({ id: "q-102", createdAt: 8000 }));
+		await settle();
+		expect(tg.of("sendMessage")).toHaveLength(3);
+		const thirdMsg = tg.last("sendMessage") as Call;
+		expect(thirdMsg.params.disable_notification).toBe(true);
+		expect(tg.of("deleteMessage")).toHaveLength(1);
+		expect(tg.last("editMessageText")?.params).toMatchObject({
+			message_id: secondMsg.result.message_id,
+		});
+		expect(tg.last("editMessageText")?.params.text).toContain(`asked again in message #${thirdMsg.result.message_id}`);
+
+		// After 7 days (GONE_IDENTITY_TTL_MS), the gone-unanswered identity expires and sends normally.
+		asks.goAway("q-102", "timed out");
+		await settle();
+		clock += GONE_IDENTITY_TTL_MS + 1_000;
+		asks.add(question({ id: "q-103", createdAt: 12000 }));
+		await settle();
+		expect(tg.last("sendMessage")?.params.disable_notification).toBeUndefined();
+	});
+
+	it("(d) a different question on the same task or chat sends normally with sound", async () => {
+		const { tg, asks, settle } = setup();
+		const a1 = asks.add(stuckAskFixture({ id: "stuck-20", createdAt: 1000 }));
+		await settle();
+		asks.goAway(a1.id, "the chat was closed");
+		await settle();
+
+		// While the chat was closed, the task's question changed to a different question on the same task #26.
+		asks.add(
+			stuckAskFixture({
+				id: "stuck-21",
+				createdAt: 2000,
+				fields: [
+					{
+						id: "answer",
+						header: "Task #26",
+						text: "Which database should it use?",
+						options: [
+							{ value: "Postgres", label: "Postgres" },
+							{ value: "SQLite", label: "SQLite" },
+						],
+						multi: false,
+						allowText: true,
+					},
+				],
+			}),
+		);
+		await settle();
+		expect(tg.of("sendMessage")).toHaveLength(2);
+		expect(tg.last("sendMessage")?.params.disable_notification).toBeUndefined();
+		expect(tg.last("editMessageText")?.params.text).toContain("no longer waiting (the question changed)");
+	});
+
+	it("(e) answered, then asked again: sends normally with sound", async () => {
+		const { tg, asks, settle } = setup();
+		const a1 = asks.add(question({ id: "q-200", createdAt: 1000 }));
+		await settle();
+		asks.answerInBrowser(a1.id, "Red");
+		await settle();
+
+		asks.add(question({ id: "q-201", createdAt: 3000 }));
+		await settle();
+		expect(tg.of("sendMessage")).toHaveLength(2);
+		expect(tg.last("sendMessage")?.params.disable_notification).toBeUndefined();
+		expect(tg.of("deleteMessage")).toHaveLength(0);
+	});
+
+	it("(f) stored entries from the old plugin version load fine", async () => {
+		const legacyAsk = stuckAskFixture({ id: "stuck-1", createdAt: 1000 });
+		const legacyEntry = {
+			key: "stuck-1@1000",
+			ref: 1700000001,
+			askId: "stuck-1",
+			createdAt: 1000,
+			messageId: 777,
+			step: 0,
+			answers: {},
+			ticks: [],
+			prompts: {},
+			sending: false,
+			link: LINK,
+			line: renderLine(legacyAsk, LINK),
+		};
+		const goneLegacyEntry = {
+			key: "q-old@500",
+			ref: 1700000000,
+			askId: "q-old",
+			createdAt: 500,
+			messageId: 776,
+			step: 0,
+			answers: {},
+			ticks: [],
+			prompts: {},
+			sending: false,
+			link: LINK,
+			line: finalLine("Old question", "Throwaway"),
+		};
+		const { tg, asks, bridge, send, settle } = setup({
+			sent: {
+				"q-old@500": goneLegacyEntry,
+				"stuck-1@1000": legacyEntry,
+			},
+			nextRef: 1700000002,
+		});
+		const rebuilt = stuckAskFixture({ id: "stuck-2", createdAt: 2000 });
+		asks.add(rebuilt);
+		await bridge.resync("pi restarted");
+		await settle();
+
+		expect(tg.of("sendMessage")).toHaveLength(0);
+		expect(tg.of("editMessageText")).toHaveLength(1);
+		expect(tg.last("editMessageText")?.params.message_id).toBe(776);
+		expect(bridge.entries.get("stuck-2@2000")?.messageId).toBe(777);
+
+		await send(tap("1700000001:0:o0", 777));
+		expect(asks.answered).toEqual([{ id: "stuck-2", answers: [{ id: "answer", selected: ["Use port 8080"] }] }]);
+
+		expect(() => questionIdentity(null as Any)).toThrow(TypeError);
 	});
 });
 
@@ -2675,8 +2928,15 @@ describe("telegram plugin: notices to the owner (telegram_send, telegram:send; O
 
 	it("sends the text with the sender in italics and the link at the end, only to the owner", async () => {
 		const tg = fakeTelegram();
+		const logs: string[] = [];
 		const r = await sendOwnerNotice(
-			{ api: tg.api, ownerId: OWNER, webAppAddress: ADDRESS, wait: quick },
+			{
+				api: tg.api,
+				ownerId: OWNER,
+				webAppAddress: ADDRESS,
+				wait: quick,
+				log: (_level: string, msg: string) => logs.push(msg),
+			},
 			{
 				text: "Your **review** is ready",
 				url: "https://example.com/a?b=1&c=2",
@@ -2685,6 +2945,8 @@ describe("telegram plugin: notices to the owner (telegram_send, telegram:send; O
 			},
 		);
 		expect(r).toEqual({ ok: true, messageId: 500, messageIds: [500] });
+		expect(logs).toEqual(["telegram: sent notice from Show & Tell (24 characters) as message 500"]);
+		expect(logs.some((l) => l.includes("review"))).toBe(false);
 		const sent = tg.of("sendMessage");
 		expect(sent).toHaveLength(1);
 		expect(sent[0].params).toMatchObject({
