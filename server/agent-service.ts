@@ -20393,15 +20393,24 @@ export class AgentService {
 	}
 
 	/**
-	 * queue-lanes: a done (or removed) task's chat leaves the running list once it is idle (at most 2
-	 * minutes). queue-done-hidden: it leaves Recent chats too, with the same tombstone as its ✕ there,
+	 * queue-lanes: a done (or removed) task's chat leaves the running list once it is idle. settle-stale
+	 * (Ops #771): however long that takes; it used to give up after 2 minutes and close a chat still working
+	 * after queue_done, disposing its run mid-turn (the reply was lost and every add-on's settle hooks hit a
+	 * stale ctx). Each look takes the chat's current session, so one a force reset replaced can't hold it
+	 * open, and a chat no longer open ends the wait. queue-done-hidden: it leaves Recent chats too, with the same tombstone as its ✕ there,
 	 * set before every window's list is read again. Its transcript stays: History lists it, the queue's
 	 * links open it, and opening it puts it back in Recent chats (markRecentSeen). Only a queued task's
 	 * own chat gets the tombstone, also when it isn't open any more.
 	 */
 	private async queueCloseChat(file: string): Promise<boolean> {
-		const session = this.queueSessionFor(file);
-		if (session) await waitUntil(() => !session.isStreaming && !session.isCompacting, 120_000, 500);
+		await waitUntil(
+			() => {
+				const session = this.queueSessionFor(file);
+				return !session || (!session.isStreaming && !session.isCompacting);
+			},
+			Number.POSITIVE_INFINITY,
+			500,
+		);
 		const open = this.queueSessionFor(file);
 		const taskChat = open ? isQueueTaskChatEntries(open.sessionManager.getEntries()) : await isQueueTaskChatFile(file);
 		return this.queueTasksChain(async () => {

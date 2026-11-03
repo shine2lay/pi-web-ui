@@ -467,4 +467,52 @@ describe("queue-done-hidden: a finished task's chat leaves the chat list", () =>
 		expect(convs.has("task")).toBe(false);
 		expect(rowFor(desk, taskFile)).toBeUndefined();
 	});
+
+	// settle-stale (Ops #771): the chat kept working after queue_done; at two minutes the old code closed it
+	// anyway, disposing the run mid-turn (its reply and its add-ons' settle work went stale).
+	it("keeps waiting while the chat still works after two minutes, and never closes it mid-run", async () => {
+		vi.useFakeTimers();
+		try {
+			const taskFile = write("task.jsonl", taskChatEntries(7));
+			const task = conv("task", taskFile, taskChatEntries(7), { streaming: true });
+			const desk = win("desk", "elsewhere", [taskFile]);
+			let result: boolean | undefined;
+			void closeChat(taskFile).then((r) => {
+				result = r;
+			});
+			await vi.advanceTimersByTimeAsync(10 * 60_000);
+			expect(result).toBeUndefined();
+			expect(convs.has("task")).toBe(true);
+			expect(store.getRecentRemoved()).toEqual([]);
+			expect(rowFor(desk, taskFile)?.live).toBe(true);
+			task.session.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(result).toBe(true);
+			expect(convs.has("task")).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("looks at the chat's current session while it waits: a replaced one doesn't keep it open", async () => {
+		vi.useFakeTimers();
+		try {
+			const taskFile = write("task.jsonl", taskChatEntries(7));
+			const task = conv("task", taskFile, taskChatEntries(7), { streaming: true });
+			win("desk", "elsewhere", [taskFile]);
+			let result: boolean | undefined;
+			void closeChat(taskFile).then((r) => {
+				result = r;
+			});
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(result).toBeUndefined();
+			// A force reset puts a fresh, idle session in its place; the old object still says it streams.
+			task.session = { ...task.session, isStreaming: false };
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(result).toBe(true);
+			expect(convs.has("task")).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });

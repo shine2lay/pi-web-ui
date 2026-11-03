@@ -5161,6 +5161,12 @@ the TL;DR and Telegram links open it, and opening it puts it back in Recent chat
 4. **Recent chats keep their rows** (`pushSessions`): `recentSessions` is the whole saved-chat list (at
    most 200) instead of 3 times the limit, so many hidden task chats can't leave Recent chats short.
 5. `server/queue-host.ts`: the comment says what `closeChat` does now.
+6. **settle-stale: never closed mid-run** (Ops #771, H-SETTLE-STALE-1, `docs/settle-stale-771.md`): `queueCloseChat`
+   waits for the chat to be idle however long that takes (it used to give up after 2 minutes and close a
+   chat still working after `queue_done`: the chat's session was disposed mid-turn, its reply was lost and
+   every add-on's `agent_before_settle`/`agent_settled` hit a stale ctx, with "turn_end could not resolve
+   the persisted assistant entry ID"). Each look takes the chat's current session (`queueSessionFor`), so
+   one a force reset replaced can't hold it open, and a chat that is no longer open ends the wait.
 
 pi-queue (its own repo, same task): a lane task removed from the queue gets `closeChat` once its chat has
 stopped working on it (done, needs you or on hold, by its own record): at once, or when that chat next
@@ -5183,7 +5189,9 @@ of its own, where a plain new client would take over the chat open last in the s
   it moves on; open tasks' and the user's chats stay; the queue's clients opening it don't bring it back,
   the user opening it does; a task chat that isn't open is tombstoned and every window's list goes out,
   a user's chat or a missing file isn't; 60 hidden task chats still leave Recent chats its 15 rows; it
-  waits for the chat's run to end first.
+  waits for the chat's run to end first; it still waits after 10 minutes of work (fake timers) and
+  closes it a moment after the run ends; a session a force reset replaced doesn't hold it open
+  (Ops #771: the last two fail on the old 2-minute wait).
 - `tests/queue-lanes-test.mjs` (sealed browser test, real pi-queue, stand-in model): a finished task's
   chat leaves the observer's list and window A's left panel within seconds, #3's (open in A) once A
   moves on; the transcripts stay and History lists them; the Queue tab's link opens #1's chat, which is
@@ -5195,6 +5203,8 @@ of its own, where a plain new client would take over the chat open last in the s
 
 - Keep the tombstone in `queueCloseChat` before the release (`releaseQueueChat` refreshes every window's
   list) and the queue-client check in `markRecentSeen`.
+- Keep `queueCloseChat`'s wait without a deadline and looking the session up again on every look (Ops #771):
+  a deadline brings back mid-turn disposal of a task chat still working after `queue_done`.
 - If pi-queue changes how a task's chat starts (the `assigned` entry before the first message),
   follow it in `taskChatHeadEntry`.
 
