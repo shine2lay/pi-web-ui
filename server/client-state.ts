@@ -11,7 +11,13 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { normalizeSoftCapByModel, normalizeSoftCapTokens } from "./soft-cap.js";
 import { deriveLegacy, legacyToDisabled, normalizeDisabledAgentTools } from "./tool-manager.js";
 import type { UiAlign, UiLayoutPrefs } from "./protocol.js";
-import { validModelChoice, type ModelChoice } from "./model-all-chats.js";
+import {
+	validModelChoice,
+	validThinkingChoice,
+	type ModelChoice,
+	type ThinkingChoice,
+	type ThinkingLevelName,
+} from "./model-all-chats.js";
 
 /** System-prompt mode: append the custom text to the built prompt, or replace
  *  the whole system prompt with it. (遗留字段：主会话已迁移到 compose 模板，
@@ -485,6 +491,8 @@ export interface ClientState {
 	allChatsModel?: ModelChoice;
 	/** Explicit picks on blank chats may not yet be flushed by the SDK. */
 	chatModelChoices?: Record<string, ModelChoice>;
+	/** The latest thinking-for-all-chats move; older chats on its `from` follow it when they open. */
+	allChatsThinking?: ThinkingChoice;
 	/** 全局默认模型各 provider 当时用的 key（provider -> keyName），随全局默认一起记；
 	 *  新项目回落到全局默认模型时一并恢复 key（同 projectProviderKeys 的作用）。 */
 	defaultProviderKeys?: Record<string, string>;
@@ -1182,6 +1190,24 @@ export class ClientStateStore {
 	getAllChatsModel(): ModelChoice | undefined {
 		const record = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.allChatsModel;
 		return validModelChoice(record) ? record : undefined;
+	}
+
+	getAllChatsThinking(): ThinkingChoice | undefined {
+		const record = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.allChatsThinking;
+		return validThinkingChoice(record) ? record : undefined;
+	}
+
+	/** Dated like saveAllChatsModel; a repeat move is still later than the one before. */
+	saveAllChatsThinking(from: ThinkingLevelName, to: ThinkingLevelName): ThinkingChoice {
+		const record: ThinkingChoice = {
+			from,
+			to,
+			at: Math.max(Date.now(), (this.getAllChatsThinking()?.at ?? 0) + 0.001),
+		};
+		const state = (this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
+		state.allChatsThinking = record;
+		this.save();
+		return record;
 	}
 
 	getChatModelChoice(sessionId: string): ModelChoice | undefined {

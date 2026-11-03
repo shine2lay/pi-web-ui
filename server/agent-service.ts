@@ -48,6 +48,7 @@ import {
 	createWriteToolDefinition,
 	getAgentDir,
 	SessionManager,
+	SettingsManager,
 	VERSION,
 	type AgentSession,
 	type AgentSessionEvent,
@@ -156,9 +157,19 @@ import type { UsageAccountingView } from "./usage-accounting-host.js";
 import { attachUsageLedger, recordUsageLedgerEntry } from "./usage-accounting-ledger.js";
 // new-chat-default: the global default model is what every new chat starts on.
 import { carryOverToNewChat, freshChatModel } from "./new-chat-model.js";
-import { chatModelChoice, latestChatModelChoice, inModelChangeLane, type ModelChoice } from "./model-all-chats.js";
+import {
+	chatModelChoice,
+	chatThinkingChoice,
+	latestChatModelChoice,
+	latestThinkingChangeAt,
+	inModelChangeLane,
+	thinkingMove,
+	type ModelChoice,
+	type ThinkingLevelName,
+} from "./model-all-chats.js";
+import { moveThinkingInMemory, moveThinkingInSettingsFile } from "./thinking-level-settings.js";
 import { defaultThinking, prepareLaunch, profileChoices, QueueLaunchRefused } from "./queue-profile.js";
-import type { UiDecisionRecordView, UiDecisionsPage, UiTaskLaunch } from "./protocol.js";
+import type { ThinkingAllChatsResult, UiDecisionRecordView, UiDecisionsPage, UiTaskLaunch } from "./protocol.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -8271,6 +8282,12 @@ export class ClientSession {
 		this.startWidgetsTimer();
 		this.startStallTimer();
 		// Every runtime open/rebuild (UI, queue, plugin, Telegram, recovery) comes here.
+		// Thinking first: a model restore keeps the chat's level, so it then keeps the new one.
+		try {
+			await this.restoreChatThinkingChoice(conv);
+		} catch (err) {
+			console.warn(`[thinking-all-chats] ${conv.id}: level kept, ${(err as Error).message}`);
+		}
 		await this.restoreChatModelChoice(conv);
 	}
 
@@ -18105,7 +18122,7 @@ export class ClientSession {
 					entry.customType === "pi-web-ui/model-pinned" &&
 					(entry.data as { pinned?: boolean } | undefined)?.pinned === true,
 			);
-		const createdAt = Date.parse(sm.getHeader()?.timestamp ?? "") || conv.createdAt;
+		const createdAt = this.chatCreatedAt(conv);
 		return chatModelChoice(
 			this.stateStore.getAllChatsModel(),
 			createdAt,
@@ -18113,6 +18130,19 @@ export class ClientSession {
 			this.stateStore.getChatModelChoice(sm.getSessionId()),
 			!!pinned,
 		);
+	}
+
+	/** When the chat was born (its transcript header, else the in-memory record). */
+	private chatCreatedAt(conv: Conversation): number {
+		return Date.parse(conv.session.sessionManager.getHeader()?.timestamp ?? "") || conv.createdAt;
+	}
+
+	/** Every window showing this chat repaints its model and thinking line. */
+	private refreshChatViewers(conv: Conversation): void {
+		for (const client of ClientSession.liveSessions) {
+			if (client.activeId === conv.id) client.flushSnapshot();
+			client.checkpointViewers(conv.id, true);
+		}
 	}
 
 	private markChatModelChoice(conv: Conversation, choice: ModelChoice): void {
@@ -18165,10 +18195,7 @@ export class ClientSession {
 			session.sessionManager.appendCustomEntry(FAST_MODE_ENTRY, fastModeEntryData(session.sessionManager, nextSpeed));
 		}
 		this.applyCompactionOverrides();
-		for (const client of ClientSession.liveSessions) {
-			if (client.activeId === conv.id) client.flushSnapshot();
-			client.checkpointViewers(conv.id, true);
-		}
+		this.refreshChatViewers(conv);
 	}
 
 	/** Called at ALL open paths and by All chats. Like the chat's own picker, a running reply is
@@ -18240,6 +18267,98 @@ export class ClientSession {
 				textEn: `Failed to switch all chats: ${(err as Error).message}`,
 			});
 		}
+	}
+
+	/** pi's global settings file, through the SDK's own storage and lock. */
+	private settingsFileManager(): SettingsManager {
+		return SettingsManager.create(this.cwd, process.env.PI_CODING_AGENT_DIR ?? getAgentDir());
+	}
+
+	/** One open chat: on `from` it goes to `to` for its next model request, like its own picker
+	 * (persist false: the shared settings were moved once already). A running reply goes on. */
+	private moveChatThinking(conv: Conversation, from: ThinkingLevelName, to: ThinkingLevelName, apply: boolean) {
+		const session = conv.session;
+		if (session.thinkingLevel !== from) return false;
+		if (!apply) return true;
+		session.setThinkingLevel(to, { persist: false });
+		if (session.thinkingLevel === from) throw new Error(`${modelKeyOf(session) ?? "its model"} has no ${to} level`);
+		this.refreshChatViewers(conv);
+		return true;
+	}
+
+	/** Thinking for all chats (owner, 2026-11-03: "set every chat's effort to extra high instead of
+	 * max"). Every open chat in every window, queue, scheduler and participant chat on `from` goes to
+	 * `to`; others stay. pi's settings move first (file once, then each chat's in-memory copy), so a
+	 * model or account switch can't bring `from` back. Older chats follow when they next open
+	 * (restoreChatThinkingChoice). Answers with thinking_all_chats_result and one notice. */
+	async setThinkingAllChats(from: unknown, to: unknown, dryRun?: unknown): Promise<ThinkingAllChatsResult> {
+		const result: ThinkingAllChatsResult = {
+			type: "thinking_all_chats_result",
+			ok: false,
+			dryRun: dryRun === true,
+			from: String(from ?? ""),
+			to: String(to ?? ""),
+			changed: 0,
+			skipped: 0,
+			failed: 0,
+			failures: [],
+			settingsFileEntries: [],
+			settingsCopies: 0,
+		};
+		try {
+			if (dryRun !== undefined && typeof dryRun !== "boolean") throw new Error('"dryRun" must be true or false');
+			const move = thinkingMove(from, to);
+			const apply = dryRun !== true;
+			const convs = [...this.convs.values()];
+			if (apply) this.stateStore.saveAllChatsThinking(move.from, move.to);
+			result.settingsFileEntries = moveThinkingInSettingsFile(this.settingsFileManager(), move.from, move.to, apply);
+			for (const manager of new Set(convs.map((conv) => conv.session.settingsManager)))
+				if (moveThinkingInMemory(manager, move.from, move.to, apply).length) result.settingsCopies++;
+			for (const conv of convs) {
+				try {
+					// The model lane: a model switch in progress can't put back the level it captured.
+					const moved = await inModelChangeLane(conv, async () =>
+						this.moveChatThinking(conv, move.from, move.to, apply),
+					);
+					if (moved) result.changed++;
+					else result.skipped++;
+				} catch (err) {
+					result.failed++;
+					result.failures.push(`${conv.id}: ${(err as Error).message}`);
+				}
+			}
+			result.ok = true;
+			const chats = (n: number) => `${n} open chat${n === 1 ? "" : "s"}`;
+			const failedText = result.failed
+				? `; ${result.failed} couldn't change: ${result.failures[0].replace(/\.$/, "")}`
+				: "";
+			const text = apply
+				? `Thinking ${move.from} → ${move.to}: ${chats(result.changed)} changed, ${result.skipped} left as it was${failedText}.`
+				: `Dry run, thinking ${move.from} → ${move.to}: ${chats(result.changed)} would change, ${result.skipped} would stay; ${result.settingsFileEntries.length} settings entries.`;
+			this.emit({ type: "notice", level: result.failed ? "warning" : "info", text, textEn: text });
+		} catch (err) {
+			result.error = (err as Error).message;
+			const text = `Failed to change thinking for all chats: ${result.error}`;
+			this.emit({ type: "notice", level: "error", text, textEn: text });
+		}
+		this.emit(result);
+		return result;
+	}
+
+	/** At every open: a chat older than the latest thinking move, still on its `from`, goes to its
+	 * `to`. A chat born later, or set again after the move, keeps its level. */
+	private async restoreChatThinkingChoice(conv: Conversation): Promise<boolean> {
+		return inModelChangeLane(conv, async () => {
+			const level = chatThinkingChoice(
+				this.stateStore.getAllChatsThinking(),
+				this.chatCreatedAt(conv),
+				conv.session.thinkingLevel,
+				latestThinkingChangeAt(conv.session.sessionManager.getBranch()),
+			);
+			if (!level) return false;
+			conv.session.setThinkingLevel(level, { persist: false });
+			return conv.session.thinkingLevel === level;
+		});
 	}
 
 	/** Set the GLOBAL default model ("provider/id"): projects with no memory

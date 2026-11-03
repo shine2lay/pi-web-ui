@@ -1487,6 +1487,10 @@ export type ClientCommand =
 	| { type: "set_model"; modelId: string }
 	/** One dated choice for existing chats only; never changes new-chat defaults. */
 	| { type: "set_model_all_chats"; modelId: string }
+	/** Thinking for all chats: every open chat on `from` goes to `to` from its next request (running
+	 *  replies aren't stopped), pi's settings entries on `from` too, and older chats when they next
+	 *  open. dryRun only counts. Answered by thinking_all_chats_result. */
+	| { type: "thinking_all_chats"; from: string; to: string; dryRun?: boolean }
 	/** 设全局默认模型（"provider/id"）：无项目记忆的新项目回落到它（项目记忆优先）。
 	 *  服务端回 default_model 广播；pi 引擎专有。 */
 	| { type: "set_default_model"; modelId: string }
@@ -4484,6 +4488,27 @@ export interface ConversationSummary {
  *  switch_conversation（对话 id）一一对应。服务端在 switch_done / switch_failed 里原样回传。 */
 export type SwitchTarget = { kind: "session"; path: string } | { kind: "conversation"; id: string };
 
+/** What thinking_all_chats did (or, on a dry run, would do). ok false: refused, nothing changed. */
+export type ThinkingAllChatsResult = {
+	type: "thinking_all_chats_result";
+	ok: boolean;
+	dryRun: boolean;
+	from: string;
+	to: string;
+	/** Open chats moved from `from` to `to`. */
+	changed: number;
+	/** Open chats on another level, left as they were. */
+	skipped: number;
+	failed: number;
+	/** "<conversation id>: <reason>", one per failed chat. */
+	failures: string[];
+	/** pi's settings.json entries on `from` ("defaultThinkingLevel", "modelThinkingLevels.<provider/id>"). */
+	settingsFileEntries: string[];
+	/** Live in-memory copies of pi's settings that held `from`. */
+	settingsCopies: number;
+	error?: string;
+};
+
 /** A conversation open on ANOTHER client (different tab / device) —
  *  read-only awareness for issue #145. The owning client holds the only
  *  writer for that transcript; this entry lets other tabs discover that
@@ -5000,6 +5025,7 @@ export type ServerMessage =
 	/** first-send: how a New chat (by its reqId) ended: ok with the chat it made current, or not
 	 *  (the existing failure or warning notice says why). An unknown reqId answers ok:false. */
 	| { type: "new_chat_result"; reqId: string; ok: boolean; conversationId?: string }
+	| ThinkingAllChatsResult
 	| { type: "switch_failed"; target: SwitchTarget; error: string; errorEn?: string }
 	/** chat-open-speed: the newest messages of the chat being opened, sent BEFORE the open
 	 *  itself (the SDK load, the add-ons' session start, the folder side effects). A 267 MB

@@ -1,3 +1,5 @@
+import { THINKING_LEVELS } from "./queue-profile.js";
+
 /** All-chats is a dated choice, not a default. No transcript or model requests here. */
 export interface ModelChoice {
 	modelId: string;
@@ -69,6 +71,73 @@ export function chatModelChoice(
 	if (press && (!pinned || press.reachesPinned === true) && createdAt < Math.floor(press.at) && last.at < press.at)
 		return press;
 	return !pinned && manual && manual.at >= latest.at ? manual : undefined;
+}
+
+export type ThinkingLevelName = (typeof THINKING_LEVELS)[number];
+
+/** Thinking for all chats: every chat on `from` goes to `to`. Dated like ModelChoice, so a
+ * chat older than the move follows it when it next opens. */
+export interface ThinkingChoice {
+	from: ThinkingLevelName;
+	to: ThinkingLevelName;
+	at: number;
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevelName {
+	return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
+/** Check a requested move before anything is recorded or changed; throws a clear reason. */
+export function thinkingMove(from: unknown, to: unknown): { from: ThinkingLevelName; to: ThinkingLevelName } {
+	const known = `(one of: ${THINKING_LEVELS.join(", ")})`;
+	for (const [name, value] of [
+		["from", from],
+		["to", to],
+	] as const) {
+		if (value === undefined || value === null || value === "")
+			throw new Error(`Missing "${name}" thinking level ${known}`);
+		if (!isThinkingLevel(value)) throw new Error(`Unknown "${name}" thinking level: ${String(value)} ${known}`);
+	}
+	const move = { from: from as ThinkingLevelName, to: to as ThinkingLevelName };
+	if (move.from === move.to) throw new Error(`"from" and "to" are both ${move.from}: nothing to move`);
+	return move;
+}
+
+export function validThinkingChoice(value: unknown): value is ThinkingChoice {
+	if (!value || typeof value !== "object") return false;
+	const v = value as Partial<ThinkingChoice>;
+	return (
+		isThinkingLevel(v.from) &&
+		isThinkingLevel(v.to) &&
+		v.from !== v.to &&
+		typeof v.at === "number" &&
+		Number.isFinite(v.at) &&
+		v.at > 0
+	);
+}
+
+/** When the chat's thinking level was last set on its current branch (-Infinity: never). */
+export function latestThinkingChangeAt(entries: readonly unknown[]): number {
+	let at = Number.NEGATIVE_INFINITY;
+	for (const raw of entries) {
+		const e = raw as { type?: string; timestamp?: string } | null;
+		if (e?.type !== "thinking_level_change") continue;
+		const t = Date.parse(e.timestamp ?? "");
+		if (Number.isFinite(t) && t > at) at = t;
+	}
+	return at;
+}
+
+/** The level a chat moves to when it opens, or undefined to keep its own. Only a chat older than
+ * the move, still on `from`, whose level wasn't set again after the move (a later pick wins). */
+export function chatThinkingChoice(
+	press: ThinkingChoice | undefined,
+	createdAt: number,
+	level: string | undefined,
+	lastChangeAt: number,
+): ThinkingLevelName | undefined {
+	if (press && level === press.from && createdAt < Math.floor(press.at) && lastChangeAt < press.at) return press.to;
+	return undefined;
 }
 
 /** One writer per chat. Re-check choices INSIDE the lane after async auth/key work. */

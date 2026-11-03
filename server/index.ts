@@ -1283,6 +1283,7 @@ export interface DispatchSession {
 	/** 全局默认模型（pi 引擎专有；DSH 无此概念，实现缺失时 dispatch 侧 `?.` 忽略）。 */
 	setDefaultModel?(modelId: string): Promise<void>;
 	setModelAllChats?(modelId: string): Promise<void>;
+	setThinkingAllChats?(from: unknown, to: unknown, dryRun?: unknown): Promise<unknown>;
 	clearDefaultModel?(): void;
 	setThinking(level: string): void;
 	/** fast-mode: the chat's Fast button (pi chats only; DSH has none). */
@@ -3625,6 +3626,9 @@ wss.on("connection", (ws, req) => {
 				break;
 			case "set_model_all_chats":
 				void cs.setModelAllChats?.(msg.modelId);
+				break;
+			case "thinking_all_chats":
+				void cs.setThinkingAllChats?.(msg.from, msg.to, msg.dryRun);
 				break;
 			case "set_default_model":
 				void cs.setDefaultModel?.(msg.modelId);
