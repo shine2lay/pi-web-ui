@@ -3692,6 +3692,9 @@ export interface UiLimitsAccount {
 	/** When the last check ran (ms), failed or not. */
 	triedAt?: number;
 	failure?: { reason: UiLimitsFailureReason; text: string; at: number };
+	/** Plain words from pi-multi-pass for a provider that gives no usage numbers (Sign in with ChatGPT);
+	 *  shown instead of "no numbers yet" while the row has no windows. Not a failure. */
+	note?: string;
 }
 
 export interface ModelInfo {

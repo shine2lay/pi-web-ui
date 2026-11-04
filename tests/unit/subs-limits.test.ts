@@ -26,6 +26,7 @@ import type { ServerMessage, UiLimitsAccount } from "../../server/protocol.js";
 import { setAppSend } from "../../web/src/app-globals.js";
 import {
 	accountLimited,
+	accountStatusLine,
 	accountWho,
 	agoParts,
 	formatResetIn,
@@ -95,6 +96,14 @@ describe("server: the readings file", () => {
 		expect(view!.accounts[2].failure).toBeUndefined();
 		expect(sanitizeLimits({ version: 2, accounts: [] })).toBeUndefined();
 		expect(sanitizeLimits(null)).toBeUndefined();
+	});
+
+	it("keeps pi-multi-pass's plain-words note for an account whose provider gives no numbers (Ops #780)", () => {
+		const note = "OpenAI gives no usage numbers for Sign in with ChatGPT; see chatgpt.com/settings/usage";
+		const raw = { provider: "openai", base: "openai", number: 1, name: "ChatGPT", windows: [], note, limited: true };
+		const view = sanitizeLimits(readings([raw as never, account("anthropic", { note: 7 as never })]));
+		expect(view!.accounts[0]).toEqual({ ...raw, note });
+		expect(view!.accounts[1].note).toBeUndefined();
 	});
 
 	it("reads nothing from a missing or broken file", () => {
@@ -254,6 +263,17 @@ describe("client: what a row shows", () => {
 		expect(accountWho(account("a", { label: "work", email: "x@y" }))).toBe("work");
 		expect(accountWho(account("a", { email: "x@y" }))).toBe("x@y");
 		expect(accountWho(account("a"))).toBeUndefined();
+	});
+
+	it("the provider's note shows in place of 'no numbers yet' while the row has no numbers (Ops #780)", () => {
+		const note = "OpenAI gives no usage numbers for Sign in with ChatGPT; see chatgpt.com/settings/usage";
+		const bare = account("openai", { windows: [], checkedAt: undefined, source: undefined });
+		expect(accountStatusLine({ ...bare, note })).toEqual({ kind: "note", text: note });
+		expect(accountStatusLine({ ...bare, note, checkedAt: NOW })).toEqual({ kind: "note", text: note });
+		expect(accountStatusLine(bare)).toEqual({ kind: "no-numbers" });
+		expect(accountStatusLine(account("anthropic"))).toEqual({ kind: "checked", at: NOW });
+		// numbers win over a note: the row then says how old they are
+		expect(accountStatusLine(account("openai", { note }))).toEqual({ kind: "checked", at: NOW });
 	});
 });
 

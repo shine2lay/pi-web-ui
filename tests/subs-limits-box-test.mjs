@@ -79,6 +79,9 @@ function accounts(now: number, previous: any, failClaude3: boolean) {
 		fresh({ provider: "anthropic-2", base: "anthropic", number: 2, name: "Claude 2", plan: "Max", label: "work", email: "two@example.com",
 			windows: windows(now, 80, 40, [{ key: "7d:opus", label: "Weekly · Opus", usedPercent: 20, resetAt: Math.floor(now / 1000) + 50 * HOUR }]) }),
 		fresh({ provider: "anthropic-3", base: "anthropic", number: 3, name: "Claude 3", plan: "Pro", email: "three@example.com", windows: windows(now, 5, 92) }),
+		// Sign in with ChatGPT: no usage numbers, a note instead; a reply's limit error marked it (Ops #780).
+		{ provider: "openai", base: "openai", number: 1, name: "ChatGPT", windows: [], limited: true, limitedAt: now,
+			note: "OpenAI gives no usage numbers for Sign in with ChatGPT; see chatgpt.com/settings/usage" },
 		fresh({ provider: "openai-codex", base: "openai-codex", number: 1, name: "ChatGPT 1", plan: "Plus", email: "gpt@example.com", windows: windows(now, 3, 10) }),
 		fresh({ provider: "fastfail", base: "fastfail", number: 1, name: "Test 1", windows: windows(now, 1, 2) }),
 	];
@@ -189,7 +192,7 @@ try {
 		"the button spins at once",
 		await until(() => refreshBtn(page).evaluate((b) => b.classList.contains("spinning")), 1000, 20),
 	);
-	check("every account gets a row", await until(async () => (await rows(page).count()) === 5, 10_000));
+	check("every account gets a row", await until(async () => (await rows(page).count()) === 6, 10_000));
 	check(
 		"the spinner stops when the check is over",
 		await until(async () => !(await refreshBtn(page).evaluate((b) => b.classList.contains("spinning"))), 5000),
@@ -197,7 +200,7 @@ try {
 	const names = await rows(page).locator(".lp-limit-name").allInnerTexts();
 	check(
 		"rows in pi-multi-pass's order",
-		names.join(",") === "Claude 1,Claude 2,Claude 3,ChatGPT 1,Test 1",
+		names.join(",") === "Claude 1,Claude 2,Claude 3,ChatGPT,ChatGPT 1,Test 1",
 		names.join(","),
 	);
 	const c2 = row(page, "anthropic-2");
@@ -237,6 +240,17 @@ try {
 		.locator(".lp-limit-fill")
 		.evaluate((el) => el.style.width);
 	check("the bar shows how much is used", width === "100%", width);
+	const gpt = row(page, "openai");
+	const gptText = await gpt.innerText();
+	check(
+		"an account with no numbers shows the add-on's note, not 'no numbers yet'",
+		(await gpt.locator(".lp-limit-note").innerText()) ===
+			"OpenAI gives no usage numbers for Sign in with ChatGPT; see chatgpt.com/settings/usage" &&
+			!/no numbers yet/.test(gptText) &&
+			(await gpt.locator(".lp-limit-window").count()) === 0,
+		gptText.replace(/\n/g, " / "),
+	);
+	check("... and its Limited mark", (await gpt.locator(".lp-limit-badge").innerText()) === "Limited");
 	check(
 		"the open chat's account is marked",
 		(await row(page, "fastfail").locator(".lp-limit-current").count()) === 1 &&
@@ -249,7 +263,7 @@ try {
 	await page2.goto(srv.http + "/");
 	check(
 		"a second window shows the same rows without pressing",
-		await until(async () => (await rows(page2).count()) === 5),
+		await until(async () => (await rows(page2).count()) === 6),
 	);
 	writeFileSync(join(srv.workdir, "fail-claude-3"), "1");
 	await refreshBtn(page).click();
@@ -287,10 +301,10 @@ try {
 	await until(() => box(page).isVisible());
 	check("the fold is remembered", await box(page).evaluate((el) => el.classList.contains("collapsed")));
 	await box(page).locator(".lp-section-title").click();
-	check("unfolds", await until(async () => (await rows(page).count()) === 5));
+	check("unfolds", await until(async () => (await rows(page).count()) === 6));
 	await srv.restart();
 	await page.reload();
-	check("readings survive a restart", await until(async () => (await rows(page).count()) === 5, 15_000));
+	check("readings survive a restart", await until(async () => (await rows(page).count()) === 6, 15_000));
 	check("... with their failure", /timed out/.test(await row(page, "anthropic-3").innerText()));
 
 	console.log("phone");
@@ -301,7 +315,7 @@ try {
 	await toggle.click();
 	const drawer = phone.page.locator(".panel-drawer.drawer-left.open");
 	check("the drawer has the box", await until(() => drawer.locator(".lp-section-limits").isVisible(), 5000));
-	check("with every row", await until(async () => (await drawer.locator(".lp-limit-row").count()) === 5, 10_000));
+	check("with every row", await until(async () => (await drawer.locator(".lp-limit-row").count()) === 6, 10_000));
 	const btn = drawer.locator(".lp-limits-refresh");
 	const bb = await btn.boundingBox();
 	check(

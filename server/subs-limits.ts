@@ -117,6 +117,7 @@ function cleanAccount(raw: unknown): UiLimitsAccount | undefined {
 	const plan = str(raw.plan, 40);
 	const checkedAt = num(raw.checkedAt);
 	const triedAt = num(raw.triedAt);
+	const note = str(raw.note);
 	if (label) out.label = label;
 	if (email) out.email = email;
 	if (plan) out.plan = plan;
@@ -125,6 +126,7 @@ function cleanAccount(raw: unknown): UiLimitsAccount | undefined {
 	if (source) out.source = source;
 	if (triedAt !== undefined) out.triedAt = triedAt;
 	if (failure) out.failure = failure;
+	if (note) out.note = note;
 	return out;
 }
 

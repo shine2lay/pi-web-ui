@@ -11,6 +11,7 @@ import { FiRefreshCw } from "react-icons/fi";
 import { useT, type Translate } from "../i18n";
 import {
 	accountLimited,
+	accountStatusLine,
 	accountWho,
 	agoParts,
 	formatResetIn,
@@ -69,6 +70,7 @@ function LimitWindowRow({ w, now, t }: { w: UiLimitWindow; now: number; t: Trans
 function LimitsAccountRow({ a, now, current, t }: { a: UiLimitsAccount; now: number; current: boolean; t: Translate }) {
 	const limited = accountLimited(a);
 	const who = accountWho(a);
+	const status = accountStatusLine(a);
 	return (
 		<div
 			className={`lp-limit-row${limited ? " limited" : ""}${current ? " current" : ""}${a.failure ? " failed" : ""}`}
@@ -93,9 +95,13 @@ function LimitsAccountRow({ a, now, current, t }: { a: UiLimitsAccount; now: num
 				<LimitWindowRow key={w.key} w={w} now={now} t={t} />
 			))}
 			{a.failure && <div className="lp-limit-failure">{a.failure.text}</div>}
-			<div className="lp-limit-age">
-				{a.checkedAt !== undefined ? t("limitsChecked", { ago: agoText(t, a.checkedAt, now) }) : t("limitsNoNumbers")}
-			</div>
+			{status.kind === "note" ? (
+				<div className="lp-limit-note">{status.text}</div>
+			) : (
+				<div className="lp-limit-age">
+					{status.kind === "checked" ? t("limitsChecked", { ago: agoText(t, status.at, now) }) : t("limitsNoNumbers")}
+				</div>
+			)}
 		</div>
 	);
 }

@@ -1036,6 +1036,12 @@ body.rp-resizing .rp-sash.dragging::after {
 	color: var(--text-faint);
 	font-size: 10px;
 }
+.lp-limit-note {
+	margin-top: 2px;
+	color: var(--text-dim);
+	font-size: 11px;
+	overflow-wrap: anywhere;
+}
 .lp-section-body.convs-scroll,
 .lp-section-body.sessions-scroll {
 	padding-bottom: 6px;

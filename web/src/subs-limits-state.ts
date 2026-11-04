@@ -155,6 +155,17 @@ export function orderedWindows(windows: UiLimitWindow[]): UiLimitWindow[] {
 		.map(({ w }) => w);
 }
 
+/** The row's last line: how old its numbers are; the provider's note while the row has no numbers
+ *  (Sign in with ChatGPT gives none, Ops #780); else "no numbers yet". */
+export type AccountStatusLine =
+	{ kind: "checked"; at: number } | { kind: "note"; text: string } | { kind: "no-numbers" };
+
+export function accountStatusLine(a: UiLimitsAccount): AccountStatusLine {
+	if (a.windows.length === 0 && a.note) return { kind: "note", text: a.note };
+	if (a.checkedAt !== undefined) return { kind: "checked", at: a.checkedAt };
+	return { kind: "no-numbers" };
+}
+
 /** Who the account is: its label, else its email. */
 export function accountWho(a: UiLimitsAccount): string | undefined {
 	return a.label || a.email || undefined;

@@ -5556,6 +5556,18 @@ error?}` from the server (`error` only to the window whose press couldn't run). 
    Checked by `tests/unit/model-admin-oauth.test.ts` ("calls onOAuthLoginSucceeded once ...", "does not
    call ... when the sign-in fails", "still reports the sign-in as succeeded when the follow-up hook
    throws"; the first and third fail without the change).
+5. **The provider's note** (Ops #780, 2026-11-04; `protocol.ts`, `server/subs-limits.ts`,
+   `web/src/subs-limits-state.ts`, `LimitsBox.tsx`, `styles.css`): the row's optional `note` (pi-multi-pass's
+   `NO_USAGE_NOTES`: "OpenAI gives no usage numbers for Sign in with ChatGPT; see
+   chatgpt.com/settings/usage") is passed on and, while the row has no windows, shown as `.lp-limit-note` in
+   place of "no numbers yet" (`accountStatusLine`); a row with numbers still says how old they are. The text
+   is the add-on's (English), so no locale key. Why: the owner asked for real ChatGPT numbers (11-04: "Well I
+   want it to be working. I should be logged in"); H-CHATGPT-USAGE-1 found none (the sign-in's token has no
+   account id and `wham/usage` answers 401 `no_matching_rule`; reply headers carry no usage fields), so the
+   row says why instead. Checked by `tests/unit/subs-limits.test.ts` ("keeps pi-multi-pass's plain-words
+   note ...", "the provider's note shows in place of 'no numbers yet' ..."; both fail without the change)
+   and the sealed `tests/subs-limits-box-test.mjs` (a sixth, ChatGPT-sign-in row: the note, no windows, no
+   "no numbers yet", its Limited mark).
 
 ### How it was checked
 
