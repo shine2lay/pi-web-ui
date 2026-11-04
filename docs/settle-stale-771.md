@@ -1,7 +1,14 @@
 # Stale ctx at settle: why a chat's session is replaced mid-turn (Ops #771)
 
-**Status**: fix landed for cause BS (queue close); causes R and TE reported, not changed here.
-**Result**: H-SETTLE-STALE-1 pending (24-hour passive count after the install).
+**Status**: done. Fix for cause BS (queue close) landed in 808ff847 and live since 2026-11-03 06:57 PST;
+causes R and TE reported, not changed here.
+**Result**: H-SETTLE-STALE-1 HIT: 0 mid-run events in the 24 hours after the install (before: 6 BS events
+in about 3.3 days); 2 task chats that worked past 2 minutes after their `done` op were kept open, with
+no stale line. See "Result" below.
+**Receipts**: land request 332-b7f64a succeeded; deployed 2026-11-03 06:57 (server, page, reply, big chat
+and log checks passed); `pi-web-deploy result 808ff847` on 11-04: "2026-11-03 16:30 deploy of f16bbe11,
+which contains 808ff84: live, and the checks all passed"; counts `after-24h.json`, `before-24h.json` in
+`/home/shinelay/kept-from-tmp/2026-11-03/771/`.
 
 ## What was seen
 
@@ -130,6 +137,39 @@ session while it waits: a replaced one doesn't keep it open"; on the old code bo
 to be undefined`, `expected undefined to be true`), on the new code 11 of 11 pass. PATCHES.md:
 queue-done-hidden, change 6.
 
+## Result (24-hour passive count, same query)
+
+`settle-stale-count.py` over 2026-11-03 06:57 -> 2026-11-04 06:58 PST (the new process started
+06:57:33), against the 24 hours before:
+
+| Window | Restarts | Mid-run events | Mid-run BS events | Restart-time lines (multi-sub before_settle / pi-queue settled / unresolved turn_end) |
+| --- | --- | --- | --- | --- |
+| Before (11-02 06:57 -> 11-03 06:57) | 17 | 47 (4 with settle or turn_end lines: 11-02 10:18:09 and 10:18:11 TE, 11-03 04:41:11 BS, 04:51:21 TE; the rest multi-sub `agent_end` only) | 1 | 477 / 159 / 161 |
+| After (11-03 06:57 -> 11-04 06:58) | 4 | 0 | 0 | 102 / 34 / 34 |
+
+- `settle-stale-watch.py --after 2026-11-03T06:57:33 --step-end 2026-11-04T06:58:00`: "no mid-run
+  before_settle event since 2026-11-03T06:57:33" (six 4-hour steps, each passed).
+- The fix's path was used: 65 task chats got their `done` op in the window; 2 kept working more than 2
+  minutes after it, which the old code would have cut off mid-run: task 777
+  (`~/.pi/agent/sessions/--home-shinelay--/2026-11-03T15-59-06-443Z_01a1a222-b6cb-7645-a2fc-290b0e6f1ec0.jsonl`,
+  last entry 8,510 s after its `done` op) and task 483
+  (`~/.pi/agent/sessions/--home-shinelay-rollcall--/2026-11-03T15-05-11-388Z_01a1a1f1-59dc-7645-a2fc-28f8b6c86af2.jsonl`,
+  246 s after). Neither has a stale line.
+- Not proved wrong: none of the 65 finished task chats is still in the running list
+  (`~/.pi-web-ui/running-chats.json`).
+- Caveat: BS ran at about 1.8 events a day, so a quiet day alone would be weak evidence (a 1 in 6 chance);
+  the HIT rests on that together with the two chats kept open and the failing-first test.
+- R and TE: restart lines follow the number of restarts (4 instead of 17), as predicted; no tool watchdog
+  force reset happened in the window.
+
+## What is left (not changed here)
+
+- R: the restart burst is expected noise; carry-on resumes the chats. A quieter shutdown (stop each run
+  before disposing it) would change only which lines the old process prints.
+- TE: an abandoned agent loop runs one more turn on a disposed session when a hung tool returns late.
+  The fix belongs with tools that ignore the abort signal, or the SDK (don't start another turn on a
+  disposed session). pi-multi-pass and pi-queue need no change.
+
 ## Undo
 
-Revert the commit and pi-web-deploy it; nothing is stored.
+Revert 808ff847 and pi-web-deploy it; nothing is stored.
