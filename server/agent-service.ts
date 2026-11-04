@@ -8490,6 +8490,7 @@ export class ClientSession {
 				const home = identityRegistry().identities.find((i) => i.id === identity.id)?.homeChat;
 				out.push({
 					sessionId: sm.getSessionId(),
+					conversationId: conv.id,
 					role: identity.id,
 					isHome: !!home && resolve(home) === resolve(file),
 					busy: conv.session.isStreaming,

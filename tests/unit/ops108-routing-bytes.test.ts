@@ -34,7 +34,11 @@ describe("Ops108 baseline", () => {
 		// ownerSeesAskEvent import and one line in host.asks.on that keeps an ask held for COO, and its held, released
 		// and returned events, from plugins (with the switch off no ask is held, so every event goes out as before);
 		// its diff removes no line; no Ops108 routing line changed. Was 553e809d….
-		expect(sha("server/plugins.ts")).toBe("ee2f3e0d9af04b1029f36232eda43def9fe3c5a56594b75d086b8a3868996e51");
+		// Re-pinned by plugin-participant-routes conversationId (Ops #779, Backend rm-9025819f): it only adds
+		// PluginParticipantRoute.conversationId (metadata, the id run events already carry) and passes it through
+		// host.participantRoutes()'s field list; its diff removes only that list's destructuring line (now with the
+		// field); no Ops108 routing line changed. Was ee2f3e0d….
+		expect(sha("server/plugins.ts")).toBe("b89c7f63a8c526815e47c20a601609a30bd670d62587ac1937aab34d6668a620");
 		// Re-pinned by owner-card-brief (Ops #682, owner via COO rm-d2c1f9b2): it only adds the display-only
 		// renderBrief and puts its lines first in renderAsk's message and short form; its diff removes only renderAsk's
 		// doc comment and the two joined part lists (now with the brief); no Ops108 routing line changed. Was 91637612….

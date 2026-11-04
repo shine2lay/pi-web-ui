@@ -264,8 +264,15 @@ export type ToolGuardPreDecision =
 
 /** 插件服务端入口拿到的宿主接口（精简：全量见 server/plugins.ts PluginHost）。 */
 export interface PluginHost {
-	/** Optional additive capability: exact loaded Pi role/session metadata, never transcripts. */
-	participantRoutes?(): Array<{ sessionId: string; role: string; isHome: boolean; busy: boolean }>;
+	/** Optional additive capability: exact loaded Pi role/session metadata, never transcripts.
+	 *  conversationId = this host's id for the loaded chat, the one run events carry (process-local). */
+	participantRoutes?(): Array<{
+		sessionId: string;
+		conversationId: string;
+		role: string;
+		isHome: boolean;
+		busy: boolean;
+	}>;
 	/** Requires participants. Keeps exact existing sessions loaded; no prompt or role assignment. */
 	retainParticipantRoutes?(source: () => Array<{ sessionId: string; role: string }>): {
 		refresh(): Promise<void>;

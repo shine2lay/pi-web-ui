@@ -1,9 +1,13 @@
 # Metadata-only participant routes (local fork capability)
 
-`host.participantRoutes?.()` returns `{ sessionId, role, isHome, busy }[]` for
-loaded, identified, durable native Pi conversations across clients. Exact Pi
-session IDs are used, not browser conversation IDs, process IDs, aliases or the
-currently selected chat. Transient/ephemeral/unidentified/replaced sessions and
+`host.participantRoutes?.()` returns `{ sessionId, conversationId, role, isHome, busy }[]`
+for loaded, identified, durable native Pi conversations across clients. Exact Pi
+session IDs identify the chat, not browser conversation IDs, process IDs, aliases
+or the currently selected chat. `conversationId` is only there so a plugin can
+tie a run event to its chat: it is the same value `PluginRunEvent.conversationId`
+carries. It is process-local (it changes when the chat is reloaded or the server
+restarts), so match it against the current routes only, never store it as an
+identity. Transient/ephemeral/unidentified/replaced sessions and
 conflicting identities are excluded. Home status compares the trusted identity
 registry’s existing home route with the exact session file, without returning
 its path. No histories, titles, working directories, prompts, private memories,

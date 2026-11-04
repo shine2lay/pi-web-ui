@@ -192,6 +192,10 @@ export interface PluginChatResult {
 /** Metadata only. Never infer a participant from the active browser conversation. */
 export interface PluginParticipantRoute {
 	sessionId: string;
+	/** This host's conversation id for the loaded chat: the same value PluginRunEvent.conversationId
+	 *  carries, so a plugin can tell which chat a run event belongs to. Process-local: it changes
+	 *  when the chat is reloaded or the server restarts, so match it against current routes only. */
+	conversationId: string;
 	role: string;
 	isHome: boolean;
 	busy: boolean;
@@ -3697,8 +3701,9 @@ export class PluginManager {
 			},
 			participantRoutes: () => {
 				try {
-					return (self.participantRouteProvider?.() ?? []).map(({ sessionId, role, isHome, busy }) => ({
+					return (self.participantRouteProvider?.() ?? []).map(({ sessionId, conversationId, role, isHome, busy }) => ({
 						sessionId,
+						conversationId,
 						role,
 						isHome,
 						busy,
