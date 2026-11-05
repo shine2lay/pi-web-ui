@@ -49,6 +49,7 @@ import { registerFileTransferRoutes } from "./file-transfer-routes.js";
 import { initAttachmentStore, readAttachment } from "./attachment-store.js";
 import { isAudioFile, previewKind } from "./text-sniff.js";
 import { startControlServer } from "./control-socket.js";
+import { OWNER_TELEGRAM_PLUGIN, OWNER_TELEGRAM_TOOL, sendOwnerTelegram } from "./owner-telegram.js";
 import { ensureAppToken } from "./app-token.js";
 import type { CiAlertResult, RoleReportReceipt, RoleReportResult, ScriptNoticeResult } from "./role-messages.js";
 import type { BoardChangeResult, BoardPostInput, BoardPostResult } from "./role-board.js";
@@ -4816,7 +4817,20 @@ try {
 } catch (err) {
 	console.warn(`[control] couldn't make the app token: ${(err as Error).message} (report requests refused)`);
 }
-const stopControl = startControlServer({ service, dataDir: DATA_DIR, port: PORT, appToken });
+const stopControl = startControlServer({
+	service,
+	dataDir: DATA_DIR,
+	port: PORT,
+	appToken,
+	// owner-telegram (Ops #783): a script's Telegram message to the owner goes through the Telegram plugin's own
+	// telegram_send tool (the bot token stays inside the plugin).
+	ownerTelegram: (notice) =>
+		sendOwnerTelegram(
+			pluginMgr.agentToolOf(OWNER_TELEGRAM_PLUGIN, OWNER_TELEGRAM_TOOL),
+			notice,
+			`control-telegram-${randomUUID()}`,
+		),
+});
 
 /**
  * Graceful shutdown budget (issue #172): disposeAll() can hang forever on a

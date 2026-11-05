@@ -48,6 +48,17 @@ export function ensureAppToken(dataDir: string): string {
 	return token;
 }
 
+/** notify-cli (Ops #783): the token in the data dir for a command the app runs on a script's behalf (pi-web-ui
+ *  notify), or undefined when there is none or it isn't a token. Only reads: never makes one. */
+export function readAppToken(dataDir: string): string | undefined {
+	try {
+		const have = readFileSync(appTokenPath(dataDir), "utf8").trim();
+		return TOKEN_RE.test(have) ? have : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** Whether `given` is the token (compared in constant time). */
 export function isAppToken(given: unknown, token: string): boolean {
 	if (typeof given !== "string" || !TOKEN_RE.test(given) || !TOKEN_RE.test(token)) return false;

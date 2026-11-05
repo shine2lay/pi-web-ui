@@ -34,6 +34,10 @@ import {
 	checkPluginUpdates,
 	resolveRemoteSha,
 } from "../dist/server/plugin-updater.js";
+// notify-cli (Ops #783): `pi-web-ui notify telegram|role` for scripts (server/notify-cli.ts).
+import { runNotify } from "../dist/server/notify-cli.js";
+import { askControl, controlPath as controlSocketPath } from "../dist/server/control-client.js";
+import { readAppToken } from "../dist/server/app-token.js";
 import {
 	chmodSync,
 	copyFileSync,
@@ -100,6 +104,7 @@ const HELP_ZH = `pi-web-ui v${pkg.version} — web chat for the pi coding agent
   pi-web-ui server start|stop|restart|status [选项]
   pi-web-ui server quiesce [选项]          进入排空模式：拒绝新的对话/消息/编辑，存量运行继续跑完
   pi-web-ui server unquiesce [选项]        解除排空模式，恢复接收新工作
+  pi-web-ui notify telegram|role [选项]    供脚本使用：用 Telegram 通知 owner，或通知一个角色（notify --help）
   pi-web-ui --version / --help
 
 server 选项:
@@ -155,6 +160,7 @@ Usage:
   pi-web-ui server start|stop|restart|status [options]
   pi-web-ui server quiesce [options]       Drain mode: reject new chats/messages/edits; let current runs finish
   pi-web-ui server unquiesce [options]     Exit drain mode, resume accepting new work
+  pi-web-ui notify telegram|role [options] For scripts: Telegram the owner, or tell a role (notify --help)
   pi-web-ui --version / --help
 
 Server options:
@@ -3546,6 +3552,24 @@ async function decisionsCmd(argv) {
  * the last round's time and cost, the findings (whom it would wake) and every active project's and initiative's
  * state. Read only.
  */
+/** notify-cli (Ops #783): a script's Telegram message to the owner or notice to a role; exit codes in
+ *  server/notify-cli.ts NOTIFY_EXIT (docs/script-notice.md). */
+async function notifyCmd(argv) {
+	process.exitCode = await runNotify(argv, {
+		env: process.env,
+		readStdin: async () => {
+			const chunks = [];
+			for await (const chunk of process.stdin) chunks.push(chunk);
+			return Buffer.concat(chunks).toString("utf8");
+		},
+		readToken: readAppToken,
+		socketPath: controlSocketPath,
+		ask: askControl,
+		out: (line) => console.log(line),
+		err: (line) => console.error(line),
+	});
+}
+
 async function stallCmd(argv) {
 	const action = argv[0];
 	const { opts } = parseFlags(argv.slice(1));
@@ -3591,6 +3615,10 @@ async function main() {
 	}
 	if (first === "stall") {
 		await stallCmd(argv.slice(1));
+		return;
+	}
+	if (first === "notify") {
+		await notifyCmd(argv.slice(1));
 		return;
 	}
 	if (first === "plugins" || first === "plugin") {

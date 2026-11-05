@@ -2492,6 +2492,11 @@ export class PluginManager {
 		for (const table of [...this.agentTools.values()].sort()) out.push(...table.values());
 		return out;
 	}
+	/** owner-telegram (Ops #783): plugin `pluginId`'s agent tool `name`, or undefined when that plugin hasn't
+	 *  registered it (not loaded, off, or another plugin's tool of that name). */
+	agentToolOf(pluginId: string, name: string): PluginAgentTool | undefined {
+		return this.agentTools.get(pluginId)?.get(name);
+	}
 	/** 注册一个供 AI 调用的工具；重名拒绝并返回空操作注销函数。
 	 *  跨插件重名同样拒绝（与 registerCommand 同口径）：工具进会话时按名字合入
 	 *  （syncPluginToolsIntoSession 的 byName 覆盖），重名意味着后注册者静默抢注

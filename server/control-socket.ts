@@ -24,6 +24,10 @@
  *                             ← {"ok":true,"id":"rm-…","duplicate":false}
  *     script-notice (Ops #782): a script on this machine tells a role's home chat something; an fyi adds it without
  *     a turn, a request starts one; one per sender, role and key (docs/script-notice.md).
+ *   → {"cmd":"telegram_send","token":"<app token>","text":"...","from":"...","url":"...","linkLabel":"..."}
+ *                             ← {"ok":true,"messageIds":[901]} | {"ok":false,"error":"...","maybeSent":true?}
+ *     owner-telegram (Ops #783): a script on this machine sends the owner a Telegram message through the Telegram
+ *     plugin's own telegram_send tool; answered once the tool has sent it or refused (docs/script-notice.md).
  *   → {"cmd":"decisions_backfill","date":"YYYY-MM-DD"}  ← {"ok":true,"decisions":{...}} (starts it in the
  *     background; decision-records, task #83)
  *   → {"cmd":"decisions_status"}  ← {"ok":true,"decisions":{file, backfill, counts, reader, decisions}}
@@ -41,9 +45,10 @@
  */
 import { createServer, createConnection, type Server, type Socket } from "node:net";
 import { chmodSync, existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import type { AgentService } from "./agent-service.js";
 import { isAppToken } from "./app-token.js";
+import { askControl, controlPath } from "./control-client.js";
+import { checkOwnerTelegram, type OwnerTelegramNotice, type OwnerTelegramResult } from "./owner-telegram.js";
 import type { UiServiceInfo } from "./protocol.js";
 import type { RoleReportReceipt } from "./role-messages.js";
 import { parseRecoveryCommand } from "./decision-recovery.js";
@@ -103,10 +108,8 @@ const CONTROL_IDLE_TIMEOUT_MS = 5_000;
 /** How long the CLI waits for a reply before giving up. */
 const CONTROL_CLIENT_TIMEOUT_MS = 3_000;
 
-/** Socket path (POSIX) or pipe name (Windows). */
-export function controlPath(dataDir: string, port: number): string {
-	return process.platform === "win32" ? `\\\\.\\pipe\\pi-web-ui-${port}` : join(dataDir, "pi-web-ui.sock");
-}
+/** Socket path (POSIX) or pipe name (Windows); in control-client.ts since Ops #783, where the CLI reads it too. */
+export { controlPath };
 
 export interface ControlCommand {
 	cmd:
@@ -117,6 +120,7 @@ export interface ControlCommand {
 		| "role_reports"
 		| "ci_alert"
 		| "script_notice"
+		| "telegram_send"
 		| "decisions_backfill"
 		| "decisions_status"
 		| "decisions_read"
@@ -142,6 +146,11 @@ export interface ControlCommand {
 	sender?: unknown;
 	text?: unknown;
 	key?: unknown;
+	/** owner-telegram (Ops #783): telegram_send's optional fields (owner-telegram.ts checkOwnerTelegram); with token
+	 *  and text. */
+	from?: unknown;
+	url?: unknown;
+	linkLabel?: unknown;
 }
 
 export interface ControlStatus {
@@ -167,6 +176,9 @@ export interface ControlStatus {
 	/** ci-alert, script-notice: the record, and whether it was already sent (the key's first record). */
 	id?: string;
 	duplicate?: boolean;
+	/** owner-telegram (Ops #783): telegram_send's Telegram message ids; on a refusal, whether it may have gone out. */
+	messageIds?: number[];
+	maybeSent?: true;
 	/** decision-records: decisions_backfill's progress, or decisions_status. */
 	decisions?: unknown;
 	/** progress-feed: feed_status, or what feed_catch_up sent. */
@@ -182,8 +194,14 @@ export function startControlServer(opts: {
 	port: number;
 	/** role-reports: the app's token (app-token.ts); none = role_report is refused. */
 	appToken?: string;
+	/** owner-telegram (Ops #783): sends the owner one checked Telegram message (index.ts: the Telegram plugin's
+	 *  telegram_send tool); none = telegram_send is refused. */
+	ownerTelegram?: (notice: OwnerTelegramNotice) => Promise<OwnerTelegramResult>;
+	/** How long a connection may sit idle with no answer pending (default CONTROL_IDLE_TIMEOUT_MS; tests shorten it). */
+	idleTimeoutMs?: number;
 }): () => void {
-	const { service, dataDir, port, appToken } = opts;
+	const { service, dataDir, port, appToken, ownerTelegram } = opts;
+	const idleTimeoutMs = opts.idleTimeoutMs ?? CONTROL_IDLE_TIMEOUT_MS;
 	const path = controlPath(dataDir, port);
 	let server: Server;
 	// 只有本实例真正 bind 成功才允许 stop 时删 socket 文件：探测发现活实例而
@@ -298,11 +316,65 @@ export function startControlServer(opts: {
 		return res.ok ? { ok: true, id: res.record.id, duplicate: res.duplicate } : { ok: false, error: res.error };
 	}
 
+	/** owner-telegram (Ops #783): a script on this machine sends the owner a Telegram message (only with the app
+	 *  token). Answers once the Telegram plugin has sent it or refused; logs the outcome, never the token or text. */
+	async function telegramSend(req: ControlCommand): Promise<ControlStatus> {
+		if (!ownerTelegram) return { ok: false, error: "Telegram messages aren't supported here" };
+		const why = appTokenRefusal(req.token);
+		if (why) {
+			console.warn(`[control] refused telegram_send: ${why}`);
+			return {
+				ok: false,
+				error: `refused: only scripts on this machine with the app token may send Telegram messages (${why})`,
+			};
+		}
+		const checked = checkOwnerTelegram(req as unknown as Record<string, unknown>);
+		if (!checked.ok) return { ok: false, error: checked.error };
+		let res: OwnerTelegramResult;
+		try {
+			res = await ownerTelegram(checked.notice);
+		} catch (err) {
+			res = { ok: false, error: `the send failed: ${(err as Error)?.message ?? String(err)}`, maybeSent: true };
+		}
+		if (res.ok) {
+			console.log(`[control] telegram_send: sent to the owner as message ${res.messageIds.join(", ")}`);
+			return { ok: true, messageIds: res.messageIds };
+		}
+		console.warn(`[control] telegram_send: ${res.error}${res.maybeSent ? " (it may have gone out)" : ""}`);
+		return { ok: false, error: res.error, ...(res.maybeSent ? { maybeSent: true as const } : {}) };
+	}
+
 	function handleConnection(sock: Socket): void {
 		let buf = "";
-		const timer = setTimeout(() => {
+		// owner-telegram (Ops #783): an answer that takes a while (telegram_send) keeps the connection open; answers
+		// go out in the order their requests came.
+		let waiting = 0;
+		let answers: Promise<void> = Promise.resolve();
+		const timer = setTimeout(function idle() {
+			if (waiting > 0) {
+				timer.refresh();
+				return;
+			}
 			sock.destroy();
-		}, CONTROL_IDLE_TIMEOUT_MS);
+		}, idleTimeoutMs);
+		const answer = (resp: ControlStatus | Promise<ControlStatus>): void => {
+			if (!(resp instanceof Promise) && waiting === 0) {
+				sock.write(JSON.stringify(resp) + "\n");
+				return;
+			}
+			waiting++;
+			answers = answers.then(async () => {
+				let out: ControlStatus;
+				try {
+					out = await resp;
+				} catch (err) {
+					out = { ok: false, error: `failed: ${(err as Error)?.message ?? String(err)}` };
+				}
+				waiting--;
+				timer.refresh();
+				if (!sock.destroyed) sock.write(JSON.stringify(out) + "\n");
+			});
+		};
 		sock.on("data", (chunk) => {
 			buf += chunk.toString("utf8");
 			let nl: number;
@@ -315,10 +387,10 @@ export function startControlServer(opts: {
 				try {
 					req = JSON.parse(line) as ControlCommand;
 				} catch {
-					sock.write(JSON.stringify({ ok: false, error: "bad json" }) + "\n");
+					answer({ ok: false, error: "bad json" });
 					continue;
 				}
-				let resp: ControlStatus;
+				let resp: ControlStatus | Promise<ControlStatus>;
 				switch (req.cmd) {
 					case "status":
 						resp = { ok: true, ...service.serviceStatus() };
@@ -339,6 +411,9 @@ export function startControlServer(opts: {
 						break;
 					case "script_notice":
 						resp = scriptNotice(req);
+						break;
+					case "telegram_send":
+						resp = telegramSend(req);
 						break;
 					case "role_reports":
 						resp = service.roleReportReceipts
@@ -407,7 +482,7 @@ export function startControlServer(opts: {
 						resp = { ok: false, error: `unknown cmd: ${String((req as { cmd?: unknown }).cmd)}` };
 						break;
 				}
-				sock.write(JSON.stringify(resp) + "\n");
+				answer(resp);
 			}
 		});
 		sock.on("error", () => {
@@ -428,42 +503,14 @@ export function startControlServer(opts: {
 
 /**
  * CLI-side client: send one command and return the parsed reply (or null if
- * the server is unreachable / timed out).
+ * the server is unreachable / timed out). On askControl (control-client.ts) since Ops #783.
  */
-export function sendControlCommand(
+export async function sendControlCommand(
 	dataDir: string,
 	port: number,
 	cmd: ControlCommand["cmd"],
 	extra: Omit<ControlCommand, "cmd"> = {},
 ): Promise<ControlStatus | null> {
-	const path = controlPath(dataDir, port);
-	return new Promise((resolve) => {
-		const sock = createConnection(path);
-		let done = false;
-		const finish = (v: ControlStatus | null): void => {
-			if (done) return;
-			done = true;
-			clearTimeout(timer);
-			sock.destroy();
-			resolve(v);
-		};
-		const timer = setTimeout(() => finish(null), CONTROL_CLIENT_TIMEOUT_MS);
-		let buf = "";
-		sock.on("connect", () => {
-			sock.write(JSON.stringify({ ...extra, cmd }) + "\n");
-		});
-		sock.on("data", (chunk) => {
-			buf += chunk.toString("utf8");
-			const nl = buf.indexOf("\n");
-			if (nl >= 0) {
-				try {
-					finish(JSON.parse(buf.slice(0, nl)) as ControlStatus);
-				} catch {
-					finish(null);
-				}
-			}
-		});
-		sock.on("error", () => finish(null));
-		sock.on("close", () => finish(null));
-	});
+	const out = await askControl(controlPath(dataDir, port), { ...extra, cmd }, CONTROL_CLIENT_TIMEOUT_MS);
+	return out.state === "answered" ? (out.answer as unknown as ControlStatus) : null;
 }

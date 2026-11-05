@@ -49,6 +49,7 @@ import telegramPlugin, {
 	questionIdentity,
 	questionIdentityHash,
 } from "../../plugins/telegram/index.mjs";
+import { sendOwnerTelegram } from "../../server/owner-telegram.js";
 
 const OWNER = "8778288252";
 const STRANGER = "5550001111";
@@ -3126,5 +3127,23 @@ describe("telegram plugin: notices to the owner (telegram_send, telegram:send; O
 		expect((await toolOf(host).execute("c", { text: "b" })).details.ok).toBe(true);
 		expect(sent.map((p) => p.text)).toEqual(["b"]);
 		off?.();
+	});
+
+	it("a script's message (control socket telegram_send, Ops #783) reads this tool's own answers: sent or off", async () => {
+		const { host, sent } = liveHost({ botToken: TOKEN, ownerId: OWNER });
+		const off = telegramPlugin.activate(host);
+		const r = await sendOwnerTelegram(toolOf(host), { text: "Deployed", from: "RollCall CD" }, "control-telegram-1");
+		expect(r).toEqual({ ok: true, messageIds: [901] });
+		expect(sent.map((p) => p.text)).toEqual(["<i>RollCall CD:</i>\n\nDeployed"]);
+		off?.();
+		vi.unstubAllGlobals();
+		const offHost = liveHost({ enabled: false, botToken: TOKEN, ownerId: OWNER });
+		const off2 = telegramPlugin.activate(offHost.host);
+		expect(await sendOwnerTelegram(toolOf(offHost.host), { text: "Deployed" }, "c")).toEqual({
+			ok: false,
+			error: "not sent: Telegram is off in its settings",
+		});
+		expect(offHost.sent).toHaveLength(0);
+		off2?.();
 	});
 });

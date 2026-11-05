@@ -38,7 +38,10 @@ describe("Ops108 baseline", () => {
 		// PluginParticipantRoute.conversationId (metadata, the id run events already carry) and passes it through
 		// host.participantRoutes()'s field list; its diff removes only that list's destructuring line (now with the
 		// field); no Ops108 routing line changed. Was ee2f3e0d….
-		expect(sha("server/plugins.ts")).toBe("b89c7f63a8c526815e47c20a601609a30bd670d62587ac1937aab34d6668a620");
+		// Re-pinned by script-notify-cli (Ops #783, Systems rm-e2634da5): it only adds PluginManager.agentToolOf (one
+		// plugin's registered agent tool by name, read-only, for the control socket's telegram_send); its diff removes
+		// no line; no Ops108 routing line changed. Was b89c7f63….
+		expect(sha("server/plugins.ts")).toBe("1b94c3fef18701bb9b60a8d0258779a4eb7da802ae5ac20bf189746579c22dc1");
 		// Re-pinned by owner-card-brief (Ops #682, owner via COO rm-d2c1f9b2): it only adds the display-only
 		// renderBrief and puts its lines first in renderAsk's message and short form; its diff removes only renderAsk's
 		// doc comment and the two joined part lists (now with the brief); no Ops108 routing line changed. Was 91637612….
