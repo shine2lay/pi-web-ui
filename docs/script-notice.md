@@ -8,7 +8,7 @@ A script or systemd unit on spark can send a short message into a role's home ch
 - **The one change.** A `script_notice` command beside `ci_alert`: the same app-token check, the same app-report record (kind report, chain 1, outside the role-message caps and grants), the script's own short text and sender name, and an optional key for dedupe.
 - **Expected result, and how it is measured.** A valid `fyi` lands as one note in the target role's home chat and starts no turn; a valid `request` starts one turn once the chat's running turn has settled; a repeated key returns the first id with `duplicate: true` and sends nothing. Measured by `tests/unit/script-notice.test.ts` (fails on the old code) and, after the deploy, by one real `fyi` to Ops plus the same key again: one record, delivered, added without a turn, and journal lines without the token or the text.
 - **What would prove it wrong.** A valid send that is not delivered; a bad request (bad token, unknown key, bad value, unknown role, role without a home chat) that sends or stores anything; a repeated key that sends twice; an `fyi` that starts a turn; the token or the text in the journal.
-- **Result.** (Filled in after the deploy and the live check.)
+- **Result: HIT.** Landed `5c8f7bb4` through land request 338-34fa01 (quick lane, 2026-11-05 11:40-11:46 PST); deployed with `pi-web-deploy` at 11:47 PST, `pi-web-deploy result 5c8f7bb4ace7dd50d17a960d70e7f8deffa06e2c` exit 0, "live, and the checks all passed". The new tests (`tests/unit/script-notice.test.ts`, 13) fail on the old code (`6bb150fe` has no `server/script-notice.ts`) and pass on the new one. Live check, 2026-11-05T19:49:33Z, the only real send (kit `~/kept-from-tmp/2026-11-05/ops-782-live/send-once.mjs`, `journal-check.mjs`): an `fyi` to Ops from `ops-live-check` with key `ops-782-live-1` -> `rm-12b365f9`, `duplicate: false`; the same key with another text -> `rm-12b365f9`, `duplicate: true`; `kind: "alert"` -> refused with the kind reason. One record (kind report, chain 1, from `{app, "Ops live check", ops-live-check}`, `script.kind` fyi), delivered 0.3 s after the send, sent once; in Ops' home chat it is the last entry (a role-message note) with no turn after it. Journal: `rm-12b365f9 ops-live-check -> ops · fyi (ops-782-live-1)`, `rm-12b365f9 ops-live-check: the same notice again (ops-782-live-1), not sent`, `rm-12b365f9 delivered to ops (home chat), added without a turn`; the token and both texts appear nowhere in the journal since the deploy. A `request` was not sent live (no live sends beyond this one `fyi` were planned); its turn is covered by the unit tests.
 
 ## Contract
 
@@ -68,6 +68,8 @@ rm-12345678 rollcall-cd: the same notice again (deploy-1a2b3c4), not sent
 rm-12345678 delivered to rollcall (home chat), added without a turn
 refused a script notice for rollcall: a wrong app token
 ```
+
+Only token refusals are logged; a bad field is refused in the answer alone, like `ci_alert`.
 
 ## Python example (stdlib only)
 
