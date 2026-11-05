@@ -19,6 +19,11 @@
  *                             ← {"ok":true,"id":"rm-…","duplicate":false}
  *     ci-alert (Ops #720): the CI watch tells a role's home chat about a CI run; checked fields only, one per
  *     key (docs/ci-alert.md).
+ *   → {"cmd":"script_notice","token":"<app token>","role":"rollcall","kind":"fyi"|"request",
+ *      "sender":{"id":"rollcall-cd","title":"RollCall deployer"},"text":"...","key":"..."(optional)}
+ *                             ← {"ok":true,"id":"rm-…","duplicate":false}
+ *     script-notice (Ops #782): a script on this machine tells a role's home chat something; an fyi adds it without
+ *     a turn, a request starts one; one per sender, role and key (docs/script-notice.md).
  *   → {"cmd":"decisions_backfill","date":"YYYY-MM-DD"}  ← {"ok":true,"decisions":{...}} (starts it in the
  *     background; decision-records, task #83)
  *   → {"cmd":"decisions_status"}  ← {"ok":true,"decisions":{file, backfill, counts, reader, decisions}}
@@ -77,6 +82,8 @@ type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesc
 			| "noteRoleReportRefused"
 			| "requestCiAlert"
 			| "noteCiAlertRefused"
+			| "requestScriptNotice"
+			| "noteScriptNoticeRefused"
 			| "decisionsBackfill"
 			| "decisionsStatus"
 			| "decisionsRead"
@@ -86,6 +93,9 @@ type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesc
 			| "stallList"
 		>
 	>;
+
+/** script-notice: the keys script_notice takes (any other is refused). */
+const SCRIPT_NOTICE_KEYS: readonly string[] = ["cmd", "token", "role", "kind", "sender", "text", "key"];
 
 /** How long a control connection may sit idle before the server closes it. */
 const CONTROL_IDLE_TIMEOUT_MS = 5_000;
@@ -106,6 +116,7 @@ export interface ControlCommand {
 		| "role_report"
 		| "role_reports"
 		| "ci_alert"
+		| "script_notice"
 		| "decisions_backfill"
 		| "decisions_status"
 		| "decisions_read"
@@ -126,6 +137,11 @@ export interface ControlCommand {
 	activity?: unknown;
 	/** ci-alert: ci_alert's alert (ci-alert.ts checkCiAlert); with token and role. */
 	alert?: unknown;
+	/** script-notice: script_notice's fields (script-notice.ts checkScriptNotice); with token and role. */
+	kind?: unknown;
+	sender?: unknown;
+	text?: unknown;
+	key?: unknown;
 }
 
 export interface ControlStatus {
@@ -148,7 +164,7 @@ export interface ControlStatus {
 	paused?: boolean;
 	/** role-reports: role_reports' receipts. */
 	receipts?: RoleReportReceipt[];
-	/** ci-alert: the alert's record, and whether it was already sent (the key's first record). */
+	/** ci-alert, script-notice: the record, and whether it was already sent (the key's first record). */
 	id?: string;
 	duplicate?: boolean;
 	/** decision-records: decisions_backfill's progress, or decisions_status. */
@@ -254,6 +270,34 @@ export function startControlServer(opts: {
 		return res.ok ? { ok: true, id: res.record.id, duplicate: res.duplicate } : { ok: false, error: res.error };
 	}
 
+	/** script-notice (Ops #782): a script on this machine tells a role's home chat something (only with the app
+	 *  token). Any key it doesn't take is refused; never logs the token or the text. */
+	function scriptNotice(req: ControlCommand): ControlStatus {
+		if (!service.requestScriptNotice) return { ok: false, error: "script notices aren't supported here" };
+		const why = appTokenRefusal(req.token);
+		if (why) {
+			service.noteScriptNoticeRefused?.(req.role, why);
+			return {
+				ok: false,
+				error: `refused: only scripts on this machine with the app token may send script notices (${why})`,
+			};
+		}
+		const extra = Object.keys(req).filter((k) => !SCRIPT_NOTICE_KEYS.includes(k));
+		if (extra.length)
+			return {
+				ok: false,
+				error: `script_notice takes only cmd, token, role, kind, sender, text and key (not ${extra.slice(0, 5).join(", ")})`,
+			};
+		const res = service.requestScriptNotice({
+			role: req.role,
+			kind: req.kind,
+			sender: req.sender,
+			text: req.text,
+			...("key" in req ? { key: req.key } : {}),
+		});
+		return res.ok ? { ok: true, id: res.record.id, duplicate: res.duplicate } : { ok: false, error: res.error };
+	}
+
 	function handleConnection(sock: Socket): void {
 		let buf = "";
 		const timer = setTimeout(() => {
@@ -292,6 +336,9 @@ export function startControlServer(opts: {
 						break;
 					case "ci_alert":
 						resp = ciAlert(req);
+						break;
+					case "script_notice":
+						resp = scriptNotice(req);
 						break;
 					case "role_reports":
 						resp = service.roleReportReceipts

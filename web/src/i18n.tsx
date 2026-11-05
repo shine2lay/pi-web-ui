@@ -1963,6 +1963,17 @@ export const en = {
 		"From the CI watch ({id}), a script on this machine that watches CI runs. The server set the sender and wrote the text from checked fields.",
 	roleCiCardFromText:
 		"From the CI watch ({id}), as the message's first line says (the server no longer has its record).",
+	/* script-notice (Ops #782): a script on this machine tells a role's home chat something */
+	roleMessageFoldScript: "From {title}",
+	roleScriptNoticeWord: "script notice",
+	roleScriptRequestWord: "script request",
+	roleScriptLabel: "{title} \u00b7 {kind}",
+	roleScriptNoticeCardTitle: "Script notice \u00b7 {title}",
+	roleScriptRequestCardTitle: "Script request \u00b7 {title}",
+	roleScriptCardFrom:
+		"From the script {sender} ({id}) on this machine. The server checked its app token; a script can't read a reply, so none is owed.",
+	roleScriptCardFromText:
+		"From the script {sender} ({id}), as the message's first line says (the server no longer has its record). A script can't read a reply.",
 	roleMessageFoldOpen: "Show the whole message",
 	roleMessageFoldClose: "Fold the message into one line",
 	roleMessageFoldUnstamped: "sender as its first line says",

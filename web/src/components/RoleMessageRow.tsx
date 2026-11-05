@@ -75,6 +75,8 @@ export function roleMessageFrom(m: RoleMessageView, t: Translate): string {
 	if (m.kind === "report" && m.stall) return t("roleMessageFoldWorkCheck");
 	if (m.kind === "report" && m.poke) return t("roleMessageFoldPage");
 	if (m.kind === "report" && m.ci) return t("roleMessageFoldCiWatch");
+	// script-notice (Ops #782): the script's own name (checked by the server).
+	if (m.kind === "report" && m.script) return t("roleMessageFoldScript", { title: m.script.title });
 	if (m.kind === "report") return t("roleMessageFoldApp");
 	// board (task #76): the turn-start note comes from the board; an order from its poster.
 	if (m.kind === "board") return t("roleMessageFoldBoard");
@@ -88,6 +90,8 @@ export function roleMessageKindWord(m: RoleMessageView, t: Translate): string {
 	if (m.kind === "report" && m.stall) return t("roleMessageFoldStall", { names: m.stall.names });
 	if (m.kind === "report" && m.poke) return t("roleMessageFoldPoke", { name: m.poke.name });
 	if (m.kind === "report" && m.ci) return m.ci.title;
+	if (m.kind === "report" && m.script)
+		return m.script.kind === "request" ? t("roleScriptRequestWord") : t("roleScriptNoticeWord");
 	if (m.kind === "report") return t("roleMessageFoldReport", { date: m.reportDate ?? "?" });
 	if (m.kind === "board") return m.what ?? "";
 	if (m.kind === "board-order") return t("roleMessageFoldBoardOrder");

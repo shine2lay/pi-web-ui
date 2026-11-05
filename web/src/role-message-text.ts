@@ -37,10 +37,20 @@ export interface ParsedRoleMessage {
 	stall?: { names: string };
 	/** ci-alert (Ops #720): the CI watch's alert about a CI run: the header's words (what happened, repo, workflow). */
 	ci?: { title: string };
+	/** script-notice (Ops #782): a script's notice: its id and name, and its kind (header word "notice" = fyi). */
+	script?: ScriptSender;
 	/** Body after the header and removable role hint; owner-question guidance stays in the body. */
 	body: string;
 	/** The hint line for the model, when there is one. */
 	hint?: string;
+}
+
+/** script-notice (Ops #782): who sent a script's notice, and its kind: fyi (added without a turn) or request
+ *  (starts a turn; no reply owed, the script can't read one). */
+export interface ScriptSender {
+	sender: string;
+	title: string;
+	kind: "fyi" | "request";
 }
 
 const ID = "rm-[0-9a-f]{8}";
@@ -53,6 +63,11 @@ const POKE_RE = new RegExp(
 const STALL_RE = new RegExp(`^\\[Role message (${ID}) from the work check \\u00b7 stalled work \\u00b7 ([^\\]]+)\\]$`);
 /** ci-alert (Ops #720): server/role-messages.ts roleMessageHeader for the CI watch's alert. */
 const CI_RE = new RegExp(`^\\[Role message (${ID}) from the CI watch \\u00b7 ([^\\]]+)\\]$`);
+/** script-notice (Ops #782): server/role-messages.ts roleMessageHeader for a script's notice (script-notice.ts
+ *  checks the id and the name: no brackets or line breaks). */
+const SCRIPT_RE = new RegExp(
+	`^\\[Role message (${ID}) from the script ([a-z0-9][a-z0-9-]{0,39}) \\u00b7 ([^\\[\\]\\n]{1,60}) \\u00b7 (notice|request)\\]$`,
+);
 const ROLE_RE = new RegExp(
 	`^\\[Role message (${ID}) from ([a-z0-9][a-z0-9._-]*) \\((.*)\\), sent from its (.*) \\u00b7 (question|request|fyi|reply to (${ID})|reply)\\]$`,
 );
@@ -62,6 +77,8 @@ const HINT_STARTS = [
 	"(The Initiatives page asks you,",
 	"(The work check found",
 	"(The CI watch found",
+	"(A notice from a script on this machine",
+	"(A request from a script on this machine",
 	"(An FYI from another role,",
 	"(The answer to your message",
 	"(Answer it once, with message_role",
@@ -143,6 +160,7 @@ export function parseRoleMessageText(text: string): ParsedRoleMessage | null {
 	const poke = report ? null : POKE_RE.exec(head);
 	const stall = report || poke ? null : STALL_RE.exec(head);
 	const ci = report || poke || stall ? null : CI_RE.exec(head);
+	const script = report || poke || stall || ci ? null : SCRIPT_RE.exec(head);
 	if (report) {
 		parsed = { id: report[1], kind: "report", reportDate: report[2] };
 	} else if (stall) {
@@ -151,6 +169,9 @@ export function parseRoleMessageText(text: string): ParsedRoleMessage | null {
 		parsed = { id: poke[1], kind: "report", poke: { name: poke[2] } };
 	} else if (ci) {
 		parsed = { id: ci[1], kind: "report", ci: { title: ci[2] } };
+	} else if (script) {
+		const kind = script[4] === "request" ? "request" : "fyi";
+		parsed = { id: script[1], kind: "report", script: { sender: script[2], title: script[3], kind } };
 	} else {
 		const m = ROLE_RE.exec(head);
 		if (!m) return null;
@@ -185,6 +206,8 @@ export interface RoleMessageView {
 	stall?: { names: string };
 	/** ci-alert (Ops #720): kind report from the CI watch: an alert about a CI run. */
 	ci?: { title: string };
+	/** script-notice (Ops #782): kind report from a script on this machine: its id, name and kind. */
+	script?: ScriptSender;
 	/** board: an order the owner gave through a role (COO): that role. */
 	via?: string;
 	/** A board note's head, an order's time, or an owner-question header after its label. */
@@ -229,6 +252,7 @@ export function roleMessageViewOf(message: ChatMessageLike, text: string): RoleM
 		...(p.poke ? { poke: p.poke } : {}),
 		...(p.stall ? { stall: p.stall } : {}),
 		...(p.ci ? { ci: p.ci } : {}),
+		...(p.script ? { script: p.script } : {}),
 		text: p.body,
 		stamped: false,
 	};

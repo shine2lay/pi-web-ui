@@ -1665,6 +1665,10 @@ export function roleMessageLabel(m: RoleMessageView, t: Translate): string {
 	if (m.kind === "report" && m.stall) return t("roleStallLabel", { names: m.stall.names });
 	if (m.kind === "report" && m.poke) return t("rolePokeLabel", { name: m.poke.name });
 	if (m.kind === "report" && m.ci) return t("roleCiLabel", { title: m.ci.title });
+	if (m.kind === "report" && m.script) {
+		const kind = m.script.kind === "request" ? t("roleScriptRequestWord") : t("roleScriptNoticeWord");
+		return t("roleScriptLabel", { title: m.script.title, kind });
+	}
 	if (m.kind === "report") return t("roleReportLabel", { date: m.reportDate ?? "?" });
 	// board (task #76): the turn-start note and an order sent directly.
 	if (m.kind === "board") return t("boardNoteLabel", { what: m.what ?? "" });
@@ -1740,6 +1744,20 @@ function RoleMessageCard({
 					<span className="chead-title rolemsg-title">{t("rolePokeCardTitle", { name: m.poke.name })}</span>
 					<span className="rolemsg-from">
 						{m.stamped ? t("rolePokeCardFrom", { id: m.id }) : t("rolePokeCardFromText", { id: m.id })}
+					</span>
+				</>
+			) : m.kind === "report" && m.script ? (
+				// script-notice (Ops #782): a script on this machine; it can't read a reply.
+				<>
+					<span className="chead-title rolemsg-title">
+						{t(m.script.kind === "request" ? "roleScriptRequestCardTitle" : "roleScriptNoticeCardTitle", {
+							title: m.script.title,
+						})}
+					</span>
+					<span className="rolemsg-from">
+						{m.stamped
+							? t("roleScriptCardFrom", { id: m.id, sender: m.script.sender })
+							: t("roleScriptCardFromText", { id: m.id, sender: m.script.sender })}
 					</span>
 				</>
 			) : m.kind === "report" && m.ci ? (

@@ -116,6 +116,9 @@ export interface UiRoleMessage {
 	/** ci-alert (Ops #720): kind report sent by the CI watch about a CI run: the header's words (what happened,
 	 *  repo, workflow). */
 	ci?: { title: string };
+	/** script-notice (Ops #782): kind report sent by a script on this machine: its id, its name, and whether it is
+	 *  an fyi (added without a turn) or a request (starts a turn; no reply owed, a script can't read one). */
+	script?: { sender: string; title: string; kind: "fyi" | "request" };
 	/** decision-records: the initiative it is part of (a short id). */
 	initiative?: string;
 	/** quiet-turns: a reply that answers a question asked for the owner: the turn it starts is his to

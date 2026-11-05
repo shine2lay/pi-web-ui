@@ -64,6 +64,13 @@ import { readQueueEntries } from "./queue-entries-tail.js";
 import { statusHint } from "./turn-status.js";
 import { checkCiAlert, ciAlertHint, ciAlertKey, ciAlertText, ciAlertTitle, type CiAlert } from "./ci-alert.js";
 import {
+	checkScriptNotice,
+	scriptNoticeHeader,
+	scriptNoticeHint,
+	scriptNoticeKey,
+	type ScriptNoticeKind,
+} from "./script-notice.js";
+import {
 	taskQueueAll,
 	taskQueueBackOwed,
 	taskQueueFromEntries,
@@ -201,6 +208,10 @@ export interface RoleMessageRecord {
 	/** ci-alert (Ops #720): kind report sent by the CI watch about a CI run (ci-alert.ts): outside the role message
 	 *  caps and guards like a poke, a chain of its own; one record per key (the dedupe). */
 	ci?: RoleCiInfo;
+	/** script-notice (Ops #782): kind report sent by a script on this machine (control socket script_notice, app
+	 *  token), from { role "app", title: its name, chat: its id }: outside the role message caps and guards like a CI
+	 *  alert, a chain of its own. An fyi starts no turn (noTurn); a request starts its own (needsOwnTurn). */
+	script?: RoleScriptInfo;
 	/** telegram-coo: a question or request a role's home chat sent while its turn was the owner's (his
 	 *  Telegram message started it, or a reply to an earlier one of these did): the turn its reply starts
 	 *  goes to his Telegram (role-replies.ts forOwner). */
@@ -324,6 +335,18 @@ export type RoleCiInfo = { key: string } & Pick<
 /** ci-alert: the record, new or (duplicate) the key's first. */
 export type CiAlertResult = { ok: true; record: RoleMessageRecord; duplicate: boolean } | { ok: false; error: string };
 
+/** script-notice (Ops #782): a script's notice: its kind, who sent it (id and name) and its optional dedupe key
+ *  (with the sender and the role: script-notice.ts scriptNoticeKey). */
+export interface RoleScriptInfo {
+	kind: ScriptNoticeKind;
+	sender: string;
+	title: string;
+	key?: string;
+}
+
+/** script-notice: the record, new or (duplicate) the key's first. */
+export type ScriptNoticeResult = CiAlertResult;
+
 interface StoreFile {
 	v: number;
 	paused: boolean;
@@ -419,8 +442,17 @@ export type RoleMessageSendResult =
 
 /** An FYI starts no turn. role-message-ladder: except the requester's notice of an Owner decision (a typed
  *  control, kind fyi under E), which resumes the requesting chat so it can use (or stop on) the decision. */
-export function noTurn(r: Pick<RoleMessageRecord, "kind" | "guard">): boolean {
+export function noTurn(r: Pick<RoleMessageRecord, "kind" | "guard" | "script">): boolean {
+	// script-notice (Ops #782): a script's fyi is added like a role's FYI.
+	if (r.kind === "report") return r.script?.kind === "fyi";
 	return r.kind === "fyi" && r.guard?.phase !== "decision";
+}
+
+/** An app message that starts a turn of its own: it waits until the chat's running turn has settled (never joins
+ *  it, so it never inherits an owner's Telegram attribution). A CI alert; script-notice (Ops #782): a script's
+ *  request. */
+export function needsOwnTurn(r: Pick<RoleMessageRecord, "ci" | "script">): boolean {
+	return !!r.ci || r.script?.kind === "request";
 }
 
 export function sha1(text: string): string {
@@ -444,7 +476,10 @@ export function chatLabel(o: { taskId?: number; isHome: boolean; title?: string 
 	return t ? `chat "${t}"` : "a chat";
 }
 
-type HeaderParts = Pick<RoleMessageRecord, "id" | "from" | "kind" | "replyTo" | "report" | "poke" | "stall" | "ci">;
+type HeaderParts = Pick<
+	RoleMessageRecord,
+	"id" | "from" | "kind" | "replyTo" | "report" | "poke" | "stall" | "ci" | "script"
+>;
 
 /** progress-feed (task #85): what an ask for a progress update tells the lead to do with it. turn-status
  *  (Ops #688): the lead's turn ends with one status line. */
@@ -475,6 +510,8 @@ export function stallNames(s: RoleStallInfo): string {
 export function roleMessageHeader(r: HeaderParts): string {
 	// ci-alert (Ops #720): its words are checked fields (ci-alert.ts), no brackets or line breaks.
 	if (r.kind === "report" && r.ci) return `[Role message ${r.id} from the CI watch \u00b7 ${ciAlertTitle(r.ci)}]`;
+	// script-notice (Ops #782): the sender's id and name are checked (script-notice.ts): no brackets or line breaks.
+	if (r.kind === "report" && r.script) return `[Role message ${r.id} from ${scriptNoticeHeader(r.script)}]`;
 	if (r.kind === "report" && r.stall)
 		return `[Role message ${r.id} from the work check \u00b7 stalled work \u00b7 ${oneLine(stallNames(r.stall), 120).replace(/[\]\n]/g, " ")}]`;
 	if (r.kind === "report" && r.poke)
@@ -519,6 +556,7 @@ export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } 
 			}
 			if (r.poke) return POKE_HINT;
 			if (r.ci) return ciAlertHint(r.ci);
+			if (r.script) return scriptNoticeHint(r.script.kind);
 			return "(The app's 6 am report request: your answer in this chat is the report the owner reads. No message_role, no new work, no tasks started.)";
 		case "fyi":
 			// No turn of its own: it is read with the chat's next message, which may be the owner's.
@@ -1259,6 +1297,7 @@ export class RoleMessages {
 			...(r.poke ? { poke: { initiative: r.poke.initiative, name: r.poke.name } } : {}),
 			...(r.stall ? { stall: { names: stallNames(r.stall) } } : {}),
 			...(r.ci ? { ci: { title: ciAlertTitle(r.ci) } } : {}),
+			...(r.script ? { script: { sender: r.script.sender, title: r.script.title, kind: r.script.kind } } : {}),
 			...(r.initiative ? { initiative: r.initiative } : {}),
 			// quiet-turns: a reply answering a question asked for the owner starts his turn, never folded.
 			...(this.ownerAnswerOf(r.id) ? { forOwner: true } : {}),
@@ -1593,6 +1632,61 @@ export class RoleMessages {
 		return { ok: true, record, duplicate: false };
 	}
 
+	/**
+	 * script-notice (Ops #782): a script on this machine tells a role's home chat something (control socket
+	 * script_notice, after the app token was checked). Every field is checked first (script-notice.ts
+	 * checkScriptNotice); a bad one stores and sends nothing. As the app's: outside the role message caps and guards
+	 * (kind report), a chain of its own, from { role "app", title: the sender's name, chat: its id }. An fyi is added
+	 * without a turn; a request starts its own once the running turn has settled. With a key, the same sender, role
+	 * and key again returns the first record (duplicate) and sends nothing. Never logs the text.
+	 */
+	requestScriptNotice(input: {
+		role?: unknown;
+		kind?: unknown;
+		sender?: unknown;
+		text?: unknown;
+		key?: unknown;
+	}): ScriptNoticeResult {
+		const checked = checkScriptNotice(input);
+		if (!checked.ok) return checked;
+		const notice = checked.notice;
+		const found = this.appReportRole(notice.role);
+		if (!found.ok) return found;
+		const to = found.role.id;
+		const sender = notice.sender.id;
+		if (notice.key !== undefined) {
+			const key = scriptNoticeKey(sender, to, notice.key);
+			const first = this.data.messages.find(
+				(m) => m.script?.key !== undefined && scriptNoticeKey(m.script.sender, m.to.role, m.script.key) === key,
+			);
+			if (first) {
+				this.log(`${first.id} ${sender}: the same notice again (${oneLine(notice.key, 200)}), not sent`);
+				return { ok: true, record: first, duplicate: true };
+			}
+		}
+		const script: RoleScriptInfo = {
+			kind: notice.kind,
+			sender,
+			title: notice.sender.title,
+			...(notice.key !== undefined ? { key: notice.key } : {}),
+		};
+		const record = this.addAppReport(
+			found.role,
+			{ role: "app", title: notice.sender.title, chat: sender, file: "" },
+			notice.text,
+			{ script },
+			(id, role) =>
+				`${id} ${sender} -> ${role} \u00b7 ${notice.kind}${notice.key !== undefined ? ` (${oneLine(notice.key, 200)})` : ""}`,
+		);
+		return { ok: true, record, duplicate: false };
+	}
+
+	/** script-notice: a refused notice (no token, a wrong one), in the server log (never the token or the text). */
+	noteScriptNoticeRefused(role: unknown, why: string): void {
+		const label = typeof role === "string" ? oneLine(role, 40) : "?";
+		this.log(`refused a script notice for ${label}: ${why.slice(0, 200)}`);
+	}
+
 	/** ci-alert: a refused CI alert (no token, a wrong one), in the server log (never the token). */
 	noteCiAlertRefused(role: unknown, why: string): void {
 		const label = typeof role === "string" ? oneLine(role, 40) : "?";
@@ -1613,7 +1707,7 @@ export class RoleMessages {
 		role: { id: string; title: string },
 		sender: RoleMessageRecord["from"],
 		text: string,
-		extra: Pick<RoleMessageRecord, "initiative" | "poke" | "stall" | "ci">,
+		extra: Pick<RoleMessageRecord, "initiative" | "poke" | "stall" | "ci" | "script">,
 		logLine: (id: string, to: string) => string,
 	): RoleMessageRecord {
 		const record: RoleMessageRecord = {
@@ -1852,6 +1946,13 @@ export class RoleMessages {
 					error: dead.length
 						? `${replyTo} is the work check's wake about ${dead.map((i) => `project ${i.id}`).join(", ")} with nothing moving: a reply doesn't clear it. Take a way out with your tools: ${deadEndWaysOut(dead[0].id)} The check sees what you do.`
 						: `${replyTo} is the work check's wake about stalled work: no reply is needed. Act with your tools (queue_add under it, work_project or work_initiative change or wait); the check sees what you do.`,
+				};
+			}
+			if (original.kind === "report" && original.script) {
+				const what = original.script.kind === "request" ? "request" : "notice";
+				return {
+					ok: false,
+					error: `${replyTo} is a script's ${what} (from ${original.script.title}, ${original.script.sender}): a script can't read a reply. If it asks for something, act on it with your tools.`,
 				};
 			}
 			if (original.kind === "report" && original.ci) {
@@ -2105,7 +2206,8 @@ export class RoleMessages {
 		const state = this.host.chatState(target);
 		// CI must start its own app turn, never inherit a running owner's Telegram attribution.
 		// A carry-on is also an existing turn: leave the alert in the outbox until it settles.
-		if (r.ci && (state === "working" || resumeFile)) return;
+		// script-notice (Ops #782): a script's request likewise.
+		if (needsOwnTurn(r) && (state === "working" || resumeFile)) return;
 		const flight = this.inFlight.get(r.id);
 		if (flight) {
 			// It got in: it lands when the chat takes it (after its running turn).

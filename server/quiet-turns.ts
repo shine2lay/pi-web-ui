@@ -40,6 +40,8 @@ export interface QuietStamp {
 	stall?: boolean | { names: string };
 	/** CI alerts are app work notices, not owner-facing reports. */
 	ci?: boolean | { title: string };
+	/** script-notice (Ops #782): a script's request (kind report) is app work like a CI alert: folded like a role's. */
+	script?: boolean | { sender: string; title: string; kind: string };
 }
 
 export interface QuietCall {
@@ -116,6 +118,11 @@ const STALL_HEAD = new RegExp(`^\\[Role message ${RM} from the work check \\u00b
 const CI_HEAD = new RegExp(
 	`^\\[Role message ${RM} from the CI watch \\u00b7 (?:failed|timed out|failed to start|cancelled|missing run) \\u00b7 [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+ \\u00b7 [A-Za-z0-9 _./()-]{1,100}\\]$`,
 );
+/** script-notice (Ops #782): role-messages.ts roleMessageHeader for a script's notice (script-notice.ts checks the
+ *  id and the name: no brackets or line breaks). */
+const SCRIPT_HEAD = new RegExp(
+	`^\\[Role message ${RM} from the script [a-z0-9][a-z0-9-]{0,39} \\u00b7 [^\\[\\]\\n]{1,60} \\u00b7 (?:notice|request)\\]$`,
+);
 /** pi-queue's wake-on-done notices (queue.ts wakeOnDoneText, #88). */
 const QUEUE_WAKE = /^\[Queue\] (?:Task #\d+ \(.*\) is done in its chat |\d+ tasks are done in their chats:)/;
 
@@ -142,11 +149,12 @@ function roleStarter(text: string, stamp: QuietStamp | null | undefined): Starte
 	const head = (nl === -1 ? text : text.slice(0, nl)).trimEnd();
 	const body = nl === -1 ? "" : text.slice(nl + 1).replace(/^\n+/, "");
 	if (stamp) {
-		if (stamp.ci) return stamp.forOwner ? "visible" : { kind: "role" };
+		if (stamp.ci || stamp.script) return stamp.forOwner ? "visible" : { kind: "role" };
 		if (stamp.poke || stamp.stall) return { kind: "role" };
 		if (stamp.kind === "report" || stamp.forOwner) return "visible";
 	} else {
-		if (POKE_HEAD.test(head) || STALL_HEAD.test(head) || CI_HEAD.test(head)) return { kind: "role" };
+		if (POKE_HEAD.test(head) || STALL_HEAD.test(head) || CI_HEAD.test(head) || SCRIPT_HEAD.test(head))
+			return { kind: "role" };
 		if (REPORT_HEAD.test(head)) return "visible";
 		const cut = text.lastIndexOf("\n\n");
 		const hint = cut === -1 ? "" : text.slice(cut + 2);

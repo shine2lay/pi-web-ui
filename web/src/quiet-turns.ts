@@ -57,6 +57,8 @@ export function quietMsgOf(m: UiMessage): QuietMsg {
 							// stall-wake (Ops #284): the work check's wake folds like a role's turn.
 							...(rm.stall ? { stall: true } : {}),
 							...(rm.ci ? { ci: true } : {}),
+							// script-notice (Ops #782): a script's request folds like a CI alert's turn.
+							...(rm.script ? { script: true } : {}),
 						},
 					}
 				: {}),

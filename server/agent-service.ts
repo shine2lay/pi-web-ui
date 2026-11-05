@@ -415,6 +415,8 @@ import {
 	type RoleReportReceipt,
 	type RoleReportResult,
 	type CiAlertResult,
+	type ScriptNoticeResult,
+	needsOwnTurn,
 } from "./role-messages.js";
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { admitRoleMailAtResume, installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
@@ -19550,6 +19552,23 @@ export class AgentService {
 		this.roleMessages.noteCiAlertRefused(role, why);
 	}
 
+	/** script-notice (Ops #782): a script on this machine tells a role's home chat something (control socket, after
+	 *  the app token was checked): an fyi without a turn, a request with one; one per sender, role and key. */
+	requestScriptNotice(input: {
+		role?: unknown;
+		kind?: unknown;
+		sender?: unknown;
+		text?: unknown;
+		key?: unknown;
+	}): ScriptNoticeResult {
+		return this.roleMessages.requestScriptNotice(input);
+	}
+
+	/** script-notice: a notice the control socket refused (no token, a wrong one): logged, never the token. */
+	noteScriptNoticeRefused(role: unknown, why: string): void {
+		this.roleMessages.noteScriptNoticeRefused(role, why);
+	}
+
 	/** roles-overview: the Roles page's reader (made on first use; it only reads, see roles-overview.ts). */
 	private rolesReader: RolesOverviewReader | null = null;
 	/** stall-watch (H-STALL-COST-2): the newest overview made here, by any reader, and when (Date.now()). */
@@ -19744,7 +19763,8 @@ export class AgentService {
 			: undefined;
 		return {
 			cause: this.roleMessageCause(text),
-			...(record?.ci ? { requireIdle: true } : {}),
+			// A CI alert or a script's request (Ops #782) starts its own turn, never joins a running one.
+			...(record && needsOwnTurn(record) ? { requireIdle: true } : {}),
 			...(owner ? { forOwner: owner } : {}),
 			...(requester ? { requester } : {}),
 		};

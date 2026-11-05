@@ -50,7 +50,7 @@ import { initAttachmentStore, readAttachment } from "./attachment-store.js";
 import { isAudioFile, previewKind } from "./text-sniff.js";
 import { startControlServer } from "./control-socket.js";
 import { ensureAppToken } from "./app-token.js";
-import type { CiAlertResult, RoleReportReceipt, RoleReportResult } from "./role-messages.js";
+import type { CiAlertResult, RoleReportReceipt, RoleReportResult, ScriptNoticeResult } from "./role-messages.js";
 import type { BoardChangeResult, BoardPostInput, BoardPostResult } from "./role-board.js";
 import { scheduleUploadCleanup } from "./uploads.js";
 import { ensureWindowsBash, windowsBashDir } from "./ensure-bash.js";
@@ -1478,6 +1478,16 @@ export interface EngineService {
 	requestCiAlert?(input: { role?: unknown; alert?: unknown }): CiAlertResult;
 	/** ci-alert (pi engine): a refused CI alert, logged. */
 	noteCiAlertRefused?(role: unknown, why: string): void;
+	/** script-notice (Ops #782, pi engine): a script tells a role's home chat something (control socket). */
+	requestScriptNotice?(input: {
+		role?: unknown;
+		kind?: unknown;
+		sender?: unknown;
+		text?: unknown;
+		key?: unknown;
+	}): ScriptNoticeResult;
+	/** script-notice (pi engine): a refused script notice, logged. */
+	noteScriptNoticeRefused?(role: unknown, why: string): void;
 	/** role-messages (pi engine): set by index.ts; the list changed. */
 	onRoleMessagesChanged?: (() => void) | null;
 	/** role-message-ladder (pi engine): open Owner questions at the active Owner tier, or explicitly escalated. */
