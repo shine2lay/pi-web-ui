@@ -278,9 +278,28 @@ identity.
   `pi-web-deploy`. Stored entries in `storage.json` keep the original `key` field and `sent` map
   structure (`identity`, `identityHash`, `sentAt`, and top-level `goneIdentities` are additive only),
   so the old plugin reads them without migration or loss.
-- **72 h live receipt**: pending 72 h live look-only window after deploy (will record near-restart
-  sends of already-sent questions, notifying sends per question identity, silent repeats, question
-  messages per day, notices per sender role, and final HIT or MISS verdict).
+- **72 h live receipt (HIT)**: window 2026-11-03 00:58:41 PST → 2026-11-06 00:58:41 PST, with
+  `v0.2.6` live throughout (`[plugin:telegram] activated (v0.2.6)` x14, no other version). Counted
+  look-only from the `pi-web-ui.service` journal with
+  `/home/shinelay/.cache/pi/ops763/tg-counts.py "2026-11-03 00:58:41" "2026-11-06 00:58:41"`.
+  - Restarts: 14. Sends within 3 min of a restart: 1 total, of which **0** were questions already
+    sent, and **0** were already-sent questions re-sent with sound (expected 0 — met).
+  - Question sends: 36, over 36 distinct identities. Notifying sends per identity: mean 1.00,
+    max 1, identities with more than one notifying send: 0 (MISS bar was > 1.1 — not reached).
+  - Silent repeats (`disable_notification`): 0 — no unanswered question came back within 7 days.
+  - Adoptions (`kept`): 130 — restarts and chat reopens that kept the existing message instead of
+    sending a new one. Old-format (pre-fix) send lines: 0.
+  - Question messages per day (PST): 11 (Nov 3), 10 (Nov 4), 15 (Nov 5); mean 12.0/day against
+    ~63/day before the change — **−81%** (expected at least −40% — met).
+  - Questions by kind: 31 `q-N` (chat `ask_user_question`), 4 `stuck-*` (queued-task lead cards),
+    1 `dlg-1`. The sender role of a question is not recorded in the journal, so questions cannot be
+    split by role without adding a log field; notices can.
+  - Notices by sender role: Show&Tell 18, `rollcall deployer` 16, RollCall 10, Design 5, Ops 1;
+    total 50 (4 on Nov 3, 12 on Nov 4, 34 on Nov 5).
+  - Also logged: 33 `coo answered another role's message (not sent, N characters)` — questions that
+    COO answered and that therefore never reached Telegram.
+  - Verdict: **H-TG-ONCE-1 HIT** — no restart or reopen re-sent an already-waiting question with
+    sound, notifying sends stayed at 1.00 per identity, and question volume fell 81%.
 
 ## Not included
 
