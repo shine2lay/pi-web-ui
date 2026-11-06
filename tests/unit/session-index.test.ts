@@ -421,6 +421,12 @@ describe("session-index: identity labels", () => {
 describe("session-index: never blocks the server", () => {
 	// Ops #639: load-sensitive. Its point is wall-clock latency (how long the event loop stops), which a busy machine
 	// stretches whatever the code does; the reading checks always run, the 200 ms bar only when the load allows it.
+	// Ops #786: a skipped bar proves nothing, and the gate (load above this machine's cores) still let the bar run in
+	// the daily full suite, where ten workers share the cores at a load below twenty. So the pause is also measured in
+	// a way a busy machine doesn't change: the thread CPU burnt during the longest pause. A pause this thread didn't
+	// spend on the CPU is the machine making it wait for a core; a pause it did spend is this code blocking the loop,
+	// which is what the test is about. Both readings are reported, and the wall-clock bar still runs on a quiet
+	// machine, so neither the proof nor the real latency check is lost.
 	it("a big transcript (one 48 MB line among 40 MB of others) keeps every event-loop pause under 200 ms", async (ctx) => {
 		mkdirSync(dirA, { recursive: true });
 		const big = join(dirA, "2026-09-02T00-00-00-000Z_big0.jsonl");
@@ -439,11 +445,17 @@ describe("session-index: never blocks the server", () => {
 
 		const idx = newIndex({ file: null });
 		let maxGap = 0;
+		// The most CPU this thread spent between two ticks: how long it ran without giving the loop a turn.
+		let maxBlockedCpuMs = 0;
 		let last = performance.now();
+		let lastCpu = threadCpuMs();
 		const timer = setInterval(() => {
 			const now = performance.now();
+			const cpu = threadCpuMs();
 			maxGap = Math.max(maxGap, now - last);
+			maxBlockedCpuMs = Math.max(maxBlockedCpuMs, cpu - lastCpu);
 			last = now;
+			lastCpu = cpu;
 		}, 5);
 		try {
 			const rows = await idx.listAll();
@@ -457,6 +469,13 @@ describe("session-index: never blocks the server", () => {
 		} finally {
 			clearInterval(timer);
 		}
+		// Always: this code never ran for 200 ms without giving the loop a turn, whatever the machine was doing.
+		// Measured 2026-11-06 (Ops #786): 14-31 ms on a quiet machine and at load 90+, where the wall-clock pause of
+		// the same runs reached 1,900 ms. Blocking reads of the 48 MB line would put this in the hundreds.
+		process.stdout.write(
+			`session-index's longest event-loop pause: ${maxGap.toFixed(0)} ms, ${maxBlockedCpuMs.toFixed(0)} ms of it on the CPU\n`,
+		);
+		expect(maxBlockedCpuMs).toBeLessThan(200);
 		const busy = loadSensitive(`session-index's event-loop pause (${maxGap.toFixed(0)} ms measured)`);
 		if (busy) return ctx.skip(busy);
 		expect(maxGap).toBeLessThan(200);
@@ -600,18 +619,39 @@ describe("session-index: cheap saves", () => {
 		}
 		const bigIdx = newIndex({ workers: 0, file: bigFile });
 		await bigIdx.listProject(CWD_A, workDir);
-		await bigIdx.flush(); // initial save caches all 2,053 pieces
+		const fullCpu0 = threadCpuMs();
+		await bigIdx.flush(); // initial save: serializes all 18.5 MB and caches all 2,053 pieces
+		const fullSaveCpuMs = threadCpuMs() - fullCpu0;
 
 		for (const f of working) appendFileSync(f, lines(message("assistant", "step done", (t += 1000))));
 		await bigIdx.listProject(CWD_A, workDir);
+		const steadySpy = vi.spyOn(JSON, "stringify");
 		const cpu0 = threadCpuMs();
 		await bigIdx.flush();
 		const steadySaveCpuMs = threadCpuMs() - cpu0;
+		let steadySerializedChars: number;
+		try {
+			steadySerializedChars = steadySpy.mock.results.reduce((sum, r) => sum + String(r.value).length, 0);
+		} finally {
+			steadySpy.mockRestore();
+		}
+		// Kept in the run's log, so a later failure here can be read without running it again (Ops #786).
+		process.stdout.write(
+			`session-index's 18.5 MB save: first ${fullSaveCpuMs.toFixed(0)} ms of thread CPU, ` +
+				`steady ${steadySaveCpuMs.toFixed(1)} ms and ${steadySerializedChars} characters serialized\n`,
+		);
 
 		const savedText = readFileSync(bigFile, "utf8");
 		expect(savedText.length).toBeGreaterThan(18_500_000);
 		expect(savedText).toBe(JSON.stringify(JSON.parse(savedText)));
-		// Old code re-serialized all 18.5 MB on every save (~330-500 ms thread CPU); cached pieces take ~5-25 ms.
+		// What the cached pieces save, counted rather than timed: the steady save hands JSON.stringify only the 13
+		// changed entries (6,438 characters measured), not the 18.5 M of the whole index. Old code re-serialized all
+		// of it every time. A count is the same quiet or busy.
+		expect(steadySerializedChars).toBeLessThan(100_000);
+		// And in CPU, which a busy machine does not stretch the way it stretches the clock. Measured 2026-11-06
+		// (Ops #786) across loads 62 to 108: 14.9 to 31.0 ms, against the first save of the same index in the same
+		// run, which does serialize all 18.5 MB, at 118 ms. Both saves write the whole file, so the bar sits between
+		// them rather than ten times above the steady one: the counted check above is what proves the caching.
 		expect(steadySaveCpuMs).toBeLessThan(100);
 	});
 });

@@ -38,6 +38,27 @@ of the code it protects), or the gate still fails at load on a test that measure
   over, proved by a file the code writes only after it), task-chat-start's quick refusal (refused before the
   prompt finished).
 
+## Two more rules, from the daily full run (Ops #786, 2026-11-06)
+
+The daily full run of `mine` failed on `tests/unit/durable-client-review-regression.test.ts` and
+`tests/unit/session-index.test.ts`, both of which pass sealed on the same commit. Neither was covered by the rules
+above, so they are now part of them (H-FULL-TEST-FLAKES-1):
+
+- **A fixed number of async turns is a wall clock in disguise.** Waiting for something by doing N turns of real
+  asynchronous work (`for (let i = 0; i < 8; i++) await crypto.subtle.digest(…)`) only works while the code under
+  test needs fewer turns than N, and code that hashes, reads or writes runs on libuv's thread pool, which ten
+  vitest workers share. Wait for the thing the test is about instead — the send arriving, the ownership taken —
+  with a generous turn count as the hang guard and a message that says what never happened.
+- **A wall-clock latency bar needs a reading beside it that always runs.** `loadSensitive()` skips above a
+  1-minute load equal to this machine's cores, but the daily full suite runs ten workers on twenty cores: a load
+  below the gate with every pause stretched. A bar that is skipped when busy and tripped when nearly-busy proves
+  nothing either way. Measure the **thread CPU burnt during the longest pause** as well: a pause this thread did
+  not spend on the CPU is the machine making it wait for a core; a pause it did spend is the code blocking the
+  loop, which is the claim. The CPU reading is checked always, the wall-clock one keeps its quiet-machine gate.
+  (`tests/unit/session-index.test.ts`, the 48 MB line: 155 ms of pause at load 70, 1 ms of it on the CPU.)
+
+Measurements, the kept run logs and the hypothesis: `/home/shinelay/kept-from-tmp/2026-11-06/full-test-flakes/`.
+
 ## Found on the way
 
 The usage store's index (`server/usage-accounting-store.ts`, `step()`) checks its 100 ms work slice on

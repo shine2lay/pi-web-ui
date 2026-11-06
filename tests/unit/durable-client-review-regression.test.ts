@@ -304,6 +304,30 @@ function tick(ms: number) {
 	act(() => vi.advanceTimersByTime(ms));
 }
 
+// Ops #786 (H-FULL-TEST-FLAKES-1): the pending-send path hashes with crypto.subtle.digest (pending-send-storage.ts,
+// pending-recovery-coordinator.ts), which runs on libuv's threads. How many async turns a send needs is therefore not
+// a constant a busy machine keeps, and the fixed pumps these tests used ("six turns, then eight") failed in the daily
+// full run of 2026-11-06. They wait for what the test is about instead: ownership taken, or the send arrived.
+const asyncTurn = () => globalThis.crypto.subtle.digest("SHA-256", new Uint8Array(0));
+/** Far past the handful of turns the path needs, so only a send that never arrives ends the wait. */
+const MOST_TURNS = 2_000;
+async function actUntil(done: () => boolean, what: string): Promise<void> {
+	for (let turn = 0; turn < MOST_TURNS; turn++) {
+		if (done()) return;
+		await act(async () => {
+			await asyncTurn();
+		});
+	}
+	throw new Error(`${what} within ${MOST_TURNS} async turns`);
+}
+
+/** The recovery coordinator has taken ownership, so a send now goes through the real pending-send path. */
+const recoveryReady = () => actUntil(() => activeOwners.size > 0, "the recovery coordinator took no ownership");
+
+// The fixture's stores, remade for every test; the waits above read them.
+let records = new Map<string, RecoveryRecord>();
+let activeOwners = new Set<string>();
+
 beforeEach(() => {
 	vi.useFakeTimers({ now: T0 });
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -324,8 +348,8 @@ beforeEach(() => {
 	localStorage.clear();
 	sessionStorage.clear();
 	localStorage.setItem("pi-web-ui:lang", "en");
-	const records = new Map<string, RecoveryRecord>();
-	const activeOwners = new Set<string>();
+	records = new Map<string, RecoveryRecord>();
+	activeOwners = new Set<string>();
 	const backend: PendingRecoveryBackend = {
 		async read(ownerId) {
 			return structuredClone([...records.values()].filter((r) => r.ownerId === ownerId));
@@ -771,11 +795,11 @@ describe("Ops #574 composer identity and initialization", () => {
 		expect(textarea(host).placeholder).not.toContain("initializing");
 		expect(sendButton(host).disabled).toBe(false);
 		expect(socket.promptCount).toBe(0); // Binding is not an implicit submit.
-		await act(async () => {
-			for (let i = 0; i < 6; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
+		await recoveryReady();
+		act(() => {
 			textarea(host).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-			for (let i = 0; i < 8; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
 		});
+		await actUntil(() => socket.promptCount > 0, "the typed draft never reached the socket");
 		expect(socket.promptCount).toBe(1);
 		expect(socket.promptIds).toEqual([expect.any(String)]);
 		expect(
@@ -923,11 +947,9 @@ describe("Ops #574 composer identity and initialization", () => {
 		expect(textarea(host).placeholder).not.toContain("initializing");
 		typeText(host, "Synthetic DSH no-session send.");
 		expect(sendButton(host).disabled).toBe(false);
-		await act(async () => {
-			for (let i = 0; i < 6; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
-			sendButton(host).click();
-			for (let i = 0; i < 8; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
-		});
+		await recoveryReady();
+		act(() => sendButton(host).click());
+		await actUntil(() => socket.promptCount > 0, "the DSH no-session send never reached the socket");
 		expect(socket.promptCount).toBe(1);
 		expect(socket.promptIds).toEqual([expect.any(String)]);
 		expect(api.chat.pendingSends).toHaveLength(1);
@@ -951,11 +973,11 @@ describe("Ops #574 composer identity and initialization", () => {
 		expect(textarea(host).value).toBe("");
 		expect(socket.promptCount).toBe(0);
 		typeText(host, "Synthetic DSH B only.");
-		await act(async () => {
-			for (let i = 0; i < 6; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
+		await recoveryReady();
+		act(() => {
 			textarea(host).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-			for (let i = 0; i < 8; i++) await crypto.subtle.digest("SHA-256", new Uint8Array(0));
 		});
+		await actUntil(() => socket.promptCount > 0, "the DSH B draft never reached the socket");
 		expect(socket.promptCount).toBe(1);
 		expect(socket.promptIds).toEqual([expect.any(String)]);
 		expect(api.chat.pendingSends).toHaveLength(1);
