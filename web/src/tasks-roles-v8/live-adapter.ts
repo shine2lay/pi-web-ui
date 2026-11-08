@@ -777,8 +777,7 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 						},
 					}
 				: {}),
-			createdAt:
-				rawTask.createdAt ?? existingTask?.createdAt ?? rawTask.startedAt ?? rawTask.latest?.ts ?? now,
+			createdAt: rawTask.createdAt ?? existingTask?.createdAt ?? rawTask.startedAt ?? rawTask.latest?.ts ?? now,
 			updatedAt:
 				rawTask.updatedAt ??
 				rawTask.finishedAt ??

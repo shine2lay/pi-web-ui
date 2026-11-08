@@ -346,9 +346,9 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 			const evt = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
 			window.dispatchEvent(evt);
 		});
-		expect(
-			container.querySelector<HTMLDetailsElement>('details.filter-dd[data-filter-dropdown="dept"]')?.open,
-		).toBe(false);
+		expect(container.querySelector<HTMLDetailsElement>('details.filter-dd[data-filter-dropdown="dept"]')?.open).toBe(
+			false,
+		);
 
 		await act(async () => {
 			root.unmount();
