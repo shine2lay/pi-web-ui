@@ -232,6 +232,15 @@ function mapProtocolDelivery(
 	return undefined;
 }
 
+function stripLeadingUnblockPrefix(text: string): string {
+	return text.replace(/^(?:how to unblock:\s*)+/i, "").trim();
+}
+
+function isRawShellCheckUnblock(text: string | undefined): boolean {
+	if (!text) return false;
+	return text.includes("bash -c") || text.includes("Wait on '") || text.includes("for f in /");
+}
+
 function mapProtocolBlocked(task: AdaptableTaskInput, now: number): UiRoleTaskBlocked | undefined {
 	const b = task.blocked as
 		| (Partial<UiRoleTaskBlocked> & {
@@ -262,7 +271,8 @@ function mapProtocolBlocked(task: AdaptableTaskInput, now: number): UiRoleTaskBl
 		(summaryParts.length > 0
 			? `Waiting on ${summaryParts.join(", ")}`
 			: b.need || b.owes || (task.waitsOn ? `Waiting on ${task.waitsOn}` : "Blocked on upstream dependency"));
-	const howToUnblock = b.howToUnblock || task.howToUnblock || `Resolve ${unblockSummary}`;
+	const rawHowToUnblock = b.howToUnblock || task.howToUnblock || `Resolve ${unblockSummary}`;
+	const howToUnblock = stripLeadingUnblockPrefix(rawHowToUnblock);
 	const deadlockReasonFromDep = resolvedOn.find((d) => d.deadlockReason)?.deadlockReason;
 	const deadlock =
 		b.deadlock ??
@@ -302,6 +312,14 @@ function mapProtocolWait(task: AdaptableTaskInput, now: number): UiRoleTaskWait 
 	const what = w.what ?? "external check";
 	const overdueNote =
 		w.overdueNote ?? (overdue ? `⚠ Overdue (${elapsedMin}m elapsed vs ${expectMin}m expected)` : undefined);
+	const fallbackWaitUnblock = overdue
+		? `Check overdue (${elapsedMin}m elapsed vs ${expectMin}m expected): inspect ${what}`
+		: `Waiting on ${what}`;
+	const candidateUnblock = w.howToUnblock || task.howToUnblock;
+	const cleanWaitUnblock =
+		candidateUnblock && !isRawShellCheckUnblock(candidateUnblock)
+			? stripLeadingUnblockPrefix(candidateUnblock)
+			: fallbackWaitUnblock;
 	return {
 		what,
 		checkCmd: w.checkCmd || (w as { check?: string }).check || "check",
@@ -317,12 +335,7 @@ function mapProtocolWait(task: AdaptableTaskInput, now: number): UiRoleTaskWait 
 		...(w.lastCheckedAt !== undefined ? { lastCheckedAt: w.lastCheckedAt } : {}),
 		...(w.lastExitCode !== undefined ? { lastExitCode: w.lastExitCode } : {}),
 		...(w.lastOutput ? { lastOutput: w.lastOutput } : {}),
-		howToUnblock:
-			w.howToUnblock ||
-			task.howToUnblock ||
-			(overdue
-				? `Check overdue (${elapsedMin}m elapsed vs ${expectMin}m expected): inspect ${what}`
-				: `Waiting on ${what}`),
+		howToUnblock: cleanWaitUnblock,
 	} as UiRoleTaskWait;
 }
 
@@ -503,16 +516,11 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 		const derivedLifecycle = deriveLifecycleFromProtocolTask(rawTask, queueRunning);
 		const lifecycleStatus: UiTaskLifecycleStatus = rawTask.lifecycleStatus
 			? rawTask.lifecycleStatus
-			: existingTask &&
-				  existingTask.lifecycleStatus !== "working" &&
-				  existingTask.lifecycleStatus !== "done" &&
-				  (derivedLifecycle === "working" || derivedLifecycle === "done")
-				? existingTask.lifecycleStatus
-				: existingTask &&
-					  (existingTask.lifecycleStatus === "live" || existingTask.lifecycleStatus === "landed") &&
-					  derivedLifecycle === "done"
-					? existingTask.lifecycleStatus
-					: derivedLifecycle;
+			: existingTask
+				? existingTask.lifecycleStatus === "working" && derivedLifecycle !== "working" && derivedLifecycle !== "queued"
+					? derivedLifecycle
+					: existingTask.lifecycleStatus
+				: derivedLifecycle;
 		const statusTone = rawTask.statusTone ?? statusToneForLifecycle(lifecycleStatus);
 
 		const explicitAppOrSystem = (rawTask as { appOrSystem?: string }).appOrSystem?.trim();
@@ -715,8 +723,12 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 			});
 		}
 
-		const howToUnblock =
-			rawTask.howToUnblock ??
+		const rawTaskUnblockClean =
+			rawTask.howToUnblock && !isRawShellCheckUnblock(rawTask.howToUnblock)
+				? stripLeadingUnblockPrefix(rawTask.howToUnblock)
+				: undefined;
+		const rawHowToUnblock =
+			rawTaskUnblockClean ??
 			existingTask?.howToUnblock ??
 			blocked?.howToUnblock ??
 			wait?.howToUnblock ??
@@ -729,6 +741,7 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 						: rawTask.waitsOn
 							? `Resolve: ${rawTask.waitsOn}`
 							: undefined);
+		const howToUnblock = rawHowToUnblock ? stripLeadingUnblockPrefix(rawHowToUnblock) : undefined;
 
 		const doneSummary = rawTask.doneSummary ?? rawTask.summary ?? existingTask?.doneSummary;
 
@@ -818,11 +831,16 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 			addAdaptedTask(t, role.id, roleTitle, queueRunning, homeChatObj);
 		}
 		for (const d of recentDoneTasks) {
+			const doneLifecycle = (d as { lifecycleStatus?: UiTaskLifecycleStatus }).lifecycleStatus;
+			if (!tasksByKey.has(`${role.id}:${d.id}`) && (!doneLifecycle || doneLifecycle === "done")) {
+				continue;
+			}
 			addAdaptedTask(
 				{
 					id: d.id,
 					title: d.title,
 					status: "done",
+					...(doneLifecycle ? { lifecycleStatus: doneLifecycle } : {}),
 					...(d.summary ? { doneSummary: d.summary } : {}),
 					...(d.at ? { finishedAt: d.at, updatedAt: d.at } : {}),
 				},
@@ -838,7 +856,6 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 		const isRoleActive =
 			activeTasks.length > 0 ||
 			queuedTasks.length > 0 ||
-			recentDoneTasks.length > 0 ||
 			role.status === "busy" ||
 			role.status === "needs-you" ||
 			(role.status as string) === "working" ||
@@ -951,8 +968,19 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 
 	// 3. Merge tasks from UiWorkPage.tasks (and any test-fixture workPage shapes)
 	for (const wpTask of (workPage?.tasks ?? []) as ProtocolUiWorkPageTask[]) {
+		if (wpTask.state === "removed" || wpTask.state === "dropped") {
+			continue;
+		}
 		const roleId = wpTask.queueName || cleanTagSlug(wpTask.queue) || "workspace";
-		const rawState = wpTask.state && wpTask.state !== "removed" ? wpTask.state : "working";
+		const wpTaskKey = `${roleId}:${wpTask.task}`;
+		if (
+			wpTask.state === "done" &&
+			!tasksByKey.has(wpTaskKey) &&
+			(!wpTask.lifecycleStatus || wpTask.lifecycleStatus === "done")
+		) {
+			continue;
+		}
+		const rawState = wpTask.state || "working";
 		const pProj = wpTask.parent && "project" in wpTask.parent ? wpTask.parent.project : undefined;
 		const pInit = wpTask.parent && "initiative" in wpTask.parent ? wpTask.parent.initiative : undefined;
 		addAdaptedTask(

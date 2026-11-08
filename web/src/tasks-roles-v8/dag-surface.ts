@@ -1,6 +1,5 @@
 import {
 	renderDeliveryPipelineMeter,
-	renderDepartmentStrip,
 	renderStatusBadge,
 	renderTaskCallouts,
 	renderUnifiedTaskCard,
@@ -229,7 +228,7 @@ export function renderTagDagRegion(params: {
 
       <div class="how-to-unblock-banner tone-${escapeHtml(parentAsk.statusTone || "working")}" data-unblock-banner="${escapeHtml(askIdForAttr)}">
         <div>
-          <strong>How to unblock:</strong> ${escapeHtml(parentAsk.howToUnblock ?? "")}${dagPreview.rootBlockerRefs.length ? ` <span style="font-weight:700; color:var(--text-primary);" data-root-blocker="true">(Root: ${escapeHtml(dagPreview.rootBlockerRefs.join(", "))})</span>` : ""}
+          <strong>How to unblock:</strong> ${escapeHtml((parentAsk.howToUnblock ?? "").replace(/^(?:how to unblock:\s*)+/i, "").trim())}${dagPreview.rootBlockerRefs.length ? ` <span style="font-weight:700; color:var(--text-primary);" data-root-blocker="true">(Root: ${escapeHtml(dagPreview.rootBlockerRefs.join(", "))})</span>` : ""}
         </div>
       </div>
 
@@ -269,11 +268,8 @@ export function renderUnifiedTasksPanel(params: {
 
 	const matchingItems = allTasksWithContext.filter(({ task, ask }) => matchesTaskFilters(task, state, ask));
 
-	const deptStripHtml = renderDepartmentStrip(dataset, state);
-
 	if (matchingItems.length === 0) {
 		return `
-      ${deptStripHtml}
       <div class="state-card">
         <h2 style="margin-top:0;">No tasks match your current filter</h2>
         <p>Try clearing one of the selected department, state, or tag filters.</p>
@@ -307,14 +303,12 @@ export function renderUnifiedTasksPanel(params: {
 	const allDetailsOpen = sortedTasks.every((task) => Boolean(state.expandedTasks[task.id]));
 
 	return `
-    ${deptStripHtml}
     ${tagDagDrawerHtml}
     <section class="unified-tasks-panel" aria-label="All available tasks across all departments">
       <div class="unified-tasks-header">
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-          <h2 style="margin:0; font-size:16px; font-weight:800; color:var(--text-primary);">All Available Tasks Across Departments</h2>
+          <h2 style="margin:0; font-size:15px; font-weight:800; color:var(--text-primary);">All Available Tasks Across Departments</h2>
           <span class="tier-count-pill">${sortedTasks.length} of ${allTasksWithContext.length} tasks</span>
-          <span style="font-size:14px; color:var(--text-secondary);">· Click any <strong>☍ #tag DAG</strong> button to view that tag's implementation DAG &amp; task states</span>
         </div>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           ${

@@ -512,8 +512,9 @@ export function renderUnifiedTaskCard(params: {
 	const pipelineMeter = renderDeliveryPipelineMeter(task, effectiveStatus);
 
 	let oneLineSummary = "";
-	if (["stuck", "blocked", "waiting", "asking", "paused"].includes(effectiveStatus) && task.howToUnblock) {
-		oneLineSummary = `<strong>How to unblock:</strong> ${escapeHtml(task.howToUnblock)}`;
+	const cleanUnblock = task.howToUnblock ? task.howToUnblock.replace(/^(?:how to unblock:\s*)+/i, "").trim() : "";
+	if (["stuck", "blocked", "waiting", "asking", "paused"].includes(effectiveStatus) && cleanUnblock) {
+		oneLineSummary = `<strong>How to unblock:</strong> ${escapeHtml(cleanUnblock)}`;
 	} else if (dependsOnRefs.length > 0 || unlocksRefs.length > 0) {
 		const depParts: string[] = [];
 		if (dependsOnRefs.length > 0) depParts.push(`Depends on: ${escapeHtml(dependsOnRefs.join(", "))}`);
@@ -521,10 +522,22 @@ export function renderUnifiedTaskCard(params: {
 		oneLineSummary = depParts.join(" · ");
 	} else if (task.latestTldr) {
 		oneLineSummary = `${escapeHtml(task.latestTldr.text)} (${escapeHtml(task.latestTldr.age ?? "just now")})`;
+	} else if (task.doneSummary) {
+		oneLineSummary = escapeHtml(task.doneSummary);
+	} else if (task.queuedDetail?.summary) {
+		oneLineSummary = escapeHtml(task.queuedDetail.summary);
+	} else {
+		oneLineSummary = escapeHtml(STATUS_META[effectiveStatus]?.label ?? effectiveStatus);
 	}
 
-	const taskTags = task.tags ?? ask?.tags ?? [];
-	const tagDagButtonsHtml = taskTags
+	const rawTaskTags = task.tags ?? ask?.tags ?? [];
+	const prioritizedTags = [...rawTaskTags].sort((a, b) => {
+		const aActive = state.activeTagDag === a || state.selectedTags.includes(a) ? 0 : 1;
+		const bActive = state.activeTagDag === b || state.selectedTags.includes(b) ? 0 : 1;
+		return aActive - bActive;
+	});
+	const visibleTaskTags = prioritizedTags.slice(0, 2);
+	const tagDagButtonsHtml = visibleTaskTags
 		.map((tg, idx) => {
 			const isCurDag = state.activeTagDag === tg;
 			const seqToggleCls = tg === "mobile-redesign" && idx === 0 && displayId === 221 ? "seq-toggle-btn" : "";
@@ -576,7 +589,7 @@ export function renderUnifiedTaskCard(params: {
 				isTaskExpanded
 					? `<div class="task-detail-drawer" data-task-detail="${task.id}" style="display:flex; flex-direction:column; gap:6px; padding:8px 14px 12px 14px; border-top:1px solid var(--border-subtle); background:var(--bg-subtle);">
               <div class="task-subline">
-                <span><strong>Stage ${stepNumber} in #${escapeHtml(taskTags[0] || "workflow")}</strong></span>
+                <span><strong>Stage ${stepNumber} in #${escapeHtml(rawTaskTags[0] || "workflow")}</strong></span>
                 ${dependsOnRefs.length ? `<span class="seq-edge-pill">Depends on: ${escapeHtml(dependsOnRefs.join(", "))}</span>` : ""}
                 ${unlocksRefs.length ? `<span class="seq-edge-pill">Unlocks → ${escapeHtml(unlocksRefs.join(", "))}</span>` : ""}
                 ${pipelineMeter}

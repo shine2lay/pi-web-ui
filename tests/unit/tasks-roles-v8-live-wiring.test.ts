@@ -474,4 +474,83 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 		expect(tasks120[0]!.id).not.toBe(tasks120[1]!.id);
 		expect(res.dataset.tasks.some((t) => (t.displayId ?? t.id) >= 8000)).toBe(false);
 	});
+
+	it("excludes historical done/removed tasks from workPage & doneRecent, preserves blocked lifecycle across workPage merge, and sanitizes howToUnblock", () => {
+		const overview = sampleLiveOverview();
+		// Add historical doneRecent tasks that are not in active/queued/tagGroups
+		const opsRole = overview.roles.find((r) => r.id === "ops")!;
+		opsRole.doneRecent = [
+			{ id: 901, title: "Old finished ops task #901", summary: "Done last week", at: 1_762_000_000_000 },
+		];
+		opsRole.queue?.active.push({
+			id: 765,
+			title: "Ops task #765 blocked on architecture #450",
+			status: "blocked",
+			lifecycleStatus: "blocked",
+			statusTone: "blocked",
+			howToUnblock: "How to unblock: Answer architecture #450's owner question",
+			wait: {
+				what: "deploy check",
+				checkCmd: "bash -c 'for f in /tmp/test; do echo $f; done'",
+				sinceAt: 1_762_559_000_000,
+				everyMs: 120_000,
+				expectByAt: 1_762_560_800_000,
+				giveUpAt: 1_762_640_000_000,
+				overdue: false,
+				howToUnblock: "Wait on 'bash -c \"for f in /tmp/test; do echo $f; done\"' (16m / 30m expected)",
+			},
+		});
+
+		const workPage = sampleLiveWorkPage();
+		workPage.tasks = [
+			// Historical done & removed tasks in workPage must be excluded
+			{
+				queue: "ops",
+				queueName: "ops",
+				task: 901,
+				title: "Old finished ops task #901",
+				state: "done",
+				parent: { standalone: true },
+				added: 1_762_000_000_000,
+			},
+			{
+				queue: "ops",
+				queueName: "ops",
+				task: 902,
+				title: "Removed ops task #902",
+				state: "removed",
+				parent: { standalone: true },
+				added: 1_762_000_000_000,
+			},
+			// Active blocked task #765 also has paused metadata in workPage without lifecycleStatus
+			{
+				queue: "ops",
+				queueName: "ops",
+				task: 765,
+				title: "Ops task #765 blocked on architecture #450",
+				state: "blocked",
+				paused: { why: "Hold while blocked", at: 1_762_559_100_000 },
+				parent: { standalone: true },
+				added: 1_762_559_000_000,
+			},
+		];
+
+		const res = buildLiveTasksRolesV8Dataset({
+			overview,
+			workPage,
+			now: 1_762_560_000_000,
+		});
+
+		// Historical done #901 and removed #902 should not be included
+		expect(res.dataset.tasks.some((t) => (t.displayId ?? t.id) === 901)).toBe(false);
+		expect(res.dataset.tasks.some((t) => (t.displayId ?? t.id) === 902)).toBe(false);
+
+		// Ops #765 must keep its "blocked" lifecycleStatus from overview (not overwritten with "paused")
+		const t765 = res.dataset.tasks.find((t) => t.role === "ops" && (t.displayId ?? t.id) === 765);
+		expect(t765).toBeDefined();
+		expect(t765?.lifecycleStatus).toBe("blocked");
+		expect(t765?.howToUnblock).toBe("Answer architecture #450's owner question");
+		expect(t765?.howToUnblock?.toLowerCase().startsWith("how to unblock:")).toBe(false);
+		expect(t765?.wait?.howToUnblock).toBe("Waiting on deploy check");
+	});
 });

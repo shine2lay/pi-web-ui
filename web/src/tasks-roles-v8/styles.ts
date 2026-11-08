@@ -1072,7 +1072,7 @@ html[data-theme="light"][data-scheme="graphite"],
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 12px 16px;
+  padding: 9px 14px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-default);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
@@ -1081,7 +1081,7 @@ html[data-theme="light"][data-scheme="graphite"],
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px;
+  padding: 10px 12px;
 }
 .unified-task-item {
   border: 1px solid var(--border-default);
@@ -1169,12 +1169,12 @@ html[data-theme="light"][data-scheme="graphite"],
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: 8px;
+  padding: 8px 12px;
   background: var(--bg-surface);
   border: 1px solid var(--border-default);
   border-radius: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .filter-dropdowns-group {
   display: flex;
@@ -1277,13 +1277,13 @@ html[data-theme="light"][data-scheme="graphite"],
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: 8px;
+  padding: 8px 14px;
   background: var(--card-grad);
   border: 1px solid var(--border-default);
   box-shadow: inset 3px 0 0 var(--on-you-bg), var(--card-rim-shadow);
   border-radius: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .attention-stat-pill {
   display: inline-flex;
@@ -1301,15 +1301,15 @@ html[data-theme="light"][data-scheme="graphite"],
 .unified-task-line {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: 6px;
+  padding: 10px 14px;
 }
 .task-card-top {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 }
 .task-card-heading {
   display: flex;
@@ -1324,8 +1324,8 @@ html[data-theme="light"][data-scheme="graphite"],
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 7px 11px;
+  gap: 8px;
+  padding: 6px 10px;
   border-radius: 8px;
   background: var(--card-well-bg);
   border: 1px solid var(--border-subtle);
@@ -1347,7 +1347,7 @@ html[data-theme="light"][data-scheme="graphite"],
   flex-shrink: 0;
 }
 .task-col-title {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 650;
   color: var(--text-primary);
   letter-spacing: -0.01em;
@@ -1357,6 +1357,10 @@ html[data-theme="light"][data-scheme="graphite"],
   color: var(--text-secondary);
   min-width: 0;
   flex: 1 1 320px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .task-col-actions {
   display: flex;
