@@ -123,9 +123,9 @@ export function renderRolesBentoView(params: {
 		const isRoleExpanded = Boolean(state.expandedRoles[dept.id]);
 
 		const roleSummaryLine = heldTask
-			? `<strong style="color:var(--text-primary);">How to unblock:</strong> (#${heldTask.id}) ${escapeHtml(heldTask.howToUnblock ?? "")}`
+			? `<strong style="color:var(--text-primary);">How to unblock:</strong> (#${heldTask.displayId ?? heldTask.id}) ${escapeHtml(heldTask.howToUnblock ?? "")}`
 			: topTask
-				? `<span style="color:var(--text-muted);">Top task (#${topTask.id}): ${escapeHtml(topTask.title)}</span>`
+				? `<span style="color:var(--text-muted);">Top task (#${topTask.displayId ?? topTask.id}): ${escapeHtml(topTask.title)}</span>`
 				: "";
 
 		const relatedTaskChips = allDeptTasks
@@ -141,7 +141,7 @@ export function renderRolesBentoView(params: {
 						: "";
 				return `<span style="display:inline-flex; align-items:center; gap:5px; font-size:14px; color:var(--text-secondary); padding:2px 4px;">
           <span class="status-dot tone-${escapeHtml(tone)}" aria-hidden="true"></span>
-          <strong style="color:var(--text-primary);">#${t.id}</strong>
+          <strong style="color:var(--text-primary);">#${t.displayId ?? t.id}</strong>
           <span>${escapeHtml(t.appOrSystem ?? "app")}</span>
         </span>${arrow}`;
 			})
@@ -195,9 +195,7 @@ export function renderRolesBentoView(params: {
 			return `<span class="${pillCls}" aria-hidden="true"></span>`;
 		}).join("");
 
-		const lanePct = dept.atOnce > 0 ? Math.round((dept.inUse / dept.atOnce) * 100) : 0;
-		const ringStroke = heldTask ? "var(--on-you-bg)" : "var(--st-working-text)";
-		const laneRingHtml = renderSvgDonut(lanePct, ringStroke, `${dept.inUse}/${dept.atOnce}`);
+		const monogram = (dept.title || dept.id).slice(0, 2).toUpperCase();
 
 		return {
 			isHeld: Boolean(heldTask),
@@ -206,7 +204,7 @@ export function renderRolesBentoView(params: {
           ${topTaskStatus === "stuck" ? `<span class="on-you-badge" style="position:absolute; top:-9px; right:12px;">ON YOU</span>` : ""}
           <div class="role-card-header">
             <div style="display:flex; align-items:center; gap:10px;">
-              ${laneRingHtml}
+              <span class="dept-monogram" aria-hidden="true">${escapeHtml(monogram)}</span>
               <div>
                 <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:14px; color:var(--text-secondary);">
                   <span>Task lanes</span>

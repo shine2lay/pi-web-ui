@@ -38,23 +38,23 @@ export interface TasksRolesV8FilterState {
 
 /**
  * Deterministic urgency rank across all 12 lifecycle states (`stuck` / `ON YOU` first,
- * then `asking`, `blocked`, `waiting`, `deploying`, `landing`, `working`, `landed`,
- * `queued`, `paused`, `live`, `done`, `dropped`).
+ * then `blocked`, `waiting`, `asking`, `paused`, `deploying`, `landing`, `landed`,
+ * `working`, `queued`, `live`, `done`, `dropped`) matching prototype.html v8.
  */
 export const TASK_URGENCY_RANK: Readonly<Record<UiTaskLifecycleStatus, number>> = {
-	stuck: 1,
-	asking: 2,
-	blocked: 3,
-	waiting: 4,
+	stuck: 0,
+	blocked: 1,
+	waiting: 2,
+	asking: 3,
+	paused: 4,
 	deploying: 5,
 	landing: 6,
-	working: 7,
-	landed: 8,
+	landed: 7,
+	working: 8,
 	queued: 9,
-	paused: 10,
-	live: 11,
-	done: 12,
-	dropped: 13,
+	live: 10,
+	done: 11,
+	dropped: 12,
 };
 
 export function createInitialFilterState(overrides: Partial<TasksRolesV8FilterState> = {}): TasksRolesV8FilterState {
@@ -92,7 +92,7 @@ export function effectiveTaskLifecycleStatus(
 	return task.lifecycleStatus;
 }
 
-export function sortTasksByUrgency<T extends Pick<UiRoleTask, "id" | "lifecycleStatus">>(
+export function sortTasksByUrgency<T extends Pick<UiRoleTask, "id" | "displayId" | "lifecycleStatus">>(
 	tasks: ReadonlyArray<T>,
 	answeredTasks?: Readonly<Record<number, string>>,
 ): T[] {
@@ -105,6 +105,9 @@ export function sortTasksByUrgency<T extends Pick<UiRoleTask, "id" | "lifecycleS
 		const rankA = TASK_URGENCY_RANK[effA] ?? 99;
 		const rankB = TASK_URGENCY_RANK[effB] ?? 99;
 		if (rankA !== rankB) return rankA - rankB;
+		const dispA = a.displayId ?? a.id;
+		const dispB = b.displayId ?? b.id;
+		if (dispA !== dispB) return dispA - dispB;
 		return a.id - b.id;
 	});
 }
@@ -217,9 +220,12 @@ export function matchesTaskFilters(
 		const tldrText = task.latestTldr?.text ?? "";
 		const unblockText =
 			task.howToUnblock ?? task.blocked?.howToUnblock ?? task.blocked?.unblockSummary ?? task.wait?.what ?? "";
+		const displayId = task.displayId ?? task.id;
 		const haystack = [
 			task.role ?? "",
 			task.roleTitle ?? "",
+			`#${displayId}`,
+			String(displayId),
 			`#${task.id}`,
 			String(task.id),
 			task.title ?? "",

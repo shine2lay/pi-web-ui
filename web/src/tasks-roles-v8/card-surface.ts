@@ -93,12 +93,13 @@ export function renderDeliveryPipelineMeter(
 
 export function renderTaskCallouts(task: UiRoleTask, answeredTasks?: Readonly<Record<number, string>>): string {
 	const parts: string[] = [];
+	const displayId = task.displayId ?? task.id;
 
 	if (task.lifecycleStatus === "stuck") {
 		const answered = answeredTasks?.[task.id];
 		if (answered) {
 			parts.push(
-				`<div class="callout-box"><strong>✓ Answered by you:</strong> "${escapeHtml(answered)}" — sent to ${escapeHtml(task.roleTitle ?? task.role ?? "Lead")} #${task.id}.</div>`,
+				`<div class="callout-box"><strong>✓ Answered by you:</strong> "${escapeHtml(answered)}" — sent to ${escapeHtml(task.roleTitle ?? task.role ?? "Lead")} #${displayId}.</div>`,
 			);
 		} else if (task.stuck) {
 			const choicesHtml = (task.stuck.choices ?? [])
@@ -429,6 +430,71 @@ export function renderCompactFilterBar(dataset: TasksRolesV8Dataset, state: Task
   `;
 }
 
+export function renderDepartmentStrip(dataset: TasksRolesV8Dataset, state: TasksRolesV8FilterState): string {
+	if (state.mode !== "normal" || (dataset.departments.length === 0 && dataset.idleDepartments.length === 0)) {
+		return "";
+	}
+
+	const allPressed = !state.deptFilter || state.deptFilter === "all";
+	const pillsHtml = dataset.departments
+		.map((dept) => {
+			const deptTasks = dataset.tasks.filter((t) => t.role === dept.id);
+			const heldTask = deptTasks.find((t) => {
+				const eff = effectiveTaskLifecycleStatus(t, state.answeredTasks);
+				return ["stuck", "blocked", "waiting", "asking"].includes(eff);
+			});
+			const topTask = heldTask ?? deptTasks[0];
+			const topStatus = topTask ? effectiveTaskLifecycleStatus(topTask, state.answeredTasks) : "working";
+			const deptTone = deptTasks.length > 0 ? statusToneForLifecycle(topStatus) : "done";
+			const isSelected = state.deptFilter === dept.id;
+			const monogram = (dept.title || dept.id).slice(0, 2).toUpperCase();
+			const chatBtn = dept.homeChat?.file
+				? `<button type="button" class="dept-strip-chat-btn open-chat-btn" data-chat-file="${escapeHtml(dept.homeChat.file)}" aria-label="Open ${escapeHtml(dept.title)} home chat" title="Open ${escapeHtml(dept.title)} home chat">↗</button>`
+				: "";
+
+			return `<div class="dept-strip-pill" data-dept-pill="${escapeHtml(dept.id)}" data-selected="${isSelected ? "true" : "false"}">
+        <button type="button" class="dept-strip-btn" data-dept-strip-id="${escapeHtml(dept.id)}" aria-pressed="${isSelected ? "true" : "false"}">
+          <span class="dept-strip-monogram" aria-hidden="true">${escapeHtml(monogram)}</span>
+          <span class="status-dot tone-${escapeHtml(deptTone)}" aria-hidden="true"></span>
+          <span class="dept-strip-title">${escapeHtml(dept.title)}</span>
+          <span class="dept-strip-lanes">${dept.inUse}/${dept.atOnce} · ${deptTasks.length}</span>
+        </button>
+        ${chatBtn}
+      </div>`;
+		})
+		.join("");
+
+	const idleCount = dataset.idleDepartments.length;
+	const idleToggleHtml =
+		idleCount > 0
+			? `<button type="button" class="chip-btn" id="toggle-idle-btn" aria-expanded="${state.idleExpanded ? "true" : "false"}" style="padding:3px 10px;">
+          ${state.idleExpanded ? `Hide ${idleCount} idle ▴` : `+${idleCount} idle depts ▾`}
+        </button>`
+			: "";
+
+	const idleListHtml =
+		state.idleExpanded && idleCount > 0
+			? `<div class="idle-list" style="width:100%; padding-top:6px; border-top:1px solid var(--border-subtle);">
+          ${dataset.idleDepartments
+						.map((d) => `<span class="dep-chip"><strong>${escapeHtml(d.title)}:</strong> ${escapeHtml(d.note)}</span>`)
+						.join("")}
+        </div>`
+			: "";
+
+	return `
+    <section class="dept-queues-strip" aria-label="Department queues">
+      <div class="dept-queues-strip-row">
+        <button type="button" class="dept-strip-all-btn dept-strip-btn" data-dept-strip-id="all" aria-pressed="${allPressed ? "true" : "false"}">
+          <span>All queues (${dataset.tasks.length})</span>
+        </button>
+        ${pillsHtml}
+        ${idleToggleHtml}
+      </div>
+      ${idleListHtml}
+    </section>
+  `;
+}
+
 export function renderUnifiedTaskCard(params: {
 	task: UiRoleTask;
 	ask?: Partial<UiTaskGroupRollup>;
@@ -436,6 +502,7 @@ export function renderUnifiedTaskCard(params: {
 	state: TasksRolesV8FilterState;
 }): string {
 	const { task, ask, dagNode, state } = params;
+	const displayId = task.displayId ?? task.id;
 	const effectiveStatus = effectiveTaskLifecycleStatus(task, state.answeredTasks);
 	const tone = statusToneForLifecycle(effectiveStatus);
 	const isTaskExpanded = Boolean(state.expandedTasks[task.id]);
@@ -460,9 +527,9 @@ export function renderUnifiedTaskCard(params: {
 	const tagDagButtonsHtml = taskTags
 		.map((tg, idx) => {
 			const isCurDag = state.activeTagDag === tg;
-			const seqToggleCls = tg === "mobile-redesign" && idx === 0 && task.id === 221 ? "seq-toggle-btn" : "";
+			const seqToggleCls = tg === "mobile-redesign" && idx === 0 && displayId === 221 ? "seq-toggle-btn" : "";
 			const askAliasAttr =
-				tg === "mobile-redesign" && idx === 0 && task.id === 221 ? `data-ask-id="tag:mobile-redesign"` : "";
+				tg === "mobile-redesign" && idx === 0 && displayId === 221 ? `data-ask-id="tag:mobile-redesign"` : "";
 			return `<button type="button" class="tag-dag-btn ${seqToggleCls}" data-open-tag-dag="${escapeHtml(tg)}" ${askAliasAttr} aria-pressed="${isCurDag ? "true" : "false"}" title="Open #${escapeHtml(tg)} implementation DAG & task states"><span>☍ #${escapeHtml(tg)} DAG</span></button>`;
 		})
 		.join("");
@@ -472,7 +539,7 @@ export function renderUnifiedTaskCard(params: {
 	const monogram = roleTitle.slice(0, 2).toUpperCase();
 
 	return `
-    <article class="unified-task-item task-row" data-task-id="${task.id}" data-status-tone="${escapeHtml(tone)}" data-task-expanded="${isTaskExpanded ? "true" : "false"}">
+    <article class="unified-task-item task-row" data-task-id="${task.id}" data-display-task-id="${displayId}" data-status-tone="${escapeHtml(tone)}" data-task-expanded="${isTaskExpanded ? "true" : "false"}">
       <div class="unified-task-line">
         <div class="task-card-top">
           <div class="task-card-heading">
@@ -481,7 +548,7 @@ export function renderUnifiedTaskCard(params: {
                 <span class="dept-monogram" aria-hidden="true">${escapeHtml(monogram)}</span>
                 <div class="dept-meta-stack">
                   <span class="dept-name-label">${escapeHtml(roleTitle)}</span>
-                  <span class="task-id-keycap">#${task.id}</span>
+                  <span class="task-id-keycap">#${displayId}</span>
                   <span class="app-well-pill">${escapeHtml(appLabel)}</span>
                 </div>
               </div>

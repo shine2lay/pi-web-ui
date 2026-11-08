@@ -138,12 +138,13 @@ function RolesV8Surface({ active, dialogs = [], onOpen, onAbout }: RolesExactVie
 
 		const ctrl = mountTasksRolesV8Surface(container, {
 			initialState: {
-				page: "roles",
+				page: "initiatives",
 				theme: detectInitialTheme(),
 				mode: initialAdapted.mode,
 			},
 			dataset: initialAdapted.dataset,
 			syncDocumentTheme: true,
+			showPrototypeChrome: useRefData,
 			exposeWindowGlobals: true,
 			onOpenChat: (chatFile) => {
 				const cur = current.current;

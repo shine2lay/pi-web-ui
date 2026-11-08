@@ -378,6 +378,8 @@ export type UiRoleTaskRawStatus =
 
 export interface UiRoleTask {
 	id: number;
+	displayId?: number;
+	taskKey?: string;
 	role?: string;
 	roleTitle?: string;
 	title: string;
@@ -974,9 +976,13 @@ export function deriveV8TaskFromLegacyTask(
 			: (nextSummary ?? (legacy.waitsOn ? `Resolve: ${legacy.waitsOn}` : undefined));
 
 	const { paused: rawPaused, ...restLegacy } = legacy;
+	const displayId = legacy.displayId ?? legacy.id;
+	const taskKey = legacy.taskKey ?? `${role}:${displayId}`;
 	return {
 		...restLegacy,
 		id: legacy.id,
+		displayId,
+		taskKey,
 		role,
 		roleTitle,
 		title: legacy.title,
@@ -1056,7 +1062,7 @@ export function deriveV8DatasetFromRolesOverview(overview: {
 					role: r,
 					roleTitle: rt?.roleTitle ?? r,
 					status: rt?.lifecycleStatus ?? "working",
-					summary: `#${rt?.id ?? 0}`,
+					summary: `#${rt?.displayId ?? rt?.id ?? 0}`,
 				};
 			}),
 			tasks: groupTasks,

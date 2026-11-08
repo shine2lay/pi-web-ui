@@ -2,6 +2,7 @@ import {
 	renderAttentionNoteBar,
 	renderCompactFilterBar,
 	renderDeliveryPipelineMeter,
+	renderDepartmentStrip,
 	renderStatusBadge,
 	renderTaskCallouts,
 	renderUnifiedTaskCard,
@@ -38,6 +39,7 @@ export {
 	renderCompactFilterBar,
 	renderDagBoard,
 	renderDeliveryPipelineMeter,
+	renderDepartmentStrip,
 	renderRolesBentoView,
 	renderStatusBadge,
 	renderSvgDonut,
@@ -56,8 +58,9 @@ export function renderViewRegion(params: {
 	dataset: TasksRolesV8Dataset;
 	state: TasksRolesV8FilterState;
 	activeDagBoards?: Map<string, TaskDagResult>;
+	showPrototypeChrome?: boolean;
 }): string {
-	const { dataset, state, activeDagBoards } = params;
+	const { dataset, state, activeDagBoards, showPrototypeChrome = true } = params;
 	if (state.mode === "loading") {
 		return `
       <div class="state-card" aria-busy="true" aria-live="polite">
@@ -82,7 +85,7 @@ export function renderViewRegion(params: {
       <div class="state-card">
         <h2 style="margin-top:0;">All queues are clear — 0 active or held tasks</h2>
         <p style="color:var(--text-secondary);">All 14 departments are idle and all recent code changes are deployed live.</p>
-        <button type="button" class="choice-btn" id="restore-normal-btn">Restore sample tasks</button>
+        ${showPrototypeChrome ? `<button type="button" class="choice-btn" id="restore-normal-btn">Restore sample tasks</button>` : ""}
       </div>
     `;
 	}
@@ -98,36 +101,26 @@ export function renderTasksRolesV8Shell(params: {
 	state: TasksRolesV8FilterState;
 	activeDagBoards?: Map<string, TaskDagResult>;
 	whyModalOpen?: boolean;
+	showPrototypeChrome?: boolean;
 }): string {
-	const { dataset, state, activeDagBoards, whyModalOpen = false } = params;
+	const { dataset, state, activeDagBoards, whyModalOpen = false, showPrototypeChrome = true } = params;
 	const activeDeptCount = dataset.departments.length;
 	const onYouCount = dataset.tasks.filter((t) => t.lifecycleStatus === "stuck").length;
 	const subtitleSummary = `${dataset.tasks.length} tasks across ${activeDeptCount} active departments · ${onYouCount} on you`;
 
-	return `
-    <div class="app-shell" data-tasks-roles-v8-theme="${escapeHtml(state.theme)}">
-      <header class="topbar" role="banner">
-        <div class="brand-group">
-          <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
-            <h1 class="brand-title" id="page-main-title">Tasks &amp; Roles</h1>
-            <span class="brand-subtitle">${escapeHtml(subtitleSummary)}</span>
-          </div>
-          <nav class="seg-group" aria-label="Primary views">
+	const primaryTabsHtml = showPrototypeChrome
+		? `<nav class="seg-group" aria-label="Primary views">
             <button type="button" class="seg-btn" id="tab-initiatives" aria-pressed="${state.page === "initiatives" ? "true" : "false"}">
               All Department Tasks
             </button>
             <button type="button" class="seg-btn" id="tab-roles" aria-pressed="${state.page === "roles" ? "true" : "false"}">
               Roles &amp; Queues
             </button>
-          </nav>
-        </div>
+          </nav>`
+		: "";
 
-        <div class="controls-right">
-          <span class="roles-live-pill" role="status">
-            <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"></circle></svg>
-            <span>Live · updated just now</span>
-          </span>
-          <div class="seg-group" role="group" aria-label="Prototype data mode">
+	const protoControlsHtml = showPrototypeChrome
+		? `<div class="seg-group" role="group" aria-label="Prototype data mode">
             <button type="button" class="seg-btn mode-btn" data-mode="normal" data-ui-mode="normal" aria-pressed="${state.mode === "normal" ? "true" : "false"}">Live (12 states)</button>
             <button type="button" class="seg-btn mode-btn" data-mode="loading" data-ui-mode="loading" aria-pressed="${state.mode === "loading" ? "true" : "false"}">Loading</button>
             <button type="button" class="seg-btn mode-btn" data-mode="empty" data-ui-mode="empty" aria-pressed="${state.mode === "empty" ? "true" : "false"}">Empty</button>
@@ -138,11 +131,30 @@ export function renderTasksRolesV8Shell(params: {
           </button>
           <button type="button" class="chip-btn" id="theme-toggle" aria-label="Switch color theme">
             Theme: <span id="theme-toggle-label">${state.theme === "dark" ? "Dark" : "Light"}</span>
-          </button>
+          </button>`
+		: "";
+
+	return `
+    <div class="app-shell" data-tasks-roles-v8-theme="${escapeHtml(state.theme)}">
+      <header class="topbar" role="banner">
+        <div class="brand-group">
+          <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
+            <h1 class="brand-title" id="page-main-title">Tasks &amp; Roles</h1>
+            <span class="brand-subtitle">${escapeHtml(subtitleSummary)}</span>
+          </div>
+          ${primaryTabsHtml}
+        </div>
+
+        <div class="controls-right">
+          <span class="roles-live-pill" role="status">
+            <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"></circle></svg>
+            <span>Live · updated just now</span>
+          </span>
+          ${protoControlsHtml}
         </div>
       </header>
 
-      ${renderWhyModal(whyModalOpen)}
+      ${showPrototypeChrome ? renderWhyModal(whyModalOpen) : ""}
 
       <main id="main-content">
         <section id="hero-region" aria-label="Attention summary">
@@ -152,7 +164,7 @@ export function renderTasksRolesV8Shell(params: {
           ${renderCompactFilterBar(dataset, state)}
         </section>
         <section id="view-region" aria-live="polite">
-          ${renderViewRegion({ dataset, state, activeDagBoards })}
+          ${renderViewRegion({ dataset, state, activeDagBoards, showPrototypeChrome })}
         </section>
       </main>
     </div>
@@ -164,6 +176,7 @@ export interface MountTasksRolesV8Options {
 	initialState?: Partial<TasksRolesV8FilterState>;
 	injectStyles?: boolean;
 	syncDocumentTheme?: boolean;
+	showPrototypeChrome?: boolean;
 	exposeWindowGlobals?: boolean;
 	onAnswerQuestion?: (taskId: number, choice: string) => void;
 	onOpenChat?: (chatFile: string) => void;
@@ -243,13 +256,21 @@ export function mountTasksRolesV8Surface(
 		}
 	}
 	let state = createInitialFilterState(urlInitPatch);
+	const showPrototypeChrome = options.showPrototypeChrome ?? true;
 	let whyModalOpen = false;
 	const activeDagBoards = new Map<string, TaskDagResult>();
 
 	function syncThemeAttributes(): void {
-		doc.documentElement.setAttribute("data-theme", state.theme);
-		if (options.syncDocumentTheme && state.scheme) {
-			doc.documentElement.setAttribute("data-scheme", state.scheme);
+		if (showPrototypeChrome) {
+			doc.documentElement.setAttribute("data-theme", state.theme);
+			if (options.syncDocumentTheme && state.scheme) {
+				doc.documentElement.setAttribute("data-scheme", state.scheme);
+			}
+		} else {
+			const hostTheme = doc.documentElement.getAttribute("data-theme");
+			if (hostTheme === "light" || hostTheme === "dark") {
+				state.theme = hostTheme;
+			}
 		}
 		const shell = container.querySelector<HTMLElement>(".app-shell");
 		if (shell) {
@@ -424,7 +445,7 @@ export function mountTasksRolesV8Surface(
 			state = { ...state, searchQuery: (e.target as HTMLInputElement).value || "" };
 			if (viewRegion) {
 				activeDagBoards.clear();
-				viewRegion.innerHTML = renderViewRegion({ dataset, state, activeDagBoards });
+				viewRegion.innerHTML = renderViewRegion({ dataset, state, activeDagBoards, showPrototypeChrome });
 				bindViewRegionEvents();
 				drawAllDagEdges(container, activeDagBoards);
 			}
@@ -448,6 +469,19 @@ export function mountTasksRolesV8Surface(
 	function bindViewRegionEvents(): void {
 		const viewRegion = container.querySelector<HTMLElement>("#view-region");
 		if (!viewRegion) return;
+
+		viewRegion.querySelectorAll<HTMLButtonElement>(".dept-strip-btn").forEach((btn) => {
+			btn.addEventListener("click", () => {
+				const clickedDept = btn.getAttribute("data-dept-strip-id") || "all";
+				const nextDept = clickedDept === "all" || state.deptFilter === clickedDept ? "all" : clickedDept;
+				state = {
+					...state,
+					deptFilter: nextDept,
+					openDropdown: null,
+				};
+				refresh();
+			});
+		});
 
 		viewRegion.querySelectorAll<HTMLButtonElement>("[data-open-tag-dag]").forEach((btn) => {
 			btn.addEventListener("click", () => {
@@ -631,6 +665,7 @@ export function mountTasksRolesV8Surface(
 			state,
 			activeDagBoards,
 			whyModalOpen,
+			showPrototypeChrome,
 		});
 		syncThemeAttributes();
 		bindDynamicEvents();

@@ -1,5 +1,6 @@
 import {
 	renderDeliveryPipelineMeter,
+	renderDepartmentStrip,
 	renderStatusBadge,
 	renderTaskCallouts,
 	renderUnifiedTaskCard,
@@ -41,15 +42,16 @@ export function renderTaskNode(dagNode: TaskDagNode, state: TasksRolesV8FilterSt
 	}
 	const pipelineMeter = renderDeliveryPipelineMeter(task, effectiveStatus);
 	const roleTitle = task.roleTitle ?? task.role ?? "Dept";
+	const displayId = task.displayId ?? task.id;
 
 	return `
-    <article class="dag-node-card task-row" data-task-id="${task.id}" data-dag-node="${task.id}" data-dag-stage="${stageIndex}" data-seq-step="${stepNum}" data-status-tone="${escapeHtml(tone)}" data-root-blocker-node="${isRootBlocker ? "true" : "false"}" data-task-expanded="${isTaskExpanded ? "true" : "false"}">
+    <article class="dag-node-card task-row" data-task-id="${task.id}" data-display-task-id="${displayId}" data-dag-node="${task.id}" data-dag-stage="${stageIndex}" data-seq-step="${stepNum}" data-status-tone="${escapeHtml(tone)}" data-root-blocker-node="${isRootBlocker ? "true" : "false"}" data-task-expanded="${isTaskExpanded ? "true" : "false"}">
       ${hasInPort ? `<span class="dag-port dag-port-in" aria-hidden="true"></span>` : ""}
       ${hasOutPort ? `<span class="dag-port dag-port-out" aria-hidden="true"></span>` : ""}
       <div class="task-main-line">
         <div class="task-id-title">
           ${rootBadge}
-          <span class="task-id">${escapeHtml(roleTitle)} #${task.id}</span>
+          <span class="task-id">${escapeHtml(roleTitle)} #${displayId}</span>
           <span>${escapeHtml(task.title)}</span>
         </div>
         <div class="ask-meta-row">
@@ -143,7 +145,7 @@ export function renderTagDagRegion(params: {
 		.filter(({ task, ask }) => (task.tags ?? ask.tags ?? []).includes(tagId))
 		.map(({ task }) => task);
 	const allTasksRaw = allTasksWithContext.map(({ task }) => task);
-	const byRef = new Map(allTasksRaw.map((t) => [`${t.role} #${t.id}`, t]));
+	const byRef = new Map(allTasksRaw.map((t) => [`${t.role} #${t.displayId ?? t.id}`, t]));
 	const tagTaskMap = new Map<number, UiRoleTask>();
 
 	for (const t of directTaggedTasks) {
@@ -207,7 +209,15 @@ export function renderTagDagRegion(params: {
             <span style="font-weight:700; color:var(--text-secondary);">Tag Implementation DAG &amp; Task States</span>
             <span>· #${escapeHtml(tagId)} (${fullTagTasks.length} tasks across ${stageCount} ${stageCount === 1 ? "stage" : "stages"} · ${dagPreview.edges.length} dependency ${dagPreview.edges.length === 1 ? "edge" : "edges"})</span>
           </div>
-          <h3 class="ask-title" style="margin:0; font-size:17px;">#${escapeHtml(tagId)} — ${escapeHtml(parentAsk.title ?? tagId)}</h3>
+          <h3 class="ask-title" style="margin:0; font-size:17px;">#${escapeHtml(tagId)} — ${escapeHtml(
+						parentAsk.title && parentAsk.title !== `#${tagId}` && parentAsk.title !== tagId
+							? parentAsk.title
+							: tagId
+									.split("-")
+									.filter(Boolean)
+									.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+									.join(" "),
+					)}</h3>
         </div>
         <div class="ask-meta-row" style="flex-shrink:0;">
           ${renderStatusBadge(parentAsk.rollupStatus, true)}
@@ -259,8 +269,11 @@ export function renderUnifiedTasksPanel(params: {
 
 	const matchingItems = allTasksWithContext.filter(({ task, ask }) => matchesTaskFilters(task, state, ask));
 
+	const deptStripHtml = renderDepartmentStrip(dataset, state);
+
 	if (matchingItems.length === 0) {
 		return `
+      ${deptStripHtml}
       <div class="state-card">
         <h2 style="margin-top:0;">No tasks match your current filter</h2>
         <p>Try clearing one of the selected department, state, or tag filters.</p>
@@ -294,6 +307,7 @@ export function renderUnifiedTasksPanel(params: {
 	const allDetailsOpen = sortedTasks.every((task) => Boolean(state.expandedTasks[task.id]));
 
 	return `
+    ${deptStripHtml}
     ${tagDagDrawerHtml}
     <section class="unified-tasks-panel" aria-label="All available tasks across all departments">
       <div class="unified-tasks-header">

@@ -1426,6 +1426,107 @@ html[data-theme="light"][data-scheme="graphite"],
   border: 1.5px solid var(--border-strong);
 }
 
+.dept-queues-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  box-shadow: var(--card-rim-shadow);
+}
+.dept-queues-strip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.dept-strip-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  background: var(--card-well-bg);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--keycap-shadow);
+  overflow: hidden;
+}
+.dept-strip-pill[data-selected="true"] {
+  background: var(--accent-soft-bg);
+  border-color: var(--accent-soft-border);
+}
+.dept-strip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 3px 9px 3px 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dept-strip-all-btn {
+  padding: 3px 11px;
+  border-radius: 8px;
+  background: var(--card-well-bg);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--keycap-shadow);
+}
+.dept-strip-btn[aria-pressed="true"] {
+  color: var(--accent-soft-text);
+}
+.dept-strip-all-btn[aria-pressed="true"] {
+  background: var(--accent-soft-bg);
+  border-color: var(--accent-soft-border);
+  color: var(--accent-soft-text);
+}
+.dept-strip-monogram {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+.dept-strip-title {
+  font-size: 14px;
+  font-weight: 650;
+}
+.dept-strip-lanes {
+  font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--text-muted);
+}
+.dept-strip-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  min-width: 30px;
+  padding: 0 7px;
+  border: none;
+  border-left: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+}
+.dept-strip-chat-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
 @media (max-width: 980px) {
   .dag-columns {
     grid-template-columns: 1fr !important;

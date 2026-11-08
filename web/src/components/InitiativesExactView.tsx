@@ -152,6 +152,7 @@ function InitiativesV8Surface(props: InitiativesExactViewProps) {
 			},
 			dataset: initialAdapted.dataset,
 			syncDocumentTheme: true,
+			showPrototypeChrome: useRefData,
 			exposeWindowGlobals: true,
 			onOpenChat: (chatFile) => {
 				const cur = current.current;

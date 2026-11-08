@@ -567,7 +567,7 @@ describe("Tasks & Roles v8 client module (Task #240)", () => {
 		container.querySelector<HTMLButtonElement>("#tab-roles")?.click();
 		const roleCards = container.querySelectorAll("[data-role-card]");
 		expect(roleCards.length).toBe(6);
-		expect(container.querySelectorAll(".pulse-ring-wrap svg").length).toBe(6);
+		expect(container.querySelectorAll("[data-role-card] .dept-monogram").length).toBe(6);
 		expect(container.querySelectorAll(".roles-lane-pills").length).toBe(6);
 
 		// Expand a department queue in Roles view
@@ -772,15 +772,15 @@ describe("Tasks & Roles v8 client module (Task #240)", () => {
 		const sorted = sortTasksByUrgency(shuffled);
 		expect(sorted.map((s) => s.lifecycleStatus)).toEqual([
 			"stuck",
-			"asking",
 			"blocked",
 			"waiting",
+			"asking",
+			"paused",
 			"deploying",
 			"landing",
-			"working",
 			"landed",
+			"working",
 			"queued",
-			"paused",
 			"live",
 			"done",
 		]);

@@ -455,7 +455,8 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 	const chatByTaskId = new Map<number, LiveChatTarget>();
 	const chatByRoleId = new Map<string, string>();
 	const tasksById = new Map<number, UiRoleTask>();
-	const seenRoleTaskKeys = new Set<string>();
+	const tasksByKey = new Map<string, UiRoleTask>();
+	let nextCollisionId = 100_001;
 
 	const departments: V8DepartmentSummary[] = [];
 	const idleCandidates: Array<{
@@ -478,54 +479,76 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 		contextProjectId?: string,
 		contextInitiativeId?: string,
 	): UiRoleTask | null => {
-		const dedupKey = `${roleId}:#${rawTask.id}`;
-		const existingTask = tasksById.get(rawTask.id);
-		if (seenRoleTaskKeys.has(dedupKey) && existingTask) {
-			const hasRicherInput =
-				Boolean(rawTask.lifecycleStatus && rawTask.lifecycleStatus !== existingTask.lifecycleStatus) ||
-				Boolean(rawTask.delivery && !existingTask.delivery) ||
-				Boolean(rawTask.pipelineStage !== undefined && existingTask.pipelineStage === undefined) ||
-				Boolean(
-					rawTask.tags && rawTask.tags.length > 0 && !(existingTask.tags ?? []).includes(cleanTagSlug(rawTask.tags[0])),
-				);
-			if (!hasRicherInput) {
-				return existingTask;
-			}
-		}
-		seenRoleTaskKeys.add(dedupKey);
+		const displayId = rawTask.id;
+		const taskKey = `${roleId}:${displayId}`;
+		const askLookupKey = `${roleId}:#${displayId}`;
+		const existingTask = tasksByKey.get(taskKey);
 
-		const roleTitle = shortRoleTitle(roleId, roleTitleRaw);
-		const title = rawTask.title || rawTask.text || `Task #${rawTask.id}`;
-		const lifecycleStatus = deriveLifecycleFromProtocolTask(rawTask, queueRunning);
+		let internalId: number;
+		if (existingTask) {
+			internalId = existingTask.id;
+		} else if (!tasksById.has(displayId)) {
+			internalId = displayId;
+		} else {
+			while (tasksById.has(nextCollisionId)) {
+				nextCollisionId++;
+			}
+			internalId = nextCollisionId++;
+		}
+
+		const roleTitle = shortRoleTitle(roleId, roleTitleRaw || existingTask?.roleTitle);
+		const rawTitle = rawTask.title || rawTask.text;
+		const title = rawTitle || existingTask?.title || `Task #${displayId}`;
+
+		const derivedLifecycle = deriveLifecycleFromProtocolTask(rawTask, queueRunning);
+		const lifecycleStatus: UiTaskLifecycleStatus = rawTask.lifecycleStatus
+			? rawTask.lifecycleStatus
+			: existingTask &&
+				  existingTask.lifecycleStatus !== "working" &&
+				  existingTask.lifecycleStatus !== "done" &&
+				  (derivedLifecycle === "working" || derivedLifecycle === "done")
+				? existingTask.lifecycleStatus
+				: existingTask &&
+					  (existingTask.lifecycleStatus === "live" || existingTask.lifecycleStatus === "landed") &&
+					  derivedLifecycle === "done"
+					? existingTask.lifecycleStatus
+					: derivedLifecycle;
 		const statusTone = rawTask.statusTone ?? statusToneForLifecycle(lifecycleStatus);
 
 		const explicitAppOrSystem = (rawTask as { appOrSystem?: string }).appOrSystem?.trim();
 		const explicitAppLabel = (rawTask as { appLabel?: string }).appLabel?.trim();
 
+		const rawTouches =
+			rawTask.touches && rawTask.touches.length > 0 ? rawTask.touches : (existingTask?.touches ?? undefined);
 		const normalizedTouches: UiNormalizedTouch[] =
 			rawTask.normalizedTouches && rawTask.normalizedTouches.length > 0
 				? rawTask.normalizedTouches
 				: explicitAppOrSystem
-					? normalizeTouches([explicitAppOrSystem, ...(rawTask.touches ?? [])])
-					: rawTask.touches && rawTask.touches.length > 0
-						? normalizeTouches(rawTask.touches)
-						: [];
+					? normalizeTouches([explicitAppOrSystem, ...(rawTouches ?? [])])
+					: rawTouches && rawTouches.length > 0
+						? normalizeTouches(rawTouches)
+						: (existingTask?.normalizedTouches ?? []);
 
 		const appOrSystem =
 			explicitAppOrSystem ??
 			normalizedTouches[0]?.appOrSystem ??
 			rawTask.delivery?.repo ??
 			rawTask.evidence?.repo ??
-			inferAppFromText(`${title} ${(rawTask.touches ?? []).join(" ")}`) ??
+			existingTask?.appOrSystem ??
+			inferAppFromText(`${title} ${(rawTouches ?? []).join(" ")}`) ??
 			"pi-web-ui";
-		const appLabel = explicitAppLabel ?? formatAppDisplayLabel(appOrSystem);
+		const appLabel = explicitAppLabel ?? existingTask?.appLabel ?? formatAppDisplayLabel(appOrSystem);
 
 		const parentProject =
-			rawTask.project ?? (rawTask.parent && "project" in rawTask.parent ? rawTask.parent.project : contextProjectId);
+			rawTask.project ??
+			(rawTask.parent && "project" in rawTask.parent ? rawTask.parent.project : contextProjectId) ??
+			existingTask?.project;
 		const parentInitiative =
 			rawTask.initiative ??
-			(rawTask.parent && "initiative" in rawTask.parent ? rawTask.parent.initiative : contextInitiativeId);
+			(rawTask.parent && "initiative" in rawTask.parent ? rawTask.parent.initiative : contextInitiativeId) ??
+			existingTask?.initiative;
 
+		const defaultFallbackTag = cleanTagSlug(appOrSystem) || "general";
 		const tagSet = new Set<string>();
 		for (const tg of rawTask.tags ?? []) {
 			const cleaned = cleanTagSlug(tg);
@@ -539,17 +562,34 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 			const cleaned = cleanTagSlug(parentInitiative);
 			if (cleaned) tagSet.add(cleaned);
 		}
+		for (const existingTag of existingTask?.tags ?? []) {
+			if (existingTag && existingTag !== "general" && existingTag !== defaultFallbackTag) {
+				tagSet.add(existingTag);
+			}
+		}
 		if (tagSet.size === 0) {
-			tagSet.add(cleanTagSlug(appOrSystem) || "general");
+			for (const existingTag of existingTask?.tags ?? []) {
+				if (existingTag) tagSet.add(existingTag);
+			}
+		}
+		if (tagSet.size === 0) {
+			tagSet.add(defaultFallbackTag);
 		}
 		const tags = Array.from(tagSet);
 
-		const matchingAsk = asksByRoleAndTaskKey.get(dedupKey) ?? asksByTaskId.get(rawTask.id);
-		const chatFile = rawTask.chat?.file ?? matchingAsk?.chat?.file ?? homeChat?.file;
+		const fallbackAskById = asksByTaskId.get(displayId);
+		const matchingAsk =
+			asksByRoleAndTaskKey.get(askLookupKey) ??
+			(fallbackAskById && (!fallbackAskById.role || fallbackAskById.role === roleId) ? fallbackAskById : undefined);
+		if (matchingAsk) {
+			asksByTaskId.set(internalId, matchingAsk);
+		}
+
+		const chatFile = rawTask.chat?.file ?? existingTask?.chat?.file ?? matchingAsk?.chat?.file ?? homeChat?.file;
 		if (chatFile) {
-			chatByTaskId.set(rawTask.id, {
+			chatByTaskId.set(internalId, {
 				file: chatFile,
-				focus: { kind: "task", id: String(rawTask.id) },
+				focus: { kind: "task", id: String(displayId) },
 				...(rawTask.latest?.ts ? { jumpAt: rawTask.latest.ts } : {}),
 			});
 		}
@@ -568,14 +608,21 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 							at: rawTask.latest.ts,
 							age: formatRelativeAge(rawTask.latest.ts, now),
 						}
-					: undefined);
+					: existingTask?.latestTldr);
 
-		const blocked = mapProtocolBlocked(rawTask, now);
-		const wait = mapProtocolWait(rawTask, now);
-		const queuedDetail = mapProtocolQueued(rawTask, roleId);
-		const delivery = mapProtocolDelivery(rawTask, appOrSystem, now);
+		const newBlocked = mapProtocolBlocked(rawTask, now);
+		const blocked = newBlocked ?? existingTask?.blocked;
+		const newWait = mapProtocolWait(rawTask, now);
+		const wait = newWait ?? existingTask?.wait;
+		const newQueuedDetail = mapProtocolQueued(rawTask, roleId);
+		const queuedDetail = newQueuedDetail ?? existingTask?.queuedDetail;
+		const newDelivery = mapProtocolDelivery(rawTask, appOrSystem, now);
+		const delivery =
+			newDelivery && existingTask?.delivery
+				? { ...existingTask.delivery, ...newDelivery }
+				: (newDelivery ?? existingTask?.delivery);
 
-		const dependsOnRefs =
+		const rawDeps =
 			rawTask.dependsOnRefs && rawTask.dependsOnRefs.length > 0
 				? [...rawTask.dependsOnRefs]
 				: blocked?.on && blocked.on.length > 0
@@ -583,11 +630,13 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 					: rawTask.after && rawTask.after.length > 0
 						? rawTask.after.map((id) => (typeof id === "number" ? `${roleId} #${id}` : String(id)))
 						: [];
+		const dependsOnRefs = rawDeps.length > 0 ? rawDeps : (existingTask?.dependsOnRefs ?? []);
 
 		const askFallbackChoices = (matchingAsk as { choices?: readonly string[] } | undefined)?.choices;
 		const questionText =
 			rawTask.stuck?.question ??
 			rawTask.question ??
+			existingTask?.stuck?.question ??
 			matchingAsk?.text ??
 			(rawTask.next && rawTask.next.kind === "answer" ? rawTask.next.what : undefined);
 		const choices =
@@ -595,23 +644,33 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 				? [...rawTask.stuck.choices]
 				: rawTask.choices && rawTask.choices.length > 0
 					? [...rawTask.choices]
-					: askFallbackChoices && askFallbackChoices.length > 0
-						? [...askFallbackChoices]
-						: questionText
-							? ["Answer question"]
-							: [];
+					: existingTask?.stuck?.choices && existingTask.stuck.choices.length > 0
+						? [...existingTask.stuck.choices]
+						: askFallbackChoices && askFallbackChoices.length > 0
+							? [...askFallbackChoices]
+							: questionText
+								? ["Answer question"]
+								: [];
 
-		const rawStuckAge = (rawTask.stuck as { age?: string } | undefined)?.age;
+		const rawStuckAge = (rawTask.stuck as { age?: string } | undefined)?.age ?? existingTask?.stuck?.age;
 		const stuck =
-			lifecycleStatus === "stuck" && (questionText || matchingAsk || rawTask.stuck)
+			lifecycleStatus === "stuck" && (questionText || matchingAsk || rawTask.stuck || existingTask?.stuck)
 				? {
 						question: questionText ?? matchingAsk?.text ?? title,
 						age:
 							rawStuckAge ?? formatRelativeAge(rawTask.stuck?.sinceAt ?? matchingAsk?.since ?? rawTask.latest?.ts, now),
 						...(choices.length > 0 ? { choices } : {}),
-						...(rawTask.stuck?.needsOwner ? { needsOwner: rawTask.stuck.needsOwner } : {}),
-						...(rawTask.stuck?.sinceAt ? { sinceAt: rawTask.stuck.sinceAt } : {}),
-						tier: rawTask.stuck?.tier ?? ("owner" as const),
+						...(rawTask.stuck?.needsOwner
+							? { needsOwner: rawTask.stuck.needsOwner }
+							: existingTask?.stuck?.needsOwner
+								? { needsOwner: existingTask.stuck.needsOwner }
+								: {}),
+						...(rawTask.stuck?.sinceAt
+							? { sinceAt: rawTask.stuck.sinceAt }
+							: existingTask?.stuck?.sinceAt
+								? { sinceAt: existingTask.stuck.sinceAt }
+								: {}),
+						tier: rawTask.stuck?.tier ?? existingTask?.stuck?.tier ?? ("owner" as const),
 					}
 				: undefined;
 
@@ -622,67 +681,83 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 				? {
 						leadRole:
 							rawAskingLead?.leadRole ??
+							existingTask?.askingLead?.leadRole ??
 							(rawTask.withLead
 								? `${shortRoleTitle(rawTask.withLead, rawTask.withLead)} Lead`
 								: rawTask.askLead
 									? `${shortRoleTitle(rawTask.askLead, rawTask.askLead)} Lead`
 									: `${roleTitle} Lead`),
-						question: rawAskingLead?.question ?? questionText ?? latestTldr?.text ?? title,
-						age: rawAskingLead?.age ?? formatRelativeAge(rawTask.progress?.at ?? rawTask.latest?.ts, now),
+						question:
+							rawAskingLead?.question ??
+							existingTask?.askingLead?.question ??
+							questionText ??
+							latestTldr?.text ??
+							title,
+						age:
+							rawAskingLead?.age ??
+							existingTask?.askingLead?.age ??
+							formatRelativeAge(rawTask.progress?.at ?? rawTask.latest?.ts, now),
 					}
 				: undefined;
 
-		if (lifecycleStatus === "stuck" && !asksByTaskId.has(rawTask.id) && chatFile) {
-			asksByTaskId.set(rawTask.id, {
-				key: `${roleId}:task:${rawTask.id}`,
+		if (lifecycleStatus === "stuck" && !asksByTaskId.has(internalId) && chatFile) {
+			asksByTaskId.set(internalId, {
+				key: `${roleId}:task:${displayId}`,
 				role: roleId,
 				kind: "task",
 				text: stuck?.question ?? title,
 				since: rawTask.latest?.ts ?? now,
-				focus: `task:${rawTask.id}`,
+				focus: `task:${displayId}`,
 				chat: {
 					file: chatFile,
-					where: rawTask.id,
+					where: displayId,
 				},
 			});
 		}
 
 		const howToUnblock =
 			rawTask.howToUnblock ??
+			existingTask?.howToUnblock ??
 			blocked?.howToUnblock ??
 			wait?.howToUnblock ??
 			(stuck
-				? `Answer ${roleTitle} #${rawTask.id} in Details ▸ (${choices[0] ?? "decision required"})`
+				? `Answer ${roleTitle} #${displayId} in Details ▸ (${choices[0] ?? "decision required"})`
 				: askingLead
-					? `${askingLead.leadRole}: reply on #${rawTask.id}`
+					? `${askingLead.leadRole}: reply on #${displayId}`
 					: queuedDetail
 						? queuedDetail.summary
 						: rawTask.waitsOn
 							? `Resolve: ${rawTask.waitsOn}`
 							: undefined);
 
-		const doneSummary = rawTask.doneSummary ?? rawTask.summary;
+		const doneSummary = rawTask.doneSummary ?? rawTask.summary ?? existingTask?.doneSummary;
 
 		const pausedReason =
 			rawTask.pausedReason ??
-			(typeof rawTask.paused === "object" && rawTask.paused !== null ? rawTask.paused.why : undefined);
+			(typeof rawTask.paused === "object" && rawTask.paused !== null ? rawTask.paused.why : undefined) ??
+			existingTask?.pausedReason;
+		const pipelineStage = rawTask.pipelineStage ?? existingTask?.pipelineStage;
+		const chatTitle = rawTask.chat?.title ?? existingTask?.chat?.title;
+
 		const adapted: UiRoleTask = {
-			id: rawTask.id,
+			id: internalId,
+			displayId,
+			taskKey,
 			role: roleId,
 			roleTitle,
 			title,
-			status: rawTask.status,
+			status: rawTask.status ?? existingTask?.status ?? "working",
 			lifecycleStatus,
 			statusTone,
-			paused: Boolean(rawTask.paused),
+			paused: Boolean(rawTask.paused) || Boolean(existingTask?.paused),
 			...(pausedReason ? { pausedReason } : {}),
-			...(rawTask.pipelineStage !== undefined ? { pipelineStage: rawTask.pipelineStage } : {}),
+			...(pipelineStage !== undefined ? { pipelineStage } : {}),
 			...(parentProject ? { project: parentProject } : {}),
 			...(parentInitiative ? { initiative: parentInitiative } : {}),
 			appOrSystem,
 			appLabel,
 			tags,
-			...(rawTask.touches ? { touches: rawTask.touches } : {}),
+			...(rawTouches ? { touches: rawTouches } : {}),
 			normalizedTouches,
 			dependsOnRefs,
 			...(howToUnblock ? { howToUnblock } : {}),
@@ -698,15 +773,23 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 				? {
 						chat: {
 							file: chatFile,
-							...(rawTask.chat?.title ? { title: rawTask.chat.title } : {}),
+							...(chatTitle ? { title: chatTitle } : {}),
 						},
 					}
 				: {}),
-			createdAt: rawTask.createdAt ?? rawTask.startedAt ?? rawTask.latest?.ts ?? now,
-			updatedAt: rawTask.updatedAt ?? rawTask.finishedAt ?? rawTask.endedAt ?? rawTask.latest?.ts ?? now,
+			createdAt:
+				rawTask.createdAt ?? existingTask?.createdAt ?? rawTask.startedAt ?? rawTask.latest?.ts ?? now,
+			updatedAt:
+				rawTask.updatedAt ??
+				rawTask.finishedAt ??
+				rawTask.endedAt ??
+				existingTask?.updatedAt ??
+				rawTask.latest?.ts ??
+				now,
 		};
 
-		tasksById.set(rawTask.id, adapted);
+		tasksByKey.set(taskKey, adapted);
+		tasksById.set(internalId, adapted);
 		return adapted;
 	};
 
@@ -818,6 +901,8 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 		const askSince = ask.since ?? (ask as { at?: number }).at ?? now;
 		const synthTask: UiRoleTask = {
 			id: synthId,
+			displayId: synthId,
+			taskKey: `${askRole}:${synthId}`,
 			role: askRole,
 			roleTitle,
 			title: ask.text,
@@ -842,6 +927,7 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 			createdAt: askSince,
 			updatedAt: askSince,
 		};
+		tasksByKey.set(`${askRole}:${synthId}`, synthTask);
 		tasksById.set(synthId, synthTask);
 		asksByTaskId.set(synthId, ask);
 		chatByTaskId.set(synthId, {
@@ -904,9 +990,10 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 		);
 	}
 
-	// 3b. Adapt InitiativesExactInput when provided
+	// 3b. Adapt InitiativesExactInput metadata; only adapt standalone tasks when no live overview/workPage tasks exist
 	if (input.exactInput) {
 		const exact = input.exactInput;
+		const shouldAdaptExactTasks = tasksByKey.size === 0 && !overview && !workPage;
 		let synthExactId = 8001;
 		for (const init of exact.initiatives ?? []) {
 			const slug = cleanTagSlug(init.id);
@@ -958,6 +1045,7 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 						initiative: init.id,
 					});
 				}
+				if (!shouldAdaptExactTasks) continue;
 				for (const t of proj.tasks ?? []) {
 					const roleId = t.roleId || cleanTagSlug(t.role ?? "workspace") || "workspace";
 					addAdaptedTask(
@@ -979,6 +1067,7 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 					);
 				}
 			}
+			if (!shouldAdaptExactTasks) continue;
 			for (const t of initAny.tasks ?? []) {
 				const roleId = t.roleId || cleanTagSlug(t.role ?? "workspace") || "workspace";
 				addAdaptedTask(
@@ -1090,7 +1179,7 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 					role: r,
 					roleTitle,
 					status: topTask?.lifecycleStatus ?? "working",
-					summary: topTask ? `#${topTask.id}` : roleTitle,
+					summary: topTask ? `#${topTask.displayId ?? topTask.id}` : roleTitle,
 				};
 			});
 

@@ -56,8 +56,8 @@ export interface DagBoxRect {
 	height: number;
 }
 
-function canonicalTaskRef(task: Pick<UiRoleTask, "id" | "role">): string {
-	return `${task.role ?? "workspace"} #${task.id}`;
+function canonicalTaskRef(task: Pick<UiRoleTask, "id" | "displayId" | "role">): string {
+	return `${task.role ?? "workspace"} #${task.displayId ?? task.id}`;
 }
 
 function normalizeDepRef(raw: string | number, fallbackRole: string): string {

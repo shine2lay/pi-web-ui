@@ -301,7 +301,7 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 		expect(v8Group?.title).toBe("Tasks & Roles v8 Rework");
 	});
 
-	it("mounts RolesExactView in live v8 mode (without fonts) and wires Escape + Open chat", async () => {
+	it("mounts RolesExactView in live v8 mode (without fonts), strips prototype demo chrome, and wires Escape + Open chat", async () => {
 		const container = document.createElement("div");
 		document.body.appendChild(container);
 		const root = createRoot(container);
@@ -319,24 +319,36 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 
 		const shell = container.querySelector(".app-shell");
 		expect(shell).not.toBeNull();
-		expect(container.querySelector("#tab-roles")?.getAttribute("aria-pressed")).toBe("true");
+		// Prototype demo chrome must be completely absent in live mode
+		expect(container.querySelector("#tab-roles")).toBeNull();
+		expect(container.querySelector("#tab-initiatives")).toBeNull();
+		expect(container.querySelector("[data-ui-mode]")).toBeNull();
+		expect(container.querySelector("#why-modal-btn")).toBeNull();
+		expect(container.querySelector("#why-modal")).toBeNull();
+		expect(container.querySelector("#theme-toggle")).toBeNull();
+		expect(container.querySelector("#restore-normal-btn")).toBeNull();
+
 		expect(container.querySelectorAll("details.filter-dd[data-filter-dropdown]").length).toBe(4);
 		expect(container.querySelector("#task-search-input")).not.toBeNull();
 
-		// Open #why-modal and verify Escape closes it via shortcut-stack
-		const whyBtn = container.querySelector<HTMLButtonElement>("#why-modal-btn");
-		expect(whyBtn).not.toBeNull();
+		// Open a filter dropdown and verify Escape closes it via shortcut-stack
+		const deptDetails = container.querySelector<HTMLDetailsElement>('details.filter-dd[data-filter-dropdown="dept"]');
+		expect(deptDetails).not.toBeNull();
 		await act(async () => {
-			whyBtn?.click();
+			if (deptDetails) {
+				deptDetails.open = true;
+				deptDetails.dispatchEvent(new Event("toggle"));
+			}
 		});
-		const whyModal = container.querySelector<HTMLElement>("#why-modal");
-		expect(whyModal?.hidden).toBe(false);
+		expect(deptDetails?.open).toBe(true);
 
 		await act(async () => {
 			const evt = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
 			window.dispatchEvent(evt);
 		});
-		expect(container.querySelector<HTMLElement>("#why-modal")?.hidden).toBe(true);
+		expect(
+			container.querySelector<HTMLDetailsElement>('details.filter-dd[data-filter-dropdown="dept"]')?.open,
+		).toBe(false);
 
 		await act(async () => {
 			root.unmount();
@@ -384,7 +396,13 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 			);
 		});
 
-		expect(container.querySelector("#tab-initiatives")?.getAttribute("aria-pressed")).toBe("true");
+		expect(container.querySelector("#tab-initiatives")).toBeNull();
+		expect(container.querySelector("#tab-roles")).toBeNull();
+		expect(container.querySelector("[data-ui-mode]")).toBeNull();
+		expect(container.querySelector("#why-modal-btn")).toBeNull();
+		expect(container.querySelector("#theme-toggle")).toBeNull();
+		expect(container.querySelector(".unified-tasks-panel")).not.toBeNull();
+
 		const dagPill = container.querySelector<HTMLButtonElement>('[data-open-tag-dag="roles-initiatives-v8"]');
 		expect(dagPill).not.toBeNull();
 		await act(async () => {
@@ -408,5 +426,52 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 		await act(async () => {
 			root.unmount();
 		});
+	});
+
+	it("preserves cross-department tasks that share the same numeric #id and skips synthetic 8001+ exactInput duplicates when live overview exists", () => {
+		const overview = sampleLiveOverview();
+		// Add a task #120 in frontend as well (colliding with backend #120)
+		const feRole = overview.roles.find((r) => r.id === "frontend")!;
+		feRole.queue?.active.push({
+			id: 120,
+			title: "Frontend task #120 (same number as Backend #120)",
+			status: "working",
+			lifecycleStatus: "working",
+			statusTone: "working",
+			tags: ["roles-initiatives-v8"],
+			touches: ["pi-web-ui"],
+			chat: { file: "/tmp/frontend-120.jsonl" },
+		});
+
+		const res = buildLiveTasksRolesV8Dataset({
+			overview,
+			workPage: sampleLiveWorkPage(),
+			exactInput: {
+				page: { state: "live" },
+				initiatives: [
+					{
+						id: "roles-initiatives-v8",
+						name: "Tasks & Roles v8 Rework",
+						goal: "Unified v8 Tasks & Roles surface",
+						roles: [
+							{
+								name: "design",
+								taskTitle: "Role row without task number that previously synthesized #8001",
+								kind: "working",
+							},
+						],
+					},
+				],
+			},
+			now: 1_762_560_000_000,
+		});
+
+		// Both backend #120 and frontend #120 exist without overwriting each other, and no synthetic 8001 task was created
+		expect(res.dataset.tasks.length).toBe(4);
+		const tasks120 = res.dataset.tasks.filter((t) => (t.displayId ?? t.id) === 120);
+		expect(tasks120.length).toBe(2);
+		expect(tasks120.map((t) => t.role).sort()).toEqual(["backend", "frontend"]);
+		expect(tasks120[0]!.id).not.toBe(tasks120[1]!.id);
+		expect(res.dataset.tasks.some((t) => (t.displayId ?? t.id) >= 8000)).toBe(false);
 	});
 });
