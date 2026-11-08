@@ -213,6 +213,24 @@ export interface SqliteWalEntryStore extends ExtensionSqliteEntryStore {
 	close(): void;
 }
 
+export interface DurableBridgeToolInfo {
+	name: string;
+	description: string;
+	parameters: unknown;
+	sourceInfo: Extension["sourceInfo"];
+}
+
+export interface DurableExtensionToolTarget {
+	getActiveToolNames(): string[];
+	getAllTools(): Array<{
+		name: string;
+		description?: string;
+		parameters?: unknown;
+		sourceInfo?: Extension["sourceInfo"];
+	}>;
+	setActiveToolsByName(toolNames: string[]): void;
+}
+
 export interface DurableExtensionBridgeOptions {
 	defaultSessionKey?: string;
 	cwd?: string;
@@ -221,6 +239,14 @@ export interface DurableExtensionBridgeOptions {
 	sourceSessionFile?: string;
 	entryStore?: ExtensionSqliteEntryStore;
 	sessionPort?: DurableSessionPort;
+	/** Optional session tool target (`AgentSession`-compatible) to delegate `getActiveTools`/`getAllTools`/`setActiveTools`. */
+	toolTarget?: DurableExtensionToolTarget;
+	/** Initial tool catalog when running without an external `toolTarget`. */
+	initialTools?: readonly (
+		string | { name: string; description?: string; parameters?: unknown; sourceInfo?: Extension["sourceInfo"] }
+	)[];
+	/** Initial active tool names when running without an external `toolTarget`. */
+	activeTools?: readonly string[];
 	/** Optional Pi `ExtensionRunner` or inline `ExtensionFactory` modules to bind. */
 	extensionRunner?: ExtensionRunner;
 	extensionFactories?: readonly ExtensionFactory[];
@@ -237,6 +263,9 @@ export interface DurableExtensionBridge extends ExtensionHookBridge {
 	getSessionManager(sessionKey?: string): DurableSessionManagerView;
 	bindExtensionFactories(factories: readonly ExtensionFactory[]): Promise<ExtensionRunner>;
 	getExtensionRunner(): ExtensionRunner | undefined;
+	getActiveTools(): string[];
+	getAllTools(): DurableBridgeToolInfo[];
+	setActiveTools(toolNames: string[]): void;
 
 	// High-level custom-entry helpers (backed by SQLite `appendEntry` + replay)
 	setIdentity(
@@ -930,6 +959,87 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 
 	let boundRunner: ExtensionRunner | undefined = options.extensionRunner;
 
+	const defaultToolSourceInfo: Extension["sourceInfo"] = {
+		path: "<durable-session>",
+		source: "local",
+		scope: "temporary",
+		origin: "top-level",
+	};
+	const registeredTools = new Map<string, DurableBridgeToolInfo>();
+	const activeToolSet = new Set<string>();
+	const hasExplicitInitialActive = Array.isArray(options.activeTools);
+
+	const registerBridgeTool = (
+		tool: { name: string; description?: string; parameters?: unknown },
+		sourceInfo: Extension["sourceInfo"] = defaultToolSourceInfo,
+		activate = true,
+	): void => {
+		if (!tool || typeof tool.name !== "string" || !tool.name) return;
+		registeredTools.set(tool.name, {
+			name: tool.name,
+			description: typeof tool.description === "string" ? tool.description : "",
+			parameters: tool.parameters ?? {},
+			sourceInfo,
+		});
+		if (activate) activeToolSet.add(tool.name);
+	};
+
+	for (const item of options.initialTools ?? []) {
+		if (typeof item === "string") {
+			registerBridgeTool({ name: item }, defaultToolSourceInfo, !hasExplicitInitialActive);
+		} else if (item && typeof item.name === "string") {
+			registerBridgeTool(item, item.sourceInfo ?? defaultToolSourceInfo, !hasExplicitInitialActive);
+		}
+	}
+	for (const ext of options.extensions ?? []) {
+		for (const [, registered] of ext.tools) {
+			const def = registered.definition as { name: string; description?: string; parameters?: unknown };
+			registerBridgeTool(def, registered.sourceInfo ?? ext.sourceInfo, !hasExplicitInitialActive);
+		}
+	}
+	if (hasExplicitInitialActive) {
+		for (const name of options.activeTools!) {
+			if (!registeredTools.has(name)) {
+				registerBridgeTool({ name }, defaultToolSourceInfo, false);
+			}
+			activeToolSet.add(name);
+		}
+	}
+
+	const getSessionActiveTools = (): string[] => {
+		if (options.toolTarget) return [...options.toolTarget.getActiveToolNames()];
+		return [...activeToolSet];
+	};
+
+	const getSessionAllTools = (): DurableBridgeToolInfo[] => {
+		if (options.toolTarget) {
+			return options.toolTarget.getAllTools().map((t) => ({
+				name: t.name,
+				description: typeof t.description === "string" ? t.description : "",
+				parameters: t.parameters ?? {},
+				sourceInfo: t.sourceInfo ?? defaultToolSourceInfo,
+			}));
+		}
+		return [...registeredTools.values()].map((t) => ({ ...t }));
+	};
+
+	const setSessionActiveTools = (toolNames: string[], ensureRegistered = false): void => {
+		if (options.toolTarget) {
+			options.toolTarget.setActiveToolsByName([...toolNames]);
+			return;
+		}
+		activeToolSet.clear();
+		for (const name of toolNames) {
+			if (typeof name !== "string" || !name) continue;
+			if (ensureRegistered && !registeredTools.has(name)) {
+				registerBridgeTool({ name }, defaultToolSourceInfo, false);
+			}
+			if (registeredTools.size === 0 || registeredTools.has(name)) {
+				activeToolSet.add(name);
+			}
+		}
+	};
+
 	const resolveSessionKey = (sessionKey?: string): string => {
 		return sessionKey ?? boundSessionPort?.getSessionKey() ?? defaultSessionKey;
 	};
@@ -1484,11 +1594,12 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 						if (idx >= 0) current.splice(idx, 1);
 					};
 				},
-				registerTool(tool: { name: string }) {
+				registerTool(tool: { name: string; description?: string; parameters?: unknown }) {
 					ext.tools.set(tool.name, {
 						definition: tool as never,
 						sourceInfo: ext.sourceInfo,
 					});
+					registerBridgeTool(tool, ext.sourceInfo, !hasExplicitInitialActive);
 				},
 				registerCommand(name: string, cmdOptions: { handler: (...args: unknown[]) => unknown; description?: string }) {
 					ext.commands.set(name, {
@@ -1524,9 +1635,11 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 				},
 				setLabel() {},
 				exec: async () => ({ stdout: "", stderr: "", code: 0, killed: false }),
-				getActiveTools: () => [],
-				getAllTools: () => [],
-				setActiveTools() {},
+				getActiveTools: () => getSessionActiveTools(),
+				getAllTools: () => getSessionAllTools() as never,
+				setActiveTools(toolNames: string[]) {
+					setSessionActiveTools(toolNames);
+				},
 				getCommands: () => [],
 				getSettings: () => ({}),
 				setModel: async () => false,
@@ -1579,10 +1692,12 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 				setSessionName: () => {},
 				getSessionName: () => undefined,
 				setLabel: () => {},
-				getActiveTools: () => [],
-				getAllTools: () => [],
+				getActiveTools: () => getSessionActiveTools(),
+				getAllTools: () => getSessionAllTools() as never,
 				getSettings: () => ({}),
-				setActiveTools: () => {},
+				setActiveTools: (toolNames: string[]) => {
+					setSessionActiveTools(toolNames);
+				},
 				refreshTools: () => {},
 				getCommands: () => [],
 				setModel: async () => false,
@@ -1601,7 +1716,7 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 				getContextUsage: () => undefined,
 				compact: () => {},
 				getSystemPrompt: () => "",
-				getSystemPromptOptions: () => ({ cwd, selectedTools: [], forceSystemPrompt: "" }),
+				getSystemPromptOptions: () => ({ cwd, selectedTools: getSessionActiveTools(), forceSystemPrompt: "" }),
 			},
 		);
 
@@ -1618,6 +1733,9 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 		getSessionManager,
 		bindExtensionFactories,
 		getExtensionRunner: () => boundRunner,
+		getActiveTools: () => getSessionActiveTools(),
+		getAllTools: () => getSessionAllTools(),
+		setActiveTools: (toolNames: string[]) => setSessionActiveTools(toolNames, true),
 
 		on: <K extends ExtensionHookName>(hookName: K, handler: ExtensionHookHandlerMap[K]) =>
 			baseBridge.on(hookName, handler),

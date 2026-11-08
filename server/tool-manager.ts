@@ -260,13 +260,85 @@ export const WINDOWS_ONLY_TOOL_NAMES = ["powershell"] as const;
 export const TASK_CHAT_OFF_TOOL_NAMES = [
 	"queue_reply",
 	"queue_add",
+	"queue_control",
 	"work_project",
 	"work_initiative",
+	"roles_overview",
+	"board",
+	"scheduler_create",
+	"scheduler_list",
+	"scheduler_run",
+	"scheduler_history",
+	"scheduler_delete",
 	"decision_log",
 	"ask_user_question",
 	"source_check",
 	"acp_cache",
 ] as const;
+
+/** Worker-only queue tools stripped in Lead / non-worker chats (`!taskChat` / `!s.from`). */
+export const NON_TASK_CHAT_OFF_TOOL_NAMES = ["queue_done", "ask_lead", "queue_wait", "queue_blocked"] as const;
+
+/** Queue management tools stripped in the `coo` role's Lead / home chat (`coo` has no queue;
+ *  keeps `queue_reply`, `work_project`, `work_initiative`). */
+export const COO_OFF_TOOL_NAMES = ["queue_add", "queue_control"] as const;
+
+/** Temper run/workflow tools (`temper_*`) — active only for `TEMPER_ALLOWED_ROLES` when a role is set. */
+export const TEMPER_TOOL_NAMES = ["temper_workflows", "temper_start_run", "temper_run_status"] as const;
+
+export const TEMPER_ALLOWED_ROLES = ["temper", "ops", "qa", "coo"] as const;
+
+/** Coding and terminal tools (`claim_files`, `lsp`, `terminal_*`) — active for `CODING_ALLOWED_ROLES`
+ *  and unroled general chats; stripped from `NON_CODING_ROLES` (`coo`, `product`, `marketing`, `docs`). */
+export const CODING_ROLE_TOOL_NAMES = [
+	"claim_files",
+	"lsp",
+	"terminal_create",
+	"terminal_list",
+	"terminal_close",
+	"terminal_input",
+	"terminal_key",
+	"terminal_read",
+	"terminal_wait",
+] as const;
+
+export const CODING_ALLOWED_ROLES = [
+	"backend",
+	"frontend",
+	"ops",
+	"systems",
+	"temper",
+	"qa",
+	"security",
+	"data",
+	"rollcall",
+	"architecture",
+	"design",
+] as const;
+
+export const NON_CODING_ROLES = ["coo", "product", "marketing", "docs"] as const;
+
+const TEMPER_ALLOWED_ROLE_SET = new Set<string>(TEMPER_ALLOWED_ROLES);
+const CODING_ALLOWED_ROLE_SET = new Set<string>(CODING_ALLOWED_ROLES);
+const NON_CODING_ROLE_SET = new Set<string>(NON_CODING_ROLES);
+
+/** Returns the set of tool names stripped by role-specific gating for `role` (and `taskChat` mode).
+ *  Unroled general chats (`role` empty/null/undefined) have no role-specific tool restrictions. */
+export function getRoleOffToolNames(role?: string | null, taskChat = false): Set<string> {
+	const off = new Set<string>();
+	const r = typeof role === "string" ? role.trim().toLowerCase() : "";
+	if (!r) return off;
+	if (!taskChat && r === "coo") {
+		for (const name of COO_OFF_TOOL_NAMES) off.add(name);
+	}
+	if (!TEMPER_ALLOWED_ROLE_SET.has(r)) {
+		for (const name of TEMPER_TOOL_NAMES) off.add(name);
+	}
+	if (NON_CODING_ROLE_SET.has(r) || !CODING_ALLOWED_ROLE_SET.has(r)) {
+		for (const name of CODING_ROLE_TOOL_NAMES) off.add(name);
+	}
+	return off;
+}
 
 /** Pi tool exposures that wait for their owner to switch them on. Pi declares a "deferred" tool to
  *  the model only once a search activates it (Pi's tool search, or the MCP adapter's search mode:
@@ -392,6 +464,7 @@ export function applyAgentToolsGating(
 	preset?: string,
 	platform: NodeJS.Platform = process.platform,
 	taskChat = false,
+	role?: string | null,
 ): void {
 	try {
 		const off = new Set(disabled);
@@ -411,7 +484,12 @@ export function applyAgentToolsGating(
 			else if (allNames.includes(core)) names.add(core);
 		}
 		if (platform !== "win32") for (const name of WINDOWS_ONLY_TOOL_NAMES) names.delete(name);
-		if (taskChat) for (const name of TASK_CHAT_OFF_TOOL_NAMES) names.delete(name);
+		if (taskChat) {
+			for (const name of TASK_CHAT_OFF_TOOL_NAMES) names.delete(name);
+		} else {
+			for (const name of NON_TASK_CHAT_OFF_TOOL_NAMES) names.delete(name);
+		}
+		for (const name of getRoleOffToolNames(role, taskChat)) names.delete(name);
 		const filtered = filterToolsByPreset(names, preset);
 		session.setActiveToolsByName(filtered);
 		gatedSessions.add(session);
@@ -420,20 +498,33 @@ export function applyAgentToolsGating(
 	}
 }
 
-/** Takes TASK_CHAT_OFF_TOOL_NAMES out of the session's CURRENT active tools and changes nothing else.
+/** Takes TASK_CHAT_OFF_TOOL_NAMES (and role-off tools when `role` is given) out of the session's CURRENT
+ *  active tools and changes nothing else.
  *  For the moment a chat becomes a queued task's own chat (its "assigned" entry is appended after the
  *  session started). A full re-gate there named every registered tool again, which undid add-ons' own
  *  masks set at session start: pi-control-chrome hides its 41 browser tools until its skill loads, and
  *  task chats carried them all (about 40 KB of tool descriptions per request, Oct 17-18). Returns
  *  whether it changed the active set. */
 export function removeTaskChatTools(
-	session: Pick<ActiveToolSet, "getActiveToolNames" | "setActiveToolsByName">,
+	session: Pick<ActiveToolSet, "getActiveToolNames" | "setActiveToolsByName"> &
+		Partial<Pick<ActiveToolSet, "getAllTools">>,
+	role?: string | null,
 ): boolean {
 	try {
-		const off = new Set<string>(TASK_CHAT_OFF_TOOL_NAMES);
+		const off = new Set<string>([...TASK_CHAT_OFF_TOOL_NAMES, ...getRoleOffToolNames(role, true)]);
 		const active = session.getActiveToolNames();
 		const kept = active.filter((name) => !off.has(name));
-		if (kept.length === active.length) return false;
+		if (typeof session.getAllTools === "function") {
+			const registered = new Set(session.getAllTools().map((t) => t.name));
+			const present = new Set(kept);
+			for (const name of NON_TASK_CHAT_OFF_TOOL_NAMES) {
+				if (registered.has(name) && !off.has(name) && !present.has(name)) {
+					kept.push(name);
+					present.add(name);
+				}
+			}
+		}
+		if (kept.length === active.length && kept.every((name, idx) => name === active[idx])) return false;
 		session.setActiveToolsByName(kept);
 		return true;
 	} catch {

@@ -29,6 +29,14 @@ import {
 	normalizeDisabledAgentTools,
 	filterToolsByPreset,
 	TASK_CHAT_OFF_TOOL_NAMES,
+	NON_TASK_CHAT_OFF_TOOL_NAMES,
+	COO_OFF_TOOL_NAMES,
+	TEMPER_TOOL_NAMES,
+	TEMPER_ALLOWED_ROLES,
+	CODING_ROLE_TOOL_NAMES,
+	CODING_ALLOWED_ROLES,
+	NON_CODING_ROLES,
+	getRoleOffToolNames,
 	presetAllowsPluginTools,
 	presetHasQuestionnaire,
 	presetShowsSkillCatalog,
@@ -38,6 +46,10 @@ import {
 	SUBAGENT_TOOL_NAMES,
 	TERMINAL_TOOL_NAMES,
 } from "../../server/tool-manager.js";
+import { createDurableExtensionBridge } from "../../server/durable-extension-bridge.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /** 假 ActiveSet（只记录名字集合，不碰 SDK；getAllTools 与活跃集同源 = 初始全集）。 */
 function fakeSet(initial: string[] = []) {
@@ -227,13 +239,15 @@ describe("tool_manage 出入口", () => {
 		expect(lead.peek()).toContain("tldr");
 	});
 
-	it("a queued task's own chat leaves out every tool on the task-chat off list, and keeps the rest", () => {
+	it("a queued task's own chat leaves out every tool on the task-chat off list, and a Lead chat leaves out worker-only tools", () => {
 		const kept = [
 			"bash",
 			"read",
 			"tldr",
-			"queue_stuck",
 			"queue_done",
+			"ask_lead",
+			"queue_wait",
+			"queue_blocked",
 			"message_role",
 			"web_search",
 			"fetch_content",
@@ -245,8 +259,12 @@ describe("tool_manage 出入口", () => {
 		for (const name of TASK_CHAT_OFF_TOOL_NAMES) expect(task.peek()).not.toContain(name);
 		for (const name of kept) expect(task.peek()).toContain(name);
 		const lead = fakeSet(all);
-		applyAgentToolsGating(lead, [], undefined, "linux");
-		for (const name of all) expect(lead.peek()).toContain(name);
+		applyAgentToolsGating(lead, [], undefined, "linux", false);
+		for (const name of TASK_CHAT_OFF_TOOL_NAMES) expect(lead.peek()).toContain(name);
+		for (const name of NON_TASK_CHAT_OFF_TOOL_NAMES) expect(lead.peek()).not.toContain(name);
+		for (const name of ["bash", "read", "tldr", "message_role", "web_search", "fetch_content", "acp_status"]) {
+			expect(lead.peek()).toContain(name);
+		}
 	});
 
 	it("turning a chat into a task's own chat removes only the off list and keeps an add-on's mask", () => {
@@ -267,6 +285,129 @@ describe("tool_manage 出入口", () => {
 		const quiet = { getActiveToolNames: () => ["bash", "read"], setActiveToolsByName: () => void calls++ };
 		expect(removeTaskChatTools(quiet)).toBe(false);
 		expect(calls).toBe(0);
+	});
+
+	it("enforces role-specific tool gating for coo, temper_*, and coding/terminal tools across roles and Lead/Worker modes", () => {
+		const fullCatalog = [
+			"bash",
+			"read",
+			"edit",
+			"write",
+			"queue_add",
+			"queue_reply",
+			"queue_control",
+			"work_project",
+			"work_initiative",
+			"queue_done",
+			"ask_lead",
+			"queue_wait",
+			"queue_blocked",
+			"roles_overview",
+			"board",
+			"scheduler_create",
+			"scheduler_list",
+			"scheduler_run",
+			"scheduler_history",
+			"scheduler_delete",
+			"temper_workflows",
+			"temper_start_run",
+			"temper_run_status",
+			...CODING_ROLE_TOOL_NAMES,
+		];
+
+		// 1. Unroled general chat (Lead mode): keeps temper_* and coding tools, strips Worker-only tools.
+		const unroled = fakeSet(fullCatalog);
+		applyAgentToolsGating(unroled, [], undefined, "linux", false, undefined);
+		for (const t of [...TEMPER_TOOL_NAMES, ...CODING_ROLE_TOOL_NAMES, "queue_add", "queue_control", "queue_reply"]) {
+			expect(unroled.peek()).toContain(t);
+		}
+		for (const t of NON_TASK_CHAT_OFF_TOOL_NAMES) {
+			expect(unroled.peek()).not.toContain(t);
+		}
+
+		// 2. COO home chat (Lead mode, role="coo"): strips COO_OFF_TOOL_NAMES (queue_add, queue_control),
+		// strips NON_TASK_CHAT_OFF_TOOL_NAMES, strips CODING_ROLE_TOOL_NAMES, keeps queue_reply/work_*/temper_*/roles_overview/board.
+		const cooLead = fakeSet(fullCatalog);
+		applyAgentToolsGating(cooLead, [], undefined, "linux", false, "coo");
+		for (const t of [...COO_OFF_TOOL_NAMES, ...NON_TASK_CHAT_OFF_TOOL_NAMES, ...CODING_ROLE_TOOL_NAMES]) {
+			expect(cooLead.peek()).not.toContain(t);
+		}
+		for (const t of [
+			"queue_reply",
+			"work_project",
+			"work_initiative",
+			"roles_overview",
+			"board",
+			...TEMPER_TOOL_NAMES,
+		]) {
+			expect(cooLead.peek()).toContain(t);
+		}
+
+		// 3. temper_* tools: allowed ONLY for temper, ops, qa, coo; stripped from all other roles.
+		const allRoles = [...CODING_ALLOWED_ROLES, ...NON_CODING_ROLES];
+		for (const role of allRoles) {
+			const s = fakeSet(fullCatalog);
+			applyAgentToolsGating(s, [], undefined, "linux", false, role);
+			const shouldHaveTemper = (TEMPER_ALLOWED_ROLES as readonly string[]).includes(role);
+			for (const t of TEMPER_TOOL_NAMES) {
+				if (shouldHaveTemper) expect(s.peek()).toContain(t);
+				else expect(s.peek()).not.toContain(t);
+			}
+		}
+
+		// 4. Coding/terminal tools (claim_files, lsp, terminal_*): allowed for CODING_ALLOWED_ROLES, stripped for NON_CODING_ROLES.
+		for (const role of CODING_ALLOWED_ROLES) {
+			const s = fakeSet(fullCatalog);
+			applyAgentToolsGating(s, [], undefined, "linux", false, role);
+			for (const t of CODING_ROLE_TOOL_NAMES) {
+				expect(s.peek()).toContain(t);
+			}
+		}
+		for (const role of NON_CODING_ROLES) {
+			const s = fakeSet(fullCatalog);
+			applyAgentToolsGating(s, [], undefined, "linux", false, role);
+			for (const t of CODING_ROLE_TOOL_NAMES) {
+				expect(s.peek()).not.toContain(t);
+			}
+		}
+
+		// 5. Worker mode + non-coding role (e.g. product task chat): strips TASK_CHAT_OFF_TOOL_NAMES, temper_*, and coding tools; keeps Worker tools.
+		const productWorker = fakeSet(fullCatalog);
+		applyAgentToolsGating(productWorker, [], undefined, "linux", true, "product");
+		for (const t of [...TASK_CHAT_OFF_TOOL_NAMES, ...TEMPER_TOOL_NAMES, ...CODING_ROLE_TOOL_NAMES]) {
+			expect(productWorker.peek()).not.toContain(t);
+		}
+		for (const t of NON_TASK_CHAT_OFF_TOOL_NAMES) {
+			expect(productWorker.peek()).toContain(t);
+		}
+
+		// 6. Role switch on same session (e.g. /identity ops -> /identity marketing -> /identity clear) re-applies cleanly.
+		const dynamic = fakeSet(fullCatalog);
+		applyAgentToolsGating(dynamic, [], undefined, "linux", false, "ops");
+		expect(dynamic.peek()).toContain("temper_workflows");
+		expect(dynamic.peek()).toContain("claim_files");
+		applyAgentToolsGating(dynamic, [], undefined, "linux", false, "marketing");
+		expect(dynamic.peek()).not.toContain("temper_workflows");
+		expect(dynamic.peek()).not.toContain("claim_files");
+		expect(dynamic.peek()).toContain("queue_add");
+		applyAgentToolsGating(dynamic, [], undefined, "linux", false, null);
+		expect(dynamic.peek()).toContain("temper_workflows");
+		expect(dynamic.peek()).toContain("claim_files");
+		expect(getRoleOffToolNames(null)).toEqual(new Set());
+
+		// 7. Blank chat assigned to a queued task (removeTaskChatTools with role) strips TASK_CHAT_OFF_TOOL_NAMES + role-off tools,
+		// restores NON_TASK_CHAT_OFF_TOOL_NAMES, and preserves add-on masks (e.g. hidden browser_click).
+		const blankToTask = fakeSet([...fullCatalog, "browser_click"]);
+		applyAgentToolsGating(blankToTask, [], undefined, "linux", false, undefined);
+		blankToTask.setActiveToolsByName(blankToTask.peek().filter((n) => n !== "browser_click"));
+		expect(removeTaskChatTools(blankToTask, "docs")).toBe(true);
+		expect(blankToTask.peek()).not.toContain("browser_click");
+		for (const t of [...TASK_CHAT_OFF_TOOL_NAMES, ...TEMPER_TOOL_NAMES, ...CODING_ROLE_TOOL_NAMES]) {
+			expect(blankToTask.peek()).not.toContain(t);
+		}
+		for (const t of NON_TASK_CHAT_OFF_TOOL_NAMES) {
+			expect(blankToTask.peek()).toContain(t);
+		}
 	});
 
 	/** A session whose registry carries Pi tool exposures; `active` is the loadout before gating
@@ -364,5 +505,37 @@ describe("预设语义总表（见 tool-manager.ts 语义注释）", () => {
 		expect(isTerminalGuidanceOn([...TERMINAL_TOOL_NAMES], "reader")).toBe(false);
 		// 缺省 preset = 只看开关（旧语义不变）。
 		expect(isTerminalGuidanceOn([TERMINAL_TOOL_NAMES[0]])).toBe(true);
+	});
+});
+
+describe("durable-extension-bridge active tool delegation", () => {
+	it("delegates getActiveTools, getAllTools, and setActiveTools to the session toolTarget and extension factories", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "bridge-tools-"));
+		try {
+			const target = fakeSet(["bash", "read", "queue_add", "queue_done", "ask_lead"]);
+			const bridge = createDurableExtensionBridge({
+				cwd: dir,
+				dbDir: join(dir, "db"),
+				toolTarget: target,
+			});
+
+			let seenAll: string[] = [];
+			await bridge.bindExtensionFactories([
+				(pi) => {
+					pi.on("session_start", () => {
+						seenAll = pi.getAllTools().map((t) => t.name);
+						pi.setActiveTools(pi.getActiveTools().filter((t) => t !== "queue_done" && t !== "ask_lead"));
+					});
+				},
+			]);
+
+			expect(seenAll).toEqual(["bash", "read", "queue_add", "queue_done", "ask_lead"]);
+			expect(target.peek()).toEqual(["bash", "read", "queue_add"]);
+			expect(bridge.getActiveTools()).toEqual(["bash", "read", "queue_add"]);
+			bridge.setActiveTools(["bash", "queue_done"]);
+			expect(target.peek()).toEqual(["bash", "queue_done"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

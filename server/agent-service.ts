@@ -295,9 +295,11 @@ import {
 	ASK_USER_QUESTION_TOOL_NAME,
 	BROWSER_PAGE_TOOL_NAME,
 	effectiveDisabledAgentTools,
+	getRoleOffToolNames,
 	isAgentToolEnabled,
 	isTerminalGuidanceOn,
 	MARKERS_LIST_TOOL_NAME,
+	NON_TASK_CHAT_OFF_TOOL_NAMES,
 	PI_AGENT_PRESETS,
 	PI_PERMISSION_OPTIONS,
 	PRESENT_FILES_TOOL_NAME,
@@ -305,6 +307,7 @@ import {
 	presetHasQuestionnaire,
 	presetShowsSkillCatalog,
 	removeTaskChatTools,
+	TASK_CHAT_OFF_TOOL_NAMES,
 } from "./tool-manager.js";
 import { WebUIContext } from "./webui-context.js";
 import { ChatDialogs, chatUiContext, type DialogWatcher } from "./chat-dialogs.js";
@@ -7162,10 +7165,10 @@ export class ClientSession {
 				session.sessionManager.appendCustomEntry(e.customType, data);
 			}
 			// The "assigned" entry just made this a queued task's own chat: take the tools a task's chat
-			// doesn't get (TASK_CHAT_OFF_TOOL_NAMES) out before its first prompt. Only those: a full re-gate
-			// here named every tool again and undid masks add-ons set at session start (pi-control-chrome's
-			// 41 browser tools, hidden until its skill loads).
-			if (removeTaskChatTools(session)) {
+			// doesn't get (TASK_CHAT_OFF_TOOL_NAMES + role-off tools) out before its first prompt. Only those:
+			// a full re-gate here named every tool again and undid masks add-ons set at session start
+			// (pi-control-chrome's 41 browser tools, hidden until its skill loads).
+			if (removeTaskChatTools(session, this.sessionRoleId(session))) {
 				invalidateSessionStats(session);
 				this.cachedBaseTokens = null;
 				const shown = this.convs.get(this.activeId);
@@ -10243,6 +10246,7 @@ export class ClientSession {
 		if (this.disposed || session.isStreaming) return;
 		try {
 			await session.reload();
+			conv.identityCache = undefined;
 			this.applyRetryOverrides();
 			this.applyCompactionOverrides();
 			this.applyToolGating(session, conv.agentPreset);
@@ -12077,22 +12081,59 @@ export class ClientSession {
 		];
 	}
 
+	/** Resolve the current identity role id for `session` (from its Conversation cache/branch
+	 *  `identity` custom entry, falling back to `homeChat` matching). Returns `null`/`undefined`
+	 *  when the chat has no role (general owner chat). */
+	private sessionRoleId(session: AgentSession): string | null | undefined {
+		for (const conv of this.convs.values()) {
+			if (conv.session === session) {
+				const id = this.identityOf(conv)?.id;
+				if (id) return id;
+				break;
+			}
+		}
+		try {
+			const sm = session.sessionManager as {
+				getBranch?: () => Iterable<IdentityEntryLike>;
+				getEntries?: () => Iterable<IdentityEntryLike>;
+				getSessionFile?: () => string | null | undefined;
+			};
+			const entries =
+				typeof sm?.getBranch === "function"
+					? sm.getBranch()
+					: typeof sm?.getEntries === "function"
+						? sm.getEntries()
+						: [];
+			const onBranch = identityIdOnBranch(entries);
+			const file =
+				(typeof sm?.getSessionFile === "function" ? sm.getSessionFile() : undefined) ??
+				(session as { sessionFile?: string | null }).sessionFile ??
+				undefined;
+			return liveChatIdentityId(onBranch, file ?? undefined, identityRegistry().identities);
+		} catch {
+			return undefined;
+		}
+	}
+
 	/** 统一工具门控（tool_manage 唯一落点）：按 disabledAgentTools 把目录内工具
 	 *  逐个加回/剔除活跃集（工具仍留在注册表，重开可直接加回；live 生效无需
-	 *  reload）。支持按当前会话预设（preset）进行工具过滤。
+	 *  reload）。支持按当前会话预设（preset）、Lead/Worker 模式与角色（role）进行工具过滤。
 	 *  session.reload() 与新会话创建都会把 custom 工具加回活跃集，
 	 *  所以这两条路径之后都要重放本方法（见 reloadSession/创建处）。 */
 	private applyToolGating(session: AgentSession, preset?: string): void {
 		const targetPreset =
 			preset ?? this.presetOfSession(session) ?? this.settingsSvc.current.defaultAgentPreset ?? "standard";
+		const taskChat = isQueueTaskChatEntries(session.sessionManager.getEntries());
+		const role = this.sessionRoleId(session);
+		this.syncPluginTools(session, targetPreset, role, taskChat);
 		applyAgentToolsGating(
 			session,
 			effectiveDisabledAgentTools(this.settingsSvc.current),
 			targetPreset,
 			process.platform,
-			isQueueTaskChatEntries(session.sessionManager.getEntries()),
+			taskChat,
+			role,
 		);
-		this.syncPluginTools(session, targetPreset);
 		invalidateSessionStats(session);
 		this.cachedBaseTokens = null;
 		// SDK 的 setActiveToolsByName 只改 agent.state.tools，不派发任何事件——门控后
@@ -12256,9 +12297,18 @@ export class ClientSession {
 	 *  未知/已卸载插件的禁用条目保留但不影响现有工具）。
 	 *  预设是第二层门控（见 tool-manager.ts 语义总表）：非 standard 预设下插件工具
 	 *  一律不可用（读写未知，保守处理），此时返回空表，调用方负责从会话移除。 */
-	private enabledPluginToolDefs(preset?: string, callerContext?: () => PluginToolCallerContext): ToolDefinition[] {
+	private enabledPluginToolDefs(
+		preset?: string,
+		callerContext?: () => PluginToolCallerContext,
+		role?: string | null,
+		taskChat = false,
+	): ToolDefinition[] {
 		if (!presetAllowsPluginTools(preset)) return [];
-		const off = new Set(normalizeDisabledPluginTools(this.settingsSvc.current.disabledPluginTools));
+		const off = new Set<string>([
+			...normalizeDisabledPluginTools(this.settingsSvc.current.disabledPluginTools),
+			...(taskChat ? TASK_CHAT_OFF_TOOL_NAMES : NON_TASK_CHAT_OFF_TOOL_NAMES),
+			...getRoleOffToolNames(role, taskChat),
+		]);
 		return (this.pluginToolsProvider?.() ?? [])
 			.filter((t) => !off.has(t.name))
 			.map((t) => pluginToolToDefinition(t, callerContext));
@@ -12268,7 +12318,7 @@ export class ClientSession {
 	 *  实际 diff 逻辑在 plugins.ts 的 syncPluginToolsIntoSession（可单测）。
 	 *  模板白名单的子代理（subagentBarsPluginTools）跳过：工厂期就没注册，这里
 	 *  不回补，否则白名单等于没关门。 */
-	private syncPluginTools(session: AgentSession, preset?: string): void {
+	private syncPluginTools(session: AgentSession, preset?: string, role?: string | null, taskChat?: boolean): void {
 		let targetPreset = preset;
 		let convId: string | undefined;
 		let convCwd: string | undefined;
@@ -12283,8 +12333,13 @@ export class ClientSession {
 		const ownerId = convId ?? meta?.ownerId;
 		const fallbackCwd = convCwd ?? meta?.cwd;
 		try {
-			const defs = this.enabledPluginToolDefs(targetPreset, () =>
-				this.pluginToolCallerContext({ session }, ownerId, fallbackCwd),
+			const resolvedTaskChat = taskChat ?? isQueueTaskChatEntries(session.sessionManager.getEntries());
+			const resolvedRole = role !== undefined ? role : this.sessionRoleId(session);
+			const defs = this.enabledPluginToolDefs(
+				targetPreset,
+				() => this.pluginToolCallerContext({ session }, ownerId, fallbackCwd),
+				resolvedRole,
+				resolvedTaskChat,
 			);
 			// 移除口径 = 已同步过的 ∪ 全量插件宇宙：创建时工厂直接注册进
 			// _customTools 的工具不在 applied 表里，首轮同步（defs 为空时）否则删不掉。
@@ -12297,7 +12352,9 @@ export class ClientSession {
 				defs as unknown as Parameters<typeof syncPluginToolsIntoSession>[1],
 				universe,
 			);
-			if (next) this.appliedPluginToolNames = new Set(next);
+			if (next) {
+				for (const name of next) this.appliedPluginToolNames.add(name);
+			}
 		} catch (err) {
 			console.error("[plugins] sync tools to session failed:", err);
 		}
@@ -12305,7 +12362,19 @@ export class ClientSession {
 
 	/** index.ts 经 pluginMgr.onAgentToolsChanged 触发：把插件 AI 工具推入全部会话。 */
 	refreshPluginTools(): void {
-		for (const conv of this.convs.values()) this.syncPluginTools(conv.session);
+		for (const conv of this.convs.values()) {
+			this.syncPluginTools(conv.session, conv.agentPreset);
+			const taskChat = isQueueTaskChatEntries(conv.session.sessionManager.getEntries());
+			const role = this.sessionRoleId(conv.session);
+			applyAgentToolsGating(
+				conv.session,
+				effectiveDisabledAgentTools(this.settingsSvc.current),
+				conv.agentPreset,
+				process.platform,
+				taskChat,
+				role,
+			);
+		}
 	}
 
 	private async applySettingsReload(): Promise<void> {
@@ -13202,6 +13271,10 @@ export class ClientSession {
 			}
 			if (coordinator && receipt.id) {
 				coordinator.markSettled({ sessionId: s.sessionId, idempotencyKey });
+			}
+			if (slash?.name === "identity") {
+				conv.identityCache = undefined;
+				this.applyToolGating(s, conv.agentPreset);
 			}
 			// optimistic-send: pi came back without calling preflightResult (a refusal would have thrown):
 			// it put the text off until the previous run has settled and calls it then, or refuses it
