@@ -210,6 +210,14 @@ export interface PluginConversationListItem {
 	isStreaming: boolean;
 }
 
+/** 插件 AI 工具执行时由宿主传入的调用方对话上下文。 */
+export interface PluginToolCallerContext {
+	conversationId?: string;
+	sessionFile?: string;
+	cwd?: string;
+	role?: string;
+}
+
 /**
  * 插件注册的 AI 工具（结构化定义，与 SDK ToolDefinition 解耦——由
  * agent-service 负责转换）。execute 返回 { content, details? }（content 为
@@ -228,12 +236,13 @@ export interface PluginAgentTool {
 	promptGuidelines?: string[];
 	/** 参数 JSON Schema（TypeBox/JSON Schema 兼容）。缺省为空对象。 */
 	parameters?: Record<string, unknown>;
-	/** 执行体；onUpdate 可流式上报部分结果（同形结构）。 */
+	/** 执行体；onUpdate 可流式上报部分结果（同形结构）；context 传入调用方会话信息。 */
 	execute(
 		toolCallId: string,
 		params: Record<string, unknown>,
 		signal?: AbortSignal,
 		onUpdate?: (partial: unknown) => void,
+		context?: PluginToolCallerContext,
 	): Promise<unknown>;
 }
 

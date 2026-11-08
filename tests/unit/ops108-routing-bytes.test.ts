@@ -41,7 +41,10 @@ describe("Ops108 baseline", () => {
 		// Re-pinned by script-notify-cli (Ops #783, Systems rm-e2634da5): it only adds PluginManager.agentToolOf (one
 		// plugin's registered agent tool by name, read-only, for the control socket's telegram_send); its diff removes
 		// no line; no Ops108 routing line changed. Was b89c7f63….
-		expect(sha("server/plugins.ts")).toBe("1b94c3fef18701bb9b60a8d0258779a4eb7da802ae5ac20bf189746579c22dc1");
+		// Re-pinned by scheduler-fold-wake (Ops #788, owner via COO rm-efb868f4): it only adds PluginToolCallerContext
+		// (conversationId, sessionFile, cwd, role) on PluginAgentTool.execute; no Ops108 routing line changed.
+		// Was 1b94c3fe….
+		expect(sha("server/plugins.ts")).toBe("f30f2f463eb6844086541a08bb2fe9e31819d303fa33bcf83a692ea0bc2e59ba");
 		// Re-pinned by owner-card-brief (Ops #682, owner via COO rm-d2c1f9b2): it only adds the display-only
 		// renderBrief and puts its lines first in renderAsk's message and short form; its diff removes only renderAsk's
 		// doc comment and the two joined part lists (now with the brief); no Ops108 routing line changed. Was 91637612….

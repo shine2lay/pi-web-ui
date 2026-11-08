@@ -80,7 +80,6 @@ const FACTORY_TOOLS: Record<string, string[]> = {
 	makeRolesOverviewTool: [ROLES_OVERVIEW_TOOL_NAME],
 	makePresentFilesTool: [PRESENT_FILES_TOOL_NAME],
 	makeSkillTool: [SKILL_TOOL_NAME],
-	makeScheduleTools: [SCHEDULE_TASK_TOOL_NAME, SCHEDULE_LIST_TOOL_NAME, SCHEDULE_CANCEL_TOOL_NAME],
 	makeEvalTool: [EVAL_TOOL_NAME],
 	makePatchTool: [PATCH_TOOL_NAME],
 	makeLspTool: [LSP_TOOL_NAME],
@@ -152,6 +151,7 @@ describe("注册→目录", () => {
 			"makeCompactContextTool",
 			"makeDecisionLogTool",
 			"makeInitiativeUpdateTool",
+			"makeScheduleTools",
 		]) {
 			expect(called.has(retiredFactory)).toBe(false);
 		}
@@ -161,6 +161,9 @@ describe("注册→目录", () => {
 			COMPACT_CONTEXT_TOOL_NAME,
 			DECISION_LOG_TOOL_NAME,
 			INITIATIVE_UPDATE_TOOL_NAME,
+			SCHEDULE_TASK_TOOL_NAME,
+			SCHEDULE_LIST_TOOL_NAME,
+			SCHEDULE_CANCEL_TOOL_NAME,
 		]) {
 			expect(known.has(retiredTool)).toBe(false);
 		}

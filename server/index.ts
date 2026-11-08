@@ -106,7 +106,7 @@ import { McpBridge } from "./mcp-bridge.js";
 import { createMcpHotReload } from "./mcp-hot-reload.js";
 import { createHostMetricsSampler } from "./host-metrics.js";
 import { startCgroupSplit } from "./cgroup-split.js";
-import { SchedulerStore } from "./scheduler-tasks.js";
+import { SchedulerStore, wakeScheduledChat, type SchedulerWakeService } from "./scheduler-tasks.js";
 import {
 	identityFilePath,
 	identityInfos,
@@ -1830,169 +1830,24 @@ const scheduler = new SchedulerStore(DATA_DIR, {
 	executor: async (task) => {
 		let result: { ok: boolean; conversationId?: string; error?: string };
 		try {
-			const svc = service as unknown as {
-				chatFromScheduler?: (t: {
-					id: string;
-					cwd: string;
-					prompt: string;
-					model?: string;
-					thinkingLevel?: string;
-				}) => Promise<{ ok: boolean; conversationId?: string; error?: string }>;
-				wakeConversation?: (
-					id: string,
-					text: string,
-					opts?: { sessionFile?: string; cwd?: string },
-				) => Promise<{
-					ok: boolean;
-					conversationId?: string;
-					sessionFile?: string;
-					clientId?: string;
-					busy?: boolean;
-					error?: string;
-				}>;
-				wakeClosedChat?: (
-					sessionFile: string,
-					text: string,
-				) => Promise<{ ok: boolean; conversationId?: string; sessionFile?: string; error?: string }>;
-				wakeViewportInCwd?: (
-					cwd: string,
-					text: string,
-				) => Promise<{
-					ok: boolean;
-					conversationId?: string;
-					sessionFile?: string;
-					clientId?: string;
-					busy?: boolean;
-					error?: string;
-				}>;
-				chatFileOf?: (ref: { conversationId?: string; sessionFile?: string; cwd?: string }) => string;
-				noteToPausedTaskChat?: (file: string, text: string) => Promise<{ ok: boolean; error?: string } | undefined>;
-			};
-			if (typeof svc.chatFromScheduler !== "function" && typeof svc.wakeConversation !== "function") {
-				result = { ok: false, error: "The current engine does not support scheduled tasks (standard pi engine only)" };
-			} else {
-				const runHeadless = (): Promise<{ ok: boolean; conversationId?: string; error?: string }> =>
-					svc.chatFromScheduler!({
-						id: task.id,
-						cwd: task.cwd,
-						prompt: task.prompt,
-						model: task.model,
-						thinkingLevel: task.thinkingLevel,
-					});
-				const target = String(task.conversationId ?? "").trim();
-				const taskFile = String((task as { sessionFile?: unknown }).sessionFile ?? "").trim();
-				const text = `[Scheduled task ${task.name}] ${task.prompt}`;
-				// queue-paused: its chat works on a queued task the owner paused: the wake-up goes in without a
-				// turn (read once the pause is lifted), and never to another chat.
-				const quietFile =
-					(target || taskFile) && typeof svc.chatFileOf === "function"
-						? svc.chatFileOf({ conversationId: target, sessionFile: taskFile, cwd: task.cwd })
-						: "";
-				const quiet =
-					quietFile && typeof svc.noteToPausedTaskChat === "function"
-						? await svc.noteToPausedTaskChat(quietFile, text)
-						: undefined;
-				if (quiet) {
-					result = quiet.ok ? { ok: true } : { ok: false, error: quiet.error ?? "its task is paused by the owner" };
-				} else if (!target && !taskFile) {
-					// 面板建的任务：创建时就没绑对话，保持无头语义（不抢占用户视口）。
-					result = await runHeadless();
-				} else if (typeof svc.wakeConversation === "function") {
-					// 原绑定对话还在（含压缩/重启后按会话文件重认）→ steer 唤醒，报告落原对话。
-					let w: {
-						ok: boolean;
-						conversationId?: string;
-						sessionFile?: string;
-						busy?: boolean;
-						error?: string;
-					};
+			const w = await wakeScheduledChat(task, {
+				service: service as unknown as SchedulerWakeService,
+				allowHeadless: true,
+				onNotice: (level, message) => pushNoticeToAll(level, message, message),
+				onRebind: (patch) => {
+					if (task.oneShot) return;
 					try {
-						w = await svc.wakeConversation(target, text, { sessionFile: taskFile, cwd: task.cwd });
-					} catch (err) {
-						w = { ok: false, error: (err as Error).message };
+						scheduler.rebind(task.id, patch);
+					} catch {
+						// 重绑失败不影响本次已投递的唤醒
 					}
-					// wake-reopen: the chat isn't open (closed, or idle through a restart). As long as its
-					// transcript is there, reopen it and wake it there, instead of handing its wake-up to
-					// another chat of the project. (busy = it is open but compacting: no second copy.)
-					if (!w.ok && !w.busy && taskFile && typeof svc.wakeClosedChat === "function") {
-						let r: { ok: boolean; conversationId?: string; sessionFile?: string; error?: string };
-						try {
-							r = await svc.wakeClosedChat(taskFile, text);
-						} catch (err) {
-							r = { ok: false, error: (err as Error).message };
-						}
-						if (r.ok) {
-							pushNoticeToAll(
-								"info",
-								`Scheduled task "${task.name}": its chat wasn't open, so it was reopened and woken up there.`,
-								`Scheduled task "${task.name}": its chat wasn't open, so it was reopened and woken up there.`,
-							);
-							w = { ok: true, conversationId: r.conversationId, sessionFile: r.sessionFile };
-						}
-					}
-					if (w.ok) {
-						// 会话继承（issue #231）：压缩/重启后同文件对话换了新 id → 任务跟过去，
-						// 下次触发直达，不再误判 closed/gone。单次任务随后自删，免一次写盘。
-						if (!task.oneShot) {
-							try {
-								if (w.conversationId && w.conversationId !== target)
-									scheduler.rebind(task.id, { conversationId: w.conversationId });
-								if (w.sessionFile && w.sessionFile !== taskFile)
-									scheduler.rebind(task.id, { sessionFile: w.sessionFile });
-							} catch {
-								// 重绑失败不影响本次已投递的唤醒
-							}
-						}
-						result = { ok: true, conversationId: w.conversationId };
-					} else if (typeof svc.wakeViewportInCwd === "function") {
-						// 活跃视口兜底（issue #231）：原句柄断开（切走释放/过户改名/重启），
-						// 只要同项目还有用户正看着的对话，报告落那里 —— 不静默吞结果。
-						const fallbackText = `[Scheduled task ${task.name} | original chat gone, continued in this window] ${task.prompt}`;
-						let f: {
-							ok: boolean;
-							conversationId?: string;
-							sessionFile?: string;
-							busy?: boolean;
-							error?: string;
-						};
-						try {
-							f = await svc.wakeViewportInCwd(task.cwd, fallbackText);
-						} catch (err) {
-							f = { ok: false, error: (err as Error).message };
-						}
-						if (f.ok) {
-							if (!task.oneShot) {
-								try {
-									scheduler.rebind(task.id, {
-										conversationId: f.conversationId ?? "",
-										sessionFile: f.sessionFile ?? "",
-									});
-								} catch {
-									// 重绑失败不影响本次已投递的唤醒
-								}
-							}
-							pushNoticeToAll(
-								"info",
-								`Scheduled task "${task.name}" moved to the project's active conversation (was ${target || "unknown"}). The report lands in the current chat.`,
-								`Scheduled task "${task.name}" moved to the project's active conversation (was ${target || "unknown"}). The report lands in the current chat.`,
-							);
-							result = { ok: true, conversationId: f.conversationId };
-						} else {
-							// 降级可见性（issue #231）：必须无头时明确广播去向，不静默。
-							pushNoticeToAll(
-								"warning",
-								`Scheduled task "${task.name}" found no live conversation and runs headless; see its report in the background-tasks panel history.`,
-								`Scheduled task "${task.name}" found no live conversation and runs headless; see its report in the background-tasks panel history.`,
-							);
-							result = await runHeadless();
-						}
-					} else {
-						result = await runHeadless();
-					}
-				} else {
-					result = await runHeadless();
-				}
-			}
+				},
+			});
+			result = {
+				ok: w.ok,
+				...(w.conversationId ? { conversationId: w.conversationId } : {}),
+				...(w.error ? { error: w.error } : {}),
+			};
 		} catch (err) {
 			result = { ok: false, error: (err as Error).message };
 		}
@@ -4830,6 +4685,12 @@ const stopControl = startControlServer({
 			notice,
 			`control-telegram-${randomUUID()}`,
 		),
+	schedulerWake: (job) =>
+		wakeScheduledChat(job, {
+			service: service as unknown as SchedulerWakeService,
+			allowHeadless: false,
+			onNotice: (level, message) => pushNoticeToAll(level, message, message),
+		}),
 });
 
 /**

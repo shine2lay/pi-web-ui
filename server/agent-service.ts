@@ -221,6 +221,7 @@ import type {
 	PluginCommandDef,
 	PluginConversationSnapshot,
 	PluginRunEvent,
+	PluginToolCallerContext,
 	PluginToolEvent,
 } from "./plugins.js";
 import { syncPluginToolsIntoSession } from "./plugins.js";
@@ -451,7 +452,6 @@ import {
 	type CarriedRoleTurn,
 } from "./role-replies.js";
 import { makeSkillTool, type SkillToolHost } from "./skill-tool.js";
-import { makeScheduleTools, type ScheduleToolHost } from "./schedule-agent-tool.js";
 import { makePatchTool } from "./patch-tool.js";
 import { makeLspTool } from "./lsp-tool.js";
 import { sameSessionFile, type SchedulerStore } from "./scheduler-tasks.js";
@@ -1880,7 +1880,7 @@ export function extractShotImage(
  * 插件结构化工具 → SDK ToolDefinition。
  * execute 返回值宽容处理：{content,details} 原样收编；字符串/对象包成文本块。
  */
-function pluginToolToDefinition(tool: PluginAgentTool): ToolDefinition {
+function pluginToolToDefinition(tool: PluginAgentTool, callerContext?: () => PluginToolCallerContext): ToolDefinition {
 	const normalize = (
 		result: unknown,
 	): {
@@ -1917,6 +1917,7 @@ function pluginToolToDefinition(tool: PluginAgentTool): ToolDefinition {
 				params as Record<string, unknown>,
 				signal,
 				onUpdate ? (partial) => onUpdate(normalize(partial) as never) : undefined,
+				callerContext?.(),
 			);
 			return normalize(raw) as never;
 		},
@@ -4618,6 +4619,8 @@ export class ClientSession {
 	pluginStopBgTask: ((taskId: string) => boolean) | undefined = undefined;
 	/** 上一轮注入会话的插件工具名集合（用于检测注销/移除）。 */
 	private appliedPluginToolNames = new Set<string>();
+	/** 每个 SDK AgentSession 的插件调用归属（ownerId 与创建时 cwd），供 syncPluginTools 保持上下文。 */
+	private sessionPluginMeta = new WeakMap<AgentSession, { ownerId?: string; cwd?: string }>();
 
 	/** The active conversation (all session operations target it). */
 	private get conv(): Conversation {
@@ -5384,30 +5387,39 @@ export class ClientSession {
 		},
 	};
 
-	/** schedule_* 工具的数据宿主：全局调度存储＋创建时刻 live 的 cwd/活动对话。
-	 *  issue #231：同时快照 owner 对话的落盘会话文件（压缩/重启后稳定），触发时
-	 *  先按 sessionFile 认同一会话（内存对话 id 重启即失效，不可单独做持久键）。 */
-	private scheduleToolHost(): ScheduleToolHost {
-		return {
-			store: () => this.schedulerStore,
-			cwd: () => this.cwd,
-			activeConversationId: () => this.activeId,
-			conversationInfo: (id?: string) => {
-				try {
-					const target = (id ?? "").trim() ? this.convs.get((id ?? "").trim()) : this.convs.get(this.activeId);
-					if (!target) return undefined;
-					let sessionFile = "";
-					try {
-						sessionFile = String(target.session.sessionFile ?? "");
-					} catch {
-						sessionFile = "";
-					}
-					return { cwd: target.cwd ?? this.cwd, sessionFile };
-				} catch {
-					return undefined;
-				}
-			},
-		};
+	/** 插件 AI 工具执行时的调用方上下文（绑定发起对话的 conversationId、sessionFile、cwd 与 role）。 */
+	private pluginToolCallerContext(
+		anchor: { session?: AgentSession },
+		ownerId?: string,
+		fallbackCwd?: string,
+	): PluginToolCallerContext {
+		try {
+			const found = anchor.session ? this.findConversationHome?.(anchor.session) : undefined;
+			const host = found?.session ?? this;
+			const targetId = (found?.convId ?? ownerId ?? "").trim() || host.activeId;
+			const rawConv =
+				(targetId ? host.convs.get(targetId) : undefined) ??
+				(anchor.session ? [...host.convs.values()].find((c) => c.session === anchor.session) : undefined) ??
+				host.convs.get(host.activeId);
+			const conv = rawConv?.isSubagent && rawConv.parentId ? (host.convs.get(rawConv.parentId) ?? rawConv) : rawConv;
+			const conversationId = String(conv?.id ?? targetId ?? "").trim();
+			let sessionFile = "";
+			try {
+				sessionFile = String(conv?.session?.sessionFile ?? anchor.session?.sessionFile ?? "").trim();
+			} catch {
+				sessionFile = "";
+			}
+			const cwd = String(conv?.cwd ?? fallbackCwd ?? host.cwd ?? "").trim();
+			const role = conv ? host.identityOf(conv)?.id : undefined;
+			return {
+				...(conversationId ? { conversationId } : {}),
+				...(sessionFile ? { sessionFile } : {}),
+				...(cwd ? { cwd } : {}),
+				...(role ? { role } : {}),
+			};
+		} catch {
+			return {};
+		}
 	}
 
 	/** conversation_read 工具的数据宿主：读本客户端的 conversation 体系 +
@@ -6601,7 +6613,11 @@ export class ClientSession {
 					// 子代理模板带非空扩展白名单时不注入：插件/MCP 工具没有 SDK extensionKey
 					// 身份、无法参与白名单匹配，全放行等于白名单没关门，全收编才符合「只加载这些」。
 					// 空白名单 = 跟随主会话（插件工具照常进入子代理）。
-					...(apply && apply.enabledExtensions.length > 0 ? [] : this.enabledPluginToolDefs()),
+					...(apply && apply.enabledExtensions.length > 0
+						? []
+						: this.enabledPluginToolDefs(targetPreset, () =>
+								this.pluginToolCallerContext(bridgeAnchor, ownerId, effectiveCwd),
+							)),
 					// 第一方子代理工具（spawn/get_result/steer/list/stop）。子代理会话
 					// 也注册了它们，因此可自然嵌套派发。host 按 ownerId 包装：子代理的
 					// 父对话 = 真正调用 spawn 的那个会话（本 runtime 所属会话），而不是
@@ -6676,11 +6692,6 @@ export class ClientSession {
 					// 子代理会话同样注册（owner 即真正派发的父对话，读该会话 loader）。
 					// DSH 引擎无 customTool 注册面，不接。开关走统一工具 tab。
 					makeSkillTool(this.skillToolHost(ownerId), () => this.getLang()),
-					// 定时唤醒三件套（schedule_task/list/cancel，issue #193）：默认绑定
-					// 发起对话（ownerId，无则活动对话），到期 steer 语义唤醒它；子代理
-					// 会话同样注册（owner 即真正派发的父对话）。开关走统一工具 tab。
-					// DSH 引擎无 customTool 注册面，不接。
-					...makeScheduleTools(this.scheduleToolHost(), ownerId, () => this.getLang()),
 					// 持久代码求值沙箱（eval）：开关走统一工具 tab（ActiveSet 门控，默认关）。
 					// ownerId 绑定当前会话；DSH 引擎无 customTool 注册面，不接。
 					makeEvalTool({
@@ -6697,6 +6708,7 @@ export class ClientSession {
 			// 桥接工具归属锚点：SDK 会话对象在本 runtime 生命周期内稳定，过户只搬对话
 			// 不改它（见 ClientSession.findConversationHome）。
 			bridgeAnchor.session = created.session;
+			this.sessionPluginMeta.set(created.session, { ownerId, cwd: effectiveCwd });
 			// read / write / edit 三处覆盖在会话建好后注入（见 tool-overrides.ts）：SDK 的合并链是
 			// [...扩展工具, ...customTools] 后写赢 ⇒ 创建时塞进 customTools 会**恒定顶掉**第三方
 			// 扩展注册的同名工具（官方 docs/extensions.md 明写扩展可覆盖 read/write/edit）。
@@ -12244,10 +12256,12 @@ export class ClientSession {
 	 *  未知/已卸载插件的禁用条目保留但不影响现有工具）。
 	 *  预设是第二层门控（见 tool-manager.ts 语义总表）：非 standard 预设下插件工具
 	 *  一律不可用（读写未知，保守处理），此时返回空表，调用方负责从会话移除。 */
-	private enabledPluginToolDefs(preset?: string): ToolDefinition[] {
+	private enabledPluginToolDefs(preset?: string, callerContext?: () => PluginToolCallerContext): ToolDefinition[] {
 		if (!presetAllowsPluginTools(preset)) return [];
 		const off = new Set(normalizeDisabledPluginTools(this.settingsSvc.current.disabledPluginTools));
-		return (this.pluginToolsProvider?.() ?? []).filter((t) => !off.has(t.name)).map(pluginToolToDefinition);
+		return (this.pluginToolsProvider?.() ?? [])
+			.filter((t) => !off.has(t.name))
+			.map((t) => pluginToolToDefinition(t, callerContext));
 	}
 
 	/** 把插件 AI 工具同步进一个已存在的会话（新增/更新/移除；禁用工具同步移除）。
@@ -12256,13 +12270,22 @@ export class ClientSession {
 	 *  不回补，否则白名单等于没关门。 */
 	private syncPluginTools(session: AgentSession, preset?: string): void {
 		let targetPreset = preset;
+		let convId: string | undefined;
+		let convCwd: string | undefined;
 		for (const conv of this.convs.values()) {
 			if (conv.session !== session) continue;
 			if (conv.subagentBarsPluginTools) return;
 			targetPreset ??= conv.agentPreset;
+			convId ??= conv.id;
+			convCwd ??= conv.cwd;
 		}
+		const meta = this.sessionPluginMeta.get(session);
+		const ownerId = convId ?? meta?.ownerId;
+		const fallbackCwd = convCwd ?? meta?.cwd;
 		try {
-			const defs = this.enabledPluginToolDefs(targetPreset);
+			const defs = this.enabledPluginToolDefs(targetPreset, () =>
+				this.pluginToolCallerContext({ session }, ownerId, fallbackCwd),
+			);
 			// 移除口径 = 已同步过的 ∪ 全量插件宇宙：创建时工厂直接注册进
 			// _customTools 的工具不在 applied 表里，首轮同步（defs 为空时）否则删不掉。
 			const universe = new Set([

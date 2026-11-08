@@ -4,7 +4,8 @@
  * 时序不进单测，覆盖靠 tests/run-smoke 聚合里的协议冒烟。
  */
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,8 +14,11 @@ import {
 	describeIntervalMs,
 	normalizeSchedulerInput,
 	sameSessionFile,
+	wakeScheduledChat,
 	RESTART_CATCHUP_MS,
 } from "../../server/scheduler-tasks.js";
+import { ensureAppToken } from "../../server/app-token.js";
+import { controlPath, startControlServer } from "../../server/control-socket.js";
 
 const BASE = {
 	name: "每日巡检",
@@ -292,5 +296,122 @@ describe("SchedulerStore.start after a restart", () => {
 
 	it("a fire missed by a long outage is still skipped", async () => {
 		expect(await startAfter(60_000 + RESTART_CATCHUP_MS + 60_000)).toEqual([]);
+	});
+});
+
+describe("wakeScheduledChat and control socket scheduler_wake (Ops #788)", () => {
+	it("walks noteToPausedTaskChat -> wakeConversation -> wakeClosedChat -> wakeViewportInCwd and reports rebind", async () => {
+		const steps: string[] = [];
+		const rebound: Array<{ conversationId?: string; sessionFile?: string }> = [];
+		const res = await wakeScheduledChat(
+			{
+				id: "task-ioqfcf",
+				name: "Temper check",
+				prompt: "Check runs",
+				cwd: "/home/shinelay/temper-ai",
+				conversationId: "c-old",
+				sessionFile: "/tmp/c-old.jsonl",
+			},
+			{
+				service: {
+					chatFileOf: () => {
+						steps.push("chatFileOf");
+						return "/tmp/c-old.jsonl";
+					},
+					noteToPausedTaskChat: async () => {
+						steps.push("noteToPausedTaskChat");
+						return undefined;
+					},
+					wakeConversation: async () => {
+						steps.push("wakeConversation");
+						return { ok: false, error: "not open" };
+					},
+					wakeClosedChat: async () => {
+						steps.push("wakeClosedChat");
+						return { ok: true, conversationId: "c-reopened", sessionFile: "/tmp/c-old.jsonl" };
+					},
+					wakeViewportInCwd: async () => {
+						steps.push("wakeViewportInCwd");
+						return { ok: true, conversationId: "c-view" };
+					},
+				},
+				onRebind: (patch) => rebound.push(patch),
+			},
+		);
+		expect(res).toEqual({
+			ok: true,
+			action: "reopened_chat",
+			conversationId: "c-reopened",
+			sessionFile: "/tmp/c-old.jsonl",
+			summary: "reopened and woke conversation c-reopened",
+		});
+		expect(steps).toEqual(["chatFileOf", "noteToPausedTaskChat", "wakeConversation", "wakeClosedChat"]);
+		expect(rebound).toEqual([{ conversationId: "c-reopened" }]);
+	});
+
+	it("scheduler_wake over control socket requires app token and dispatches to schedulerWake", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "scheduler-wake-sock-"));
+		const token = ensureAppToken(dir);
+		const seen: unknown[] = [];
+		const service = { serviceStatus: () => ({}) as never, quiesce: () => {}, unquiesce: () => {} };
+		const stop = startControlServer({
+			service,
+			dataDir: dir,
+			port: 0,
+			appToken: token,
+			schedulerWake: async (job) => {
+				seen.push(job);
+				return {
+					ok: true,
+					action: "woke_conversation",
+					conversationId: job.conversationId ?? "c1",
+					sessionFile: job.sessionFile,
+					summary: `woke conversation ${job.conversationId ?? "c1"}`,
+				};
+			},
+		});
+		const ask = (sock: string, req: Record<string, unknown>): Promise<Record<string, unknown>> =>
+			new Promise((resolve, reject) => {
+				let buf = "";
+				const conn = createConnection(sock, () => conn.end(`${JSON.stringify(req)}\n`));
+				conn.setEncoding("utf8");
+				conn.on("data", (d) => (buf += d));
+				conn.on("end", () => resolve(JSON.parse(buf.trim())));
+				conn.on("error", reject);
+			});
+		try {
+			const sock = controlPath(dir, 0);
+			for (let i = 0; i < 200; i++) {
+				try {
+					statSync(sock);
+					break;
+				} catch {
+					await new Promise((r) => setTimeout(r, 15));
+				}
+			}
+			const job = {
+				id: "task-ioqfcf",
+				name: "Temper check",
+				prompt: "Check runs",
+				cwd: "/home/shinelay/temper-ai",
+				conversationId: "c1775645520029",
+				sessionFile: "/home/shinelay/.pi/agent/sessions/2026-10-08_c1775645520029.jsonl",
+			};
+			expect(await ask(sock, { cmd: "scheduler_wake", job })).toEqual({
+				ok: false,
+				error: "refused: only the scheduler daemon with the app token may wake chats (no app token)",
+			});
+			expect(await ask(sock, { cmd: "scheduler_wake", token, job })).toEqual({
+				ok: true,
+				action: "woke_conversation",
+				conversationId: "c1775645520029",
+				sessionFile: "/home/shinelay/.pi/agent/sessions/2026-10-08_c1775645520029.jsonl",
+				summary: "woke conversation c1775645520029",
+			});
+			expect(seen).toHaveLength(1);
+		} finally {
+			stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

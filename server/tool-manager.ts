@@ -118,7 +118,7 @@ export interface AgentToolEntry {
 	offHintKey?: string;
 }
 
-/** 可开关的 Agent 工具总目录（共 27 个）。核心内置工具 bash/read/edit/write 不进
+/** 可开关的 Agent 工具总目录（共 26 个）。核心内置工具 bash/read/edit/write 不进
  *  目录——目录条目 = OTHER_AGENT_TOOLS 自动渲染的设置行，而这四个在设置页
  *  「核心工具」区单独开关（见 SettingsModal 的 CORE_BUILTIN_TOOL_NAMES 区块），
  *  禁用名单同样接受它们（normalizeDisabledAgentTools）。 */
@@ -234,32 +234,6 @@ export const AGENT_TOOL_CATALOG: AgentToolEntry[] = [
 		dshVisible: false,
 		descKey: "evalEnabledDesc",
 		offHintKey: "evalOffHint",
-	},
-	// 定时/延时唤醒：默认开（不打开 AI 根本不知道能定时；60s 间隔底线＋面板可随时取消），
-	// DSH 引擎没有该 customTool（走 goal-rpc，无 customTool 注册面）。
-	{
-		name: SCHEDULE_TASK_TOOL_NAME,
-		group: "other",
-		defaultOn: true,
-		dshVisible: false,
-		descKey: "scheduleTaskEnabledDesc",
-		offHintKey: "scheduleTaskOffHint",
-	},
-	{
-		name: SCHEDULE_LIST_TOOL_NAME,
-		group: "other",
-		defaultOn: true,
-		dshVisible: false,
-		descKey: "scheduleTaskEnabledDesc",
-		offHintKey: "scheduleTaskOffHint",
-	},
-	{
-		name: SCHEDULE_CANCEL_TOOL_NAME,
-		group: "other",
-		defaultOn: true,
-		dshVisible: false,
-		descKey: "scheduleTaskEnabledDesc",
-		offHintKey: "scheduleTaskOffHint",
 	},
 ];
 

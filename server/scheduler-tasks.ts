@@ -566,3 +566,224 @@ export class SchedulerStore {
 		this.save();
 	}
 }
+
+export interface SchedulerWakeJob {
+	id?: string;
+	name: string;
+	prompt: string;
+	cwd: string;
+	conversationId?: string;
+	sessionFile?: string;
+	model?: string;
+	thinkingLevel?: string;
+}
+
+export interface SchedulerWakeService {
+	chatFromScheduler?: (opts: {
+		id: string;
+		cwd: string;
+		prompt: string;
+		model?: string;
+		thinkingLevel?: string;
+	}) => Promise<{ ok: boolean; conversationId?: string; error?: string }>;
+	wakeConversation?: (
+		conversationId: string,
+		text: string,
+		fallback?: { sessionFile?: string; cwd?: string },
+	) => Promise<{
+		ok: boolean;
+		busy?: boolean;
+		conversationId?: string;
+		sessionFile?: string;
+		error?: string;
+	}>;
+	wakeClosedChat?: (
+		sessionFile: string,
+		text: string,
+		opts?: { unlessWorking?: boolean },
+	) => Promise<{
+		ok: boolean;
+		busy?: boolean;
+		conversationId?: string;
+		sessionFile?: string;
+		error?: string;
+	}>;
+	wakeViewportInCwd?: (
+		cwd: string,
+		text: string,
+	) => Promise<{
+		ok: boolean;
+		conversationId?: string;
+		sessionFile?: string;
+		error?: string;
+	}>;
+	chatFileOf?: (ref: { conversationId?: string; sessionFile?: string; cwd?: string }) => string;
+	noteToPausedTaskChat?: (file: string, text: string) => Promise<{ ok: boolean; error?: string } | undefined>;
+}
+
+export interface SchedulerWakeResult {
+	ok: boolean;
+	action?: "paused_note" | "woke_conversation" | "reopened_chat" | "woke_viewport" | "headless";
+	conversationId?: string;
+	sessionFile?: string;
+	summary?: string;
+	error?: string;
+	retryable?: boolean;
+	noLiveConversation?: boolean;
+}
+
+/**
+ * Wake a bound conversation in pi-web-ui:
+ * noteToPausedTaskChat -> wakeConversation -> wakeClosedChat -> wakeViewportInCwd (and optional headless fallback).
+ */
+export async function wakeScheduledChat(
+	job: SchedulerWakeJob,
+	deps: {
+		service: SchedulerWakeService;
+		allowHeadless?: boolean;
+		onNotice?: (level: "info" | "warning", message: string) => void;
+		onRebind?: (patch: { conversationId?: string; sessionFile?: string }) => void;
+	},
+): Promise<SchedulerWakeResult> {
+	const svc = deps.service;
+	if (typeof svc.chatFromScheduler !== "function" && typeof svc.wakeConversation !== "function") {
+		return {
+			ok: false,
+			error: "The current engine does not support scheduled tasks (standard pi engine only)",
+		};
+	}
+	const target = String(job.conversationId ?? "").trim();
+	const taskFile = String(job.sessionFile ?? "").trim();
+	const text = `[Scheduled task ${job.name}] ${job.prompt}`;
+	const quietFile =
+		(target || taskFile) && typeof svc.chatFileOf === "function"
+			? svc.chatFileOf({ conversationId: target, sessionFile: taskFile, cwd: job.cwd })
+			: "";
+	const quiet =
+		quietFile && typeof svc.noteToPausedTaskChat === "function"
+			? await svc.noteToPausedTaskChat(quietFile, text)
+			: undefined;
+	if (quiet) {
+		return quiet.ok
+			? { ok: true, action: "paused_note", summary: `recorded note in paused task chat (${job.name})` }
+			: { ok: false, error: quiet.error ?? "its task is paused by the owner" };
+	}
+
+	const isQuiescedErr = (err?: string): boolean => Boolean(err && /quiesced|retry later/i.test(err));
+
+	if ((target || taskFile) && typeof svc.wakeConversation === "function") {
+		let w: {
+			ok: boolean;
+			conversationId?: string;
+			sessionFile?: string;
+			busy?: boolean;
+			error?: string;
+		};
+		try {
+			w = await svc.wakeConversation(target, text, { sessionFile: taskFile, cwd: job.cwd });
+		} catch (err) {
+			w = { ok: false, error: (err as Error).message };
+		}
+		if (isQuiescedErr(w.error)) {
+			return { ok: false, retryable: true, error: w.error };
+		}
+		let reopened = false;
+		if (!w.ok && !w.busy && taskFile && typeof svc.wakeClosedChat === "function") {
+			let r: { ok: boolean; conversationId?: string; sessionFile?: string; error?: string };
+			try {
+				r = await svc.wakeClosedChat(taskFile, text);
+			} catch (err) {
+				r = { ok: false, error: (err as Error).message };
+			}
+			if (isQuiescedErr(r.error)) {
+				return { ok: false, retryable: true, error: r.error };
+			}
+			if (r.ok) {
+				reopened = true;
+				deps.onNotice?.(
+					"info",
+					`Scheduled task "${job.name}": its chat wasn't open, so it was reopened and woken up there.`,
+				);
+				w = { ok: true, conversationId: r.conversationId, sessionFile: r.sessionFile ?? taskFile };
+			}
+		}
+		if (w.ok) {
+			const nextConv = w.conversationId && w.conversationId !== target ? w.conversationId : undefined;
+			const nextFile = w.sessionFile && w.sessionFile !== taskFile ? w.sessionFile : undefined;
+			if (nextConv || nextFile) {
+				deps.onRebind?.({
+					...(nextConv ? { conversationId: nextConv } : {}),
+					...(nextFile ? { sessionFile: nextFile } : {}),
+				});
+			}
+			return {
+				ok: true,
+				action: reopened ? "reopened_chat" : "woke_conversation",
+				conversationId: w.conversationId ?? (target || undefined),
+				sessionFile: w.sessionFile ?? (taskFile || undefined),
+				summary: reopened
+					? `reopened and woke conversation ${w.conversationId ?? taskFile}`
+					: `woke conversation ${w.conversationId ?? (target || taskFile)}`,
+			};
+		}
+		if (typeof svc.wakeViewportInCwd === "function") {
+			const fallbackText = `[Scheduled task ${job.name} | original chat gone, continued in this window] ${job.prompt}`;
+			let f: { ok: boolean; conversationId?: string; sessionFile?: string; error?: string };
+			try {
+				f = await svc.wakeViewportInCwd(job.cwd, fallbackText);
+			} catch (err) {
+				f = { ok: false, error: (err as Error).message };
+			}
+			if (isQuiescedErr(f.error)) {
+				return { ok: false, retryable: true, error: f.error };
+			}
+			if (f.ok) {
+				deps.onRebind?.({
+					conversationId: f.conversationId ?? "",
+					sessionFile: f.sessionFile ?? "",
+				});
+				deps.onNotice?.(
+					"info",
+					`Scheduled task "${job.name}" moved to the project's active conversation (was ${target || "unknown"}). The report lands in the current chat.`,
+				);
+				return {
+					ok: true,
+					action: "woke_viewport",
+					conversationId: f.conversationId,
+					sessionFile: f.sessionFile,
+					summary: `delivered to active project conversation ${f.conversationId ?? "current"}`,
+				};
+			}
+		}
+	}
+
+	if (deps.allowHeadless && typeof svc.chatFromScheduler === "function") {
+		if (target || taskFile) {
+			deps.onNotice?.(
+				"warning",
+				`Scheduled task "${job.name}" found no live conversation and runs headless; see its report in the background-tasks panel history.`,
+			);
+		}
+		const h = await svc.chatFromScheduler({
+			id: job.id ?? `wake-${Date.now()}`,
+			cwd: job.cwd,
+			prompt: job.prompt,
+			model: job.model,
+			thinkingLevel: job.thinkingLevel,
+		});
+		return h.ok
+			? {
+					ok: true,
+					action: "headless",
+					conversationId: h.conversationId,
+					summary: "ran in background as a new session",
+				}
+			: { ok: false, error: h.error };
+	}
+
+	return {
+		ok: false,
+		noLiveConversation: true,
+		error: `no live conversation found for ${target || taskFile || job.cwd}`,
+	};
+}

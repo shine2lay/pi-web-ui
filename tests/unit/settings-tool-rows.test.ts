@@ -14,7 +14,11 @@ import { describe, expect, it } from "vitest";
 import * as toolManager from "../../server/tool-manager.js";
 import {
 	AGENT_TOOL_CATALOG,
+	COMPACT_CONTEXT_TOOL_NAME,
 	MARKERS_LIST_TOOL_NAME,
+	SCHEDULE_CANCEL_TOOL_NAME,
+	SCHEDULE_LIST_TOOL_NAME,
+	SCHEDULE_TASK_TOOL_NAME,
 	SUBAGENT_TOOL_NAMES,
 	TERMINAL_TOOL_NAMES,
 } from "../../server/tool-manager.js";
@@ -45,6 +49,16 @@ describe("设置「工具」页覆盖率", () => {
 	it("OTHER_AGENT_TOOLS 无单工具例外，且已下线工具不再渲染设置行", () => {
 		expect(SETTINGS_SRC.includes("title={MARKERS_LIST_TOOL_NAME}")).toBe(false);
 		expect(SETTINGS_SRC.includes("title={COMPACT_CONTEXT_TOOL_NAME}")).toBe(false);
+		const known = new Set(AGENT_TOOL_CATALOG.map((t) => t.name));
+		for (const retired of [
+			MARKERS_LIST_TOOL_NAME,
+			COMPACT_CONTEXT_TOOL_NAME,
+			SCHEDULE_TASK_TOOL_NAME,
+			SCHEDULE_LIST_TOOL_NAME,
+			SCHEDULE_CANCEL_TOOL_NAME,
+		]) {
+			expect(known.has(retired)).toBe(false);
+		}
 		const defs = [...SETTINGS_SRC.matchAll(/OTHER_AGENT_TOOLS = AGENT_TOOL_CATALOG\.filter\((.*?)\);/gs)].map(
 			(m) => m[1],
 		);

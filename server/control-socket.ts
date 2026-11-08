@@ -52,6 +52,7 @@ import { checkOwnerTelegram, type OwnerTelegramNotice, type OwnerTelegramResult 
 import type { UiServiceInfo } from "./protocol.js";
 import type { RoleReportReceipt } from "./role-messages.js";
 import { parseRecoveryCommand } from "./decision-recovery.js";
+import type { SchedulerWakeJob, SchedulerWakeResult } from "./scheduler-tasks.js";
 
 /** 探测既有 socket 的超时：活实例对 connect 的响应是内核级的，300ms 足够。 */
 const CONTROL_PROBE_TIMEOUT_MS = 300;
@@ -121,6 +122,7 @@ export interface ControlCommand {
 		| "ci_alert"
 		| "script_notice"
 		| "telegram_send"
+		| "scheduler_wake"
 		| "decisions_backfill"
 		| "decisions_status"
 		| "decisions_read"
@@ -151,6 +153,8 @@ export interface ControlCommand {
 	from?: unknown;
 	url?: unknown;
 	linkLabel?: unknown;
+	/** scheduler-wake (Ops #788): wake job payload from pi-scheduler daemon; with token. */
+	job?: unknown;
 }
 
 export interface ControlStatus {
@@ -179,6 +183,13 @@ export interface ControlStatus {
 	/** owner-telegram (Ops #783): telegram_send's Telegram message ids; on a refusal, whether it may have gone out. */
 	messageIds?: number[];
 	maybeSent?: true;
+	/** scheduler-wake (Ops #788): wake outcome and rebound conversation/sessionFile. */
+	action?: string;
+	conversationId?: string;
+	sessionFile?: string;
+	summary?: string;
+	retryable?: boolean;
+	noLiveConversation?: boolean;
 	/** decision-records: decisions_backfill's progress, or decisions_status. */
 	decisions?: unknown;
 	/** progress-feed: feed_status, or what feed_catch_up sent. */
@@ -197,10 +208,12 @@ export function startControlServer(opts: {
 	/** owner-telegram (Ops #783): sends the owner one checked Telegram message (index.ts: the Telegram plugin's
 	 *  telegram_send tool); none = telegram_send is refused. */
 	ownerTelegram?: (notice: OwnerTelegramNotice) => Promise<OwnerTelegramResult>;
+	/** scheduler-wake (Ops #788): wakes a bound chat on behalf of the pi-scheduler daemon. */
+	schedulerWake?: (job: SchedulerWakeJob) => Promise<SchedulerWakeResult>;
 	/** How long a connection may sit idle with no answer pending (default CONTROL_IDLE_TIMEOUT_MS; tests shorten it). */
 	idleTimeoutMs?: number;
 }): () => void {
-	const { service, dataDir, port, appToken, ownerTelegram } = opts;
+	const { service, dataDir, port, appToken, ownerTelegram, schedulerWake } = opts;
 	const idleTimeoutMs = opts.idleTimeoutMs ?? CONTROL_IDLE_TIMEOUT_MS;
 	const path = controlPath(dataDir, port);
 	let server: Server;
@@ -344,6 +357,50 @@ export function startControlServer(opts: {
 		return { ok: false, error: res.error, ...(res.maybeSent ? { maybeSent: true as const } : {}) };
 	}
 
+	/** scheduler-wake (Ops #788): the pi-scheduler daemon wakes a bound chat in pi-web-ui (only with the app token). */
+	async function schedulerWakeCmd(req: ControlCommand): Promise<ControlStatus> {
+		if (!schedulerWake) return { ok: false, error: "scheduler wake isn't supported here" };
+		const why = appTokenRefusal(req.token);
+		if (why) {
+			console.warn(`[control] refused scheduler_wake: ${why}`);
+			return {
+				ok: false,
+				error: `refused: only the scheduler daemon with the app token may wake chats (${why})`,
+			};
+		}
+		const extra = Object.keys(req).filter((k) => !["cmd", "token", "job"].includes(k));
+		if (extra.length) {
+			return {
+				ok: false,
+				error: `scheduler_wake takes only cmd, token and job (not ${extra.slice(0, 5).join(", ")})`,
+			};
+		}
+		const rawJob = req.job;
+		if (!rawJob || typeof rawJob !== "object" || Array.isArray(rawJob)) {
+			return { ok: false, error: "scheduler_wake requires a job object" };
+		}
+		const j = rawJob as Record<string, unknown>;
+		const name = String(j.name ?? "").trim();
+		const prompt = String(j.prompt ?? j.target ?? "").trim();
+		const cwd = String(j.cwd ?? "").trim() || process.cwd();
+		const conversationId = String(j.conversationId ?? "").trim() || undefined;
+		const sessionFile = String(j.sessionFile ?? "").trim() || undefined;
+		if (!name) return { ok: false, error: "scheduler_wake job requires a name" };
+		if (!prompt) return { ok: false, error: "scheduler_wake job requires a prompt/target" };
+		try {
+			return await schedulerWake({
+				id: typeof j.id === "string" ? j.id.trim() : undefined,
+				name,
+				prompt,
+				cwd,
+				conversationId,
+				sessionFile,
+			});
+		} catch (err) {
+			return { ok: false, error: `scheduler_wake failed: ${(err as Error)?.message ?? String(err)}` };
+		}
+	}
+
 	function handleConnection(sock: Socket): void {
 		let buf = "";
 		// owner-telegram (Ops #783): an answer that takes a while (telegram_send) keeps the connection open; answers
@@ -414,6 +471,9 @@ export function startControlServer(opts: {
 						break;
 					case "telegram_send":
 						resp = telegramSend(req);
+						break;
+					case "scheduler_wake":
+						resp = schedulerWakeCmd(req);
 						break;
 					case "role_reports":
 						resp = service.roleReportReceipts
