@@ -366,7 +366,7 @@ const current = (s: State) =>
 
 export { normTags, resolveInheritedTags };
 
-const LAND_ID_RE = /^land-\d+-[0-9a-f]+$/i;
+const LAND_ID_RE = /^(?:land-)?\d+-[0-9a-f]+$/i;
 const COMMIT_SHA_RE = /^[0-9a-f]{7,40}$/i;
 const REPO_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
 
@@ -1387,32 +1387,6 @@ function emptyReplayState(queueId: string | undefined): State {
 	};
 }
 
-function applyTagsAndDeliveryOnly(s: State, entries: readonly TaskQueueEntryLike[]): State {
-	for (const e of entries) {
-		if (!isQueueEntry(e) || !e.data || typeof e.data !== "object") continue;
-		const op = e.data as Record<string, unknown>;
-		if (op.v !== 1 || !isId(op.id)) continue;
-		const task = s.tasks.find((t) => t.id === op.id);
-		if (!task) continue;
-		if (op.op === "add" || op.op === "assigned") {
-			const tags =
-				op.tags !== undefined
-					? normTags(op.tags)
-					: op.op === "add"
-						? resolveInheritedTags(undefined, task.origin?.inputs)
-						: undefined;
-			if (tags?.length) task.tags = tags;
-		} else if (op.op === "update" && op.tags !== undefined) {
-			const tags = normTags(op.tags);
-			if (tags?.length) task.tags = tags;
-			else delete task.tags;
-		} else if (op.op === "done" && task.status === "done" && !task.delivery) {
-			const delivery = deliveryOf(op.delivery ?? op);
-			if (delivery) task.delivery = delivery;
-		}
-	}
-	return s;
-}
 /** Whether a session entry is one of the queue's own changes. */
 function isQueueEntry(e: TaskQueueEntryLike | undefined): boolean {
 	return !!e && e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE;
@@ -1449,9 +1423,7 @@ function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | u
 		}
 		if (readers) {
 			try {
-				const out = deepFreeze(
-					applyTagsAndDeliveryOnly(stateOf(readers.replay(entries, queueId), queueId), entries),
-				);
+				const out = deepFreeze(stateOf(readers.replay(entries, queueId), queueId));
 				for (let i = start + kept; i < entries.length; i++) slot.prefix.push(entries[i]);
 				slot.out = out;
 				keepReplaySlot(key, slot, formerLast);
@@ -1478,9 +1450,7 @@ function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | u
 	noteRead(read, entries, start);
 	if (readers) {
 		try {
-			const out = deepFreeze(
-				applyTagsAndDeliveryOnly(stateOf(readers.replay(entries, queueId), queueId), entries),
-			);
+			const out = deepFreeze(stateOf(readers.replay(entries, queueId), queueId));
 			keepReplaySlot(key, { reader: readerFn, prefix: entries.slice(start), out });
 			countReplay(source, missed);
 			return out;

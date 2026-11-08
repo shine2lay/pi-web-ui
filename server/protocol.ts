@@ -2474,12 +2474,7 @@ export interface UiTaskGroupRollup {
 }
 
 export type TaskDepDeadlockReason =
-	| "target_not_found"
-	| "target_dropped"
-	| "target_paused"
-	| "queue_stopped"
-	| "target_stuck"
-	| "cycle_detected";
+	"target_not_found" | "target_dropped" | "target_paused" | "queue_stopped" | "target_stuck" | "cycle_detected";
 
 export interface UiResolvedTaskDep {
 	/** Verbatim reference string from `on` or `after` (e.g. "#12" or "backend #412"). */
@@ -2558,12 +2553,7 @@ export interface UiRoleTaskWait {
 	howToUnblock: string;
 }
 
-export type QueuedWaitReason =
-	| "ready"
-	| "after"
-	| "lane_busy"
-	| "slot_full"
-	| "queue_stopped";
+export type QueuedWaitReason = "ready" | "after" | "lane_busy" | "slot_full" | "queue_stopped";
 
 export interface UiRoleTaskQueuedDetail {
 	/** Deterministic reason why this queued task has not started yet. */

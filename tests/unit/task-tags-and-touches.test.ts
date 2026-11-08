@@ -18,11 +18,7 @@ import {
 	resolveInheritedTags,
 } from "../../server/shared/task-tags.js";
 import { normalizeTouch, normalizeTouches } from "../../server/shared/touch-normalizer.js";
-import {
-	TASK_QUEUE_ENTRY_TYPE,
-	taskQueueFromEntries,
-	type TaskQueueEntryLike,
-} from "../../server/task-queue.js";
+import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries, type TaskQueueEntryLike } from "../../server/task-queue.js";
 
 const CONFORMANCE_FIXTURES_PATH =
 	"/home/shinelay/architecture-dept/work/roles-initiatives-rework/conformance-fixtures.json";
@@ -57,9 +53,8 @@ const samplePlan = (title: string): UiTaskQueuePlan => ({
 	doneWhen: "All unit and conformance tests pass",
 	decided: "Approved contract v4",
 	steps: "1. Add validators\n2. Wire protocol & replay",
-	checkedBy: "vitest",
-	wontDo: "No web/ changes",
-	lead: "backend",
+	verify: "vitest",
+	mustNot: "No web/ changes",
 });
 
 const entry = (data: Record<string, unknown>): TaskQueueEntryLike => ({
@@ -111,39 +106,43 @@ describe("server/shared/task-tags", () => {
 					expect(inherited ?? []).toEqual(fixture.expectedStoredTags);
 
 					// Also verify taskQueueFromEntries replay of op="add" matches expectedStoredTags
-					const q = taskQueueFromEntries([
-						entry({
-							op: "add",
-							id: 1,
-							text: fixture.queueAddParams.title,
-							plan: samplePlan(fixture.queueAddParams.title),
-							origin: { v: 1, inputs: fixture.originInputs },
-							...(fixture.queueAddParams.tags !== undefined ? { tags: fixture.queueAddParams.tags } : {}),
-							ts: 1000,
-						}),
-					]);
+					const q = taskQueueFromEntries(
+						[
+							entry({
+								op: "add",
+								id: 1,
+								text: fixture.queueAddParams.title,
+								plan: samplePlan(fixture.queueAddParams.title),
+								origin: { v: 1, inputs: fixture.originInputs },
+								...(fixture.queueAddParams.tags !== undefined ? { tags: fixture.queueAddParams.tags } : {}),
+								ts: 1000,
+							}),
+						],
+						true,
+					);
 					expect(q.tasks[0]?.tags ?? []).toEqual(fixture.expectedStoredTags);
 				} else if (fixture.queueAddUpdateParams) {
-					const q = taskQueueFromEntries([
-						entry({
-							op: "add",
-							id: fixture.queueAddUpdateParams.id,
-							text: "Initial title",
-							plan: samplePlan("Initial title"),
-							tags: fixture.existingTaskTags,
-							ts: 1000,
-						}),
-						entry({
-							op: "update",
-							id: fixture.queueAddUpdateParams.id,
-							text: fixture.queueAddUpdateParams.title ?? "Initial title",
-							plan: samplePlan(fixture.queueAddUpdateParams.title ?? "Initial title"),
-							...(fixture.queueAddUpdateParams.tags !== undefined
-								? { tags: fixture.queueAddUpdateParams.tags }
-								: {}),
-							ts: 1001,
-						}),
-					]);
+					const q = taskQueueFromEntries(
+						[
+							entry({
+								op: "add",
+								id: fixture.queueAddUpdateParams.id,
+								text: "Initial title",
+								plan: samplePlan("Initial title"),
+								tags: fixture.existingTaskTags,
+								ts: 1000,
+							}),
+							entry({
+								op: "update",
+								id: fixture.queueAddUpdateParams.id,
+								text: fixture.queueAddUpdateParams.title ?? "Initial title",
+								plan: samplePlan(fixture.queueAddUpdateParams.title ?? "Initial title"),
+								...(fixture.queueAddUpdateParams.tags !== undefined ? { tags: fixture.queueAddUpdateParams.tags } : {}),
+								ts: 1001,
+							}),
+						],
+						true,
+					);
 					expect(q.tasks[0]?.tags ?? []).toEqual(fixture.expectedStoredTags);
 				}
 			});
@@ -220,9 +219,7 @@ describe("server/shared/touch-normalizer", () => {
 		});
 
 		expect(normalizeTouches(undefined)).toEqual([]);
-		expect(
-			normalizeTouches(["pi-web-ui repo", "  PI-WEB-UI   repo ", "", "pi-web-deploy"]),
-		).toEqual([
+		expect(normalizeTouches(["pi-web-ui repo", "  PI-WEB-UI   repo ", "", "pi-web-deploy"])).toEqual([
 			{
 				raw: "pi-web-ui repo",
 				appOrSystem: "pi-web-ui",
@@ -304,12 +301,19 @@ describe("role-messages and role-message-tool tags propagation", () => {
 
 	it("validates tags on send, inherits on reply when omitted, clears on reply with [], and formats roleMessageHeader", () => {
 		const { store } = makeStore();
-		const cooSender = { role: "coo", title: "COO", chat: "home chat", file: "/tmp/coo/main.jsonl" };
+		const cooSender = {
+			role: "coo",
+			title: "COO",
+			chat: "home chat",
+			file: "/tmp/coo/main.jsonl",
+			handling: 0,
+		};
 		const beSender = {
 			role: "backend",
 			title: "Backend engineering",
 			chat: "home chat",
 			file: "/tmp/backend/main.jsonl",
+			handling: 0,
 		};
 
 		const bad = store.send(cooSender, {
@@ -339,22 +343,12 @@ describe("role-messages and role-message-tool tags propagation", () => {
 		expect(starterOf({ role: "user", text: `${header}\n\nBuild B1a` })).toEqual({ kind: "role" });
 
 		// Reply with tags omitted -> inherits original's tags
-		const replyInherited = store.send(
-			beSender,
-			{
-				to: "coo",
-				kind: "reply",
-				replyTo: sent.record.id,
-				text: "Queued as backend #118",
-			},
-			{
-				causality: {
-					kind: "record",
-					record: sent.record,
-					exactTarget: true,
-				},
-			},
-		);
+		const replyInherited = store.send(beSender, {
+			to: "coo",
+			kind: "reply",
+			replyTo: sent.record.id,
+			text: "Queued as backend #118",
+		});
 		expect(replyInherited.ok).toBe(true);
 		if (replyInherited.ok) {
 			expect(replyInherited.record.tags).toEqual(["roles-rework", "track-b1"]);
@@ -370,23 +364,13 @@ describe("role-messages and role-message-tool tags propagation", () => {
 		expect(sent2.ok).toBe(true);
 		if (!sent2.ok) return;
 
-		const replyCleared = store.send(
-			beSender,
-			{
-				to: "coo",
-				kind: "reply",
-				replyTo: sent2.record.id,
-				text: "Done",
-				tags: [],
-			},
-			{
-				causality: {
-					kind: "record",
-					record: sent2.record,
-					exactTarget: true,
-				},
-			},
-		);
+		const replyCleared = store.send(beSender, {
+			to: "coo",
+			kind: "reply",
+			replyTo: sent2.record.id,
+			text: "Done",
+			tags: [],
+		});
 		expect(replyCleared.ok).toBe(true);
 		if (replyCleared.ok) {
 			expect(replyCleared.record.tags).toBeUndefined();
@@ -427,75 +411,78 @@ describe("role-messages and role-message-tool tags propagation", () => {
 
 describe("server/task-queue replay of tags and delivery", () => {
 	it("replays explicit and inherited tags on add, updates/clears tags on update, and replays delivery on done", () => {
-		const q = taskQueueFromEntries([
-			entry({
-				op: "add",
-				id: 1,
-				text: "Explicit tags task",
-				plan: samplePlan("Explicit tags task"),
-				origin: {
-					v: 1,
-					inputs: [{ kind: "role", role: "coo", id: "rm-11112222", message: "request", tags: ["from-origin"] }],
-				},
-				tags: ["Explicit-Tag", "second-tag"],
-				ts: 1000,
-			}),
-			entry({
-				op: "add",
-				id: 2,
-				text: "Inherited tags task",
-				plan: samplePlan("Inherited tags task"),
-				origin: {
-					v: 1,
-					inputs: [
-						{
-							kind: "role",
-							role: "coo",
-							id: "rm-33334444",
-							message: "request",
-							tags: ["roles-rework", "glanceability"],
-						},
-					],
-				},
-				ts: 1001,
-			}),
-			entry({
-				op: "update",
-				id: 1,
-				text: "Explicit tags task",
-				plan: samplePlan("Explicit tags task"),
-				tags: ["updated-tag"],
-				ts: 1002,
-			}),
-			entry({
-				op: "done",
-				id: 1,
-				summary: "Landed B1a",
-				delivery: {
+		const q = taskQueueFromEntries(
+			[
+				entry({
+					op: "add",
+					id: 1,
+					text: "Explicit tags task",
+					plan: samplePlan("Explicit tags task"),
+					origin: {
+						v: 1,
+						inputs: [{ kind: "role", role: "coo", id: "rm-11112222", message: "request", tags: ["from-origin"] }],
+					},
+					tags: ["Explicit-Tag", "second-tag"],
+					ts: 1000,
+				}),
+				entry({
+					op: "add",
+					id: 2,
+					text: "Inherited tags task",
+					plan: samplePlan("Inherited tags task"),
+					origin: {
+						v: 1,
+						inputs: [
+							{
+								kind: "role",
+								role: "coo",
+								id: "rm-33334444",
+								message: "request",
+								tags: ["roles-rework", "glanceability"],
+							},
+						],
+					},
+					ts: 1001,
+				}),
+				entry({
+					op: "update",
+					id: 1,
+					text: "Explicit tags task",
+					plan: samplePlan("Explicit tags task"),
+					tags: ["updated-tag"],
+					ts: 1002,
+				}),
+				entry({
+					op: "done",
+					id: 1,
+					summary: "Landed B1a",
+					delivery: {
+						repo: "pi-web-ui",
+						landId: "land-1762541000-a1b2c3",
+						landedCommit: "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678",
+					},
+					ts: 1003,
+				}),
+				entry({
+					op: "update",
+					id: 2,
+					text: "Inherited tags task",
+					plan: samplePlan("Inherited tags task"),
+					tags: [],
+					ts: 1004,
+				}),
+				entry({
+					op: "done",
+					id: 2,
+					summary: "Landed via flat fields",
 					repo: "pi-web-ui",
-					landId: "land-1762541000-a1b2c3",
-					landedCommit: "A1B2C3D4E5F60718293A4B5C6D7E8F9012345678",
-				},
-				ts: 1003,
-			}),
-			entry({
-				op: "update",
-				id: 2,
-				text: "Inherited tags task",
-				plan: samplePlan("Inherited tags task"),
-				tags: [],
-				ts: 1004,
-			}),
-			entry({
-				op: "done",
-				id: 2,
-				summary: "Landed via flat fields",
-				repo: "pi-web-ui",
-				land_id: "land-1762542000-deadbe",
-				landed_commit: "deadbeef1234",
-				ts: 1005,
-			}),
-		]);
+					land_id: "345-c1e6f3",
+					landed_commit: "deadbeef1234",
+					ts: 1005,
+				}),
+			],
+			true,
+		);
 
 		const t1 = q.tasks.find((t) => t.id === 1);
 		const t2 = q.tasks.find((t) => t.id === 2);
@@ -515,7 +502,7 @@ describe("server/task-queue replay of tags and delivery", () => {
 		});
 		expect(t2?.delivery).toEqual({
 			repo: "pi-web-ui",
-			landId: "land-1762542000-deadbe",
+			landId: "345-c1e6f3",
 			landedCommit: "deadbeef1234",
 		});
 	});

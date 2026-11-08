@@ -5,9 +5,7 @@
 export const TAG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
 export const MAX_TAGS_PER_ITEM = 16;
 
-export type TagCheckResult =
-	| { ok: true; value: string[] | undefined }
-	| { ok: false; error: string };
+export type TagCheckResult = { ok: true; value: string[] | undefined } | { ok: false; error: string };
 
 /**
  * Validates and deduplicates an optional tags input at a tool or API boundary.
