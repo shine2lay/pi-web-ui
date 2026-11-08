@@ -50,19 +50,29 @@ export function renderStatusBadge(
 }
 
 export function renderDeliveryPipelineMeter(
-	task: Pick<UiRoleTask, "pipelineStage" | "lifecycleStatus">,
+	task: Pick<UiRoleTask, "pipelineStage" | "lifecycleStatus" | "delivery">,
 	effectiveStatus?: UiTaskLifecycleStatus,
 ): string {
-	const stageByStatus: Partial<Record<UiTaskLifecycleStatus, number>> = {
+	const stageByStatus: Partial<Record<UiTaskLifecycleStatus | string, number>> = {
 		working: 1,
 		landing: 2,
 		landed: 3,
 		deploying: 4,
 		live: 5,
+		done: 5,
 	};
 	const st = effectiveStatus ?? task.lifecycleStatus;
-	const stage = stageByStatus[st] ?? task.pipelineStage ?? 0;
-	if (!stage) return "";
+	const deliveryStage =
+		task.delivery?.deployStatus === "succeeded" || task.delivery?.liveCommit
+			? 5
+			: task.delivery?.deployStatus === "deploying"
+				? 4
+				: task.delivery?.landedCommit || task.delivery?.landStatus === "succeeded"
+					? 3
+					: task.delivery?.landStatus === "running" || task.delivery?.landStatus === "queued"
+						? 2
+						: undefined;
+	const stage = stageByStatus[st] ?? deliveryStage ?? task.pipelineStage ?? 1;
 
 	const steps = [
 		{ n: 1, label: "1.Work" },
@@ -98,7 +108,7 @@ export function renderTaskCallouts(task: UiRoleTask, answeredTasks?: Readonly<Re
 				)
 				.join("");
 			const openChatHtml = task.chat?.file
-				? `<button type="button" class="choice-btn secondary open-chat-btn" data-chat-file="${escapeHtml(task.chat.file)}" style="padding:5px 10px;">Open chat</button>`
+				? `<button type="button" class="choice-btn secondary open-chat-btn" data-task-id="${task.id}" data-chat-file="${escapeHtml(task.chat.file)}" style="padding:5px 10px;">Open chat</button>`
 				: "";
 			const ageStr = task.stuck.age ?? "just now";
 			parts.push(`<div class="callout-box danger">
@@ -250,6 +260,14 @@ export function renderTaskCallouts(task: UiRoleTask, answeredTasks?: Readonly<Re
 	if (task.lifecycleStatus === "done" && task.doneSummary) {
 		parts.push(`<div class="task-subline">
       <span><strong>Completed deliverable:</strong> ${escapeHtml(task.doneSummary)}</span>
+    </div>`);
+	}
+
+	if (!parts.some((p) => p.includes("callout-box"))) {
+		const fallbackSummary =
+			task.howToUnblock || task.doneSummary || task.latestTldr?.text || "Task is active in department queue.";
+		parts.push(`<div class="callout-box">
+      <div><strong>Status detail:</strong> ${escapeHtml(fallbackSummary)}</div>
     </div>`);
 	}
 
@@ -495,6 +513,7 @@ export function renderUnifiedTaskCard(params: {
                 ${dependsOnRefs.length ? `<span class="seq-edge-pill">Depends on: ${escapeHtml(dependsOnRefs.join(", "))}</span>` : ""}
                 ${unlocksRefs.length ? `<span class="seq-edge-pill">Unlocks → ${escapeHtml(unlocksRefs.join(", "))}</span>` : ""}
                 ${pipelineMeter}
+                ${task.chat?.file && effectiveStatus !== "stuck" ? `<button type="button" class="chip-btn open-chat-btn" data-task-id="${task.id}" data-chat-file="${escapeHtml(task.chat.file)}">Open chat →</button>` : ""}
               </div>
               ${task.latestTldr ? `<div class="task-subline"><span>Latest TL;DR: "${escapeHtml(task.latestTldr.text)}" · ${escapeHtml(task.latestTldr.age ?? "just now")}</span></div>` : ""}
               ${renderTaskCallouts(task, state.answeredTasks)}

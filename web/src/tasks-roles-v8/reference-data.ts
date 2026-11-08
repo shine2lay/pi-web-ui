@@ -591,3 +591,191 @@ export function createReferenceDataset(): TasksRolesV8Dataset {
 }
 
 export const V8_REFERENCE_DATASET: TasksRolesV8Dataset = createReferenceDataset();
+
+/**
+ * Builds a live-protocol-shaped `{ overview, workPage }` pair from the v8 reference dataset
+ * so tests and verification harnesses can feed `receiveRoles` / `receiveWorkPage` or
+ * `buildLiveTasksRolesV8Dataset` end-to-end.
+ */
+export function createReferenceOverviewAndWorkPage() {
+	const ref = createReferenceDataset();
+	const activeByRole = new Map<string, UiRoleTask[]>();
+	const queuedByRole = new Map<string, UiRoleTask[]>();
+	const doneByRole = new Map<string, Array<{ id: number; title: string; summary?: string; at?: number }>>();
+	const asksByRole = new Map<
+		string,
+		Array<{
+			key: string;
+			role: string;
+			kind: "question" | "task" | "tldr";
+			text: string;
+			since: number;
+			focus: string;
+			choices?: string[];
+			chat: { file: string; title?: string; where?: number };
+		}>
+	>();
+
+	for (const task of ref.tasks) {
+		const taskRole = task.role ?? "frontend";
+		if (task.lifecycleStatus === "done" || task.lifecycleStatus === "landed" || task.lifecycleStatus === "live") {
+			const list = doneByRole.get(taskRole) ?? [];
+			list.push({
+				id: task.id,
+				title: task.title,
+				...(task.doneSummary ? { summary: task.doneSummary } : {}),
+				at: task.updatedAt,
+			});
+			doneByRole.set(taskRole, list);
+		} else if (task.status === "ready" || task.lifecycleStatus === "queued" || task.lifecycleStatus === "paused") {
+			const list = queuedByRole.get(taskRole) ?? [];
+			list.push(task);
+			queuedByRole.set(taskRole, list);
+		} else {
+			const list = activeByRole.get(taskRole) ?? [];
+			list.push(task);
+			activeByRole.set(taskRole, list);
+		}
+
+		if (task.lifecycleStatus === "stuck" && task.stuck) {
+			const list = asksByRole.get(taskRole) ?? [];
+			list.push({
+				key: `${taskRole}:task:${task.id}`,
+				role: taskRole,
+				kind: "task",
+				text: task.stuck.question,
+				since: task.stuck.sinceAt ?? task.updatedAt,
+				focus: `task:${task.id}`,
+				...(task.stuck.choices ? { choices: [...task.stuck.choices] } : {}),
+				chat: {
+					file: `/tmp/${taskRole}-task-${task.id}.jsonl`,
+					title: `${task.roleTitle} #${task.id}`,
+					where: task.id,
+				},
+			});
+			asksByRole.set(taskRole, list);
+		}
+	}
+
+	const roles = [
+		...ref.departments.map((d) => {
+			const active = activeByRole.get(d.id) ?? [];
+			const queued = queuedByRole.get(d.id) ?? [];
+			const asks = asksByRole.get(d.id) ?? [];
+			const doneRecent = doneByRole.get(d.id) ?? [];
+			return {
+				id: d.id,
+				title: d.title,
+				focus: d.note ?? "",
+				status: asks.length > 0 ? ("needs-you" as const) : active.length > 0 ? ("busy" as const) : ("idle" as const),
+				homeChat: d.homeChat ?? { file: `/tmp/${d.id}-home.jsonl`, title: `${d.title} lead` },
+				tldr: d.note ? [{ text: d.note, ts: 1762541500000 }] : [],
+				asks,
+				queue: {
+					running: d.queueRunning,
+					autoApprove: true,
+					lanes: { inUse: d.inUse, atOnce: d.atOnce },
+					counts: {
+						working: active.filter((t) => t.status === "working").length,
+						waiting: active.filter((t) => t.status === "waiting").length,
+						blocked: active.filter((t) => t.status === "blocked").length,
+						stuck: active.filter((t) => t.status === "stuck").length,
+						asking: active.filter((t) => t.status === "asking").length,
+						ready: queued.length,
+						paused: [...active, ...queued].filter((t) => t.paused).length,
+						done: doneRecent.length,
+						dropped: 0,
+					},
+					active,
+					queued,
+				},
+				doneRecent,
+				requestsToIt: [],
+				sentRequests: [],
+				boardOrdersOpen: [],
+				problems: [],
+			};
+		}),
+		...ref.idleDepartments.map((d) => ({
+			id: d.id,
+			title: d.title,
+			focus: d.note,
+			status: "idle" as const,
+			homeChat: { file: `/tmp/${d.id}-home.jsonl`, title: `${d.title} lead` },
+			tldr: [{ text: d.note, ts: 1762535000000 }],
+			asks: [],
+			queue: {
+				running: true,
+				autoApprove: true,
+				lanes: { inUse: 0, atOnce: 2 },
+				counts: {
+					working: 0,
+					waiting: 0,
+					blocked: 0,
+					stuck: 0,
+					asking: 0,
+					ready: 0,
+					paused: 0,
+					done: 0,
+					dropped: 0,
+				},
+				active: [],
+				queued: [],
+			},
+			doneRecent: doneByRole.get(d.id) ?? [],
+			requestsToIt: [],
+			sentRequests: [],
+			boardOrdersOpen: [],
+			problems: [],
+		})),
+	];
+
+	const overview = {
+		at: 1762541760000,
+		roles,
+		asks: [...asksByRole.values()].flat(),
+		boardOrders: [],
+		tagGroups: ref.askGroups,
+	};
+
+	const workPage = {
+		at: 1762541760000,
+		initiatives: [],
+		projects: ref.askGroups.map((g) => ({
+			id: (g.tags ?? [])[0] ?? g.key.replace(/^tag:/, ""),
+			name: g.title,
+			status: "active" as const,
+			lead: g.roles[0] ?? "frontend",
+			outcome: g.whySummary,
+			doneWhen: [],
+		})),
+		tasks: ref.tasks.map((t) => ({
+			queue: t.roleTitle,
+			queueName: t.role,
+			task: t.id,
+			title: t.title,
+			state: t.status,
+			lifecycleStatus: t.lifecycleStatus,
+			statusTone: t.statusTone,
+			...(t.pipelineStage !== undefined ? { pipelineStage: t.pipelineStage } : {}),
+			...(t.howToUnblock ? { howToUnblock: t.howToUnblock } : {}),
+			dependsOnRefs: t.dependsOnRefs,
+			tags: t.tags,
+			...(t.touches ? { touches: t.touches } : {}),
+			...(t.normalizedTouches ? { normalizedTouches: t.normalizedTouches } : {}),
+			...(t.delivery ? { delivery: t.delivery } : {}),
+			...(t.wait ? { wait: t.wait } : {}),
+			...(t.blocked ? { blockedDetail: t.blocked } : {}),
+			...(t.queuedDetail ? { queuedDetail: t.queuedDetail } : {}),
+			...(t.paused ? { paused: { why: t.pausedReason ?? "Paused" } } : {}),
+			...(t.latestTldr ? { progress: { text: t.latestTldr.text, at: t.updatedAt } } : {}),
+			...(t.doneSummary ? { doneSummary: t.doneSummary } : {}),
+			added: t.createdAt,
+			stateAt: t.updatedAt,
+		})),
+		updates: {},
+		tagGroups: ref.askGroups,
+	};
+
+	return { overview, workPage };
+}

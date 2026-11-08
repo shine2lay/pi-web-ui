@@ -101,45 +101,43 @@ export function renderTasksRolesV8Shell(params: {
 }): string {
 	const { dataset, state, activeDagBoards, whyModalOpen = false } = params;
 	const activeDeptCount = dataset.departments.length;
-	const totalDeptCount = dataset.departments.length + dataset.idleDepartments.length;
-	const titleText = state.page === "roles" ? "Roles & Department Queues" : "Tasks & Initiatives Across Departments";
+	const onYouCount = dataset.tasks.filter((t) => t.lifecycleStatus === "stuck").length;
+	const subtitleSummary = `${dataset.tasks.length} tasks across ${activeDeptCount} active departments · ${onYouCount} on you`;
 
 	return `
     <div class="app-shell" data-tasks-roles-v8-theme="${escapeHtml(state.theme)}">
       <header class="topbar" role="banner">
         <div class="brand-group">
-          <div>
-            <h1 class="brand-title" id="page-main-title">${escapeHtml(titleText)}</h1>
-            <div class="brand-subtitle">All department tasks in one filterable table · click any #tag to open its implementation DAG</div>
+          <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
+            <h1 class="brand-title" id="page-main-title">Tasks &amp; Roles</h1>
+            <span class="brand-subtitle">${escapeHtml(subtitleSummary)}</span>
           </div>
-          <nav class="seg-group" aria-label="Primary view switcher">
+          <nav class="seg-group" aria-label="Primary views">
             <button type="button" class="seg-btn" id="tab-initiatives" aria-pressed="${state.page === "initiatives" ? "true" : "false"}">
-              <span>All Department Tasks</span>
-              <span class="chip-count">(${dataset.tasks.length})</span>
+              All Department Tasks
             </button>
             <button type="button" class="seg-btn" id="tab-roles" aria-pressed="${state.page === "roles" ? "true" : "false"}">
-              <span>Roles &amp; Queues</span>
-              <span class="chip-count">(${activeDeptCount} active · ${dataset.idleDepartments.length} idle)</span>
+              Roles &amp; Queues
             </button>
           </nav>
         </div>
 
         <div class="controls-right">
-          <span class="roles-live-pill" aria-label="${activeDeptCount} of ${totalDeptCount} departments active">
-            <span style="width:7px;height:7px;border-radius:999px;background:var(--st-live-text);display:inline-block;"></span>
-            <span>${activeDeptCount}/${totalDeptCount} departments active</span>
+          <span class="roles-live-pill" role="status">
+            <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"></circle></svg>
+            <span>Live · updated just now</span>
           </span>
-          <button type="button" class="chip-btn" id="why-modal-btn" aria-haspopup="dialog" aria-controls="why-modal">
-            ⓘ Why this design (4 choices)
-          </button>
-          <div class="seg-group" role="group" aria-label="Preview state mode">
-            <button type="button" class="seg-btn mode-btn" data-mode="normal" aria-pressed="${state.mode === "normal" ? "true" : "false"}">Live</button>
-            <button type="button" class="seg-btn mode-btn" data-mode="loading" aria-pressed="${state.mode === "loading" ? "true" : "false"}">Loading</button>
-            <button type="button" class="seg-btn mode-btn" data-mode="empty" aria-pressed="${state.mode === "empty" ? "true" : "false"}">Empty</button>
-            <button type="button" class="seg-btn mode-btn" data-mode="error" aria-pressed="${state.mode === "error" ? "true" : "false"}">Error</button>
+          <div class="seg-group" role="group" aria-label="Prototype data mode">
+            <button type="button" class="seg-btn mode-btn" data-mode="normal" data-ui-mode="normal" aria-pressed="${state.mode === "normal" ? "true" : "false"}">Live (12 states)</button>
+            <button type="button" class="seg-btn mode-btn" data-mode="loading" data-ui-mode="loading" aria-pressed="${state.mode === "loading" ? "true" : "false"}">Loading</button>
+            <button type="button" class="seg-btn mode-btn" data-mode="empty" data-ui-mode="empty" aria-pressed="${state.mode === "empty" ? "true" : "false"}">Empty</button>
+            <button type="button" class="seg-btn mode-btn" data-mode="error" data-ui-mode="error" aria-pressed="${state.mode === "error" ? "true" : "false"}">Error</button>
           </div>
+          <button type="button" class="chip-btn" id="why-modal-btn" aria-haspopup="dialog" aria-controls="why-modal" aria-expanded="${whyModalOpen ? "true" : "false"}">
+            Why this design
+          </button>
           <button type="button" class="chip-btn" id="theme-toggle" aria-label="Switch color theme">
-            <span id="theme-toggle-label">${state.theme === "dark" ? "☀ Light mode" : "☾ Dark mode"}</span>
+            Theme: <span id="theme-toggle-label">${state.theme === "dark" ? "Dark" : "Light"}</span>
           </button>
         </div>
       </header>
@@ -166,9 +164,11 @@ export interface MountTasksRolesV8Options {
 	initialState?: Partial<TasksRolesV8FilterState>;
 	injectStyles?: boolean;
 	syncDocumentTheme?: boolean;
+	exposeWindowGlobals?: boolean;
 	onAnswerQuestion?: (taskId: number, choice: string) => void;
 	onOpenChat?: (chatFile: string) => void;
 	onRetryLoad?: () => void;
+	onOverlayChange?: (open: boolean) => void;
 }
 
 export interface MountedTasksRolesV8Controller {
@@ -178,6 +178,8 @@ export interface MountedTasksRolesV8Controller {
 	setDataset: (dataset: TasksRolesV8Dataset) => void;
 	getActiveDagBoards: () => ReadonlyMap<string, TaskDagResult>;
 	drawDagEdges: () => void;
+	hasOpenOverlay: () => boolean;
+	closeTopOverlay: () => boolean;
 	refresh: () => void;
 	destroy: () => void;
 }
@@ -197,16 +199,57 @@ export function mountTasksRolesV8Surface(
 	installGlobalBuildTaskDag();
 
 	let dataset = options.dataset ?? createReferenceDataset();
-	let state = createInitialFilterState(options.initialState);
+	const urlInitPatch: Partial<TasksRolesV8FilterState> = { ...options.initialState };
+	if (typeof window !== "undefined" && typeof window.location?.search === "string" && window.location.search) {
+		const params = new URLSearchParams(window.location.search);
+		const pageParam = params.get("page");
+		if (pageParam === "roles" || pageParam === "initiatives") {
+			urlInitPatch.page = pageParam;
+		}
+		const themeParam = params.get("theme");
+		if (themeParam === "light" || themeParam === "dark") {
+			urlInitPatch.theme = themeParam;
+		}
+		const modeParam = params.get("mode");
+		if (modeParam === "normal" || modeParam === "loading" || modeParam === "empty" || modeParam === "error") {
+			urlInitPatch.mode = modeParam;
+		}
+		const touchParam = params.get("touch");
+		if (touchParam) {
+			urlInitPatch.touch = touchParam;
+		}
+		const deptParam = params.get("dept");
+		if (deptParam) {
+			urlInitPatch.deptFilter = deptParam;
+		}
+		const expandParam = params.get("expand") || "";
+		const tagDagParam = params.get("tagDag");
+		if (expandParam === "all") {
+			const expandedTasks: Record<number, boolean> = {};
+			for (const t of dataset.tasks) {
+				expandedTasks[t.id] = true;
+			}
+			const expandedRoles: Record<string, boolean> = {};
+			for (const d of dataset.departments) {
+				expandedRoles[d.id] = true;
+			}
+			urlInitPatch.expandedTasks = expandedTasks;
+			urlInitPatch.expandedRoles = expandedRoles;
+			urlInitPatch.activeTagDag = tagDagParam || "mobile-redesign";
+		} else if (expandParam === "dag") {
+			urlInitPatch.activeTagDag = tagDagParam || "mobile-redesign";
+		} else if (tagDagParam) {
+			urlInitPatch.activeTagDag = tagDagParam;
+		}
+	}
+	let state = createInitialFilterState(urlInitPatch);
 	let whyModalOpen = false;
 	const activeDagBoards = new Map<string, TaskDagResult>();
 
 	function syncThemeAttributes(): void {
-		if (options.syncDocumentTheme) {
-			doc.documentElement.setAttribute("data-theme", state.theme);
-			if (state.scheme) {
-				doc.documentElement.setAttribute("data-scheme", state.scheme);
-			}
+		doc.documentElement.setAttribute("data-theme", state.theme);
+		if (options.syncDocumentTheme && state.scheme) {
+			doc.documentElement.setAttribute("data-scheme", state.scheme);
 		}
 		const shell = container.querySelector<HTMLElement>(".app-shell");
 		if (shell) {
@@ -246,18 +289,21 @@ export function mountTasksRolesV8Surface(
 			whyModalOpen = true;
 			const modal = container.querySelector<HTMLElement>("#why-modal");
 			modal?.removeAttribute("hidden");
+			options.onOverlayChange?.(hasOpenOverlay());
 		});
 
 		container.querySelector<HTMLButtonElement>("#why-modal-close-btn")?.addEventListener("click", () => {
 			whyModalOpen = false;
 			const modal = container.querySelector<HTMLElement>("#why-modal");
 			modal?.setAttribute("hidden", "");
+			options.onOverlayChange?.(hasOpenOverlay());
 		});
 
 		container.querySelector<HTMLElement>("#why-modal")?.addEventListener("click", (ev: Event) => {
 			if (ev.target === ev.currentTarget) {
 				whyModalOpen = false;
 				(ev.currentTarget as HTMLElement).setAttribute("hidden", "");
+				options.onOverlayChange?.(hasOpenOverlay());
 			}
 		});
 
@@ -287,6 +333,7 @@ export function mountTasksRolesV8Surface(
 				} else if (!detailsEl.open && state.openDropdown === ddName) {
 					state.openDropdown = null;
 				}
+				options.onOverlayChange?.(hasOpenOverlay());
 			});
 		});
 
@@ -383,7 +430,7 @@ export function mountTasksRolesV8Surface(
 			}
 		});
 
-		container.querySelectorAll<HTMLButtonElement>("[data-open-tag-dag]").forEach((btn) => {
+		filterRegion?.querySelectorAll<HTMLButtonElement>("[data-open-tag-dag]").forEach((btn) => {
 			btn.addEventListener("click", () => {
 				const tagId = btn.getAttribute("data-open-tag-dag") || "";
 				state = {
@@ -544,7 +591,40 @@ export function mountTasksRolesV8Surface(
 		});
 	}
 
+	function hasOpenOverlay(): boolean {
+		return Boolean(whyModalOpen || state.openDropdown);
+	}
+
+	function closeTopOverlay(): boolean {
+		if (whyModalOpen) {
+			whyModalOpen = false;
+			const modal = container.querySelector<HTMLElement>("#why-modal");
+			modal?.setAttribute("hidden", "");
+			options.onOverlayChange?.(hasOpenOverlay());
+			return true;
+		}
+		if (state.openDropdown) {
+			state = { ...state, openDropdown: null };
+			refresh();
+			options.onOverlayChange?.(hasOpenOverlay());
+			return true;
+		}
+		return false;
+	}
+
 	function refresh(): void {
+		const activeEl = doc.activeElement as HTMLInputElement | null;
+		const focusSelector =
+			activeEl && container.contains(activeEl)
+				? activeEl.id === "task-search-input"
+					? "#task-search-input"
+					: activeEl.getAttribute("data-dd-search")
+						? `.filter-dd-search[data-dd-search="${activeEl.getAttribute("data-dd-search")}"]`
+						: null
+				: null;
+		const selStart = focusSelector && typeof activeEl?.selectionStart === "number" ? activeEl.selectionStart : null;
+		const selEnd = focusSelector && typeof activeEl?.selectionEnd === "number" ? activeEl.selectionEnd : null;
+
 		activeDagBoards.clear();
 		container.innerHTML = renderTasksRolesV8Shell({
 			dataset,
@@ -555,14 +635,57 @@ export function mountTasksRolesV8Surface(
 		syncThemeAttributes();
 		bindDynamicEvents();
 		drawAllDagEdges(container, activeDagBoards);
+		options.onOverlayChange?.(hasOpenOverlay());
+
+		if (focusSelector) {
+			const restored = container.querySelector<HTMLInputElement>(focusSelector);
+			if (restored) {
+				restored.focus();
+				if (selStart !== null && selEnd !== null) {
+					try {
+						restored.setSelectionRange(selStart, selEnd);
+					} catch {
+						// Ignore selection range errors on unsupported input types.
+					}
+				}
+			}
+		}
 	}
 
 	const onWindowResize = () => {
 		drawAllDagEdges(container, activeDagBoards);
 	};
+	const onWindowKeyDown = (ev: KeyboardEvent) => {
+		if (ev.key === "Escape" && !ev.defaultPrevented && hasOpenOverlay()) {
+			if (closeTopOverlay()) {
+				ev.preventDefault();
+			}
+		}
+	};
 	if (typeof window !== "undefined") {
 		window.addEventListener("resize", onWindowResize);
+		window.addEventListener("keydown", onWindowKeyDown);
 	}
+
+	const themeObserver =
+		typeof MutationObserver !== "undefined" && doc?.documentElement
+			? new MutationObserver(() => {
+					const attrTheme = doc.documentElement.getAttribute("data-theme");
+					if ((attrTheme === "light" || attrTheme === "dark") && attrTheme !== state.theme) {
+						state = { ...state, theme: attrTheme };
+						const shell = container.querySelector<HTMLElement>(".app-shell");
+						if (shell) {
+							shell.setAttribute("data-tasks-roles-v8-theme", state.theme);
+						}
+						const lbl = container.querySelector<HTMLElement>("#theme-toggle-label");
+						if (lbl) {
+							lbl.textContent = state.theme === "dark" ? "Dark" : "Light";
+						}
+						drawAllDagEdges(container, activeDagBoards);
+					}
+				})
+			: null;
+	themeObserver?.observe(doc.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
 	refresh();
 
@@ -579,11 +702,15 @@ export function mountTasksRolesV8Surface(
 		},
 		getActiveDagBoards: () => activeDagBoards,
 		drawDagEdges: () => drawAllDagEdges(container, activeDagBoards),
+		hasOpenOverlay,
+		closeTopOverlay,
 		refresh,
 		destroy: () => {
 			if (typeof window !== "undefined") {
 				window.removeEventListener("resize", onWindowResize);
+				window.removeEventListener("keydown", onWindowKeyDown);
 			}
+			themeObserver?.disconnect();
 			activeDagBoards.clear();
 			container.innerHTML = "";
 		},

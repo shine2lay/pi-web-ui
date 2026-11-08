@@ -206,6 +206,17 @@ html[data-theme="light"][data-scheme="graphite"],
   --keycap-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
+.roles-exact-host,
+.initiatives-exact-host {
+  min-height: 100vh;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  overflow-x: hidden;
+}
+
 .app-shell {
   max-width: 1380px;
   margin: 0 auto;

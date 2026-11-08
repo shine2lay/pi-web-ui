@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppField } from "../app-globals";
 import { liveVisibleAt, subscribePageLive } from "../page-live";
-import { exactRolesFonts } from "../roles-exact-fonts";
+import { resolveQuestionAction, type NativeDialogSummary } from "../roles-answer-actions";
 import { projectExactRoles } from "../roles-exact-model";
 import { createExactRolesView } from "../roles-exact-view";
 import { acknowledgeRenderedRolesUsage, reloadRoles, useRoles } from "../roles-state";
 import { bindRolesSurface, prepareRolesDocument, type FontBytes } from "../roles-u0/surface";
 import type { NeedsYouItem, UsefulOpenTarget } from "../roles-useful-model";
+import { useEscapeKey } from "../shortcut-stack";
+import {
+	buildLiveTasksRolesV8Dataset,
+	createReferenceDataset,
+	mountTasksRolesV8Surface,
+	type MountedTasksRolesV8Controller,
+} from "../tasks-roles-v8";
+import { reloadWorkPage, useWorkPage } from "../work-page-state";
 import { RoleAnswerDialog } from "./RoleAnswerDialog";
-import type { NativeDialogSummary } from "../roles-answer-actions";
 
 /** The real update/refit completion seam, also exercised with a synthetic bound DOM. */
 export function updateRolesUsageDOM(
@@ -22,30 +29,232 @@ export function updateRolesUsageDOM(
 	finished();
 }
 
-/** The actual Roles surface, not a preview. The supplied template is isolated from app themes;
- * data comes from the existing safe projections, never the design's fictional example records.
- * Exact, approved font bytes are a dependency of mounting, not a silent system-font substitution.
- */
-export function RolesExactView({
-	active,
-	dialogs = [],
-	fonts = exactRolesFonts,
-	onOpen,
-	onAbout,
-}: {
+function detectInitialTheme(): "dark" | "light" {
+	if (typeof document === "undefined") return "dark";
+	const attr = document.documentElement.getAttribute("data-theme");
+	return attr === "light" ? "light" : "dark";
+}
+
+function shouldUseReferenceDataset(): boolean {
+	if (typeof window === "undefined") return false;
+	try {
+		const params = new URLSearchParams(window.location.search);
+		return params.get("v8dataset") === "reference";
+	} catch {
+		return false;
+	}
+}
+
+export interface RolesExactViewProps {
 	active: boolean;
 	dialogs?: readonly NativeDialogSummary[];
 	fonts?: FontBytes;
 	onOpen: (target: UsefulOpenTarget) => void;
 	onAbout: (roleId: string) => void;
-}) {
+}
+
+/**
+ * Live Roles surface (v8 Tasks & Roles rework).
+ * When explicit `fonts` bytes are passed by legacy font/iframe tests, preserves the iframe seam;
+ * in live execution (`fonts === undefined`), mounts `web/src/tasks-roles-v8/` directly.
+ */
+export function RolesExactView(props: RolesExactViewProps) {
+	if (props.fonts !== undefined) {
+		return <RolesLegacyFontsFrame {...props} fonts={props.fonts} />;
+	}
+	return <RolesV8Surface {...props} />;
+}
+
+function RolesV8Surface({ active, dialogs = [], onOpen, onAbout }: RolesExactViewProps) {
+	const state = useRoles(active ? "full" : "off");
+	const work = useWorkPage(active);
+	const connection = useAppField("status");
+	const [now, setNow] = useState(() => Date.now());
+	const [answer, setAnswer] = useState<{ item: NeedsYouItem; from: HTMLElement } | null>(null);
+	const [overlayOpen, setOverlayOpen] = useState(false);
+	const host = useRef<HTMLDivElement>(null);
+	const controllerRef = useRef<MountedTasksRolesV8Controller | null>(null);
+
+	const visibleAt = useSyncExternalStore(subscribePageLive, liveVisibleAt, liveVisibleAt);
+	const model = useMemo(
+		() => projectExactRoles(state, connection, now, { visibleAt }),
+		[state, connection, now, visibleAt],
+	);
+
+	const useRefData = shouldUseReferenceDataset();
+	const adapted = useMemo(() => {
+		if (useRefData) {
+			return {
+				dataset: createReferenceDataset(),
+				mode: "normal" as const,
+				asksByTaskId: new Map(),
+				chatByTaskId: new Map(),
+				chatByRoleId: new Map(),
+				tasksById: new Map(),
+			};
+		}
+		return buildLiveTasksRolesV8Dataset({
+			rolesState: state,
+			workState: work,
+			now,
+		});
+	}, [useRefData, state, work, now]);
+
+	const current = useRef({ model, state, adapted, active, connection, onOpen, onAbout, dialogs });
+	current.current = { model, state, adapted, active, connection, onOpen, onAbout, dialogs };
+
+	useEscapeKey(
+		() => {
+			controllerRef.current?.closeTopOverlay();
+		},
+		active && overlayOpen && answer === null,
+	);
+
+	useEffect(() => {
+		if (!active) return;
+		setNow(Date.now());
+		const timer = setInterval(() => setNow(Date.now()), 30_000);
+		return () => clearInterval(timer);
+	}, [active, visibleAt]);
+
+	const graceUntil = model.graceUntil;
+	useEffect(() => {
+		if (!active || graceUntil === null) return;
+		const timer = setTimeout(() => setNow(Date.now()), Math.max(0, graceUntil - Date.now()) + 20);
+		return () => clearTimeout(timer);
+	}, [active, graceUntil]);
+
+	useEffect(() => {
+		if (!active) {
+			setAnswer(null);
+			controllerRef.current?.closeTopOverlay();
+		}
+	}, [active]);
+
+	useEffect(() => {
+		const container = host.current;
+		if (!container) return;
+		const initialAdapted = current.current.adapted;
+
+		const ctrl = mountTasksRolesV8Surface(container, {
+			initialState: {
+				page: "roles",
+				theme: detectInitialTheme(),
+				mode: initialAdapted.mode,
+			},
+			dataset: initialAdapted.dataset,
+			syncDocumentTheme: true,
+			exposeWindowGlobals: true,
+			onOpenChat: (chatFile) => {
+				const cur = current.current;
+				const matchTask = cur.adapted.dataset.tasks.find((t) => t.chat?.file === chatFile);
+				const target = (matchTask ? cur.adapted.chatByTaskId.get(matchTask.id) : undefined) ?? { file: chatFile };
+				cur.onOpen(target);
+			},
+			onAnswerQuestion: (taskId, _choice) => {
+				const cur = current.current;
+				const task = cur.adapted.dataset.tasks.find((t) => t.id === taskId);
+				const matchNeed =
+					cur.model.needs.items.find((n) => n.link?.focus?.id === String(taskId) || n.key.endsWith(`:${taskId}`)) ??
+					(task ? cur.model.needs.items.find((n) => n.roleId === task.role) : undefined);
+				const fromEl = document.activeElement instanceof HTMLElement ? document.activeElement : container;
+				if (matchNeed) {
+					const inlineResolved = resolveQuestionAction(cur.model.needs, matchNeed, cur.dialogs, "inline");
+					if (inlineResolved) {
+						setAnswer({ item: inlineResolved.item, from: fromEl });
+						return;
+					}
+					const chatResolved = resolveQuestionAction(cur.model.needs, matchNeed, cur.dialogs, "chat");
+					if (chatResolved && chatResolved.action.kind === "chat") {
+						cur.onOpen(chatResolved.action.target);
+						return;
+					}
+				}
+				const fallbackChat = cur.adapted.chatByTaskId.get(taskId) ?? (task?.chat ? { file: task.chat.file } : null);
+				if (fallbackChat) {
+					cur.onOpen(fallbackChat);
+				}
+			},
+			onRetryLoad: () => {
+				reloadRoles();
+				reloadWorkPage();
+			},
+			onOverlayChange: (open) => {
+				setOverlayOpen(open);
+			},
+		});
+		controllerRef.current = ctrl;
+		return () => {
+			controllerRef.current = null;
+			ctrl.destroy();
+		};
+	}, [useRefData]);
+
+	useEffect(() => {
+		const ctrl = controllerRef.current;
+		if (!ctrl) return;
+		ctrl.setDataset(adapted.dataset);
+		const urlMode =
+			typeof window !== "undefined" && window.location?.search
+				? new URLSearchParams(window.location.search).get("mode")
+				: null;
+		const prevState = ctrl.getState();
+		const patch: Partial<ReturnType<MountedTasksRolesV8Controller["getState"]>> = {};
+		if (!urlMode && prevState.mode !== adapted.mode && (prevState.mode === "loading" || adapted.mode === "normal")) {
+			patch.mode = adapted.mode;
+		}
+		if (Object.keys(patch).length > 0) {
+			ctrl.setState(patch);
+		}
+	}, [adapted, useRefData]);
+
+	return (
+		<>
+			<div
+				ref={host}
+				className="roles-exact-host"
+				style={{
+					width: "100%",
+					height: "100%",
+					minHeight: 0,
+					overflowY: "auto",
+					overflowX: "hidden",
+					background: "var(--bg-canvas, #0E0F11)",
+				}}
+			/>
+			{active && answer && (
+				<RoleAnswerDialog
+					item={answer.item}
+					needs={model.needs}
+					connected={connection === "open"}
+					onOpen={onOpen}
+					onClose={(back) => {
+						const from = answer.from;
+						setAnswer(null);
+						if (back && from.isConnected)
+							requestAnimationFrame(() => {
+								if (from.isConnected) from.focus();
+							});
+					}}
+				/>
+			)}
+		</>
+	);
+}
+
+function RolesLegacyFontsFrame({
+	active,
+	dialogs = [],
+	fonts,
+	onOpen,
+	onAbout,
+}: RolesExactViewProps & { fonts: FontBytes }) {
 	const state = useRoles(active ? "full" : "off");
 	const connection = useAppField("status");
 	const [now, setNow] = useState(() => Date.now());
 	const [failed, setFailed] = useState(false);
 	const [answer, setAnswer] = useState<{ item: NeedsYouItem; from: HTMLElement } | null>(null);
 	const host = useRef<HTMLDivElement>(null);
-	// pages-live: an alarm waits for fresh data, counted in visible time from when the tab came back.
 	const visibleAt = useSyncExternalStore(subscribePageLive, liveVisibleAt, liveVisibleAt);
 	const model = useMemo(
 		() => projectExactRoles(state, connection, now, { visibleAt }),
@@ -61,7 +270,6 @@ export function RolesExactView({
 		const timer = setInterval(() => setNow(Date.now()), 30_000);
 		return () => clearInterval(timer);
 	}, [active, visibleAt]);
-	// pages-live: look again the moment the "Updating" wait ends (its alarm shows then if no check came).
 	const graceUntil = model.graceUntil;
 	useEffect(() => {
 		if (!active || graceUntil === null) return;
@@ -108,7 +316,6 @@ export function RolesExactView({
 			if (disposed) return;
 			let queued: number | null = null;
 			let wasOpen = false;
-			// roles-phone: below 1024 px of the app's viewport the cards stack in one column.
 			const narrow = typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 1023.98px)") : null;
 			let binding: ReturnType<typeof bindRolesSurface> | null = null;
 			const update = () => {
@@ -117,7 +324,6 @@ export function RolesExactView({
 					queued = null;
 					if (disposed) return;
 					try {
-						// Completion is after actual binding/refits, never values(), receipt or server push.
 						updateRolesUsageDOM(
 							binding,
 							() => view.refit(),
@@ -159,7 +365,6 @@ export function RolesExactView({
 					reload: reloadRoles,
 				},
 				{
-					// The host owns execution; script-disabled child timers cannot settle the panel.
 					raf: (fn) => window.requestAnimationFrame(fn),
 					cancelRaf: (id) => window.cancelAnimationFrame(id as number),
 					setTimeout: (fn, ms) => window.setTimeout(fn, ms),
@@ -207,7 +412,6 @@ export function RolesExactView({
 					first.focus();
 				}
 			};
-			// Host-owned observation also catches a warning appearing or a status line wrapping.
 			const chrome = doc.querySelector("[data-roles-chrome]");
 			const chromeObserver = chrome && typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : null;
 			if (chrome) chromeObserver?.observe(chrome);

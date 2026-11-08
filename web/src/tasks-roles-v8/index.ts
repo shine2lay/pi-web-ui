@@ -7,3 +7,4 @@ export * from "./card-surface";
 export * from "./dag-surface";
 export * from "./role-bento-surface";
 export * from "./surface";
+export * from "./live-adapter";

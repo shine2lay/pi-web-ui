@@ -98,6 +98,8 @@ export function InitiativesPage({ active, onOpen }: InitiativesPageProps) {
 			<InitiativesExactView
 				active={active}
 				input={model.input}
+				work={work}
+				onOpenChat={onOpen}
 				onOpen={(target: InitiativesExactTarget) => {
 					const src = model.sources[target.ref];
 					if (src) setSource(src);
