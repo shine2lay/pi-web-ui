@@ -904,6 +904,73 @@ describe("taskQueueFromEntries (queue-blocked)", () => {
 		}
 	});
 
+	it("a home-chat lead answer (home: true) pokes any block once; invalid or checkpoint-only home ops are ignored (H-MIRROR-HOME-1)", () => {
+		const e = entries([...laneBase, block]);
+		const since = (e.at(-1)?.data as { ts: number }).ts;
+		// Without home: true, a need/tasks block (no b.lead) ignores lead ops.
+		const nonHome = replay([
+			...e,
+			...entries([{ op: "lead", id: 1, since, by: "tooling", answer: "In the vault.", ts: 300 }]),
+		]);
+		expect(byId(nonHome, 1)?.block?.poke).toBeUndefined();
+		// Negative cases on a need/tasks block: checkpoint-only, wrong since, blank answer, empty by.
+		for (const bad of [
+			{ op: "lead", id: 1, since, by: "tooling", home: true, checkpoint: 9000, ts: 300 },
+			{ op: "lead", id: 1, since: since + 1, by: "tooling", home: true, answer: "Old block.", ts: 300 },
+			{ op: "lead", id: 1, since, by: "tooling", home: true, answer: "   ", ts: 300 },
+			{ op: "lead", id: 1, since, by: "", home: true, answer: "In the vault.", ts: 300 },
+		]) {
+			const b = byId(replay([...e, ...entries([bad])]), 1)?.block;
+			expect(b?.poke, JSON.stringify(bad)).toBeUndefined();
+			expect(b?.checkpoint, JSON.stringify(bad)).toBeUndefined();
+		}
+		// Valid home answer on a need/tasks block sets poke once; a second home answer is ignored.
+		const needAnswered = replay([
+			...e,
+			...entries([
+				{ op: "lead", id: 1, since: since - 1, by: "tooling", home: true, answer: "Old block.", ts: 299 },
+				{ op: "lead", id: 1, since, by: "tooling", home: true, answer: "In the vault.", ts: 300 },
+				{ op: "lead", id: 1, since, by: "tooling", home: true, answer: "Second one.", ts: 301 },
+			]),
+		]);
+		expect(byId(needAnswered, 1)?.block?.poke).toEqual({ at: 300, lead: "tooling", home: true });
+
+		// Lead block answered from the task's own department home chat (by !== b.lead).
+		const leadBlock = {
+			op: "block",
+			id: 1,
+			need: "x",
+			lead: "ops",
+			owes: "the admission",
+			checkpoint: 500,
+			start: 100,
+			tries: 0,
+			ts: 100,
+		};
+		const le = entries([...laneBase, leadBlock]);
+		expect(
+			byId(replay([...le, ...entries([{ op: "lead", id: 1, since: 100, by: "tooling", answer: "ok", ts: 400 }])]), 1)
+				?.block?.poke,
+		).toBeUndefined();
+		const cpOnly = byId(
+			replay([
+				...le,
+				...entries([{ op: "lead", id: 1, since: 100, by: "tooling", home: true, checkpoint: 9000, ts: 350 }]),
+			]),
+			1,
+		)?.block;
+		expect(cpOnly?.poke).toBeUndefined();
+		expect(cpOnly?.checkpoint).toBe(500);
+		const leadAnswered = replay([
+			...le,
+			...entries([
+				{ op: "lead", id: 1, since: 100, by: "tooling", home: true, answer: "ok", ts: 400 },
+				{ op: "lead", id: 1, since: 100, by: "ops", answer: "later", ts: 401 },
+			]),
+		]);
+		expect(byId(leadAnswered, 1)?.block?.poke).toEqual({ at: 400, lead: "tooling", home: true });
+	});
+
 	it("outside after: kept with after, and recorded over by after_over", () => {
 		const add = [{ op: "add", id: 4, plan: plan("Four"), outside: [ref, ref, { file: "", id: 1 }] }];
 		const q = replay(entries(add));
@@ -933,6 +1000,16 @@ describe("taskQueueFromEntries (queue-blocked)", () => {
 			[...laneBase, block, { op: "remove", id: 1 }],
 			[...laneBase, block, { op: "ask", id: 1, question: "?", n: 1 }],
 			[
+				...laneBase,
+				{ ...block, ts: 100 },
+				{ op: "lead", id: 1, since: 100, by: "tooling", home: true, answer: "In the vault.", ts: 300 },
+			],
+			[
+				...laneBase,
+				{ op: "block", id: 1, need: "x", lead: "ops", owes: "the admission", start: 100, tries: 0, ts: 100 },
+				{ op: "lead", id: 1, since: 100, by: "tooling", home: true, answer: "ok", ts: 400 },
+			],
+			[
 				{ op: "add", id: 4, plan: plan("Four"), outside: [ref] },
 				{ op: "after_over", id: 4, file: ref.file, n: 38, summary: "s" },
 			],
@@ -948,7 +1025,14 @@ describe("taskQueueFromEntries (queue-blocked)", () => {
 				tasks: Array<{
 					id: number;
 					status: string;
-					block?: { on?: unknown[]; need?: string; since: number; start: number; tries: number };
+					block?: {
+						on?: unknown[];
+						need?: string;
+						since: number;
+						start: number;
+						tries: number;
+						poke?: { at: number; lead?: string; home?: boolean };
+					};
 					outside?: Array<{ file: string; id: number; over?: { removed?: boolean } }>;
 				}>;
 			};
@@ -956,7 +1040,16 @@ describe("taskQueueFromEntries (queue-blocked)", () => {
 			const shape = (t: (typeof theirs)[number] | (typeof mine.tasks)[number]) => [
 				t.id,
 				t.status,
-				t.block ? [t.block.on ?? null, t.block.need ?? null, t.block.since, t.block.start, t.block.tries] : null,
+				t.block
+					? [
+							t.block.on ?? null,
+							t.block.need ?? null,
+							t.block.since,
+							t.block.start,
+							t.block.tries,
+							t.block.poke ? [t.block.poke.at, t.block.poke.lead ?? null, t.block.poke.home ?? false] : null,
+						]
+					: null,
 				(t.outside ?? []).map((o) => [o.file, o.id, !!o.over, o.over?.removed ?? false]),
 			];
 			expect(mine.tasks.map(shape), JSON.stringify(ops.at(-1))).toEqual(theirs.map(shape));

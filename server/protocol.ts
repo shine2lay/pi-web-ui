@@ -532,8 +532,8 @@ export interface UiTaskQueueBlock {
 	tries: number;
 	/** The queue poked it: it comes back to work first once a slot is free (ask: to ask its main chat;
 	 *  owner: with ask, every lead it waited on stayed silent, so its question goes to the owner;
-	 *  lead: the lead that answered it, rule 24). */
-	poke?: { at: number; ask?: boolean; owner?: boolean; lead?: string };
+	 *  lead: the lead that answered it, rule 24; home: answered from its department's own home chat). */
+	poke?: { at: number; ask?: boolean; owner?: boolean; lead?: string; home?: boolean };
 	/** Filled in by the server: when it's poked next (a need, or a poked task that blocked again). */
 	nextPokeAt?: number;
 	/** Filled in by the server: the next step is asking its main chat instead of a poke. */

@@ -912,6 +912,14 @@ function apply(s: State, raw: unknown): void {
 			// lets the task go; a checkpoint moves the clock.
 			const b = task.block;
 			const by = typeof op.by === "string" ? op.by : "";
+			if (op.home === true) {
+				// Ops #709 (H-R4b): the department's own home chat sent the result to one of its queue's blocked tasks.
+				// Any block (a lead's, a need, or other tasks) takes it once; a checkpoint-only op changes nothing.
+				if (task.status !== "blocked" || !b || b.since !== op.since || b.poke) return;
+				if (!by || typeof op.answer !== "string" || !op.answer.trim()) return;
+				b.poke = { at: num(op.ts), lead: by, home: true };
+				return;
+			}
 			if (task.status !== "blocked" || !b?.lead || b.since !== op.since || b.poke || !leadsOf(b).includes(by)) return;
 			if (typeof op.answer === "string" && op.answer.trim()) {
 				b.poke = { at: num(op.ts), lead: by };
@@ -1043,6 +1051,7 @@ function blockOf(b: Record<string, unknown>): UiTaskQueueBlock {
 						...(poke.ask === true ? { ask: true } : {}),
 						...(poke.ask === true && poke.owner === true ? { owner: true } : {}),
 						...(typeof poke.lead === "string" && poke.lead ? { lead: poke.lead } : {}),
+						...(poke.home === true ? { home: true } : {}),
 					},
 				}
 			: {}),
