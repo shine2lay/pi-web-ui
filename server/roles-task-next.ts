@@ -1,15 +1,45 @@
 /** Display-only facts from an already replayed queue. Never parse plans or change the queue. */
+import { clipText } from "./live-progress.js";
 import type {
 	UiRoleQueue,
 	UiRoleTask,
 	UiRoleTaskNext,
 	UiRoleTaskOwing,
+	UiTaskEvidence,
 	UiTaskParent,
 	UiTaskQueueHold,
 	UiTaskQueueTask,
 } from "./protocol.js";
 import { requesterOf } from "./queue-requester.js";
+import {
+	collectDependsOnRefs,
+	type QueuesByRoleInput,
+	resolveBlockedState,
+	resolveQueuedDetail,
+	resolveTaskDeps,
+	resolveWaitState,
+} from "./shared/task-blocker-resolver.js";
+import {
+	computeGroupRollup,
+	computeTagGroups,
+	computeTouchSystems,
+	type DeployStateSnapshots,
+	resolveTaskLifecycleAndDelivery,
+} from "./shared/task-delivery-resolver.js";
+import { normalizeTouches } from "./shared/touch-normalizer.js";
 import { taskRefLabel } from "./task-queue.js";
+
+export {
+	collectDependsOnRefs,
+	computeGroupRollup,
+	computeTagGroups,
+	computeTouchSystems,
+	resolveBlockedState,
+	resolveQueuedDetail,
+	resolveTaskDeps,
+	resolveTaskLifecycleAndDelivery,
+	resolveWaitState,
+};
 
 type Display = Pick<UiRoleTask, "next" | "queueEvent">;
 
@@ -75,7 +105,25 @@ export function linkOf(parent: UiTaskParent | undefined): keyof NonNullable<UiRo
 	return "standalone";
 }
 
-export function taskOf(t: UiTaskQueueTask, department: string, held?: UiTaskQueueHold): UiRoleTask {
+export interface TaskOfOptions {
+	queuesByRole?: QueuesByRoleInput;
+	queueRunning?: boolean;
+	queueHold?: UiTaskQueueHold;
+	lanesAtOnce?: number;
+	queueTasks?: readonly UiTaskQueueTask[];
+	deploySnapshots?: DeployStateSnapshots;
+	evidence?: UiTaskEvidence;
+	withLead?: string;
+	now?: number;
+}
+
+export function taskOf(
+	t: UiTaskQueueTask,
+	department: string,
+	held?: UiTaskQueueHold,
+	options?: TaskOfOptions,
+): UiRoleTask {
+	const now = options?.now ?? Date.now();
 	const display = roleTaskNext(t, department, held);
 	const requester = requesterOf(t.origin);
 	const queued = t.status === "ready" ? roleTaskNext(t, department).next : undefined;
@@ -85,9 +133,112 @@ export function taskOf(t: UiTaskQueueTask, department: string, held?: UiTaskQueu
 		const on = (t.block.on ?? []).map((r) => taskRefLabel(r)).join(", ");
 		waitsOn = [on, t.block.need].filter(Boolean).join("; ") || undefined;
 	} else if (queued?.after?.length) waitsOn = queued.after.join(", ");
+
+	const normalizedTouches = t.touches?.length ? normalizeTouches(t.touches) : undefined;
+	const wait = t.status === "waiting" && t.wait ? resolveWaitState(t.wait, now) : undefined;
+	const blockedRes =
+		t.status === "blocked" && t.block
+			? resolveBlockedState(t.block, {
+					currentRole: department,
+					currentTaskId: t.id,
+					queuesByRole: options?.queuesByRole,
+					now,
+				})
+			: undefined;
+	const queuedRes =
+		t.status === "ready"
+			? resolveQueuedDetail(t, {
+					currentRole: department,
+					queueRunning: options?.queueRunning,
+					lanesAtOnce: options?.lanesAtOnce,
+					queueTasks: options?.queueTasks,
+					queuesByRole: options?.queuesByRole,
+				})
+			: undefined;
+
+	const dependsOnRefs = collectDependsOnRefs(department, t.block?.on, t.after, t.outside);
+	const afterList: (number | string)[] = [...(t.after ?? []), ...(t.outside ?? []).map((r) => taskRefLabel(r))];
+
+	const evidenceSummary = options?.evidence
+		? {
+				repo: options.evidence.repo,
+				commit: options.evidence.commit,
+				checkedAt: "at" in options.evidence.checked ? options.evidence.checked.at : undefined,
+				installedAt: "at" in options.evidence.installed ? options.evidence.installed.at : undefined,
+				live: "at" in options.evidence.live,
+			}
+		: undefined;
+
+	const effectiveStatus = t.status === "stuck" && options?.withLead ? "asking" : t.status;
+
+	const { lifecycleStatus, statusTone, delivery } = resolveTaskLifecycleAndDelivery(
+		{
+			id: t.id,
+			role: department,
+			status: effectiveStatus,
+			paused: held,
+			touches: t.touches,
+			normalizedTouches,
+			doneSummary: t.summary,
+			delivery: t.delivery,
+			wait: wait ?? t.wait,
+		},
+		{
+			...options?.deploySnapshots,
+			role: department,
+			queueRunning: options?.queueRunning,
+			queuePaused: Boolean(options?.queueHold),
+			waitOverdue: wait?.overdue,
+			hasUpstreamDeadlock: queuedRes?.hasUpstreamDeadlock,
+			evidence: evidenceSummary,
+		},
+	);
+
+	let howToUnblock: string | undefined;
+	if (lifecycleStatus === "paused") {
+		howToUnblock = t.hold
+			? `How to unblock: Resume paused task ${department ? `${department} ` : ""}#${t.id}`
+			: `How to unblock: Resume ${department ? `${department}'s` : "the"} paused queue`;
+	} else if (lifecycleStatus === "stuck") {
+		howToUnblock = `How to unblock: Answer ${department ? `${department} ` : ""}#${t.id}'s owner question`;
+	} else if (lifecycleStatus === "asking") {
+		const decider = options?.withLead ?? (t.askOps ? (t.askLead ?? "ops") : department);
+		howToUnblock = `How to unblock: Have ${decider} lead answer ${department ? `${department} ` : ""}#${t.id}'s question`;
+	} else if (lifecycleStatus === "blocked" && blockedRes) {
+		howToUnblock = blockedRes.blocked.howToUnblock;
+	} else if (lifecycleStatus === "waiting" && wait) {
+		howToUnblock = wait.howToUnblock;
+	} else if (lifecycleStatus === "queued" && queuedRes?.howToUnblock) {
+		howToUnblock = queuedRes.howToUnblock;
+	}
+
+	const updatedAt = Math.max(
+		t.doneAt ?? 0,
+		t.dropped?.at ?? 0,
+		t.block?.since ?? 0,
+		t.wait?.since ?? 0,
+		t.startedAt ?? 0,
+		t.addedAt ?? 0,
+	);
+
+	const stuckDetail =
+		(t.status === "stuck" || t.status === "asking") && t.question
+			? {
+					question: t.question,
+					...(t.choices?.length ? { choices: [...t.choices] } : {}),
+					sinceAt: t.startedAt ?? t.addedAt,
+					tier: (effectiveStatus === "stuck" ? "owner" : "lead") as "lead" | "owner",
+				}
+			: undefined;
+
 	return {
 		id: t.id,
+		...(department ? { role: department } : {}),
 		status: t.status,
+		lifecycleStatus,
+		statusTone,
+		...(howToUnblock ? { howToUnblock } : {}),
+		...(dependsOnRefs ? { dependsOnRefs } : {}),
 		title: t.plan.title,
 		...display,
 		...(requester ? { requester } : {}),
@@ -98,6 +249,25 @@ export function taskOf(t: UiTaskQueueTask, department: string, held?: UiTaskQueu
 		...(held ? { paused: { at: held.at, why: held.why } } : {}),
 		// roles-panel: where it belongs (its queue entry), and a lead block's who, what, when and reminders.
 		...(t.parent ? { parent: { ...t.parent } } : {}),
+		...(t.parent && "initiative" in t.parent ? { initiative: t.parent.initiative } : {}),
+		...(t.parent && "project" in t.parent ? { project: t.parent.project } : {}),
+		...(t.parent && "standalone" in t.parent ? { standalone: true } : {}),
+		...(t.tags?.length ? { tags: [...t.tags] } : {}),
+		...(t.touches?.length ? { touches: [...t.touches] } : {}),
+		...(normalizedTouches?.length ? { normalizedTouches } : {}),
+		createdAt: t.addedAt,
+		...(t.startedAt !== undefined ? { startedAt: t.startedAt } : {}),
+		...(t.doneAt !== undefined ? { finishedAt: t.doneAt } : {}),
+		updatedAt,
+		...(t.origin ? { origin: t.origin } : {}),
+		...(t.plan.goal ? { goal: t.plan.goal } : {}),
+		...(t.summary ? { doneSummary: clipText(t.summary) } : {}),
+		...(delivery ? { delivery } : {}),
+		...(wait ? { wait } : {}),
+		...(blockedRes ? { blocked: blockedRes.blocked } : {}),
+		...(stuckDetail ? { stuck: stuckDetail } : {}),
+		...(afterList.length ? { after: afterList } : {}),
+		...(queuedRes ? { queuedDetail: queuedRes.queuedDetail } : {}),
 		...(t.status === "blocked" && t.block?.lead ? { owing: owingOf(t.block, t.block.lead) } : {}),
 		// dead-end (Ops #483): a block the queue let go; the task comes back to work next.
 		...(t.status === "blocked" && t.block?.poke ? { poked: t.block.poke.at } : {}),

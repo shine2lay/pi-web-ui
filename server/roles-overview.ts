@@ -53,6 +53,13 @@ import { readRoleInstructions } from "./roles-instructions.js";
 import { roleSettingsOf, type RoleSettings } from "./roles-config-history.js";
 import { roleAnswerKindAllowed, sortAsks } from "./roles-asks.js";
 import { linkOf, taskOf } from "./roles-task-next.js";
+import type { QueueSnapshotForDeps } from "./shared/task-blocker-resolver.js";
+import {
+	computeTagGroups,
+	computeTouchSystems,
+	DeliveryStateCache,
+	type DeployStateSnapshots,
+} from "./shared/task-delivery-resolver.js";
 import { briefOfAsk } from "./owner-card-brief.js";
 import { taskQueueFromEntries, taskQueueHeld, taskQueueLaneUse } from "./task-queue.js";
 import { WorkRecordsFile } from "./work-records.js";
@@ -249,6 +256,13 @@ interface RoleTaskInfo {
 	mtimeMs?: number;
 }
 
+interface PreReadHome {
+	home: string | null;
+	scan?: TranscriptScan;
+	queue?: UiTaskQueue;
+	problem?: boolean;
+}
+
 /** Makes the Roles page's snapshot (cached reads; see the file comment). */
 export class RolesOverviewReader {
 	readonly scans = new TranscriptScans();
@@ -261,6 +275,8 @@ export class RolesOverviewReader {
 	private readonly reportTexts = new Map<string, { text: string; at?: number; file: string }>();
 	/** roles-evidence: wt's and pi-web-deploy's records, for the working tasks' Completion evidence. */
 	private readonly evidence: RolesEvidence | null;
+	/** Track B2: cached wt-land-queue, wt-deploy, and pi-web-deploy state + git ancestry cache. */
+	private readonly deliveryCache: DeliveryStateCache | null;
 
 	constructor(private readonly host: RolesOverviewHost) {
 		this.paths = new ChatPaths(
@@ -273,6 +289,7 @@ export class RolesOverviewReader {
 		this.work = workFile ? new WorkRecordsFile(workFile) : null;
 		const evidencePaths = host.evidencePaths?.bind(host);
 		this.evidence = evidencePaths ? new RolesEvidence(evidencePaths) : null;
+		this.deliveryCache = evidencePaths ? new DeliveryStateCache(evidencePaths) : null;
 	}
 
 	private now(): number {
@@ -303,6 +320,38 @@ export class RolesOverviewReader {
 		} catch {
 			evidence = undefined;
 		}
+		let deploySnapshots: DeployStateSnapshots | undefined;
+		try {
+			deploySnapshots = this.deliveryCache ? await this.deliveryCache.loadSnapshots() : undefined;
+		} catch {
+			deploySnapshots = undefined;
+		}
+		// Pre-read each role's home chat once so `queuesByRole` is available for cross-role blocker resolution.
+		const preHomes = new Map<string, PreReadHome>();
+		const queuesByRole = new Map<string, QueueSnapshotForDeps>();
+		for (const def of defs) {
+			const home = def.homeChat ? await this.paths.check(def.homeChat) : null;
+			if (!home) {
+				preHomes.set(def.id, { home: null });
+				continue;
+			}
+			try {
+				const s = await this.scans.read(home);
+				keep.add(home);
+				const q = taskQueueFromEntries(s.queue, true, Number.MAX_SAFE_INTEGER, undefined, s.sessionId);
+				preHomes.set(def.id, { home, scan: s, queue: q });
+				queuesByRole.set(def.id, {
+					running: q.running,
+					queueRunning: q.running,
+					hold: q.hold,
+					paused: q.hold,
+					lanesAtOnce: q.lanesAtOnce,
+					tasks: q.tasks,
+				});
+			} catch {
+				preHomes.set(def.id, { home, problem: true });
+			}
+		}
 		// roles-sent: only roles on the page count, as senders and as receivers.
 		const onPage = new Set(defs.map((d) => d.id));
 		const listed = (id: string) => onPage.has(id);
@@ -310,6 +359,7 @@ export class RolesOverviewReader {
 		// the roles with a home chat (withLead names only one of them).
 		const doneFacts = new Map<string, Map<number, DoneFact>>();
 		const withHome = new Set(defs.filter((d) => !!d.homeChat).map((d) => d.id));
+		const allRoleTasks: UiRoleTask[] = [];
 		for (const def of defs) {
 			const row = await this.role(
 				def,
@@ -322,6 +372,10 @@ export class RolesOverviewReader {
 				evidence,
 				{ roles: withHome, done: doneFacts },
 				held,
+				preHomes.get(def.id),
+				queuesByRole,
+				deploySnapshots,
+				allRoleTasks,
 			);
 			let sent: UiRoleSent | undefined;
 			try {
@@ -370,6 +424,8 @@ export class RolesOverviewReader {
 		} catch {
 			approvals = undefined;
 		}
+		const tagGroups = computeTagGroups(allRoleTasks);
+		const touchSystems = computeTouchSystems(allRoleTasks);
 		const overview: UiRolesOverview = {
 			at,
 			roles,
@@ -381,6 +437,8 @@ export class RolesOverviewReader {
 			...(contacts ? { contacts } : {}),
 			...(openPairs ? { openPairs } : {}),
 			...(approvals ? { approvals } : {}),
+			tagGroups,
+			touchSystems,
 		};
 		setDoneFacts(overview, doneFacts);
 		return overview;
@@ -399,10 +457,14 @@ export class RolesOverviewReader {
 		live: { roles: ReadonlySet<string>; done?: Map<string, Map<number, DoneFact>> } = { roles: new Set() },
 		// owner-question routing (Ops #685): asks held for COO first, with when each reaches the owner at the latest.
 		heldAsks: HeldOwnerAsk[] = [],
+		preHome?: PreReadHome,
+		queuesByRole?: ReadonlyMap<string, QueueSnapshotForDeps>,
+		deploySnapshots?: DeployStateSnapshots,
+		allRoleTasks?: UiRoleTask[],
 	): Promise<UiRoleOverview> {
 		const problems: string[] = [];
 		const mode = roleWorkMode(def.id, def.role.config, now);
-		const home = def.homeChat ? await this.paths.check(def.homeChat) : null;
+		const home = preHome !== undefined ? preHome.home : def.homeChat ? await this.paths.check(def.homeChat) : null;
 		if (def.homeChat && !home) problems.push("home chat");
 		let homeLines: UiTldrLine[] = [];
 		let tasks: UiTaskQueueTask[] = [];
@@ -420,13 +482,14 @@ export class RolesOverviewReader {
 		// roles-model: the home chat's newest recorded model change (used when the chat isn't open).
 		let recordedModel: TranscriptScan["model"];
 		if (home) {
-			try {
-				const s = await this.scans.read(home);
-				keep.add(home);
+			if (preHome?.problem) {
+				problems.push("home chat");
+			} else if (preHome?.scan && preHome.queue) {
+				const s = preHome.scan;
+				const q = preHome.queue;
 				lastActivity = Math.round(s.mtimeMs);
 				recordedModel = s.model;
 				homeLines = tldrLinesFromEntries(s.tldr, TLDR_MAX_LINES);
-				const q = taskQueueFromEntries(s.queue, true, Number.MAX_SAFE_INTEGER, undefined, s.sessionId);
 				tasks = q.tasks;
 				running = q.running;
 				pausedReason = q.pausedReason;
@@ -435,9 +498,25 @@ export class RolesOverviewReader {
 				stuckAt = s.stuckAt;
 				stuckRoute = s.stuckRoute;
 				queueRead = true;
-				live.done?.set(home, doneFactsOfTasks(tasks));
-			} catch {
-				problems.push("home chat");
+			} else {
+				try {
+					const s = await this.scans.read(home);
+					keep.add(home);
+					lastActivity = Math.round(s.mtimeMs);
+					recordedModel = s.model;
+					homeLines = tldrLinesFromEntries(s.tldr, TLDR_MAX_LINES);
+					const q = taskQueueFromEntries(s.queue, true, Number.MAX_SAFE_INTEGER, undefined, s.sessionId);
+					tasks = q.tasks;
+					running = q.running;
+					pausedReason = q.pausedReason;
+					queueHold = q.hold;
+					laneUse = taskQueueLaneUse(q);
+					stuckAt = s.stuckAt;
+					stuckRoute = s.stuckRoute;
+					queueRead = true;
+				} catch {
+					problems.push("home chat");
+				}
 			}
 		}
 
@@ -645,6 +724,16 @@ export class RolesOverviewReader {
 		}
 
 		// The queue in short.
+		const resolvedDoneById = new Map<number, UiRoleTask>();
+		const baseTaskOpts = {
+			queuesByRole,
+			queueRunning: running,
+			queueHold,
+			lanesAtOnce: laneUse?.atOnce,
+			queueTasks: tasks,
+			deploySnapshots,
+			now,
+		};
 		let queue: UiRoleQueue | undefined;
 		if (tasks.length || pausedReason || running || queueHold) {
 			const active: UiRoleTask[] = [];
@@ -657,9 +746,14 @@ export class RolesOverviewReader {
 			const dropped = tasks
 				.filter((t) => t.status === "dropped")
 				.sort((a, b) => (b.dropped?.at ?? 0) - (a.dropped?.at ?? 0));
+			const droppedRows = dropped.map((t) => taskOf(t, def.id, undefined, baseTaskOpts));
+			if (allRoleTasks) allRoleTasks.push(...droppedRows);
 			for (const t of tasks) {
 				if (t.status === "done") {
 					done++;
+					const doneRow = taskOf(t, def.id, undefined, baseTaskOpts);
+					resolvedDoneById.set(t.id, doneRow);
+					allRoleTasks?.push(doneRow);
 					continue;
 				}
 				if (t.status === "dropped") continue;
@@ -667,7 +761,9 @@ export class RolesOverviewReader {
 				const held = heldOf(t);
 				if (t.status === "ready") {
 					ready++;
-					if (queued.length < ROLES_QUEUED_MAX) queued.push(taskOf(t, def.id, held));
+					const readyRow = taskOf(t, def.id, held, baseTaskOpts);
+					allRoleTasks?.push(readyRow);
+					if (queued.length < ROLES_QUEUED_MAX) queued.push(readyRow);
 					continue;
 				}
 				const info = infos.find((i) => i.task === t);
@@ -685,17 +781,23 @@ export class RolesOverviewReader {
 				} catch {
 					ev = undefined;
 				}
-				const row = taskOf(t, def.id, held);
+				const row = taskOf(t, def.id, held, {
+					...baseTaskOpts,
+					evidence: ev,
+					withLead: lead,
+				});
 				// live-progress: a stuck question a lead still holds is that lead's to answer, not the owner's.
 				if (lead && t.status === "stuck" && !held) row.next = { kind: "answer", who: lead };
-				active.push({
+				const activeRow: UiRoleTask = {
 					...row,
 					...(busy ? { busy: true } : {}),
 					...(latest ? { latest: lineOf(latest, taskRef(t), !!held) } : {}),
 					...(progress ? { progress } : {}),
 					...(lead ? { withLead: lead } : {}),
 					...(ev ? { evidence: ev } : {}),
-				});
+				};
+				active.push(activeRow);
+				allRoleTasks?.push(activeRow);
 			}
 			queue = {
 				running,
@@ -703,12 +805,15 @@ export class RolesOverviewReader {
 				...(queueHold ? { hold: queueHold } : {}),
 				active,
 				queued,
-				...(dropped.length ? { dropped: dropped.slice(0, ROLES_DROPPED_MAX).map((t) => taskOf(t, def.id)) } : {}),
+				...(droppedRows.length ? { dropped: droppedRows.slice(0, ROLES_DROPPED_MAX) } : {}),
 				// dropped only when it has some, so a queue with none reads exactly as before.
 				counts: { active: active.length, queued: ready, done, ...(dropped.length ? { dropped: dropped.length } : {}) },
 				...(laneUse ? { lanes: laneUse } : {}),
 				links,
 			};
+		}
+		if (home && queueRead) {
+			live.done?.set(home, doneFactsOfTasks(tasks, resolvedDoneById));
 		}
 
 		// Its 6 am report.

@@ -22,11 +22,20 @@ import { open, stat, type FileHandle } from "node:fs/promises";
 import { samePath } from "./identities.js";
 import type {
 	ServerMessage,
+	UiNormalizedTouch,
+	UiRoleTaskBlocked,
 	UiRoleTaskNext,
+	UiRoleTaskQueuedDetail,
+	UiRoleTaskWait,
 	UiRolesOverview,
+	UiStatusTone,
+	UiTaskDeliveryState,
+	UiTaskGroupRollup,
+	UiTaskLifecycleStatus,
 	UiTaskParent,
 	UiTaskProgress,
 	UiTaskQueueHold,
+	UiTouchSystemSummary,
 	UiWorkActivity,
 	UiWorkActivityOp,
 	UiWorkDoneItem,
@@ -41,6 +50,7 @@ import type {
 } from "./protocol.js";
 import { doneFactsOf } from "./live-progress.js";
 import { requesterText } from "./queue-requester.js";
+import { computeTagGroups, computeTouchSystems } from "./shared/task-delivery-resolver.js";
 import { readUpTo, STATE_READ_FLAGS } from "./state-file-read.js";
 import { WORK_LOG_MAX } from "./work-records.js";
 
@@ -176,6 +186,17 @@ export interface WorkTaskFacts {
 	withLead?: string;
 	/** live-progress: done: its queue_done summary, clipped (absent when none was recorded). */
 	doneSummary?: string;
+	tags?: string[];
+	touches?: string[];
+	normalizedTouches?: UiNormalizedTouch[];
+	lifecycleStatus?: UiTaskLifecycleStatus;
+	statusTone?: UiStatusTone;
+	howToUnblock?: string;
+	dependsOnRefs?: string[];
+	delivery?: UiTaskDeliveryState;
+	wait?: UiRoleTaskWait;
+	blockedDetail?: UiRoleTaskBlocked;
+	queuedDetail?: UiRoleTaskQueuedDetail;
 }
 
 /** One queue's facts: its chat file and its tasks by number. */
@@ -557,8 +578,26 @@ function taskOut(l: Link, f: WorkTaskFacts | undefined): UiWorkPageTask {
 		...(f?.progress ? { progress: { ...f.progress } } : {}),
 		...(f?.withLead ? { withLead: f.withLead } : {}),
 		...(f?.doneSummary ? { doneSummary: f.doneSummary } : {}),
+		...(f?.tags?.length ? { tags: [...f.tags] } : {}),
+		...(f?.touches?.length ? { touches: [...f.touches] } : {}),
+		...(f?.normalizedTouches?.length ? { normalizedTouches: [...f.normalizedTouches] } : {}),
+		...(f?.lifecycleStatus ? { lifecycleStatus: f.lifecycleStatus } : {}),
+		...(f?.statusTone ? { statusTone: f.statusTone } : {}),
+		...(f?.howToUnblock ? { howToUnblock: f.howToUnblock } : {}),
+		...(f?.dependsOnRefs?.length ? { dependsOnRefs: [...f.dependsOnRefs] } : {}),
+		...(f?.delivery ? { delivery: { ...f.delivery } } : {}),
+		...(f?.wait ? { wait: { ...f.wait } } : {}),
+		...(f?.blockedDetail ? { blockedDetail: { ...f.blockedDetail } } : {}),
+		...(f?.queuedDetail ? { queuedDetail: { ...f.queuedDetail } } : {}),
 	};
 }
+
+interface OverviewGroupCarry {
+	tagGroups?: UiTaskGroupRollup[];
+	touchSystems?: UiTouchSystemSummary[];
+}
+
+const OVERVIEW_GROUP_FACTS = new WeakMap<readonly WorkQueueFacts[], OverviewGroupCarry>();
 
 /** The page from a replayed log and the queues' facts: each task gets its own queue's facts, or none. A link
  *  whose queue file is `gone` is left out (initiatives-page-tasks, H-INITIATIVES-PAGE-3c): a deleted chat's, or
@@ -596,14 +635,51 @@ export function workPageOf(
 		if (f.added !== undefined) return f.added === l.added ? f : undefined;
 		return (numbers.get(`${l.queue}\u0000${l.task}`) ?? 0) > 1 ? undefined : f;
 	};
+	const sentTasks = links.slice(0, WORK_PAGE_TASKS_MAX).map((l) => taskOut(l, factsOf(l)));
+	const carry = OVERVIEW_GROUP_FACTS.get(facts);
+	const computedTasks = sentTasks
+		.filter(
+			(t) =>
+				(t.tags && t.tags.length > 0) ||
+				(t.touches && t.touches.length > 0) ||
+				(t.normalizedTouches && t.normalizedTouches.length > 0),
+		)
+		.map((t) => ({
+			role: t.queueName,
+			status: t.state,
+			lifecycleStatus: t.lifecycleStatus,
+			tags: t.tags,
+			touches: t.touches,
+			normalizedTouches: t.normalizedTouches,
+			updatedAt: t.stateAt ?? t.added,
+			howToUnblock: t.howToUnblock,
+			blocked: t.blockedDetail,
+			queuedDetail: t.queuedDetail,
+		}));
+	const computedTagGroups = computedTasks.length > 0 ? computeTagGroups(computedTasks) : undefined;
+	const computedTouchSystems = computedTasks.length > 0 ? computeTouchSystems(computedTasks) : undefined;
+	const tagGroups =
+		carry?.tagGroups && carry.tagGroups.length > 0
+			? carry.tagGroups
+			: computedTagGroups && computedTagGroups.length > 0
+				? computedTagGroups
+				: carry?.tagGroups;
+	const touchSystems =
+		carry?.touchSystems && carry.touchSystems.length > 0
+			? carry.touchSystems
+			: computedTouchSystems && computedTouchSystems.length > 0
+				? computedTouchSystems
+				: carry?.touchSystems;
 	const problem = tooMany ? ("too-big" as const) : r.unknown ? ("unknown-change" as const) : undefined;
 	return {
 		at,
 		initiatives: sentInitiatives.map(recordOut),
 		projects: sentProjects.map(recordOut),
-		tasks: links.slice(0, WORK_PAGE_TASKS_MAX).map((l) => taskOut(l, factsOf(l))),
+		tasks: sentTasks,
 		activity: r.activity.slice(-WORK_PAGE_ACTIVITY_MAX).reverse(),
 		...(problem ? { problem } : {}),
+		...(tagGroups !== undefined ? { tagGroups } : {}),
+		...(touchSystems !== undefined ? { touchSystems } : {}),
 	};
 }
 
@@ -639,13 +715,34 @@ export function workFactsFromOverview(overview: UiRolesOverview): WorkQueueFacts
 				...(t.poked !== undefined ? { poked: t.poked } : {}),
 				...(t.progress ? { progress: t.progress } : {}),
 				...(t.withLead ? { withLead: t.withLead } : {}),
+				...(t.tags?.length ? { tags: [...t.tags] } : {}),
+				...(t.touches?.length ? { touches: [...t.touches] } : {}),
+				...(t.normalizedTouches?.length ? { normalizedTouches: [...t.normalizedTouches] } : {}),
+				...(t.lifecycleStatus ? { lifecycleStatus: t.lifecycleStatus } : {}),
+				...(t.statusTone ? { statusTone: t.statusTone } : {}),
+				...(t.howToUnblock ? { howToUnblock: t.howToUnblock } : {}),
+				...(t.dependsOnRefs?.length ? { dependsOnRefs: [...t.dependsOnRefs] } : {}),
+				...(t.delivery ? { delivery: { ...t.delivery } } : {}),
+				...(t.wait ? { wait: { ...t.wait } } : {}),
+				...(t.blocked ? { blockedDetail: { ...t.blocked } } : {}),
+				...(t.queuedDetail ? { queuedDetail: { ...t.queuedDetail } } : {}),
 			});
 		}
 		// live-progress: its done tasks' summaries, read with this overview (each knows when it was added, so a
 		// task with the same number on another branch of the chat doesn't take it).
 		for (const [id, d] of doneFactsOf(overview).get(file) ?? []) {
 			if (tasks.has(id)) continue;
-			tasks.set(id, { added: d.added, ...(d.summary ? { doneSummary: d.summary } : {}) });
+			tasks.set(id, {
+				added: d.added,
+				...(d.summary ? { doneSummary: d.summary } : {}),
+				...(d.tags?.length ? { tags: [...d.tags] } : {}),
+				...(d.touches?.length ? { touches: [...d.touches] } : {}),
+				...(d.normalizedTouches?.length ? { normalizedTouches: [...d.normalizedTouches] } : {}),
+				...(d.lifecycleStatus ? { lifecycleStatus: d.lifecycleStatus } : {}),
+				...(d.statusTone ? { statusTone: d.statusTone } : {}),
+				...(d.delivery ? { delivery: { ...d.delivery } } : {}),
+				...(d.dependsOnRefs?.length ? { dependsOnRefs: [...d.dependsOnRefs] } : {}),
+			});
 		}
 		// Its open asks come oldest first: a task's first one is what waits on the owner.
 		for (const a of role.asks) {
@@ -657,6 +754,12 @@ export function workFactsFromOverview(overview: UiRolesOverview): WorkQueueFacts
 			tasks.set(n, f);
 		}
 		if (tasks.size) out.push({ file, tasks });
+	}
+	if (overview.tagGroups !== undefined || overview.touchSystems !== undefined) {
+		OVERVIEW_GROUP_FACTS.set(out, {
+			...(overview.tagGroups !== undefined ? { tagGroups: overview.tagGroups } : {}),
+			...(overview.touchSystems !== undefined ? { touchSystems: overview.touchSystems } : {}),
+		});
 	}
 	return out;
 }

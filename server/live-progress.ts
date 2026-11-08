@@ -6,7 +6,18 @@
  *   - withLead: the role whose home chat has a task's question while it hasn't reached the owner (the owner rule);
  *   - doneRecent / doneSummary: a queue's done tasks with their queue_done summaries, clipped.
  */
-import type { UiRoleDoneTask, UiRolesOverview, UiTaskProgress, UiTaskQueueTask, UiTldrLine } from "./protocol.js";
+import type {
+	UiNormalizedTouch,
+	UiRoleDoneTask,
+	UiRoleTask,
+	UiRolesOverview,
+	UiStatusTone,
+	UiTaskDeliveryState,
+	UiTaskLifecycleStatus,
+	UiTaskProgress,
+	UiTaskQueueTask,
+	UiTldrLine,
+} from "./protocol.js";
 
 /** A role's newest done tasks sent in its overview (newest first). */
 export const LIVE_DONE_RECENT_MAX = 10;
@@ -121,17 +132,38 @@ export function doneRecentOf(tasks: readonly UiTaskQueueTask[], max = LIVE_DONE_
 export interface DoneFact {
 	added: number;
 	summary?: string;
+	tags?: string[];
+	touches?: string[];
+	normalizedTouches?: UiNormalizedTouch[];
+	lifecycleStatus?: UiTaskLifecycleStatus;
+	statusTone?: UiStatusTone;
+	delivery?: UiTaskDeliveryState;
+	dependsOnRefs?: string[];
 }
 
 /** Each home queue's done tasks, by its chat file, for the overview they were read with (never sent to a page). */
 const DONE_FACTS = new WeakMap<UiRolesOverview, Map<string, Map<number, DoneFact>>>();
 
 /** A queue's done tasks with their clipped summaries (absent when none was recorded). */
-export function doneFactsOfTasks(tasks: readonly UiTaskQueueTask[]): Map<number, DoneFact> {
+export function doneFactsOfTasks(
+	tasks: readonly UiTaskQueueTask[],
+	resolvedById?: ReadonlyMap<number, UiRoleTask>,
+): Map<number, DoneFact> {
 	const out = new Map<number, DoneFact>();
 	for (const t of tasks) {
 		if (t.status !== "done" || out.has(t.id)) continue;
-		out.set(t.id, { added: t.addedAt, ...(t.summary ? { summary: clipText(t.summary) } : {}) });
+		const resolved = resolvedById?.get(t.id);
+		out.set(t.id, {
+			added: t.addedAt,
+			...(t.summary ? { summary: clipText(t.summary) } : {}),
+			...(resolved?.tags?.length ? { tags: [...resolved.tags] } : {}),
+			...(resolved?.touches?.length ? { touches: [...resolved.touches] } : {}),
+			...(resolved?.normalizedTouches?.length ? { normalizedTouches: [...resolved.normalizedTouches] } : {}),
+			...(resolved?.lifecycleStatus ? { lifecycleStatus: resolved.lifecycleStatus } : {}),
+			...(resolved?.statusTone ? { statusTone: resolved.statusTone } : {}),
+			...(resolved?.delivery ? { delivery: { ...resolved.delivery } } : {}),
+			...(resolved?.dependsOnRefs?.length ? { dependsOnRefs: [...resolved.dependsOnRefs] } : {}),
+		});
 	}
 	return out;
 }
