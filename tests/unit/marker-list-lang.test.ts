@@ -59,4 +59,12 @@ describe("MarkerService.listForUi 语言感知", () => {
 		const todo = entries.find((e) => e.name === "todo")?.guidance.join("\n") ?? "";
 		expect(todo).not.toMatch(/[\u4e00-\u9fff]/);
 	});
+
+	it("buildGuidance no longer injects [[todo:...]] or todo_list guidance while keeping notify and conv:rename", () => {
+		const guidance = makeService("en").buildGuidance();
+		expect(guidance).not.toContain("[[todo:");
+		expect(guidance).not.toContain("todo_list");
+		expect(guidance).toContain("[[notify:");
+		expect(guidance).toContain("[[conv:rename:");
+	});
 });

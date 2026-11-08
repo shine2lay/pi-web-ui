@@ -17,7 +17,7 @@
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,11 +69,14 @@ async function sse(res, chunks, gapMs = 0) {
 	res.write("data: [DONE]\n\n");
 	res.end();
 }
-const todoCall = (id) => ({
+const claimCall = (id, paths) => ({
 	index: 0,
 	id,
 	type: "function",
-	function: { name: "todo_list", arguments: JSON.stringify({ action: "list" }) },
+	function: {
+		name: "claim_files",
+		arguments: JSON.stringify(paths ? { action: "claim", paths } : { action: "list" }),
+	},
 });
 const textOf = (msg) => {
 	const c = msg?.content;
@@ -85,9 +88,12 @@ const gateA = new Promise((r) => (releaseA = r));
 /** A 的第二次模型调用到达（被扣住）的时刻 / A 答完的时刻。 */
 let aHeldAt = 0;
 let aDoneAt = 0;
-/** A 在后台调 todo_list 拿到的文本。 */
+/** A 在后台调 claim_files 拿到的文本。 */
 let aListWhileBehind = null;
 let todoOffered = null;
+let retiredOffered = null;
+let todoGuidanceInjected = null;
+let otherMarkersInjected = null;
 
 const mock = createServer(async (req, res) => {
 	const url = new URL(req.url ?? "/", `http://127.0.0.1:${MOCK_PORT}`);
@@ -124,7 +130,17 @@ const mock = createServer(async (req, res) => {
 		await sse(res, [chunk(m, { content: "Warmed up" }), chunk(m, {}, "stop")], 200);
 		return;
 	}
-	todoOffered ??= tools.some((t) => (t.function?.name ?? t.name) === "todo_list");
+	const toolNames = tools.map((t) => t.function?.name ?? t.name);
+	todoOffered ??= toolNames.includes("todo_list");
+	retiredOffered ??= ["todo_list", "compact_context", "decision_log", "initiative_update"].some((n) =>
+		toolNames.includes(n),
+	);
+	const systemText = history
+		.filter((x) => x.role === "system" || x.role === "developer")
+		.map((x) => textOf(x))
+		.join("\n");
+	todoGuidanceInjected ??= systemText.includes("[[todo:") || systemText.includes("todo_list");
+	otherMarkersInjected ??= systemText.includes("[[notify:") && systemText.includes("[[conv:rename:");
 	let lastUser = -1;
 	history.forEach((x, i) => {
 		if (x.role === "user") lastUser = i;
@@ -137,16 +153,16 @@ const mock = createServer(async (req, res) => {
 	}
 	if (isA) {
 		if (results === 0) {
-			// 记一条任务（标记在这条消息定稿时生效），顺手调一次 todo_list，好让循环接着走。
+			// 记一条任务（标记在这条消息定稿时生效），顺手认领 alpha.txt，好让循环接着走。
 			await sse(res, [
 				chunk(m, { content: "Alpha noted [[todo:new:alpha task]]" }),
-				chunk(m, { tool_calls: [todoCall("call_a1")] }),
+				chunk(m, { tool_calls: [claimCall("call_a1", ["alpha.txt"])] }),
 				chunk(m, {}, "tool_calls"),
 			]);
 		} else if (results === 1) {
 			aHeldAt = Date.now();
 			await gateA; // 等窗口换到 B、B 记好自己的任务
-			await sse(res, [chunk(m, { tool_calls: [todoCall("call_a2")] }), chunk(m, {}, "tool_calls")]);
+			await sse(res, [chunk(m, { tool_calls: [claimCall("call_a2")] }), chunk(m, {}, "tool_calls")]);
 		} else {
 			aListWhileBehind = textOf(history.filter((x) => x.role === "tool").at(-1));
 			await sse(res, [chunk(m, { content: "TODOTEST-A-DONE" }), chunk(m, {}, "stop")]);
@@ -263,17 +279,32 @@ try {
 	check("chat B answered", await waitFor(async () => (await messagesText(page)).includes("Bravo noted"), 20000));
 	await sleep(1000); // B 的标记生效
 
-	console.log("let chat A call todo_list in the background");
+	console.log("let chat A finish in the background and verify per-conversation marker snapshots");
 	releaseA();
 	check("chat A finished", await waitFor(() => aDoneAt > 0, 20000));
 	check("the window still showed chat B", !(await messagesText(page)).includes("TODOTEST-A"));
-	check("todo_list was offered to the model", todoOffered === true, String(todoOffered));
+	check("todo_list is no longer offered to the model", todoOffered === false, String(todoOffered));
+	check("none of Bucket 1 retired tools is offered to the model", retiredOffered === false, String(retiredOffered));
 	check(
-		"A's todo_list lists A's own task",
-		!!aListWhileBehind?.includes("alpha task"),
-		JSON.stringify(aListWhileBehind),
+		"[[todo:...]] guidance is no longer injected into the system prompt",
+		todoGuidanceInjected === false && otherMarkersInjected === true,
+		JSON.stringify({ todoGuidanceInjected, otherMarkersInjected }),
 	);
-	check("A's todo_list does not list the open chat's task", !aListWhileBehind?.includes("bravo task"));
+	const sessRoot = join(agentDir, "sessions");
+	const jsonlFiles = readdirSync(sessRoot, { recursive: true })
+		.map((f) => String(f))
+		.filter((f) => f.endsWith(".jsonl"))
+		.map((f) => readFileSync(join(sessRoot, f), "utf8"));
+	const aTranscript = jsonlFiles.find((t) => t.includes("TODOTEST-A")) ?? "";
+	const bTranscript = jsonlFiles.find((t) => t.includes("TODOTEST-B")) ?? "";
+	check(
+		"A's marker snapshot stores A's own task",
+		aTranscript.includes("alpha task") && !aTranscript.includes("bravo task"),
+	);
+	check(
+		"B's marker snapshot stores B's own task",
+		bTranscript.includes("bravo task") && !bTranscript.includes("alpha task"),
+	);
 	check("no page errors", pageErrors.length === 0, pageErrors.join(" | "));
 } catch (e) {
 	failures++;

@@ -25,15 +25,12 @@ const SETTINGS_SRC = readFileSync(join(__dirname, "..", "..", "web", "src", "com
 /** 循环渲染的两组（设置页只写名单，不逐个写行）。 */
 const LOOP_RENDERED = new Set<string>([...TERMINAL_TOOL_NAMES, ...SUBAGENT_TOOL_NAMES]);
 
-/** 「其他」组循环的唯一例外（行在 markers 分区，不在「其他」组）。 */
-const OTHER_LOOP_SKIP = new Set([MARKERS_LIST_TOOL_NAME]);
-
 describe("设置「工具」页覆盖率", () => {
 	it("「其他」组每个目录项都自带文案 key（且 key 真存在），循环才画得出说明", () => {
 		const enKeys = new Set(Object.keys(en));
 		const bad: string[] = [];
 		for (const tool of AGENT_TOOL_CATALOG) {
-			if (tool.group !== "other" || OTHER_LOOP_SKIP.has(tool.name)) continue;
+			if (tool.group !== "other") continue;
 			if (!tool.descKey || !enKeys.has(tool.descKey)) bad.push(`${tool.name}.descKey=${tool.descKey}`);
 			if (!tool.offHintKey || !enKeys.has(tool.offHintKey)) bad.push(`${tool.name}.offHintKey=${tool.offHintKey}`);
 		}
@@ -45,23 +42,20 @@ describe("设置「工具」页覆盖率", () => {
 		expect(SETTINGS_SRC.includes("OTHER_AGENT_TOOLS.map"), "OTHER_AGENT_TOOLS 定义了却没有 .map 渲染").toBe(true);
 	});
 
-	it("唯一的例外锁死：todo_list 只在 markers 分区画一行，循环里跳过它", () => {
-		expect(SETTINGS_SRC.includes("title={MARKERS_LIST_TOOL_NAME}"), "markers 分区的 todo_list 行丢了").toBe(true);
-		// 例外只能是这一个：OTHER_AGENT_TOOLS 定义里除 MARKERS_LIST 外不许再点名任何工具。
+	it("OTHER_AGENT_TOOLS 无单工具例外，且已下线工具不再渲染设置行", () => {
+		expect(SETTINGS_SRC.includes("title={MARKERS_LIST_TOOL_NAME}")).toBe(false);
+		expect(SETTINGS_SRC.includes("title={COMPACT_CONTEXT_TOOL_NAME}")).toBe(false);
 		const defs = [...SETTINGS_SRC.matchAll(/OTHER_AGENT_TOOLS = AGENT_TOOL_CATALOG\.filter\((.*?)\);/gs)].map(
 			(m) => m[1],
 		);
 		expect(defs.length, "OTHER_AGENT_TOOLS 定义丢了").toBe(1);
 		const named = [...defs[0].matchAll(/\b([A-Z_][A-Z0-9_]*_TOOL_NAME)\b/g)].map((m) => m[1]);
-		expect(named, `OTHER_AGENT_TOOLS 多了例外（只允许跳过 todo_list）：${named.join(", ")}`).toEqual([
-			"MARKERS_LIST_TOOL_NAME",
-		]);
+		expect(named, `OTHER_AGENT_TOOLS 不应再跳过单个工具：${named.join(", ")}`).toEqual([]);
 	});
 
-	it("设置页手写的工具行（只剩 markers 例外）都对应目录里的工具（防名字打错）", () => {
+	it("设置页手写的工具行都对应目录里的工具（防名字打错）", () => {
 		const known = new Set(AGENT_TOOL_CATALOG.map((t) => t.name));
 		const rows = [...SETTINGS_SRC.matchAll(/title=\{([A-Z_][A-Z0-9_]*_TOOL_NAME)\}/g)].map((m) => m[1]);
-		expect(rows, "连 markers 例外行都丢了？").toContain("MARKERS_LIST_TOOL_NAME");
 		const unknown: string[] = [];
 		for (const constName of rows) {
 			const value = (toolManager as unknown as Record<string, unknown>)[constName];

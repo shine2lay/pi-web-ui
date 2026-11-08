@@ -6622,10 +6622,6 @@ export class ClientSession {
 					...(ownerId
 						? [makeDelegateTaskTool(withSubagentOwner(this.subagentHost, ownerId))]
 						: [makeDelegateTaskTool(this.subagentHost)]),
-					// 内置标记只读查询工具（todo/svc 状态查询，写操作走内联标记）。
-					// todo-list-owner：读本 runtime 所属对话（ownerId，标记就写在 conv.id 下），不是建它的
-					// 那个窗口此刻正开着的对话——对话在后台跑时两者不同，以前会拿到前台对话的任务。
-					makeMarkersListTool(() => ownerId ?? this.activeId, this.markerSvc),
 					// 标准引擎的 ask_user_question：模型调用 → 浏览器富渲染问卷（复用 DSH
 					// 的 question_pending/question_answer 协议，前端 DshQuestionDialog）。
 					// DSH 引擎不经此（它走 goal-rpc 的 userQuestions provider）。
@@ -6661,15 +6657,6 @@ export class ClientSession {
 						service: () => roleBoardService ?? undefined,
 						sender: () => this.roleMessageHost(ownerId).sender(),
 					}),
-					// initiatives-page (task #84): roles list, add and correct the Initiatives page's decisions.
-					// Registered everywhere; it refuses chats without a role, as message_role does.
-					makeDecisionLogTool(this.decisionLogHost(ownerId)),
-					// progress-feed (task #85): an initiative's lead reads what's new and posts progress updates.
-					// Registered everywhere; it refuses chats without a role, and only the initiative's lead may post.
-					makeInitiativeUpdateTool({
-						sender: () => this.roleMessageHost(ownerId).sender(),
-						feed: () => progressFeedService ?? undefined,
-					}),
 					// telegram-coo: every role's state in one call, read-only (the Roles page's snapshot as text).
 					makeRolesOverviewTool({
 						read: () =>
@@ -6693,9 +6680,6 @@ export class ClientSession {
 					// 子代理会话同样注册（owner 即真正派发的父对话，读该会话 loader）。
 					// DSH 引擎无 customTool 注册面，不接。开关走统一工具 tab。
 					makeSkillTool(this.skillToolHost(ownerId), () => this.getLang()),
-					// 主动压缩上下文工具（compact_context）：AI 主动根据当前问题精简上下文。
-					// 开关走统一工具 tab（ActiveSet 门控）。DSH 引擎无 customTool 注册面，不接。
-					makeCompactContextTool(this.compactContextHost(ownerId), () => this.getLang()),
 					// 定时唤醒三件套（schedule_task/list/cancel，issue #193）：默认绑定
 					// 发起对话（ownerId，无则活动对话），到期 steer 语义唤醒它；子代理
 					// 会话同样注册（owner 即真正派发的父对话）。开关走统一工具 tab。

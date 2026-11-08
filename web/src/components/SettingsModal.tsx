@@ -108,17 +108,15 @@ import {
 	CORE_BUILTIN_TOOL_NAMES,
 	filterToolsByPreset,
 	presetShowsSkillCatalog,
-	MARKERS_LIST_TOOL_NAME,
 	SUBAGENT_TOOL_NAMES,
 	TERMINAL_TOOL_NAMES,
 } from "../../../server/tool-manager.js";
 
 /**
  * 设置页「其他」组开关行的渲染口径：目录即页面。目录里加一行，页面自动多一行
- * （文案走目录项的 descKey/offHintKey）；不再手写 ToggleRow。唯一例外是 todo_list，
- * 它的行固定在上面的 markers 分区（单测 settings-tool-rows 把这个例外锁死）。
+ * （文案走目录项的 descKey/offHintKey）；不再手写 ToggleRow。
  */
-const OTHER_AGENT_TOOLS = AGENT_TOOL_CATALOG.filter((e) => e.group === "other" && e.name !== MARKERS_LIST_TOOL_NAME);
+const OTHER_AGENT_TOOLS = AGENT_TOOL_CATALOG.filter((e) => e.group === "other");
 
 /** Minimal terminal-tab bridge (same shape SCMPanel uses). */
 interface SettingsTerminalBridge {
@@ -2220,18 +2218,6 @@ export function SettingsModal({
 											onToggle={() => toggleMarker(m.name)}
 										/>
 									))}
-								<ToggleRow
-									title={MARKERS_LIST_TOOL_NAME}
-									tip={`${t("todoListEnabledDesc")}\n${t("todoListOffHint")}`}
-									subtitle={
-										isBlockedByPreset(MARKERS_LIST_TOOL_NAME)
-											? t("toolsBlockedByPreset", { name: piPresetName })
-											: undefined
-									}
-									enabled={!isBlockedByPreset(MARKERS_LIST_TOOL_NAME) && !disabledTools.has(MARKERS_LIST_TOOL_NAME)}
-									disabled={isBlockedByPreset(MARKERS_LIST_TOOL_NAME)}
-									onToggle={() => toggleAgentTool(MARKERS_LIST_TOOL_NAME)}
-								/>
 								<div className="set-field-label">{t("toolsSectionOther")}</div>
 								{OTHER_AGENT_TOOLS.map((tool) => {
 									const blocked = isBlockedByPreset(tool.name);

@@ -230,14 +230,18 @@ try {
 	await page.setViewportSize({ width: 1300, height: 900 });
 	await sleep(300);
 
-	// Settings' tool list: the other tools are there, the plan tool's switch is not.
+	// Settings' tool list: the other tools are there, the plan tool's switch (and retired todo_list / compact_context switches) are not.
 	const names = await settingsToolNames(page, "desktop-settings-tools");
 	check(
 		"Settings lists the tool switches",
-		["claim_files", "patch", "compact_context"].every((n) => names.some((x) => x.startsWith(n))),
+		["claim_files", "patch", "present_files"].every((n) => names.some((x) => x.startsWith(n))),
 		`${names.length} rows`,
 	);
 	check("Settings has no switch for plan_update", !names.some((x) => x.includes(OLD_TOOL)));
+	check(
+		"Settings has no switch for todo_list or compact_context",
+		["todo_list", "compact_context"].every((n) => !names.some((x) => x.includes(n))),
+	);
 	if (SHOT) {
 		await page.setViewportSize({ width: 390, height: 844 });
 		await sleep(500);

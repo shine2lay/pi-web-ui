@@ -62,13 +62,7 @@ export function describeTodos(state: TodoState, includeDeleted = false, _lang: S
 		.join("\n");
 }
 
-const TODO_GUIDANCE_EN: string[] = [
-	"# Inline marker tools (express state changes inline in your reply text — never call a tool for them)",
-	"- Marker syntax: [[todo:new:<subject>]] to create; [[todo:set:<id>,completed|in_progress|pending]] for status; [[todo:remove:<id>]] to delete; [[todo:dep:<id>,blocks=<dep ids, comma-separated>]] to set dependencies.",
-	"- Express all status changes with the [[todo:...]] inline markers above; they never interrupt your reply and need no waiting for a result.",
-	"- Only use the `todo_list` tool (the read path goes through the tool) when you want to list the current tasks.",
-	"- Never invent task ids; ids are assigned by [[todo:new:...]], starting from incrementing integers.",
-];
+const TODO_GUIDANCE_EN: string[] = [];
 
 /** 语言感知的 todo guidance（issue #91）：en 用英译、zh 用中文，默认英文。 */
 export function getTodoGuidance(_lang: ServerLang = "en"): string[] {

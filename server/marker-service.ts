@@ -256,6 +256,7 @@ export class MarkerService {
 	buildGuidance(): string {
 		if (!this.settings.markersEnabled) return "";
 		const disabled = new Set(this.settings.disabledMarkers);
+		disabled.add("todo");
 		const lines = collectGuidance(disabled, this.lang());
 		if (lines.length === 0) return "";
 		// The dynamic lines ride the `{lines}` slot so translator packs can
@@ -263,7 +264,7 @@ export class MarkerService {
 		const linesText = lines.join("\n");
 		return (
 			"\n\n────────── Inline marker tools (important) ──────────\n" +
-			"Write status operations (tasks, marker bits, notifications) directly in your reply text using inline marker syntax — do not call a tool for them.\n" +
+			"Write status operations (marker bits, notifications) directly in your reply text using inline marker syntax — do not call a tool for them.\n" +
 			"The plugin executes them and strips the markers from the displayed text without interrupting your reply.\n\n" +
 			linesText +
 			"\n──────────\n"

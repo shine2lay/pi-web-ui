@@ -50,9 +50,9 @@ function fakeSet(initial: string[] = []) {
 }
 
 describe("catalog", () => {
-	// no-plan-board: plan_update left the "other" group (it had 17).
-	it("共 31 个可开关工具（终端 7＋子代理 8＋其他 16）", () => {
-		expect(AGENT_TOOL_CATALOG).toHaveLength(31);
+	// no-plan-board + Ops #787: plan_update, todo_list and compact_context left the "other" group.
+	it("共 29 个可开关工具（终端 7＋子代理 8＋其他 14）", () => {
+		expect(AGENT_TOOL_CATALOG).toHaveLength(29);
 		expect(TERMINAL_TOOL_NAMES).toHaveLength(7);
 		expect(SUBAGENT_TOOL_NAMES).toHaveLength(8);
 	});
@@ -67,7 +67,6 @@ describe("catalog", () => {
 		for (const n of SUBAGENT_TOOL_NAMES) expect(off.has(n)).toBe(false);
 		expect(off.has("delegate_task")).toBe(false);
 		expect(off.has(ASK_USER_QUESTION_TOOL_NAME)).toBe(false);
-		expect(off.has("todo_list")).toBe(false);
 		// 对话引用读取只读，默认开。
 		expect(off.has(CONVERSATION_READ_TOOL_NAME)).toBe(false);
 		// 技能全文按名加载只读，默认开。
@@ -76,8 +75,6 @@ describe("catalog", () => {
 		expect(off.has(PRESENT_FILES_TOOL_NAME)).toBe(false);
 		// 文件认领（事前打招呼，纯 advisory）默认开：不打开 AI 不知道能认领。
 		expect(off.has(CLAIM_FILES_TOOL_NAME)).toBe(false);
-		// 主动上下文压缩默认开：让 AI 可根据当前任务主动压缩精简上下文。
-		expect(off.has(COMPACT_CONTEXT_TOOL_NAME)).toBe(false);
 	});
 });
 
@@ -87,9 +84,8 @@ describe("normalize", () => {
 		expect(normalizeDisabledAgentTools(["edit_soft", "nope", "edit_soft", 42])).toEqual(["edit_soft"]);
 	});
 
-	it("旧名 markers_list 迁移到 todo_list（已关闭保持关闭）", () => {
-		expect(normalizeDisabledAgentTools(["markers_list"])).toEqual(["todo_list"]);
-		expect(normalizeDisabledAgentTools(["markers_list", "todo_list"])).toEqual(["todo_list"]);
+	it("已下线的 markers_list / todo_list / compact_context 不再留在禁用名单中", () => {
+		expect(normalizeDisabledAgentTools(["markers_list", "todo_list", COMPACT_CONTEXT_TOOL_NAME])).toEqual([]);
 	});
 
 	it("isKnownAgentTool / isAgentToolEnabled", () => {

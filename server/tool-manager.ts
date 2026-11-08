@@ -261,26 +261,6 @@ export const AGENT_TOOL_CATALOG: AgentToolEntry[] = [
 		descKey: "scheduleTaskEnabledDesc",
 		offHintKey: "scheduleTaskOffHint",
 	},
-	// 主动上下文压缩：默认开（让 AI 可以根据当前问题主动精简上下文）。
-	// DSH 引擎无 customTool 注册面，不接。
-	{
-		name: COMPACT_CONTEXT_TOOL_NAME,
-		group: "other",
-		defaultOn: true,
-		dshVisible: false,
-		descKey: "compactContextEnabledDesc",
-		offHintKey: "compactContextOffHint",
-	},
-	// todo_list 唯一例外：行不在「其他」组，固定在上面的 markers 分区（设置页循环
-	// 跳过它，见 OTHER_AGENT_TOOLS；文案 key 照给，万一哪天搬家不用补）。
-	{
-		name: MARKERS_LIST_TOOL_NAME,
-		group: "other",
-		defaultOn: true,
-		dshVisible: true,
-		descKey: "todoListEnabledDesc",
-		offHintKey: "todoListOffHint",
-	},
 ];
 
 /** Pi built-in tools that only run on Windows. Pi's powershell tool refuses every call elsewhere

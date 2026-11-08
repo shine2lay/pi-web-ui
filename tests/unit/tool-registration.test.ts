@@ -51,12 +51,7 @@ const INTRINSIC = new Set(["bash", "read"]);
 
 /** role-messages: tools for chats with a role only. Not a catalog row: pi-identity offers them only in role
  *  chats (ROLE_ONLY_TOOLS there), and the owner's switch is Settings -> Identities -> Role messages (pause). */
-const ROLE_ONLY = new Set([
-	MESSAGE_ROLE_TOOL_NAME,
-	BOARD_TOOL_NAME,
-	DECISION_LOG_TOOL_NAME,
-	INITIATIVE_UPDATE_TOOL_NAME,
-]);
+const ROLE_ONLY = new Set([MESSAGE_ROLE_TOOL_NAME, BOARD_TOOL_NAME]);
 
 /** telegram-coo: read-only tools every chat always has. Not a catalog row: roles_overview only reads the
  *  Roles page's data, so there is nothing to switch off; the owner limits a role's tools in identity.json. */
@@ -76,21 +71,15 @@ const FACTORY_TOOLS: Record<string, string[]> = {
 	makeEditSoftTool: [EDIT_SOFT_TOOL_NAME],
 	makeSubagentTools: [...SUBAGENT_TOOL_NAMES],
 	makeDelegateTaskTool: [DELEGATE_TASK_TOOL_NAME],
-	makeMarkersListTool: [MARKERS_LIST_TOOL_NAME],
 	makeAskUserQuestionTool: [ASK_USER_QUESTION_TOOL_NAME],
 	makeBrowserPageTool: [BROWSER_PAGE_TOOL_NAME],
 	makeConversationReadTool: [CONVERSATION_READ_TOOL_NAME],
 	makeClaimFilesTool: [CLAIM_FILES_TOOL_NAME],
 	makeMessageRoleTool: [MESSAGE_ROLE_TOOL_NAME],
 	makeBoardTool: [BOARD_TOOL_NAME],
-	// initiatives-page: roles correct the Initiatives page's decisions; the tool refuses a chat without a role.
-	makeDecisionLogTool: [DECISION_LOG_TOOL_NAME],
-	// progress-feed (task #85): an initiative's lead posts its progress updates; refuses a chat without a role.
-	makeInitiativeUpdateTool: [INITIATIVE_UPDATE_TOOL_NAME],
 	makeRolesOverviewTool: [ROLES_OVERVIEW_TOOL_NAME],
 	makePresentFilesTool: [PRESENT_FILES_TOOL_NAME],
 	makeSkillTool: [SKILL_TOOL_NAME],
-	makeCompactContextTool: [COMPACT_CONTEXT_TOOL_NAME],
 	makeScheduleTools: [SCHEDULE_TASK_TOOL_NAME, SCHEDULE_LIST_TOOL_NAME, SCHEDULE_CANCEL_TOOL_NAME],
 	makeEvalTool: [EVAL_TOOL_NAME],
 	makePatchTool: [PATCH_TOOL_NAME],
@@ -154,5 +143,26 @@ describe("注册→目录", () => {
 		expect([...ROLE_ONLY].filter((n) => known.has(n))).toEqual([]);
 		expect([...ALWAYS].filter((n) => known.has(n))).toEqual([]);
 		expect([...COO_HOME_ONLY].filter((n) => known.has(n))).toEqual([]);
+	});
+
+	it("Bucket 1 obsolete tools are neither registered on agent sessions nor in AGENT_TOOL_CATALOG", () => {
+		const called = calledFactories();
+		for (const retiredFactory of [
+			"makeMarkersListTool",
+			"makeCompactContextTool",
+			"makeDecisionLogTool",
+			"makeInitiativeUpdateTool",
+		]) {
+			expect(called.has(retiredFactory)).toBe(false);
+		}
+		const known = new Set(AGENT_TOOL_CATALOG.map((t) => t.name));
+		for (const retiredTool of [
+			MARKERS_LIST_TOOL_NAME,
+			COMPACT_CONTEXT_TOOL_NAME,
+			DECISION_LOG_TOOL_NAME,
+			INITIATIVE_UPDATE_TOOL_NAME,
+		]) {
+			expect(known.has(retiredTool)).toBe(false);
+		}
 	});
 });
