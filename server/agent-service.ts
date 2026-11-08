@@ -5083,9 +5083,11 @@ export class ClientSession {
 			piExamples: PI_DOC_PATHS.examples,
 			appendFiles: this.lastSdkAppendFiles,
 			windowsPersona: process.platform === "win32" ? WINDOWS_PERSONA : "",
-			terminalGuidance: isTerminalGuidanceOn(effectiveDisabledAgentTools(this.settingsSvc.current), preset)
-				? TERMINAL_TOOLS_GUIDANCE
-				: "",
+			terminalGuidance:
+				isTerminalGuidanceOn(effectiveDisabledAgentTools(this.settingsSvc.current), preset) &&
+				src.selectedTools.some((n) => n.startsWith("terminal_"))
+					? TERMINAL_TOOLS_GUIDANCE
+					: "",
 			markersGuidance: this.markerSvc.buildGuidance(),
 			// issue #91：组合模板各来源段按客户端 UI 语言渲染（英文默认）。
 			lang: this.getLang(),
@@ -5118,9 +5120,7 @@ export class ClientSession {
 		});
 	}
 
-	/** 渲染当前组合模板。当存在自定义模板/覆盖，或者当前会话预设非 standard（如 code/minimal/ask/reader），
-	 *  或者存在被禁用的工具时，必须渲染完整系统提示词，保证工具门控、技能隐藏与 Guidelines 严格对齐当前预设；
-	 *  仅在完全默认且全功能 standard 状态下返回 undefined 让 SDK 拼装。 */
+	/** 渲染当前组合模板。始终通过 prompt-composer 渲染完整系统提示词（即使在无自定义模板/覆盖的默认 standard 状态下也不返回 undefined，避免回退到 SDK buildSystemPrompt 重新注入默认 soul / Available tools / Pi documentation）。 */
 	private renderMainCompose(src: {
 		cwd: string;
 		selectedTools: string[];
@@ -5129,14 +5129,10 @@ export class ClientSession {
 		contextFiles: { path: string; content: string }[];
 		skills: { name: string; description: string; filePath: string }[];
 		preset?: string;
-	}): string | undefined {
+	}): string {
 		const tpl = (this.settingsSvc.current.promptTemplate ?? "").trim();
 		const ovs = this.settingsSvc.current.promptOverrides ?? {};
 		const hasOverride = Object.values(ovs).some((v) => typeof v === "string" && v.trim());
-		const preset = src.preset ?? this.conv?.agentPreset ?? this.settingsSvc.current.defaultAgentPreset ?? "standard";
-		const isCustomized =
-			!!tpl || hasOverride || preset !== "standard" || effectiveDisabledAgentTools(this.settingsSvc.current).length > 0;
-		if (!isCustomized) return undefined;
 		const texts = resolveSectionTexts(this.composeInputs(src));
 		return renderPromptTemplate(tpl || DEFAULT_PROMPT_TEMPLATE, texts, hasOverride ? ovs : undefined);
 	}

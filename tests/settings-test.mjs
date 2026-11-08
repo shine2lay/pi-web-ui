@@ -136,7 +136,7 @@ try {
 		"effective prompt = compose render（只拼模板里的 token）",
 		stEff.settings.effectiveSystemPrompt.includes("我的固定开场。") &&
 			stEff.settings.effectiveSystemPrompt.includes("<project_context>") &&
-			stEff.settings.effectiveSystemPrompt.includes("You are an expert coding assistant") &&
+			!stEff.settings.effectiveSystemPrompt.includes("You are an expert coding assistant") &&
 			!stEff.settings.effectiveSystemPrompt.includes("Available tools:") &&
 			!stEff.settings.effectiveSystemPrompt.includes("{{soul}}") &&
 			!stEff.settings.effectiveSystemPrompt.includes("{{context}}"),
@@ -145,8 +145,9 @@ try {
 	check(
 		"promptSourceDefaults = per-source auto text（soul/cwd 等未覆盖时展开值）",
 		typeof dflt === "object" &&
-			typeof dflt.soul === "string" &&
-			dflt.soul.includes("You are an expert coding assistant") &&
+			dflt.soul === "" &&
+			dflt.tools === "" &&
+			dflt.pi_docs === "" &&
 			typeof dflt.cwd === "string" &&
 			dflt.cwd.startsWith("Current working directory:"),
 	);

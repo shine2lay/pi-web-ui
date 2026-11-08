@@ -8,7 +8,7 @@
  * startup guard logic lives in one module.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,7 +79,11 @@ export function patchFile(
 ): FilePatchStatus {
 	if (!file || !existsSync(file)) return "missing";
 	const result = patchSource(readFileSync(file, "utf8"), replacements);
-	if (result.status === "patched") writeFileSync(file, result.source, "utf8");
+	if (result.status === "patched") {
+		const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+		writeFileSync(tmp, result.source, "utf8");
+		renameSync(tmp, file);
+	}
 	return result.status;
 }
 

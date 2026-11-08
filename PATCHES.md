@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## prompt-composer-trim: omit default soul, tools list, and pi_docs boilerplate in prompt-composer
+
+- `local` (Ops #790; owner order via COO rm-a11b139c, m13901/m13903/m13905; H-PROMPT-COMPOSER-TRIM-790). `server/prompt-composer.ts` sets `BUILTIN_SOUL = ""`, returns `""` from `buildToolsText` and `buildPiDocsText`, and gates `terminal` in `resolveSectionTexts` on `selectedTools` containing a `terminal_*` tool. Explicit `SYSTEM.md` (`systemPromptFile`) and `promptOverrides` (`soul`, `tools`, `pi_docs`, `context`, etc.) continue to work as before.
+- `server/agent-service.ts`: `composeInputs` requires `src.selectedTools.some((n) => n.startsWith("terminal_"))` for `terminalGuidance`, and `renderMainCompose` always renders through `renderPromptTemplate(tpl || DEFAULT_PROMPT_TEMPLATE, texts, hasOverride ? ovs : undefined)` so standard uncustomized sessions also use `prompt-composer.ts` instead of falling back to the SDK's `buildSystemPrompt` (which would re-inject the default intro, tool list, and Pi docs). `server/sdk-file-patch.ts` `patchFile` writes to a per-PID temp file and atomically renames over the target so parallel Vitest workers never read a partially truncated SDK file.
+- Checks: `tests/unit/prompt-composer.test.ts`, `tests/settings-test.mjs`, `tests/vision-bridge-ui-test.mjs`. Hypothesis and result: `/home/shinelay/kept-from-tmp/2026-11-08/prompt-composer-trim-790/HYPOTHESIS.md`.
+- Undo: revert this commit and deploy with `pi-web-deploy`.
+
 ## local-test-workers: default local Vitest runs to ten workers
 
 - `local` (Ops #746; owner m84920/m84932; H-LOCAL-WORKERS-WEB). `vitest.config.ts` uses the focused `scripts/vitest-workers.mjs` selector: ten when CI and the worker override are absent, no new default when CI is defined, explicit canonical ASCII `VITEST_MAX_WORKERS=1` through `10` first. Invalid environment values fail with a fixed redacted error before Vitest's permissive integer parsing; normal CLI option precedence is unchanged.

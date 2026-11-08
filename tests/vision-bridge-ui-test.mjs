@@ -192,8 +192,11 @@ async function run() {
 	const shownDefault = await page
 		.waitForFunction(
 			() =>
-				[...document.querySelectorAll(".set-prompt-view-text")].some((el) =>
-					el.textContent.includes("You are an expert coding assistant"),
+				[...document.querySelectorAll(".set-prompt-view-text")].some(
+					(el) =>
+						el.textContent.includes("Guidelines:") &&
+						el.textContent.includes("Current working directory:") &&
+						!el.textContent.includes("You are an expert coding assistant"),
 				),
 			null,
 			{ timeout: 15000 },

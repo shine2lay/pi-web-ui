@@ -133,22 +133,12 @@ export interface PromptComposerInputs {
 	lang?: ServerLang;
 }
 
-/** 内置默认灵魂段落（buildSystemPrompt 默认分支的开头，与 SDK 同步维护）。 */
-export const BUILTIN_SOUL =
-	"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+/** 内置默认灵魂段落（默认为空，省去冗余开场白；有 SYSTEM.md 或 promptOverrides.soul 时以用户配置为准）。 */
+export const BUILTIN_SOUL = "";
 
-/** Pi documentation 段模板 —— 与 SDK buildSystemPrompt 默认分支一致（路径由调用方注入）。 */
-export function buildPiDocsText(readme: string, docs: string, examples: string, _lang: ServerLang = "en"): string {
-	return [
-		"Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):",
-		`- Main documentation: ${readme}`,
-		`- Additional docs: ${docs}`,
-		`- Examples: ${examples} (extensions, custom tools, SDK)`,
-		"- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory",
-		"- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)",
-		"- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing",
-		"- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)",
-	].join("\n");
+/** Pi documentation 段模板 —— 默认返回空串（省去指向 pi 包的冗余文档指引；仍可经 promptOverrides.pi_docs 覆盖）。 */
+export function buildPiDocsText(_readme: string, _docs: string, _examples: string, _lang: ServerLang = "en"): string {
+	return "";
 }
 
 /** Guidelines 段：文件探索引导 + 工具 promptGuidelines（去重）+ 固定两行。
@@ -233,14 +223,9 @@ function buildContextText(files: PromptComposerInputs["contextFiles"], _lang: Se
 	].join("\n");
 }
 
-/** 工具列表块：工具列表 + "In addition…" 句。 */
-function buildToolsText(inputs: PromptComposerInputs): string {
-	const visible = inputs.selectedTools.filter((n) => !!inputs.toolSnippets[n]);
-	const toolsList = visible.length > 0 ? visible.map((n) => `- ${n}: ${inputs.toolSnippets[n]}`).join("\n") : "(none)";
-	return [
-		`Available tools:\n${toolsList}`,
-		"In addition to the tools above, you may have access to other custom tools depending on the project.",
-	].join("\n\n");
+/** 工具列表块 —— 默认返回空串（原生 API 工具声明已携带完整 schema，省去重复的 Available tools 列表；仍可经 promptOverrides.tools 覆盖）。 */
+function buildToolsText(_inputs: PromptComposerInputs): string {
+	return "";
 }
 
 /** 工具 schema 条目（发给模型的 function-calling 工具定义的最小字段）。 */
@@ -270,6 +255,7 @@ export function resolveSectionTexts(inputs: PromptComposerInputs): Record<Prompt
 	const lang: ServerLang = inputs.lang ?? "en";
 	// soul：用户 SYSTEM.md 优先；无则按 lang 选内置默认（调用方自定义的 builtinSoul 原样保留）。
 	const soul = inputs.systemPromptFile?.trim() ? inputs.systemPromptFile : inputs.builtinSoul;
+	const hasTerminalTool = inputs.selectedTools.some((n) => n.startsWith("terminal_"));
 	return {
 		soul,
 		tools: buildToolsText(inputs),
@@ -277,7 +263,7 @@ export function resolveSectionTexts(inputs: PromptComposerInputs): Record<Prompt
 		pi_docs: buildPiDocsText(inputs.piReadme, inputs.piDocs, inputs.piExamples, lang),
 		append: inputs.appendFiles.join("\n\n"),
 		persona: inputs.windowsPersona,
-		terminal: inputs.terminalGuidance,
+		terminal: hasTerminalTool ? inputs.terminalGuidance : "",
 		markers: inputs.markersGuidance,
 		context: buildContextText(inputs.contextFiles, lang),
 		skills: buildSkillsText(inputs.skills, lang, inputs.skillsFullText ?? false),

@@ -75,20 +75,18 @@ function isKnown(t: string): boolean {
 }
 
 describe("resolveSectionTexts — 各来源自动内容", () => {
-	it("soul：无 SYSTEM.md 用内置默认；有则用文件内容", () => {
+	it("soul：无 SYSTEM.md 用内置默认（空串）；有则用文件内容", () => {
 		const auto = resolveSectionTexts(inputs());
-		expect(auto.soul).toBe(BUILTIN_SOUL);
+		expect(BUILTIN_SOUL).toBe("");
+		expect(auto.soul).toBe("");
 		const custom = "我的自定义人格文件";
 		const withFile = resolveSectionTexts(inputs({ systemPromptFile: custom }));
 		expect(withFile.soul).toBe(custom);
 	});
 
-	it("tools：列出活动工具 snippet + In addition 句", () => {
+	it("tools：默认为空串（原生 API 工具声明已携带完整 schema）", () => {
 		const auto = resolveSectionTexts(inputs());
-		expect(auto.tools).toContain("Available tools:");
-		expect(auto.tools).toContain("- read: Read file contents");
-		expect(auto.tools).toContain("In addition to the tools above");
-		expect(auto.tools).not.toContain("{{");
+		expect(auto.tools).toBe("");
 	});
 
 	it("guidelines：探索引导 + 工具引导去重 + 固定两行", () => {
@@ -101,13 +99,10 @@ describe("resolveSectionTexts — 各来源自动内容", () => {
 		expect(auto.guidelines.match(/Use bash for file operations/g)?.length).toBe(1);
 	});
 
-	it("pi_docs：固定指引 + 注入路径", () => {
+	it("pi_docs：默认为空串", () => {
 		const auto = resolveSectionTexts(inputs());
-		expect(auto.pi_docs).toContain(
-			"Main documentation: E:/pi-web-ui/node_modules/@earendil-works/pi-coding-agent/README.md",
-		);
-		expect(auto.pi_docs).toContain("resolve docs/... under Additional docs");
-		expect(auto.pi_docs).toBe(buildPiDocsText(inputs().piReadme, inputs().piDocs, inputs().piExamples));
+		expect(auto.pi_docs).toBe("");
+		expect(buildPiDocsText(inputs().piReadme, inputs().piDocs, inputs().piExamples)).toBe("");
 	});
 
 	it("append：多文件 \n\n 连接；无文件为空", () => {
@@ -142,11 +137,15 @@ describe("resolveSectionTexts — 各来源自动内容", () => {
 		expect(resolveSectionTexts(inputs()).cwd).toBe("Current working directory: E:/pi-web-ui");
 	});
 
-	it("persona/terminal/markers 直接透传自动内容", () => {
+	it("persona/terminal/markers 直接透传自动内容；selectedTools 无 terminal_* 时 terminal 为空串", () => {
 		const auto = resolveSectionTexts(inputs());
 		expect(auto.persona).toContain("Windows");
 		expect(auto.terminal).toContain("terminal");
 		expect(auto.markers).toBe("");
+		const noTerminal = resolveSectionTexts(
+			inputs({ selectedTools: ["read", "bash", "edit", "write", "ask_user_question"] }),
+		);
+		expect(noTerminal.terminal).toBe("");
 	});
 });
 
@@ -154,13 +153,14 @@ describe("renderPromptTemplate — 组合与覆盖", () => {
 	const texts = resolveSectionTexts(inputs());
 	const RENDERED = renderDefaultPrompt(texts);
 
-	it("默认渲染 ≈ SDK 默认拼装：顺序、关键段、无残留花括号", () => {
+	it("默认渲染：省略默认 soul / tools / pi_docs 冗余块，保留有效段顺序且无残留花括号", () => {
 		const order = [
-			"You are an expert coding assistant",
-			"Available tools:",
-			"In addition to the tools above",
 			"Guidelines:",
-			"Pi documentation (read only",
+			"Windows",
+			"Persistent interactive terminal tools are available:",
+			"<project_context>",
+			AGENTS_CONTENT,
+			"<available_skills>",
 			"Current working directory: E:/pi-web-ui",
 		];
 		let last = -1;
@@ -170,17 +170,22 @@ describe("renderPromptTemplate — 组合与覆盖", () => {
 			last = idx;
 		}
 		expect(RENDERED).not.toContain("{{");
-		expect(RENDERED).toContain("<project_context>");
-		expect(RENDERED).toContain(AGENTS_CONTENT);
-		expect(RENDERED).toContain("<available_skills>");
-		expect(RENDERED).toContain("Windows");
+		expect(RENDERED).not.toContain("You are an expert coding assistant");
+		expect(RENDERED).not.toContain("Available tools:");
+		expect(RENDERED).not.toContain("In addition to the tools above");
+		expect(RENDERED).not.toContain("Pi documentation");
 	});
 
-	it("覆盖 soul：整体模板中灵魂被替换、其他自动段原样", () => {
-		const out = renderPromptTemplate(DEFAULT_PROMPT_TEMPLATE, texts, { soul: "你是降世神龙，专精代码重构。" });
+	it("覆盖 soul / tools / pi_docs：整体模板中对应段被替换、其他自动段原样", () => {
+		const out = renderPromptTemplate(DEFAULT_PROMPT_TEMPLATE, texts, {
+			soul: "你是降世神龙，专精代码重构。",
+			tools: "自定义工具列表",
+			pi_docs: "自定义文档指引",
+		});
 		expect(out.startsWith("你是降世神龙，专精代码重构。")).toBe(true);
 		expect(out).not.toContain("You are an expert coding assistant");
-		expect(out).toContain("Available tools:");
+		expect(out).toContain("自定义工具列表");
+		expect(out).toContain("自定义文档指引");
 		expect(out).toContain(AGENTS_CONTENT);
 		expect(out).toContain("Current working directory: E:/pi-web-ui");
 	});
@@ -194,11 +199,6 @@ describe("renderPromptTemplate — 组合与覆盖", () => {
 	it("自由组合：只放想保留的块，可任意排序与穿插文字", () => {
 		const template = "我的开场白\n\n{{soul}}\n\n补充：{{context}}\n\n{{cwd}}";
 		const out = renderPromptTemplate(template, texts, {});
-		expect(out).toBe(
-			"我的开场白\n\n你是降世神龙，专精代码重构。".length
-				? out.replace("你是降世神龙，专精代码重构。", BUILTIN_SOUL)
-				: out,
-		);
 		expect(out.startsWith("我的开场白")).toBe(true);
 		expect(out).toContain("补充：<project_context>");
 		expect(out).toContain("Current working directory: E:/pi-web-ui");
