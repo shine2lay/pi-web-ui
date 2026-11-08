@@ -1,6 +1,6 @@
 import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { FiCpu, FiSearch, FiZap } from "react-icons/fi";
-import type { ModelInfo, ProviderKeyInfo, UiState } from "../types";
+import type { BulkChatScope, ModelInfo, ProviderKeyInfo, UiState } from "../types";
 import { Dropdown, DropdownItem } from "./Dropdown";
 import { useT } from "../i18n";
 import { loadModelUsage, sortByUsage } from "../model-usage";
@@ -12,9 +12,12 @@ export type ModelThinkingMsg =
 	| { type: "list_models" }
 	| { type: "set_model"; modelId: string }
 	| { type: "set_default_model"; modelId: string }
-	| { type: "set_model_all_chats"; modelId: string }
+	| { type: "set_model_all_chats"; modelId: string; scope?: BulkChatScope }
 	| { type: "clear_default_model" }
 	| { type: "set_thinking"; level: string }
+	| { type: "set_default_thinking"; level: string }
+	| { type: "set_thinking_all_chats"; level: string; scope?: BulkChatScope }
+	| { type: "clear_default_thinking" }
 	| { type: "activate_provider_key"; provider: string; keyName: string };
 
 /* 档位清单在 ../thinking-levels.ts（与设置面板「子代理模板」共用一份）。 */
@@ -35,6 +38,8 @@ interface Props {
 	/** 全局默认模型（"provider/id"，null = 未设置，undefined = 功能隐藏
 	 *  —— DSH 引擎无此概念，App 侧按 engine 传）。 */
 	defaultModel?: string | null;
+	/** 全局默认思考强度（null = 未设置，undefined = 功能隐藏）。 */
+	defaultThinking?: string | null;
 	/** Compact triggers for narrow toolbars (mobile input row). */
 	compact?: boolean;
 	/** 只画其中一个 picker（输入框槽位化后模型/思考独立控制显隐；缺省两个都画）。 */
@@ -51,6 +56,7 @@ export const ModelThinking = memo(function ModelThinking({
 	onManageModels,
 	providerKeys,
 	defaultModel,
+	defaultThinking,
 	compact = false,
 	only,
 }: Props) {
@@ -58,11 +64,15 @@ export const ModelThinking = memo(function ModelThinking({
 	const model = state?.model;
 	// snapshot model.id is the bare id; list ids are "provider/id".
 	const currentModelId = model ? `${model.provider}/${model.id}` : null;
+	const currentThinking = state?.thinkingLevel ?? null;
 	const [modelOpen, setModelOpen] = useState(false);
-	const [confirmAllChats, setConfirmAllChats] = useState(false);
+	const [confirmModelScope, setConfirmModelScope] = useState<BulkChatScope | null>(null);
+	const [confirmThinkingScope, setConfirmThinkingScope] = useState<BulkChatScope | null>(null);
 	const confirmId = useId();
-	useEffect(() => setConfirmAllChats(false), [modelOpen, currentModelId]);
+	const confirmThinkingId = useId();
+	useEffect(() => setConfirmModelScope(null), [modelOpen, currentModelId]);
 	const [thinkingOpen, setThinkingOpen] = useState(false);
+	useEffect(() => setConfirmThinkingScope(null), [thinkingOpen, currentThinking]);
 	// Model dropdown filter — the list can be long (all providers × models),
 	// so a type-to-filter box sits above it, plus a provider sidebar on the
 	// left that narrows the list to one service. Reset both when the dropdown
@@ -175,6 +185,18 @@ export const ModelThinking = memo(function ModelThinking({
 		supported: supportedThinking ? supportedThinking.has(v) : true,
 	}));
 	const thinkingLabel = (level: string): string => thinkingLevels.find((l) => l.value === level)?.label ?? level;
+	const modelConfirmQuestion = (scope: BulkChatScope): string => {
+		const modelLabel = model?.name ?? currentModelId ?? "";
+		if (scope === "leads") return t("switchLeadsChatsConfirm", { model: modelLabel });
+		if (scope === "workers") return t("switchWorkersChatsConfirm", { model: modelLabel });
+		return t("switchAllChatsConfirm", { model: modelLabel });
+	};
+	const thinkingConfirmQuestion = (scope: BulkChatScope): string => {
+		const levelLabel = currentThinking ? thinkingLabel(currentThinking) : "";
+		if (scope === "leads") return t("switchLeadsChatsThinkingConfirm", { level: levelLabel });
+		if (scope === "workers") return t("switchWorkersChatsThinkingConfirm", { level: levelLabel });
+		return t("switchAllChatsThinkingConfirm", { level: levelLabel });
+	};
 
 	// Lazily fetch the model list when the dropdown opens for the first time.
 	// 审查 #4：发不出去（未连接/未装配发送器）立即复位 reqLoading，否则下拉永远
@@ -307,14 +329,10 @@ export const ModelThinking = memo(function ModelThinking({
 			<div className="dd-footer">
 				{defaultModel !== undefined &&
 					currentModelId &&
-					(confirmAllChats ? (
+					(confirmModelScope ? (
 						<div className="dd-model-confirm" role="alertdialog" aria-labelledby={confirmId}>
-							<div
-								id={confirmId}
-								className="dd-model-confirm-question"
-								title={t("switchAllChatsConfirm", { model: model?.name ?? currentModelId })}
-							>
-								{t("switchAllChatsConfirm", { model: model?.name ?? currentModelId })}
+							<div id={confirmId} className="dd-model-confirm-question" title={modelConfirmQuestion(confirmModelScope)}>
+								{modelConfirmQuestion(confirmModelScope)}
 							</div>
 							<div className="dd-model-actions">
 								<button
@@ -322,12 +340,19 @@ export const ModelThinking = memo(function ModelThinking({
 									className="dd-model-action"
 									autoFocus
 									onClick={() => {
-										if (appSend({ type: "set_model_all_chats", modelId: currentModelId })) setModelOpen(false);
+										if (
+											appSend({
+												type: "set_model_all_chats",
+												modelId: currentModelId,
+												scope: confirmModelScope,
+											})
+										)
+											setModelOpen(false);
 									}}
 								>
 									{t("switchAllChatsSwitch")}
 								</button>
-								<button type="button" className="dd-model-action" onClick={() => setConfirmAllChats(false)}>
+								<button type="button" className="dd-model-action" onClick={() => setConfirmModelScope(null)}>
 									{t("cancel")}
 								</button>
 							</div>
@@ -343,8 +368,14 @@ export const ModelThinking = memo(function ModelThinking({
 									{t("makeDefaultModel")}
 								</button>
 							)}
-							<button type="button" className="dd-model-action" onClick={() => setConfirmAllChats(true)}>
+							<button type="button" className="dd-model-action" onClick={() => setConfirmModelScope("all")}>
 								{t("allChatsModel")}
+							</button>
+							<button type="button" className="dd-model-action" onClick={() => setConfirmModelScope("leads")}>
+								{t("leadsChatsModel")}
+							</button>
+							<button type="button" className="dd-model-action" onClick={() => setConfirmModelScope("workers")}>
+								{t("workersChatsModel")}
 							</button>
 						</div>
 					))}
@@ -404,6 +435,84 @@ export const ModelThinking = memo(function ModelThinking({
 					{l.label}
 				</DropdownItem>
 			))}
+			{defaultThinking !== undefined && (currentThinking || defaultThinking) && (
+				<div className="dd-footer">
+					{currentThinking &&
+						(confirmThinkingScope ? (
+							<div className="dd-model-confirm" role="alertdialog" aria-labelledby={confirmThinkingId}>
+								<div
+									id={confirmThinkingId}
+									className="dd-model-confirm-question"
+									title={thinkingConfirmQuestion(confirmThinkingScope)}
+								>
+									{thinkingConfirmQuestion(confirmThinkingScope)}
+								</div>
+								<div className="dd-model-actions">
+									<button
+										type="button"
+										className="dd-model-action"
+										autoFocus
+										onClick={() => {
+											if (
+												appSend({
+													type: "set_thinking_all_chats",
+													level: currentThinking,
+													scope: confirmThinkingScope,
+												})
+											)
+												setThinkingOpen(false);
+										}}
+									>
+										{t("switchAllChatsSwitch")}
+									</button>
+									<button type="button" className="dd-model-action" onClick={() => setConfirmThinkingScope(null)}>
+										{t("cancel")}
+									</button>
+								</div>
+							</div>
+						) : (
+							<div className="dd-model-actions">
+								{defaultThinking !== currentThinking && (
+									<button
+										type="button"
+										className="dd-model-action"
+										onClick={() => appSend({ type: "set_default_thinking", level: currentThinking })}
+									>
+										{t("makeDefaultModel")}
+									</button>
+								)}
+								<button type="button" className="dd-model-action" onClick={() => setConfirmThinkingScope("all")}>
+									{t("allChatsModel")}
+								</button>
+								<button type="button" className="dd-model-action" onClick={() => setConfirmThinkingScope("leads")}>
+									{t("leadsChatsModel")}
+								</button>
+								<button type="button" className="dd-model-action" onClick={() => setConfirmThinkingScope("workers")}>
+									{t("workersChatsModel")}
+								</button>
+							</div>
+						))}
+					{defaultThinking && (
+						<div className="dd-default-banner">
+							<div className="dd-default-banner-left">
+								<span className="dd-default-banner-star">★</span>
+								<span className="dd-default-banner-label">Default effort</span>
+								<span className="dd-default-banner-name" title={`Default effort: ${thinkingLabel(defaultThinking)}`}>
+									{thinkingLabel(defaultThinking)}
+								</span>
+							</div>
+							<button
+								type="button"
+								className="dd-default-banner-clear"
+								title="Clear the global default effort"
+								onClick={() => appSend({ type: "clear_default_thinking" })}
+							>
+								✕ Clear
+							</button>
+						</div>
+					)}
+				</div>
+			)}
 		</>
 	);
 

@@ -12,8 +12,11 @@ import { normalizeSoftCapByModel, normalizeSoftCapTokens } from "./soft-cap.js";
 import { deriveLegacy, legacyToDisabled, normalizeDisabledAgentTools } from "./tool-manager.js";
 import type { UiAlign, UiLayoutPrefs } from "./protocol.js";
 import {
+	effectiveScopedChoice,
+	isThinkingLevel,
 	validModelChoice,
 	validThinkingChoice,
+	type BulkChatScope,
 	type ModelChoice,
 	type ThinkingChoice,
 	type ThinkingLevelName,
@@ -487,12 +490,20 @@ export interface ClientState {
 	 *  放 per-client 下新标签页会丢），所有客户端共享、服务端持久化、重启不丢。
 	 *  优先级：项目记忆 projectModels[cwd] > 全局默认 > SDK 默认。 */
 	defaultModel?: string;
+	/** Global default thinking/effort level for new chats and new task workers. */
+	defaultThinking?: ThinkingLevelName;
 	/** One all-chats press, separate from defaults and per-project preferences. */
 	allChatsModel?: ModelChoice;
+	/** Scoped bulk model choices for lead (non-worker) and worker chats. */
+	leadsChatsModel?: ModelChoice;
+	workersChatsModel?: ModelChoice;
 	/** Explicit picks on blank chats may not yet be flushed by the SDK. */
 	chatModelChoices?: Record<string, ModelChoice>;
 	/** The latest thinking-for-all-chats move; older chats on its `from` follow it when they open. */
 	allChatsThinking?: ThinkingChoice;
+	/** Scoped bulk thinking choices for lead (non-worker) and worker chats. */
+	leadsChatsThinking?: ThinkingChoice;
+	workersChatsThinking?: ThinkingChoice;
 	/** 全局默认模型各 provider 当时用的 key（provider -> keyName），随全局默认一起记；
 	 *  新项目回落到全局默认模型时一并恢复 key（同 projectProviderKeys 的作用）。 */
 	defaultProviderKeys?: Record<string, string>;
@@ -1187,25 +1198,56 @@ export class ClientStateStore {
 		this.save();
 	}
 
-	getAllChatsModel(): ModelChoice | undefined {
-		const record = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.allChatsModel;
+	getAllChatsModel(scope: BulkChatScope = "all"): ModelChoice | undefined {
+		const s = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY];
+		const record =
+			scope === "leads" ? s?.leadsChatsModel : scope === "workers" ? s?.workersChatsModel : s?.allChatsModel;
 		return validModelChoice(record) ? record : undefined;
 	}
 
-	getAllChatsThinking(): ThinkingChoice | undefined {
-		const record = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.allChatsThinking;
+	getEffectiveChatsModel(isWorker: boolean): ModelChoice | undefined {
+		return effectiveScopedChoice(this.getAllChatsModel("all"), this.getAllChatsModel(isWorker ? "workers" : "leads"));
+	}
+
+	getAllChatsThinking(scope: BulkChatScope = "all"): ThinkingChoice | undefined {
+		const s = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY];
+		const record =
+			scope === "leads" ? s?.leadsChatsThinking : scope === "workers" ? s?.workersChatsThinking : s?.allChatsThinking;
 		return validThinkingChoice(record) ? record : undefined;
 	}
 
+	getEffectiveChatsThinking(isWorker: boolean): ThinkingChoice | undefined {
+		return effectiveScopedChoice(
+			this.getAllChatsThinking("all"),
+			this.getAllChatsThinking(isWorker ? "workers" : "leads"),
+		);
+	}
+
+	private nextThinkingChoiceAt(): number {
+		return Math.max(
+			Date.now(),
+			(this.getAllChatsThinking("all")?.at ?? 0) + 0.001,
+			(this.getAllChatsThinking("leads")?.at ?? 0) + 0.001,
+			(this.getAllChatsThinking("workers")?.at ?? 0) + 0.001,
+		);
+	}
+
 	/** Dated like saveAllChatsModel; a repeat move is still later than the one before. */
-	saveAllChatsThinking(from: ThinkingLevelName, to: ThinkingLevelName): ThinkingChoice {
+	saveAllChatsThinking(
+		from: ThinkingLevelName | undefined,
+		to: ThinkingLevelName,
+		scope: BulkChatScope = "all",
+	): ThinkingChoice {
 		const record: ThinkingChoice = {
-			from,
+			...(from !== undefined ? { from } : {}),
 			to,
-			at: Math.max(Date.now(), (this.getAllChatsThinking()?.at ?? 0) + 0.001),
+			at: this.nextThinkingChoiceAt(),
+			...(scope !== "all" ? { scope } : {}),
 		};
 		const state = (this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
-		state.allChatsThinking = record;
+		if (scope === "leads") state.leadsChatsThinking = record;
+		else if (scope === "workers") state.workersChatsThinking = record;
+		else state.allChatsThinking = record;
 		this.save();
 		return record;
 	}
@@ -1220,17 +1262,29 @@ export class ClientStateStore {
 		const state = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY];
 		// Fractional logical ticks keep same-millisecond actions ordered without
 		// moving the press into a future creation millisecond.
-		let at = Math.max(Date.now(), (this.getAllChatsModel()?.at ?? 0) + 0.001);
+		let at = Math.max(
+			Date.now(),
+			(this.getAllChatsModel("all")?.at ?? 0) + 0.001,
+			(this.getAllChatsModel("leads")?.at ?? 0) + 0.001,
+			(this.getAllChatsModel("workers")?.at ?? 0) + 0.001,
+		);
 		for (const choice of Object.values(state?.chatModelChoices ?? {})) {
 			if (validModelChoice(choice)) at = Math.max(at, choice.at + 0.001);
 		}
 		return at;
 	}
 
-	saveAllChatsModel(modelId: string): ModelChoice {
-		const record: ModelChoice = { modelId, at: this.nextModelChoiceAt(), reachesPinned: true };
+	saveAllChatsModel(modelId: string, scope: BulkChatScope = "all"): ModelChoice {
+		const record: ModelChoice = {
+			modelId,
+			at: this.nextModelChoiceAt(),
+			reachesPinned: true,
+			...(scope !== "all" ? { scope } : {}),
+		};
 		const state = (this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
-		state.allChatsModel = record;
+		if (scope === "leads") state.leadsChatsModel = record;
+		else if (scope === "workers") state.workersChatsModel = record;
+		else state.allChatsModel = record;
 		this.save();
 		return record;
 	}
@@ -1271,6 +1325,27 @@ export class ClientStateStore {
 		if (!state) return;
 		delete state.defaultModel;
 		delete state.defaultProviderKeys;
+		this.save();
+	}
+
+	/** Global default thinking/effort level (stored under __settings__). */
+	getDefaultThinking(): ThinkingLevelName | undefined {
+		const level = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.defaultThinking;
+		return isThinkingLevel(level) ? level : undefined;
+	}
+
+	saveDefaultThinking(level: ThinkingLevelName): void {
+		const all = this.load();
+		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
+		state.defaultThinking = level;
+		this.save();
+	}
+
+	clearDefaultThinking(): void {
+		const all = this.load();
+		const state = all[ClientStateStore.GLOBAL_SETTINGS_KEY];
+		if (!state) return;
+		delete state.defaultThinking;
 		this.save();
 	}
 

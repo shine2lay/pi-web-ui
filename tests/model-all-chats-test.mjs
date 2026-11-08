@@ -183,24 +183,27 @@ try {
 	check(
 		"visible buttons replace row stars",
 		(await a.locator(`${MENU} .dd-star-btn`).count()) === 0 &&
-			(await a.getByRole("button", { name: "Make default", exact: true }).isVisible()),
+			(await a.getByRole("button", { name: "Make default", exact: true }).isVisible()) &&
+			(await a.getByRole("button", { name: "All", exact: true }).isVisible()) &&
+			(await a.getByRole("button", { name: "Leads", exact: true }).isVisible()) &&
+			(await a.getByRole("button", { name: "Workers", exact: true }).isVisible()),
 	);
-	await a.getByRole("button", { name: "All chats", exact: true }).click();
+	await a.getByRole("button", { name: "All", exact: true }).click();
 	check(
 		"confirmation is one question with Switch and Cancel",
 		(await a.getByRole("alertdialog").innerText()) === "Switch all chats to Fixture Beta?\nSwitch\nCancel",
 	);
 	await a.getByRole("button", { name: "Cancel", exact: true }).click();
 	check("cancel saves no press", state().getAllChatsModel() === undefined);
-	await a.getByRole("button", { name: "All chats", exact: true }).click();
+	await a.getByRole("button", { name: "Leads", exact: true }).click();
 	await a.getByRole("button", { name: "Switch", exact: true }).click();
 	await modelIs(a, "Fixture Beta");
 	await modelIs(b, "Fixture Beta");
 	check("both open chats use this chat's model", true);
-	await a.waitForFunction(() => /\d+ open chats switched/.test(window.modelTestNotice ?? ""));
+	await a.waitForFunction(() => /\d+ open (?:lead )?chats switched/.test(window.modelTestNotice ?? ""));
 	check("notice gives the open-chat switch count", true);
 	check("saved transcript is not edited by the press", readFileSync(fixtures[2].path, "utf8") === savedBefore);
-	check("all chats preserves the app default", state().getDefaultModel() === ALPHA);
+	check("leads switch preserves the app default", state().getDefaultModel() === ALPHA);
 	await menu(a);
 	check(
 		"existing default banner unchanged",
@@ -247,7 +250,9 @@ try {
 		await menu(a);
 		check(
 			`footer visible and page fits at ${width}`,
-			(await a.getByRole("button", { name: "All chats", exact: true }).isVisible()) &&
+			(await a.getByRole("button", { name: "All", exact: true }).isVisible()) &&
+				(await a.getByRole("button", { name: "Leads", exact: true }).isVisible()) &&
+				(await a.getByRole("button", { name: "Workers", exact: true }).isVisible()) &&
 				(await a.getByRole("button", { name: "Make default", exact: true }).isVisible()) &&
 				(await a.evaluate(() => {
 					const menu = document.querySelector(".dd-menu-model"),
@@ -272,7 +277,7 @@ try {
 			mkdirSync(shots, { recursive: true });
 			await a.screenshot({ path: join(shots, `model-menu-${width}.png`) });
 		}
-		await a.getByRole("button", { name: "All chats", exact: true }).click();
+		await a.getByRole("button", { name: "All", exact: true }).click();
 		check(
 			`compact confirmation fits at ${width}`,
 			(await a.getByRole("button", { name: "Switch", exact: true }).isVisible()) &&

@@ -52,7 +52,7 @@ function makeCtx(opts: {
 	return {
 		cwd: opts.cwd,
 		clientId: opts.clientId ?? "test-client",
-		emit: (m: { level?: string; text?: string; [k: string]: unknown }) =>
+		emit: (m: { level?: string | null; text?: string; [k: string]: unknown }) =>
 			notices.push({ level: m.level ?? "", text: m.text ?? "" }),
 		settings: {
 			promptMode: "append" as const,

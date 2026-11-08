@@ -6,7 +6,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { carryOverToNewChat, freshChatModel } from "../../server/new-chat-model.js";
+import {
+	carryOverToNewChat,
+	freshChatModel,
+	hasAssignedQueueEntry,
+	isWorkerConversation,
+} from "../../server/new-chat-model.js";
 
 const OPUS = "anthropic/claude-opus-5-5";
 const open = { model: { provider: "openai-codex", id: "gpt-5.6-luna" }, thinking: "low" };
@@ -57,5 +62,38 @@ describe("the server uses these rules everywhere a chat starts", () => {
 		// Queue launch previews and inherited panel settings use this same route too.
 		expect(uses.length).toBe(4);
 		expect(src).not.toMatch(/getProjectModel\([^)]*\) \?\? this\.stateStore\.getDefaultModel\(\)/);
+	});
+
+	it("applies defaultThinking to queue launch previews, task worker chats, and fresh chats", () => {
+		const thinkingUses = src.match(/this\.stateStore\.getDefaultThinking\?\.\(\)/g) ?? [];
+		expect(thinkingUses.length).toBeGreaterThanOrEqual(6);
+	});
+});
+
+describe("isWorkerConversation", () => {
+	it("identifies worker chats via openedByQueue or pi-queue's assigned custom entry", () => {
+		expect(isWorkerConversation(null)).toBe(false);
+		expect(isWorkerConversation({})).toBe(false);
+		expect(isWorkerConversation({ openedByQueue: true })).toBe(true);
+		expect(
+			isWorkerConversation({
+				openedByQueue: false,
+				session: {
+					sessionManager: {
+						getBranch: () => [{ type: "custom", customType: "queue", data: { op: "assigned", id: 794 } }],
+					},
+				},
+			}),
+		).toBe(true);
+		expect(
+			isWorkerConversation({
+				session: {
+					sessionManager: {
+						getBranch: () => [{ type: "custom", customType: "queue", data: { op: "done", id: 794 } }],
+					},
+				},
+			}),
+		).toBe(false);
+		expect(hasAssignedQueueEntry([{ type: "custom", customType: "queue", data: { op: "assigned" } }])).toBe(true);
 	});
 });

@@ -39,7 +39,7 @@ function makeCtx(opts: {
 	return {
 		cwd: opts.cwd,
 		clientId: "image-label-test",
-		emit: (m: { level?: string; text?: string; [k: string]: unknown }) =>
+		emit: (m: { level?: string | null; text?: string; [k: string]: unknown }) =>
 			opts.notices?.push({ level: m.level ?? "", text: m.text ?? "" }),
 		// Only the vision-bridge path reads settings; these tests never bridge.
 		settings: { visionBridgeEnabled: opts.visionBridgeEnabled ?? true } as unknown as AttachmentContext["settings"],

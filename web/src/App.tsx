@@ -2594,6 +2594,7 @@ export function App() {
 							modelsLoading={chat.modelsLoading}
 							providerKeys={chat.providerKeys}
 							defaultModel={chat.engine === "pi" ? chat.defaultModel : undefined}
+							defaultThinking={chat.engine === "pi" ? chat.defaultThinking : undefined}
 							attachments={attachments}
 							composerHost={composerHost}
 							onRemoveAttachment={removeAttachmentCb}

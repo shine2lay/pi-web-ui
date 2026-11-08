@@ -54,7 +54,7 @@ const tick = () => vi.setSystemTime(Date.now() + 20);
 
 interface TestHost {
 	setModel(id: string): Promise<void>;
-	setModelAllChats(id: string): Promise<void>;
+	setModelAllChats(id: string, scope?: unknown): Promise<void>;
 	restoreChatModelChoice(conv: Conversation): Promise<boolean>;
 	restoreKeyForModel: ReturnType<typeof vi.fn>;
 	rememberProjectModel: ReturnType<typeof vi.fn>;
@@ -200,13 +200,50 @@ describe("normal SDK model path", () => {
 		await ctx.setModelAllChats("fixture/beta");
 		expect(ids(a, b)).toEqual(["beta", "beta"]);
 		expect(ctx.rememberProjectModel).not.toHaveBeenCalled();
-		expect(store.getDefaultModel()).toBe("fixture/alpha");
-		expect(a.settings.setDefaultModelAndProvider).not.toHaveBeenCalled();
+		expect(store.getDefaultModel()).toBe("fixture/beta");
 		expect(ctx.emit).toHaveBeenLastCalledWith(expect.objectContaining({ textEn: "2 open chats switched." }));
 		const record = store.getAllChatsModel();
 		await ctx.setModelAllChats("fixture/missing");
 		expect(store.getAllChatsModel()).toEqual(record);
 		expect(ctx.emit).toHaveBeenLastCalledWith(expect.objectContaining({ level: "error" }));
+	});
+	it("splits bulk model switches by scope (leads vs workers vs all) and updates defaultModel for workers and all", async () => {
+		const leadOpen = fixture(),
+			leadSaved = fixture(),
+			workerFlag = fixture(),
+			workerTranscript = fixture(),
+			workerSaved = fixture();
+		(workerFlag.conv as { openedByQueue?: boolean }).openedByQueue = true;
+		workerTranscript.sm.appendCustomEntry("queue", { op: "assigned", id: 101 });
+		workerSaved.sm.appendCustomEntry("queue", { op: "assigned", id: 102 });
+		const ctx = host([leadOpen.conv, workerFlag.conv, workerTranscript.conv]);
+		store.saveDefaultModel("fixture/alpha");
+
+		// 1. Scope 'leads': switches only lead chats; leaves workers and defaultModel untouched.
+		tick();
+		await ctx.setModelAllChats("fixture/beta", "leads");
+		expect(ids(leadOpen, workerFlag, workerTranscript)).toEqual(["beta", "alpha", "alpha"]);
+		expect(store.getDefaultModel()).toBe("fixture/alpha");
+		expect(ctx.emit).toHaveBeenLastCalledWith(expect.objectContaining({ textEn: "1 open lead chats switched." }));
+		await ctx.restoreChatModelChoice(leadSaved.conv);
+		await ctx.restoreChatModelChoice(workerSaved.conv);
+		expect(ids(leadSaved, workerSaved)).toEqual(["beta", "alpha"]);
+
+		// 2. Scope 'workers': switches only worker chats AND updates defaultModel for new workers.
+		tick();
+		await ctx.setModelAllChats("openai-codex/gpt-6-astra", "workers");
+		expect(ids(leadOpen, workerFlag, workerTranscript)).toEqual(["beta", "gpt-6-astra", "gpt-6-astra"]);
+		expect(store.getDefaultModel()).toBe("openai-codex/gpt-6-astra");
+		expect(ctx.emit).toHaveBeenLastCalledWith(expect.objectContaining({ textEn: "2 open worker chats switched." }));
+		await ctx.restoreChatModelChoice(workerSaved.conv);
+		expect(ids(leadSaved, workerSaved)).toEqual(["beta", "gpt-6-astra"]);
+
+		// 3. Scope 'all': switches both lead and worker chats AND updates defaultModel.
+		tick();
+		await ctx.setModelAllChats("fixture/plain", "all");
+		expect(ids(leadOpen, workerFlag, workerTranscript)).toEqual(["plain", "plain", "plain"]);
+		expect(store.getDefaultModel()).toBe("fixture/plain");
+		expect(ctx.emit).toHaveBeenLastCalledWith(expect.objectContaining({ textEn: "3 open chats switched." }));
 	});
 	it("a running reply switches now, exactly like the chat's own picker, and is not stopped", async () => {
 		const outcome = [];
@@ -343,7 +380,7 @@ describe("normal SDK model path", () => {
 		await ctx.setModelAllChats("fixture/beta");
 		expect(ids(a, b, c, d)).toEqual(["beta", "beta", "beta", "beta"]);
 		expect(ctx.emit).toHaveBeenLastCalledWith(expect.objectContaining({ textEn: "4 open chats switched." }));
-		expect(store.getDefaultModel()).toBe("fixture/alpha");
+		expect(store.getDefaultModel()).toBe("fixture/beta");
 		expect(a.conv.subagentTemplate?.model).toBe("fixture/alpha");
 		// A saved pinned chat that wasn't open switches when it opens, and keeps it on the next open.
 		await ctx.restoreChatModelChoice(saved.conv);

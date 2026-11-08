@@ -68,6 +68,10 @@ let file: ReturnType<typeof settingsFile>;
 
 interface TestHost {
 	setThinkingAllChats(from: unknown, to: unknown, dryRun?: unknown): Promise<ThinkingAllChatsResult>;
+	setThinkingScopeChats(level: unknown, scope?: unknown): Promise<void>;
+	setDefaultThinking(level: unknown): void;
+	clearDefaultThinking(): void;
+	pushDefaultThinking(): void;
 	restoreChatThinkingChoice(conv: Conversation): Promise<boolean>;
 	emit: ReturnType<typeof vi.fn>;
 	convs: Map<string, Conversation>;
@@ -419,5 +423,77 @@ describe("a real pi run (faux model: no network, no tokens)", () => {
 			toolRuns: 1,
 		});
 		expect(replies.map((m) => m.stopReason)).toEqual(["toolUse", "stop"]);
+	});
+});
+
+describe("default effort and All / Leads / Workers bulk effort switches", () => {
+	it("sets, broadcasts, and clears defaultThinking, refusing unknown levels", () => {
+		const ctx = host([]);
+		expect(store.getDefaultThinking()).toBeUndefined();
+		ctx.setDefaultThinking("xhigh");
+		expect(store.getDefaultThinking()).toBe("xhigh");
+		expect(ctx.emit).toHaveBeenCalledWith({ type: "default_thinking", level: "xhigh" });
+
+		ctx.emit.mockClear();
+		ctx.setDefaultThinking("bogus");
+		expect(store.getDefaultThinking()).toBe("xhigh");
+		expect(notices(ctx)).toEqual([expect.objectContaining({ level: "error" })]);
+
+		ctx.emit.mockClear();
+		ctx.clearDefaultThinking();
+		expect(store.getDefaultThinking()).toBeUndefined();
+		expect(ctx.emit).toHaveBeenCalledWith({ type: "default_thinking", level: null });
+	});
+
+	it("splits bulk effort switches by scope (leads vs workers vs all) and updates defaultThinking for workers and all", async () => {
+		const leadOpen = fixture("max"),
+			leadSaved = fixture("max"),
+			workerFlag = fixture("max"),
+			workerTranscript = fixture("max"),
+			workerSaved = fixture("max");
+		(workerFlag.conv as { openedByQueue?: boolean }).openedByQueue = true;
+		workerTranscript.sm.appendCustomEntry("queue", { op: "assigned", id: 201 });
+		workerSaved.sm.appendCustomEntry("queue", { op: "assigned", id: 202 });
+		const ctx = host([leadOpen.conv, workerFlag.conv, workerTranscript.conv]);
+		store.saveDefaultThinking("max");
+
+		// 1. Scope 'leads': switches only lead chats (open now and on reopen); leaves workers and defaultThinking untouched.
+		tick();
+		await ctx.setThinkingScopeChats("xhigh", "leads");
+		expect([
+			leadOpen.session.thinkingLevel,
+			workerFlag.session.thinkingLevel,
+			workerTranscript.session.thinkingLevel,
+		]).toEqual(["xhigh", "max", "max"]);
+		expect(store.getDefaultThinking()).toBe("max");
+		expect(notices(ctx).at(-1)).toMatchObject({ level: "info", text: "Effort → xhigh: 1 open lead chats switched." });
+		await ctx.restoreChatThinkingChoice(leadSaved.conv);
+		await ctx.restoreChatThinkingChoice(workerSaved.conv);
+		expect([leadSaved.session.thinkingLevel, workerSaved.session.thinkingLevel]).toEqual(["xhigh", "max"]);
+
+		// 2. Scope 'workers': switches only worker chats AND updates defaultThinking for new workers.
+		tick();
+		await ctx.setThinkingScopeChats("xhigh", "workers");
+		expect([
+			leadOpen.session.thinkingLevel,
+			workerFlag.session.thinkingLevel,
+			workerTranscript.session.thinkingLevel,
+		]).toEqual(["xhigh", "xhigh", "xhigh"]);
+		expect(store.getDefaultThinking()).toBe("xhigh");
+		expect(ctx.emit).toHaveBeenCalledWith({ type: "default_thinking", level: "xhigh" });
+		expect(notices(ctx).at(-1)).toMatchObject({ level: "info", text: "Effort → xhigh: 2 open worker chats switched." });
+		await ctx.restoreChatThinkingChoice(workerSaved.conv);
+		expect([leadSaved.session.thinkingLevel, workerSaved.session.thinkingLevel]).toEqual(["xhigh", "xhigh"]);
+
+		// 3. Scope 'all': switches both lead and worker chats AND updates defaultThinking.
+		tick();
+		await ctx.setThinkingScopeChats("max", "all");
+		expect([
+			leadOpen.session.thinkingLevel,
+			workerFlag.session.thinkingLevel,
+			workerTranscript.session.thinkingLevel,
+		]).toEqual(["max", "max", "max"]);
+		expect(store.getDefaultThinking()).toBe("max");
+		expect(notices(ctx).at(-1)).toMatchObject({ level: "info", text: "Effort → max: 3 open chats switched." });
 	});
 });

@@ -1,4 +1,21 @@
 import { THINKING_LEVELS } from "./queue-profile.js";
+import type { BulkChatScope } from "./protocol.js";
+
+export type { BulkChatScope };
+
+export function normalizeBulkScope(scope: unknown): BulkChatScope {
+	if (scope === undefined || scope === null || scope === "all") return "all";
+	if (scope === "leads" || scope === "workers") return scope;
+	throw new Error(`Unknown chat scope: ${String(scope)} (one of: all, leads, workers)`);
+}
+
+export function effectiveScopedChoice<T extends { at: number }>(
+	all: T | undefined,
+	scoped: T | undefined,
+): T | undefined {
+	if (all && scoped) return scoped.at >= all.at ? scoped : all;
+	return scoped ?? all;
+}
 
 /** All-chats is a dated choice, not a default. No transcript or model requests here. */
 export interface ModelChoice {
@@ -7,6 +24,7 @@ export interface ModelChoice {
 	/** All chats also reaches chats whose first model was pinned (subagent template or explicit
 	 * model). Presses saved before this existed lack it, so an install never moves a pinned chat. */
 	reachesPinned?: boolean;
+	scope?: BulkChatScope;
 }
 
 export function validModelChoice(value: unknown): value is ModelChoice {
@@ -75,30 +93,33 @@ export function chatModelChoice(
 
 export type ThinkingLevelName = (typeof THINKING_LEVELS)[number];
 
-/** Thinking for all chats: every chat on `from` goes to `to`. Dated like ModelChoice, so a
- * chat older than the move follows it when it next opens. */
+/** Thinking for all/leads/workers chats: every matching chat (optionally only on `from`) goes to
+ * `to`. Dated like ModelChoice, so a chat older than the move follows it when it next opens. */
 export interface ThinkingChoice {
-	from: ThinkingLevelName;
+	from?: ThinkingLevelName;
 	to: ThinkingLevelName;
 	at: number;
+	scope?: BulkChatScope;
 }
 
-function isThinkingLevel(value: unknown): value is ThinkingLevelName {
+export function isThinkingLevel(value: unknown): value is ThinkingLevelName {
 	return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
+export function parseThinkingLevel(value: unknown, name = "level"): ThinkingLevelName {
+	const known = `(one of: ${THINKING_LEVELS.join(", ")})`;
+	if (value === undefined || value === null || value === "")
+		throw new Error(`Missing "${name}" thinking level ${known}`);
+	if (!isThinkingLevel(value)) throw new Error(`Unknown "${name}" thinking level: ${String(value)} ${known}`);
+	return value;
 }
 
 /** Check a requested move before anything is recorded or changed; throws a clear reason. */
 export function thinkingMove(from: unknown, to: unknown): { from: ThinkingLevelName; to: ThinkingLevelName } {
-	const known = `(one of: ${THINKING_LEVELS.join(", ")})`;
-	for (const [name, value] of [
-		["from", from],
-		["to", to],
-	] as const) {
-		if (value === undefined || value === null || value === "")
-			throw new Error(`Missing "${name}" thinking level ${known}`);
-		if (!isThinkingLevel(value)) throw new Error(`Unknown "${name}" thinking level: ${String(value)} ${known}`);
-	}
-	const move = { from: from as ThinkingLevelName, to: to as ThinkingLevelName };
+	const move = {
+		from: parseThinkingLevel(from, "from"),
+		to: parseThinkingLevel(to, "to"),
+	};
 	if (move.from === move.to) throw new Error(`"from" and "to" are both ${move.from}: nothing to move`);
 	return move;
 }
@@ -106,14 +127,8 @@ export function thinkingMove(from: unknown, to: unknown): { from: ThinkingLevelN
 export function validThinkingChoice(value: unknown): value is ThinkingChoice {
 	if (!value || typeof value !== "object") return false;
 	const v = value as Partial<ThinkingChoice>;
-	return (
-		isThinkingLevel(v.from) &&
-		isThinkingLevel(v.to) &&
-		v.from !== v.to &&
-		typeof v.at === "number" &&
-		Number.isFinite(v.at) &&
-		v.at > 0
-	);
+	const fromOk = v.from === undefined || (isThinkingLevel(v.from) && v.from !== v.to);
+	return fromOk && isThinkingLevel(v.to) && typeof v.at === "number" && Number.isFinite(v.at) && v.at > 0;
 }
 
 /** When the chat's thinking level was last set on its current branch (-Infinity: never). */
@@ -129,14 +144,22 @@ export function latestThinkingChangeAt(entries: readonly unknown[]): number {
 }
 
 /** The level a chat moves to when it opens, or undefined to keep its own. Only a chat older than
- * the move, still on `from`, whose level wasn't set again after the move (a later pick wins). */
+ * the move, matching `from` (or any level when `from` is omitted), whose level wasn't set again
+ * after the move (a later pick wins). */
 export function chatThinkingChoice(
 	press: ThinkingChoice | undefined,
 	createdAt: number,
 	level: string | undefined,
 	lastChangeAt: number,
 ): ThinkingLevelName | undefined {
-	if (press && level === press.from && createdAt < Math.floor(press.at) && lastChangeAt < press.at) return press.to;
+	if (
+		press &&
+		(press.from === undefined || level === press.from) &&
+		level !== press.to &&
+		createdAt < Math.floor(press.at) &&
+		lastChangeAt < press.at
+	)
+		return press.to;
 	return undefined;
 }
 

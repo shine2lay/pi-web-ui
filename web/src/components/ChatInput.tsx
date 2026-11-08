@@ -152,6 +152,8 @@ interface ChatInputProps {
 	providerKeys: Record<string, ProviderKeyInfo[]>;
 	/** 全局默认模型（undefined = 隐藏该功能，App 按 engine==='pi' 才传）。 */
 	defaultModel?: string | null;
+	/** 全局默认思考强度（undefined = 隐藏该功能，App 按 engine==='pi' 才传）。 */
+	defaultThinking?: string | null;
 	/** DSH 引擎：权限下拉（思考强度右侧；undefined/空 = 非 dsh 或未就绪，不渲染）。 */
 	dshPermCurrent?: string | null;
 	dshPermOptions?: DshPermissionOption[];
@@ -195,6 +197,7 @@ export const ChatInput = memo(function ChatInput({
 	onManageModels,
 	providerKeys,
 	defaultModel,
+	defaultThinking,
 	recallDrafts,
 	composerLeading,
 	composerActions,
@@ -1611,6 +1614,7 @@ export const ChatInput = memo(function ChatInput({
 				modelsLoading={modelsLoading}
 				onManageModels={onManageModels}
 				providerKeys={providerKeys}
+				defaultThinking={defaultThinking}
 				compact
 			/>
 		),
@@ -1917,6 +1921,7 @@ export const ChatInput = memo(function ChatInput({
 									onManageModels={onManageModels}
 									providerKeys={providerKeys}
 									defaultModel={defaultModel}
+									defaultThinking={defaultThinking}
 									compact
 								/>
 								{fastMode && !isDsh && (

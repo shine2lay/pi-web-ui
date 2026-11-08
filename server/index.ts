@@ -1283,9 +1283,12 @@ export interface DispatchSession {
 	setModel(modelId: string): Promise<void>;
 	/** 全局默认模型（pi 引擎专有；DSH 无此概念，实现缺失时 dispatch 侧 `?.` 忽略）。 */
 	setDefaultModel?(modelId: string): Promise<void>;
-	setModelAllChats?(modelId: string): Promise<void>;
+	setModelAllChats?(modelId: string, scope?: unknown): Promise<void>;
 	setThinkingAllChats?(from: unknown, to: unknown, dryRun?: unknown): Promise<unknown>;
+	setThinkingScopeChats?(level: string, scope?: unknown): Promise<void>;
 	clearDefaultModel?(): void;
+	setDefaultThinking?(level: string): void;
+	clearDefaultThinking?(): void;
 	setThinking(level: string): void;
 	/** fast-mode: the chat's Fast button (pi chats only; DSH has none). */
 	setFastMode?(mode: unknown, conversationId: unknown): void;
@@ -3491,16 +3494,25 @@ wss.on("connection", (ws, req) => {
 				void cs.setModel(msg.modelId);
 				break;
 			case "set_model_all_chats":
-				void cs.setModelAllChats?.(msg.modelId);
+				void cs.setModelAllChats?.(msg.modelId, msg.scope);
 				break;
 			case "thinking_all_chats":
 				void cs.setThinkingAllChats?.(msg.from, msg.to, msg.dryRun);
+				break;
+			case "set_thinking_all_chats":
+				void cs.setThinkingScopeChats?.(msg.level, msg.scope);
 				break;
 			case "set_default_model":
 				void cs.setDefaultModel?.(msg.modelId);
 				break;
 			case "clear_default_model":
 				cs.clearDefaultModel?.();
+				break;
+			case "set_default_thinking":
+				cs.setDefaultThinking?.(msg.level);
+				break;
+			case "clear_default_thinking":
+				cs.clearDefaultThinking?.();
 				break;
 			case "set_thinking":
 				cs.setThinking(msg.level);

@@ -26,3 +26,46 @@ export function carryOverToNewChat<M, T>(
 export function freshChatModel(globalDefault: string | undefined, folderModel: string | undefined): string | undefined {
 	return globalDefault || folderModel || undefined;
 }
+
+export interface WorkerConversationLike {
+	openedByQueue?: boolean;
+	session?: {
+		sessionManager?: {
+			getBranch?: () => readonly unknown[];
+			getEntries?: () => readonly unknown[];
+		};
+	} | null;
+}
+
+export function hasAssignedQueueEntry(entries: Iterable<unknown>): boolean {
+	for (const raw of entries) {
+		const e = raw as {
+			type?: unknown;
+			customType?: unknown;
+			data?: { op?: unknown } | null;
+		} | null;
+		if (
+			(e?.type === undefined || e.type === "custom") &&
+			e?.customType === "queue" &&
+			e.data &&
+			typeof e.data === "object" &&
+			e.data.op === "assigned"
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** A chat is a task worker chat if opened by a queue (`openedByQueue === true`) or its
+ *  transcript branch/entries contain pi-queue's `customType: "queue", op: "assigned"` entry. */
+export function isWorkerConversation(conv: WorkerConversationLike | null | undefined): boolean {
+	if (!conv) return false;
+	if (conv.openedByQueue === true) return true;
+	const sm = conv.session?.sessionManager;
+	const branch = sm?.getBranch?.();
+	if (branch && hasAssignedQueueEntry(branch)) return true;
+	const entries = sm?.getEntries?.();
+	if (entries && entries !== branch && hasAssignedQueueEntry(entries)) return true;
+	return false;
+}

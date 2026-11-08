@@ -156,13 +156,16 @@ import { contextWindowOf, invalidateSessionStats, sessionStatsOf } from "./sessi
 import type { UsageAccountingView } from "./usage-accounting-host.js";
 import { attachUsageLedger, recordUsageLedgerEntry } from "./usage-accounting-ledger.js";
 // new-chat-default: the global default model is what every new chat starts on.
-import { carryOverToNewChat, freshChatModel } from "./new-chat-model.js";
+import { carryOverToNewChat, freshChatModel, isWorkerConversation } from "./new-chat-model.js";
 import {
 	chatModelChoice,
 	chatThinkingChoice,
+	effectiveScopedChoice,
 	latestChatModelChoice,
 	latestThinkingChangeAt,
 	inModelChangeLane,
+	normalizeBulkScope,
+	parseThinkingLevel,
 	thinkingMove,
 	type ModelChoice,
 	type ThinkingLevelName,
@@ -7071,14 +7074,18 @@ export class ClientSession {
 		const mr = conv.runtime.services.modelRuntime;
 		const slash = modelId?.indexOf("/") ?? -1;
 		const model = modelId && slash > 0 ? mr.getModel(modelId.slice(0, slash), modelId.slice(slash + 1)) : undefined;
+		const defaultThinkingPref = this.stateStore.getDefaultThinking?.();
 		return {
 			...request,
 			model: modelId,
 			thinking:
 				request.thinking ??
 				(model
-					? defaultThinking(model, sm.getModelThinkingLevel(model.provider, model.id) ?? sm.getDefaultThinkingLevel())
-					: sm.getDefaultThinkingLevel()),
+					? defaultThinking(
+							model,
+							defaultThinkingPref ?? sm.getModelThinkingLevel(model.provider, model.id) ?? sm.getDefaultThinkingLevel(),
+						)
+					: (defaultThinkingPref ?? sm.getDefaultThinkingLevel())),
 			speed: request.speed ?? "standard",
 		};
 	}
@@ -7155,10 +7162,11 @@ export class ClientSession {
 					session.model
 						? defaultThinking(
 								session.model,
-								session.settingsManager.getModelThinkingLevel(session.model.provider, session.model.id) ??
+								this.stateStore.getDefaultThinking?.() ??
+									session.settingsManager.getModelThinkingLevel(session.model.provider, session.model.id) ??
 									session.settingsManager.getDefaultThinkingLevel(),
 							)
-						: session.thinkingLevel,
+						: (this.stateStore.getDefaultThinking?.() ?? session.thinkingLevel),
 				setThinking: (level) =>
 					session.setThinkingLevel(level as Parameters<AgentSession["setThinkingLevel"]>[0], { persist: false }),
 				speed: () => fastModeRegistry.view(session.sessionManager, session.model)?.mode ?? "standard",
@@ -7501,6 +7509,7 @@ export class ClientSession {
 		// Reconnect: push the global default model (the picker's ★ marker +
 		// "set as global default" button state).
 		this.pushDefaultModel();
+		this.pushDefaultThinking();
 		// Reconnect: push agent presets and permission presets (align with DSH).
 		this.refreshAgentPresets();
 		this.refreshPermission();
@@ -9663,10 +9672,11 @@ export class ClientSession {
 					: inherited
 						? defaultThinking(
 								inherited,
-								session.settingsManager.getModelThinkingLevel(inherited.provider, inherited.id) ??
+								this.stateStore.getDefaultThinking?.() ??
+									session.settingsManager.getModelThinkingLevel(inherited.provider, inherited.id) ??
 									session.settingsManager.getDefaultThinkingLevel(),
 							)
-						: session.settingsManager.getDefaultThinkingLevel(),
+						: (this.stateStore.getDefaultThinking?.() ?? session.settingsManager.getDefaultThinkingLevel()),
 				speed: "standard",
 			},
 			...(answerBindings ? { answerBindings } : {}),
@@ -11777,10 +11787,23 @@ export class ClientSession {
 			this.stateStore.getDefaultModel(),
 			this.stateStore.getProjectModel(this.clientId, cwd),
 		);
-		if (!savedModel) return;
+		const savedDefaultThinking = this.stateStore.getDefaultThinking?.();
 		try {
 			if (messageCountOf(this.conv.session) > 0) return;
 		} catch {
+			return;
+		}
+		if (!savedModel) {
+			if (savedDefaultThinking && this.session.model) {
+				const targetThinking = defaultThinking(this.session.model, savedDefaultThinking);
+				if (targetThinking && this.session.thinkingLevel !== targetThinking) {
+					try {
+						this.session.setThinkingLevel(targetThinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
+					} catch {
+						/* 模型可能不支持该强度 */
+					}
+				}
+			}
 			return;
 		}
 		try {
@@ -11796,10 +11819,12 @@ export class ClientSession {
 			if (curId === savedModel) {
 				// 即使模型已是目标模型，也确保恢复其专属思考强度或全局默认思考强度
 				const sm = this.session.settingsManager;
-				const targetThinking = sm.getModelThinkingLevel(model.provider, model.id) ?? sm.getDefaultThinkingLevel();
+				const preferred =
+					savedDefaultThinking ?? sm.getModelThinkingLevel(model.provider, model.id) ?? sm.getDefaultThinkingLevel();
+				const targetThinking = defaultThinking(model, preferred);
 				if (targetThinking && this.session.thinkingLevel !== targetThinking) {
 					try {
-						this.session.setThinkingLevel(targetThinking);
+						this.session.setThinkingLevel(targetThinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
 					} catch {
 						/* 模型可能不支持该强度 */
 					}
@@ -11807,6 +11832,16 @@ export class ClientSession {
 				return;
 			}
 			await this.session.setModel(model);
+			if (savedDefaultThinking) {
+				const targetThinking = defaultThinking(model, savedDefaultThinking);
+				if (targetThinking && this.session.thinkingLevel !== targetThinking) {
+					try {
+						this.session.setThinkingLevel(targetThinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
+					} catch {
+						/* 模型可能不支持该强度 */
+					}
+				}
+			}
 		} catch {
 			// model no longer resolvable / key gone — keep the conversation default
 		}
@@ -14066,9 +14101,15 @@ export class ClientSession {
 					/* 保持默认 */
 				}
 			}
-			if (prevThinking) {
+			const defaultThinkingPref = this.stateStore.getDefaultThinking?.();
+			const effectiveNewThinking = defaultThinkingPref
+				? this.session.model
+					? defaultThinking(this.session.model, defaultThinkingPref)
+					: defaultThinkingPref
+				: prevThinking;
+			if (effectiveNewThinking) {
 				try {
-					this.session.setThinkingLevel(prevThinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
+					this.session.setThinkingLevel(effectiveNewThinking as Parameters<AgentSession["setThinkingLevel"]>[0]);
 				} catch {
 					// model may not support previous thinking level
 				}
@@ -18220,8 +18261,15 @@ export class ClientSession {
 					(entry.data as { pinned?: boolean } | undefined)?.pinned === true,
 			);
 		const createdAt = this.chatCreatedAt(conv);
+		const isWorker = isWorkerConversation(conv);
+		const press =
+			this.stateStore.getEffectiveChatsModel?.(isWorker) ??
+			effectiveScopedChoice(
+				this.stateStore.getAllChatsModel("all"),
+				this.stateStore.getAllChatsModel(isWorker ? "workers" : "leads"),
+			);
 		return chatModelChoice(
-			this.stateStore.getAllChatsModel(),
+			press,
 			createdAt,
 			latestChatModelChoice(createdAt, entries),
 			this.stateStore.getChatModelChoice(sm.getSessionId()),
@@ -18304,6 +18352,13 @@ export class ClientSession {
 			const choice = this.modelChoiceForConversation(conv);
 			if (!choice) return false;
 			if (modelKeyOf(conv.session) === choice.modelId) return true;
+			const isWorker = isWorkerConversation(conv);
+			const bulkChoice =
+				this.stateStore.getEffectiveChatsModel?.(isWorker) ??
+				effectiveScopedChoice(
+					this.stateStore.getAllChatsModel("all"),
+					this.stateStore.getAllChatsModel(isWorker ? "workers" : "leads"),
+				);
 			try {
 				await this.applyModelToConversation(
 					conv,
@@ -18312,7 +18367,7 @@ export class ClientSession {
 						const latest = this.modelChoiceForConversation(conv);
 						return latest?.at === choice.at && latest.modelId === choice.modelId;
 					},
-					this.stateStore.getAllChatsModel()?.at === choice.at ? undefined : choice,
+					bulkChoice?.at === choice.at ? undefined : choice,
 				);
 			} catch (err) {
 				const message = (err as Error).message;
@@ -18329,16 +18384,25 @@ export class ClientSession {
 		});
 	}
 
-	async setModelAllChats(modelId: string): Promise<void> {
+	async setModelAllChats(modelId: string, rawScope?: unknown): Promise<void> {
 		try {
-			this.modelForConversation(this.conv, modelId); // validate BEFORE persisting
-			this.stateStore.saveAllChatsModel(modelId);
+			const scope = normalizeBulkScope(rawScope);
+			const model = this.modelForConversation(this.conv, modelId); // validate BEFORE persisting
+			this.stateStore.saveAllChatsModel(modelId, scope);
+			if (scope === "all" || scope === "workers") {
+				this.stateStore.saveDefaultModel?.(modelId);
+				const active = this.modelAdmin?.getActiveKeyName?.(model.provider);
+				if (active) this.stateStore.saveDefaultProviderKey?.(model.provider, active);
+			}
 			let switched = 0;
 			const failures: string[] = [];
 			const failed = (message: string) => failures.push(message);
 			// Shared map: every window, folder and headless client, not just this browser. Running
 			// chats switch now too, like their own picker; one chat's failure doesn't stop the rest.
 			for (const conv of this.convs.values()) {
+				const isWorker = isWorkerConversation(conv);
+				if (scope === "leads" && isWorker) continue;
+				if (scope === "workers" && !isWorker) continue;
 				const before = modelKeyOf(conv.session);
 				try {
 					await this.restoreChatModelChoice(conv, failed);
@@ -18350,11 +18414,13 @@ export class ClientSession {
 			const notSwitched = failures.length
 				? `; ${failures.length} couldn't switch: ${failures[0].replace(/\.$/, "")}`
 				: "";
+			const scopeLabel =
+				scope === "leads" ? "open lead chats" : scope === "workers" ? "open worker chats" : "open chats";
 			this.emit({
 				type: "notice",
 				level: failures.length ? "warning" : "info",
-				text: `${switched} open chats switched${notSwitched}.`,
-				textEn: `${switched} open chats switched${notSwitched}.`,
+				text: `${switched} ${scopeLabel} switched${notSwitched}.`,
+				textEn: `${switched} ${scopeLabel} switched${notSwitched}.`,
 			});
 		} catch (err) {
 			this.emit({
@@ -18364,6 +18430,7 @@ export class ClientSession {
 				textEn: `Failed to switch all chats: ${(err as Error).message}`,
 			});
 		}
+		this.flushSnapshot?.();
 	}
 
 	/** pi's global settings file, through the SDK's own storage and lock. */
@@ -18442,12 +18509,19 @@ export class ClientSession {
 		return result;
 	}
 
-	/** At every open: a chat older than the latest thinking move, still on its `from`, goes to its
+	/** At every open: a chat older than the latest applicable thinking move goes to its
 	 * `to`. A chat born later, or set again after the move, keeps its level. */
 	private async restoreChatThinkingChoice(conv: Conversation): Promise<boolean> {
 		return inModelChangeLane(conv, async () => {
+			const isWorker = isWorkerConversation(conv);
+			const press =
+				this.stateStore.getEffectiveChatsThinking?.(isWorker) ??
+				effectiveScopedChoice(
+					this.stateStore.getAllChatsThinking("all"),
+					this.stateStore.getAllChatsThinking(isWorker ? "workers" : "leads"),
+				);
 			const level = chatThinkingChoice(
-				this.stateStore.getAllChatsThinking(),
+				press,
 				this.chatCreatedAt(conv),
 				conv.session.thinkingLevel,
 				latestThinkingChangeAt(conv.session.sessionManager.getBranch()),
@@ -18456,6 +18530,67 @@ export class ClientSession {
 			conv.session.setThinkingLevel(level, { persist: false });
 			return conv.session.thinkingLevel === level;
 		});
+	}
+
+	/** Bulk-switch thinking/effort level across chats in `scope` ('all' | 'leads' | 'workers').
+	 *  When scope is 'all' or 'workers', also updates defaultThinking for new chats/workers. */
+	async setThinkingScopeChats(rawLevel: unknown, rawScope?: unknown): Promise<void> {
+		try {
+			const level = parseThinkingLevel(rawLevel, "level");
+			const scope = normalizeBulkScope(rawScope);
+			this.stateStore.saveAllChatsThinking(undefined, level, scope);
+			if (scope === "all" || scope === "workers") {
+				this.stateStore.saveDefaultThinking?.(level);
+				try {
+					this.session?.settingsManager?.setDefaultThinkingLevel?.(level);
+				} catch {
+					/* ignore */
+				}
+				this.pushDefaultThinking?.();
+			}
+			let switched = 0;
+			const failures: string[] = [];
+			for (const conv of this.convs.values()) {
+				const isWorker = isWorkerConversation(conv);
+				if (scope === "leads" && isWorker) continue;
+				if (scope === "workers" && !isWorker) continue;
+				try {
+					const moved = await inModelChangeLane(conv, async () => {
+						const session = conv.session;
+						const before = session.thinkingLevel;
+						if (before === level) return false;
+						session.setThinkingLevel(level, { persist: false });
+						if (session.thinkingLevel === before) {
+							throw new Error(`${modelKeyOf(session) ?? "its model"} has no ${level} level`);
+						}
+						this.refreshChatViewers(conv);
+						return true;
+					});
+					if (moved) switched++;
+				} catch (err) {
+					failures.push((err as Error).message);
+				}
+			}
+			const notSwitched = failures.length
+				? `; ${failures.length} couldn't switch: ${failures[0].replace(/\.$/, "")}`
+				: "";
+			const scopeLabel =
+				scope === "leads" ? "open lead chats" : scope === "workers" ? "open worker chats" : "open chats";
+			this.emit({
+				type: "notice",
+				level: failures.length ? "warning" : "info",
+				text: `Effort → ${level}: ${switched} ${scopeLabel} switched${notSwitched}.`,
+				textEn: `Effort → ${level}: ${switched} ${scopeLabel} switched${notSwitched}.`,
+			});
+		} catch (err) {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `Failed to switch effort: ${(err as Error).message}`,
+				textEn: `Failed to switch effort: ${(err as Error).message}`,
+			});
+		}
+		this.flushSnapshot?.();
 	}
 
 	/** Set the GLOBAL default model ("provider/id"): projects with no memory
@@ -18523,6 +18658,52 @@ export class ClientSession {
 	/** Push the current global default model (attach + after every change). */
 	pushDefaultModel(): void {
 		this.emit({ type: "default_model", modelId: this.stateStore.getDefaultModel() ?? null });
+	}
+
+	/** Set the global default thinking/effort level for new chats and new task workers. */
+	setDefaultThinking(rawLevel: unknown): void {
+		try {
+			const level = parseThinkingLevel(rawLevel, "level");
+			this.stateStore.saveDefaultThinking(level);
+			try {
+				this.session?.settingsManager?.setDefaultThinkingLevel?.(level);
+			} catch {
+				/* ignore when session not ready */
+			}
+			this.pushDefaultThinking();
+			this.emit({
+				type: "notice",
+				level: "info",
+				text: `🌍 Default effort set to ${level}: every new chat and queued task worker starts on it`,
+				textEn: `🌍 Default effort set to ${level}: every new chat and queued task worker starts on it`,
+			});
+		} catch (err) {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `Failed to set default effort: ${(err as Error).message}`,
+				textEn: `Failed to set default effort: ${(err as Error).message}`,
+			});
+		}
+		this.flushSnapshot?.();
+	}
+
+	/** Clear the global default thinking/effort level (fall back to model default). */
+	clearDefaultThinking(): void {
+		this.stateStore.clearDefaultThinking();
+		this.pushDefaultThinking();
+		this.emit({
+			type: "notice",
+			level: "info",
+			text: "🌍 Default effort cleared: new chats and workers use the model's default effort",
+			textEn: "🌍 Default effort cleared: new chats and workers use the model's default effort",
+		});
+		this.flushSnapshot?.();
+	}
+
+	/** Push the current global default thinking/effort level (attach + after every change). */
+	pushDefaultThinking(): void {
+		this.emit({ type: "default_thinking", level: this.stateStore.getDefaultThinking?.() ?? null });
 	}
 
 	/** 切换模型，失败时抛出（无头路径专用：插件 host.chat / 定时任务）。
