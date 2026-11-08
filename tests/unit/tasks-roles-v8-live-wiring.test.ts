@@ -412,11 +412,26 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 		const dagRegion = container.querySelector<HTMLElement>("#tag-dag-region");
 		expect(dagRegion?.hidden).toBe(false);
 		expect(dagRegion?.querySelectorAll(".dag-stage-col").length).toBeGreaterThanOrEqual(1);
+		expect(dagRegion?.querySelectorAll(".handoff-bar").length).toBe(0);
 
-		const detailToggle = container.querySelector<HTMLButtonElement>('.task-detail-toggle-btn[data-task-id="221"]');
-		expect(detailToggle).not.toBeNull();
+		const dagDetailToggle = container.querySelector<HTMLButtonElement>(
+			'#tag-dag-region .task-detail-toggle-btn[data-task-id="221"]',
+		);
+		expect(dagDetailToggle).not.toBeNull();
 		await act(async () => {
-			detailToggle?.click();
+			dagDetailToggle?.click();
+		});
+		const dagPanel = container.querySelector<HTMLElement>('.dag-detail-panel[data-dag-detail-panel="221"]');
+		expect(dagPanel).not.toBeNull();
+		expect(dagPanel?.querySelectorAll(".pipe-step").length).toBe(5);
+		expect(dagPanel?.querySelector(".callout-box")).not.toBeNull();
+
+		const listDetailToggle = container.querySelector<HTMLButtonElement>(
+			'.unified-tasks-panel .task-detail-toggle-btn[data-task-id="221"]',
+		);
+		expect(listDetailToggle).not.toBeNull();
+		await act(async () => {
+			listDetailToggle?.click();
 		});
 		const drawer = container.querySelector<HTMLElement>('.task-detail-drawer[data-task-detail="221"]');
 		expect(drawer).not.toBeNull();

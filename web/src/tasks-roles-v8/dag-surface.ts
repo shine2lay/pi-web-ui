@@ -11,27 +11,116 @@ import {
 	sortTasksByUrgency,
 	type TasksRolesV8FilterState,
 } from "./filters";
-import { escapeHtml } from "./reference-data";
-import { statusToneForLifecycle, type TasksRolesV8Dataset, type UiRoleTask, type UiTaskGroupRollup } from "./types";
+import { escapeHtml, STATUS_META } from "./reference-data";
+import {
+	statusToneForLifecycle,
+	type TasksRolesV8Dataset,
+	type UiRoleTask,
+	type UiTaskGroupRollup,
+	type UiTaskLifecycleStatus,
+} from "./types";
+
+export const DAG_STAGE_CARD_CEILING = 8;
+
+export const DAG_SHORT_STATUS_LABEL: Readonly<Record<UiTaskLifecycleStatus, string>> = {
+	stuck: "Needs you",
+	asking: "Asking lead",
+	blocked: "Blocked",
+	waiting: "Waiting",
+	paused: "Paused",
+	queued: "Queued",
+	working: "Working",
+	landing: "Landing",
+	landed: "Landed",
+	deploying: "Deploying",
+	live: "Live",
+	done: "Done",
+	dropped: "Dropped",
+};
+
+export const DAG_STAGE_PRIORITY: Readonly<Record<UiTaskLifecycleStatus, number>> = {
+	stuck: 1,
+	blocked: 2,
+	waiting: 3,
+	asking: 4,
+	paused: 5,
+	deploying: 6,
+	landing: 7,
+	working: 8,
+	landed: 9,
+	queued: 10,
+	live: 11,
+	done: 12,
+	dropped: 13,
+};
+
+export function sortStageNodesForCeiling(
+	nodes: ReadonlyArray<TaskDagNode>,
+	answeredTasks?: Readonly<Record<number, string>>,
+): TaskDagNode[] {
+	return [...nodes].sort((a, b) => {
+		if (Boolean(a.isRootBlocker) !== Boolean(b.isRootBlocker)) {
+			return a.isRootBlocker ? -1 : 1;
+		}
+		const effA = effectiveTaskLifecycleStatus(a.task, answeredTasks);
+		const effB = effectiveTaskLifecycleStatus(b.task, answeredTasks);
+		const pa = DAG_STAGE_PRIORITY[effA] ?? 99;
+		const pb = DAG_STAGE_PRIORITY[effB] ?? 99;
+		if (pa !== pb) return pa - pb;
+		const dispA = a.task.displayId ?? a.task.id;
+		const dispB = b.task.displayId ?? b.task.id;
+		if (dispA !== dispB) return dispA - dispB;
+		return a.task.id - b.task.id;
+	});
+}
 
 export function renderTaskNode(dagNode: TaskDagNode, state: TasksRolesV8FilterState): string {
 	const task = dagNode.task;
 	const stepNum = dagNode.stepNumber || 1;
 	const stageIndex = dagNode.stageIndex ?? stepNum - 1;
 	const isRootBlocker = Boolean(dagNode.isRootBlocker);
-	const dependsOnRefs = dagNode.dependsOnRefs ?? task.dependsOnRefs ?? [];
-	const unlocksRefs = dagNode.unlocksRefs ?? [];
 	const hasInPort = (dagNode.inSetParentCount || 0) > 0;
 	const hasOutPort = (dagNode.inSetChildCount || 0) > 0;
-	const isTaskExpanded = Boolean(state.expandedTasks[task.id]);
+	const isDetailOpen = state.activeDagDetailTaskId === task.id;
 
 	const effectiveStatus = effectiveTaskLifecycleStatus(task, state.answeredTasks);
 	const tone = statusToneForLifecycle(effectiveStatus);
+	const meta = STATUS_META[effectiveStatus] ?? STATUS_META.working;
+	const shortStatus = DAG_SHORT_STATUS_LABEL[effectiveStatus] ?? meta.label;
+	const role = task.role ?? "dept";
+	const roleTitle = task.roleTitle ?? task.role ?? "Dept";
+	const displayId = task.displayId ?? task.id;
+
+	return `
+    <article class="dag-node-card task-node task-row" data-task-id="${task.id}" data-display-task-id="${displayId}" data-dag-node="${task.id}" data-dag-stage="${stageIndex}" data-seq-step="${stepNum}" data-dept-role="${escapeHtml(role)}" data-status-tone="${escapeHtml(tone)}" data-root-blocker-node="${isRootBlocker ? "true" : "false"}" data-task-expanded="${isDetailOpen ? "true" : "false"}">
+      ${hasInPort ? `<span class="dag-port dag-port-in" aria-hidden="true"></span>` : ""}
+      ${hasOutPort ? `<span class="dag-port dag-port-out" aria-hidden="true"></span>` : ""}
+      ${isRootBlocker ? `<span class="dag-root-marker" data-root-blocker="true" title="Root blocker" aria-hidden="true"></span>` : ""}
+      <div class="dag-node-top">
+        <span class="task-id"><span class="dag-dept-dot" data-dept-swatch="${escapeHtml(role)}" aria-hidden="true"></span>${escapeHtml(roleTitle)} #${displayId}</span>
+        <button type="button" class="status-badge dag-node-status-btn task-detail-toggle-btn ${meta.cls}" data-task-id="${task.id}" data-dag-detail-btn="${task.id}" data-task-status="${escapeHtml(effectiveStatus)}" data-status-tone="${escapeHtml(tone)}" aria-expanded="${isDetailOpen ? "true" : "false"}" aria-label="${escapeHtml(meta.label)} — Details for ${escapeHtml(roleTitle)} #${displayId}"><span class="dag-status-dot" aria-hidden="true"></span><span>${escapeHtml(shortStatus)} ${isDetailOpen ? "▾" : "▸"}</span></button>
+      </div>
+      <div class="dag-node-title">${escapeHtml(task.title)}</div>
+    </article>
+  `;
+}
+
+export function renderDagDetailPanel(dag: TaskDagResult, state: TasksRolesV8FilterState): string {
+	if (!state.activeDagDetailTaskId) return "";
+	const dagNode = (dag.nodes ?? []).find((n) => n.id === state.activeDagDetailTaskId);
+	if (!dagNode) return "";
+	const task = dagNode.task;
+	const role = task.role ?? "dept";
+	const roleTitle = task.roleTitle ?? task.role ?? "Dept";
+	const displayId = task.displayId ?? task.id;
+	const effectiveStatus = effectiveTaskLifecycleStatus(task, state.answeredTasks);
 	const tagsHtml = (task.tags ?? [])
-		.slice(0, 2)
+		.slice(0, 3)
 		.map((tg) => `<span class="tag-pill">#${escapeHtml(tg)}</span>`)
 		.join("");
-	const rootBadge = isRootBlocker ? `<span class="seq-root-badge" data-root-blocker="true">Root blocker</span>` : "";
+	const pipelineMeter = renderDeliveryPipelineMeter(task, effectiveStatus);
+	const dependsOnRefs = dagNode.dependsOnRefs ?? task.dependsOnRefs ?? [];
+	const unlocksRefs = dagNode.unlocksRefs ?? [];
 	const depEdges: string[] = [];
 	if (dependsOnRefs.length > 0) {
 		depEdges.push(`<span class="seq-edge-pill">Depends on: ${escapeHtml(dependsOnRefs.join(", "))}</span>`);
@@ -39,43 +128,21 @@ export function renderTaskNode(dagNode: TaskDagNode, state: TasksRolesV8FilterSt
 	if (unlocksRefs.length > 0) {
 		depEdges.push(`<span class="seq-edge-pill">Unlocks → ${escapeHtml(unlocksRefs.join(", "))}</span>`);
 	}
-	const pipelineMeter = renderDeliveryPipelineMeter(task, effectiveStatus);
-	const roleTitle = task.roleTitle ?? task.role ?? "Dept";
-	const displayId = task.displayId ?? task.id;
 
 	return `
-    <article class="dag-node-card task-row" data-task-id="${task.id}" data-display-task-id="${displayId}" data-dag-node="${task.id}" data-dag-stage="${stageIndex}" data-seq-step="${stepNum}" data-status-tone="${escapeHtml(tone)}" data-root-blocker-node="${isRootBlocker ? "true" : "false"}" data-task-expanded="${isTaskExpanded ? "true" : "false"}">
-      ${hasInPort ? `<span class="dag-port dag-port-in" aria-hidden="true"></span>` : ""}
-      ${hasOutPort ? `<span class="dag-port dag-port-out" aria-hidden="true"></span>` : ""}
-      <div class="task-main-line">
-        <div class="task-id-title">
-          ${rootBadge}
-          <span class="task-id">${escapeHtml(roleTitle)} #${displayId}</span>
-          <span>${escapeHtml(task.title)}</span>
-        </div>
-        <div class="ask-meta-row">
+    <aside class="dag-detail-panel" data-dag-detail-panel="${task.id}" data-task-detail="${task.id}" role="region" aria-label="Task details for ${escapeHtml(roleTitle)} #${displayId}">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+          <span class="task-id"><span class="dag-dept-dot" data-dept-swatch="${escapeHtml(role)}" aria-hidden="true"></span>${escapeHtml(roleTitle)} #${displayId}</span>
           ${renderStatusBadge(effectiveStatus, false)}
         </div>
+        <button type="button" class="chip-btn dag-detail-close-btn" data-close-dag-detail="${task.id}" aria-label="Close task details">Close ✕</button>
       </div>
-      <div class="task-subline" style="justify-content:space-between; align-items:center;">
-        <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
-          ${depEdges.join("")}
-          ${!depEdges.length ? `<span style="font-size:14px; color:var(--text-secondary);">Direct task</span>` : ""}
-        </div>
-        <button type="button" class="chip-btn task-detail-toggle-btn" data-task-id="${task.id}" aria-expanded="${isTaskExpanded ? "true" : "false"}" style="min-height:28px; padding:2px 8px;">
-          ${isTaskExpanded ? "Hide details ▴" : "Details ▸"}
-        </button>
-      </div>
-      ${
-				isTaskExpanded
-					? `<div class="task-detail-drawer" data-task-detail="${task.id}" style="display:flex; flex-direction:column; gap:6px; padding-top:6px; border-top:1px solid var(--border-subtle);">
-              <div class="task-subline">${tagsHtml}${pipelineMeter}</div>
-              ${task.latestTldr ? `<div class="task-subline"><span>Latest TL;DR: "${escapeHtml(task.latestTldr.text)}" · ${escapeHtml(task.latestTldr.age ?? "just now")}</span></div>` : ""}
-              ${renderTaskCallouts(task, state.answeredTasks)}
-            </div>`
-					: ""
-			}
-    </article>
+      <div style="font-size:15px; font-weight:700; color:var(--text-primary);">${escapeHtml(task.title)}</div>
+      <div class="task-subline">${tagsHtml}${depEdges.join("")}${pipelineMeter}</div>
+      ${task.latestTldr ? `<div class="task-subline"><span>Latest TL;DR: "${escapeHtml(task.latestTldr.text)}" · ${escapeHtml(task.latestTldr.age ?? "just now")}</span></div>` : ""}
+      ${renderTaskCallouts(task, state.answeredTasks)}
+    </aside>
   `;
 }
 
@@ -85,23 +152,33 @@ export function renderDagBoard(params: {
 	contextTasks?: ReadonlyArray<UiRoleTask>;
 	state: TasksRolesV8FilterState;
 	activeDagBoards?: Map<string, TaskDagResult>;
+	legendHtml?: string;
 }): string {
-	const { tasks, boardId, contextTasks, state, activeDagBoards } = params;
+	const { tasks, boardId, contextTasks, state, activeDagBoards, legendHtml = "" } = params;
 	const dag = buildTaskDag(tasks, contextTasks);
 	activeDagBoards?.set(boardId, dag);
 	const colCount = Math.max(1, dag.stages.length);
 
 	const columnsHtml = dag.stages
 		.map((stage) => {
-			const deptsInStage = [...new Set(stage.nodes.map((n) => n.task.roleTitle ?? n.task.role ?? "Dept"))].join(" + ");
+			const sortedNodes = sortStageNodesForCeiling(stage.nodes, state.answeredTasks);
+			const stageKey = `${boardId}:${stage.stageIndex}`;
+			const isColExpanded = Boolean(state.expandedDagStageCols?.[stageKey]);
+			const visibleNodes = isColExpanded ? sortedNodes : sortedNodes.slice(0, DAG_STAGE_CARD_CEILING);
+			const hiddenCount = Math.max(0, sortedNodes.length - DAG_STAGE_CARD_CEILING);
+			const overflowBtnHtml =
+				sortedNodes.length > DAG_STAGE_CARD_CEILING
+					? `<button type="button" class="chip-btn dag-col-overflow-btn" data-stage-overflow-toggle="${escapeHtml(stageKey)}" data-dag-stage-col-btn="${stage.stageIndex}" aria-expanded="${isColExpanded ? "true" : "false"}">${isColExpanded ? `Show top ${DAG_STAGE_CARD_CEILING} ▴` : `+${hiddenCount} more (${sortedNodes.length} total) ▸`}</button>`
+					: "";
 			return `
-        <div class="dag-stage-col seq-stage-block" data-sequence-stage="${stage.stepNumber}" data-dag-stage-col="${stage.stageIndex}">
+        <div class="dag-stage-col seq-stage-block" data-sequence-stage="${stage.stepNumber}" data-dag-stage-col="${stage.stageIndex}" data-total-stage-nodes="${sortedNodes.length}">
           <div class="dag-stage-header dept-stage-header">
             <span class="seq-stage-pill">${escapeHtml(stage.stageLabel)}</span>
-            <span style="font-size:14px; font-weight:700; color:var(--text-secondary);">${escapeHtml(deptsInStage)} (${stage.nodes.length})</span>
+            <span style="font-size:14px; font-weight:700; color:var(--text-secondary);">${sortedNodes.length} ${sortedNodes.length === 1 ? "task" : "tasks"}</span>
           </div>
           <div class="dag-stage-nodes">
-            ${stage.nodes.map((n) => renderTaskNode(n, state)).join("")}
+            ${visibleNodes.map((n) => renderTaskNode(n, state)).join("")}
+            ${overflowBtnHtml}
           </div>
         </div>
       `;
@@ -110,10 +187,12 @@ export function renderDagBoard(params: {
 
 	return `
     <div class="dag-board" data-dag-board="${escapeHtml(boardId)}" style="--dag-cols:${colCount};">
+      ${legendHtml}
       <svg class="dag-edges-svg" data-dag-svg="${escapeHtml(boardId)}" aria-hidden="true"></svg>
       <div class="dag-columns">
         ${columnsHtml}
       </div>
+      ${renderDagDetailPanel(dag, state)}
     </div>
   `;
 }
@@ -133,15 +212,23 @@ export function renderTagDagRegion(params: {
 	const askIdForAttr = tagId === "mobile-redesign" ? "tag:mobile-redesign" : `tag:${tagId}`;
 	const activeRoleFilter = state.handoffRoleFilter[askIdForAttr] ?? null;
 
-	const allTasksWithContext: Array<{ task: UiRoleTask; ask: UiTaskGroupRollup }> = [];
+	const allTasksWithContext: Array<{ task: UiRoleTask; ask?: UiTaskGroupRollup }> = [];
+	const seenTaskIds = new Set<number>();
 	for (const ask of dataset.askGroups) {
 		for (const t of ask.tasks ?? []) {
 			allTasksWithContext.push({ task: t, ask });
+			seenTaskIds.add(t.id);
+		}
+	}
+	for (const t of dataset.tasks) {
+		if (!seenTaskIds.has(t.id)) {
+			allTasksWithContext.push({ task: t });
+			seenTaskIds.add(t.id);
 		}
 	}
 
 	const directTaggedTasks = allTasksWithContext
-		.filter(({ task, ask }) => (task.tags ?? ask.tags ?? []).includes(tagId))
+		.filter(({ task, ask }) => (task.tags ?? ask?.tags ?? []).includes(tagId))
 		.map(({ task }) => task);
 	const allTasksRaw = allTasksWithContext.map(({ task }) => task);
 	const byRef = new Map(allTasksRaw.map((t) => [`${t.role} #${t.displayId ?? t.id}`, t]));
@@ -164,90 +251,95 @@ export function renderTagDagRegion(params: {
 	const boardId = tagId === "mobile-redesign" ? "ask-tag-mobile-redesign" : `tag-dag-${tagId}`;
 	const dagPreview = buildTaskDag(dagTasks, fullTagTasks);
 	const stageCount = dagPreview.stages.length;
+	const effectiveRollupStatus = fullTagTasks.some(
+		(t) => effectiveTaskLifecycleStatus(t, state.answeredTasks) === "stuck",
+	)
+		? "needs_you"
+		: parentAsk.rollupStatus;
+	const effectiveRollupTone = effectiveRollupStatus === "needs_you" ? "needs_you" : parentAsk.statusTone || "working";
+
+	const deptRolesInDag: Array<{ role: string; roleTitle: string }> = [];
+	const seenDeptRoles = new Set<string>();
+	for (const step of parentAsk.handoff ?? []) {
+		if (step.role && !seenDeptRoles.has(step.role)) {
+			seenDeptRoles.add(step.role);
+			deptRolesInDag.push({ role: step.role, roleTitle: step.roleTitle || step.role });
+		}
+	}
+	for (const t of fullTagTasks) {
+		const role = t.role || "dept";
+		if (!seenDeptRoles.has(role)) {
+			seenDeptRoles.add(role);
+			deptRolesInDag.push({ role, roleTitle: t.roleTitle ?? role });
+		}
+	}
+
+	const legendHtml = `
+    <div class="dag-dept-legend" role="group" aria-label="Departments in DAG (node color legend)">
+      ${deptRolesInDag
+				.map((d) => {
+					const pressed = activeRoleFilter === d.role ? "true" : "false";
+					return `<button type="button" class="dag-dept-chip handoff-step" data-ask-id="${escapeHtml(askIdForAttr)}" data-step-role="${escapeHtml(d.role)}" aria-pressed="${pressed}">
+          <span class="dag-dept-dot" data-dept-swatch="${escapeHtml(d.role)}" aria-hidden="true"></span>
+          <span>${escapeHtml(d.roleTitle)}</span>
+        </button>`;
+				})
+				.join("")}
+      ${activeRoleFilter ? `<button type="button" class="chip-btn clear-handoff-btn" data-ask-id="${escapeHtml(askIdForAttr)}">All depts</button>` : ""}
+    </div>
+  `;
+
 	const dagBoardHtml = renderDagBoard({
 		tasks: dagTasks,
 		boardId,
 		contextTasks: fullTagTasks,
 		state,
 		activeDagBoards,
+		legendHtml,
 	});
 
-	const handoffStepsHtml = (parentAsk.handoff ?? [])
-		.map((step, idx, arr) => {
-			const stepTone = statusToneForLifecycle(step.status);
-			const pressed = activeRoleFilter === step.role ? "true" : "false";
-			const arrow =
-				idx < arr.length - 1
-					? `<svg class="handoff-connector-svg" viewBox="0 0 18 14" aria-hidden="true" style="width:12px; height:12px;">
-              <line x1="1" y1="7" x2="13" y2="7" stroke="currentColor" stroke-width="1.75"></line>
-              <polygon points="11,3 17,7 11,11" fill="currentColor"></polygon>
-            </svg>`
-					: "";
-			return `
-        <button type="button" class="handoff-step handoff-node tone-${escapeHtml(stepTone)}" data-ask-id="${escapeHtml(askIdForAttr)}" data-step-role="${escapeHtml(step.role)}" aria-pressed="${pressed}">
-          <span class="status-dot tone-${escapeHtml(stepTone)}" aria-hidden="true"></span>
-          <span>${escapeHtml(step.roleTitle)} (${escapeHtml(step.summary)})</span>
-        </button>
-        ${arrow}
-      `;
-		})
-		.join("");
-
-	const tagSwitcherHtml = dataset.allTags
+	const tagSelectOptionsHtml = dataset.allTags
 		.map((tg) => {
 			const isCur = tg.id === tagId;
-			return `<button type="button" class="tag-dag-btn" data-open-tag-dag="${escapeHtml(tg.id)}" aria-pressed="${isCur ? "true" : "false"}"><span>☍ ${escapeHtml(tg.label)}</span></button>`;
+			return `<option value="${escapeHtml(tg.id)}" ${isCur ? "selected" : ""}>☍ ${escapeHtml(tg.label)}</option>`;
 		})
 		.join("");
 
+	const askTitle =
+		parentAsk.title && parentAsk.title !== `#${tagId}` && parentAsk.title !== tagId
+			? parentAsk.title
+			: tagId
+					.split("-")
+					.filter(Boolean)
+					.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+					.join(" ");
+
+	const cleanUnblockText = (parentAsk.howToUnblock ?? "").replace(/^(?:how to unblock:\s*)+/i, "").trim();
+
 	return `
-    <section id="tag-dag-region" class="ask-card" data-ask-card="${escapeHtml(askIdForAttr)}" data-system-section="${escapeHtml(parentAsk.appOrSystem ?? "pi-web-ui")}" data-status-tone="${escapeHtml(parentAsk.statusTone || "working")}" data-dag-stages="${stageCount}" data-ask-expanded="true" aria-label="Tag Implementation DAG for #${escapeHtml(tagId)}" style="margin-bottom:14px;">
-      <div class="ask-card-header" style="gap:10px; align-items:flex-start;">
-        <div class="ask-title-group" style="gap:4px;">
-          <div class="ask-meta-row" style="font-size:14px; color:var(--text-muted);">
-            <span style="font-weight:700; color:var(--text-secondary);">Tag Implementation DAG &amp; Task States</span>
-            <span>· #${escapeHtml(tagId)} (${fullTagTasks.length} tasks across ${stageCount} ${stageCount === 1 ? "stage" : "stages"} · ${dagPreview.edges.length} dependency ${dagPreview.edges.length === 1 ? "edge" : "edges"})</span>
-          </div>
-          <h3 class="ask-title" style="margin:0; font-size:17px;">#${escapeHtml(tagId)} — ${escapeHtml(
-						parentAsk.title && parentAsk.title !== `#${tagId}` && parentAsk.title !== tagId
-							? parentAsk.title
-							: tagId
-									.split("-")
-									.filter(Boolean)
-									.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-									.join(" "),
-					)}</h3>
-        </div>
-        <div class="ask-meta-row" style="flex-shrink:0;">
-          ${renderStatusBadge(parentAsk.rollupStatus, true)}
+    <section id="tag-dag-region" class="ask-card" data-ask-card="${escapeHtml(askIdForAttr)}" data-system-section="${escapeHtml(parentAsk.appOrSystem ?? "pi-web-ui")}" data-status-tone="${escapeHtml(effectiveRollupTone)}" data-dag-stages="${stageCount}" data-ask-expanded="true" aria-label="Tag Implementation DAG for #${escapeHtml(tagId)}" style="margin-bottom:14px;">
+      <div class="dag-header-row ask-card-header">
+        <h3 class="ask-title dag-header-title">
+          <span>#${escapeHtml(tagId)} — ${escapeHtml(askTitle)}</span>
+          <span class="dag-header-meta">· ${fullTagTasks.length} ${fullTagTasks.length === 1 ? "task" : "tasks"} · ${stageCount} ${stageCount === 1 ? "stage" : "stages"} · ${dagPreview.edges.length} ${dagPreview.edges.length === 1 ? "edge" : "edges"}</span>
+        </h3>
+        <div class="dag-header-controls">
+          ${renderStatusBadge(effectiveRollupStatus, true)}
+          <select class="dag-tag-select" data-dag-tag-select aria-label="Switch tag DAG">
+            ${tagSelectOptionsHtml}
+          </select>
           <button type="button" class="chip-btn seq-toggle-btn" data-ask-id="${escapeHtml(askIdForAttr)}" data-open-tag-dag="${escapeHtml(tagId)}" aria-expanded="true" style="padding:3px 10px;">
             Close DAG ✕
           </button>
         </div>
       </div>
 
-      <div class="how-to-unblock-banner tone-${escapeHtml(parentAsk.statusTone || "working")}" data-unblock-banner="${escapeHtml(askIdForAttr)}">
+      ${dagBoardHtml}
+
+      <div class="how-to-unblock-banner dag-footer-unblock tone-${escapeHtml(effectiveRollupTone)}" data-unblock-banner="${escapeHtml(askIdForAttr)}">
         <div>
-          <strong>How to unblock:</strong> ${escapeHtml((parentAsk.howToUnblock ?? "").replace(/^(?:how to unblock:\s*)+/i, "").trim())}${dagPreview.rootBlockerRefs.length ? ` <span style="font-weight:700; color:var(--text-primary);" data-root-blocker="true">(Root: ${escapeHtml(dagPreview.rootBlockerRefs.join(", "))})</span>` : ""}
+          <strong>How to unblock:</strong> ${escapeHtml(cleanUnblockText)}${dagPreview.rootBlockerRefs.length ? ` <span style="font-weight:700; color:var(--text-primary);" data-root-blocker="true">(Root: ${escapeHtml(dagPreview.rootBlockerRefs.join(", "))})</span>` : ""}
         </div>
-      </div>
-
-      <div class="handoff-bar handoff-graph" role="group" aria-label="Switch tag DAG or filter department station">
-        <span class="handoff-label">Switch tag DAG:</span>
-        ${tagSwitcherHtml}
-      </div>
-
-      <div class="handoff-bar handoff-graph" role="group" aria-label="Related department handoff items">
-        <span class="handoff-label">Departments in DAG:</span>
-        ${handoffStepsHtml}
-        ${activeRoleFilter ? `<button type="button" class="chip-btn clear-handoff-btn" data-ask-id="${escapeHtml(askIdForAttr)}">Show all stations</button>` : ""}
-        <button type="button" class="chip-btn expand-ask-tasks-btn" data-ask-id="${escapeHtml(parentAsk.key)}" style="margin-left:auto;">
-          ${dagTasks.every((t) => state.expandedTasks[t.id]) ? "Collapse node details ▴" : "Expand all node details ▾"}
-        </button>
-      </div>
-
-      <div class="sequence-section" style="margin-top:4px;">
-        ${dagBoardHtml}
       </div>
     </section>
   `;

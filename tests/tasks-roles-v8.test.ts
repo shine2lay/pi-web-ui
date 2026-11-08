@@ -536,12 +536,12 @@ describe("Tasks & Roles v8 client module (Task #240)", () => {
 		expect(onAnswerQuestion).toHaveBeenCalledWith(221, "Group by ticker (Recommended)");
 		expect(container.querySelector('[data-task-detail="221"]')?.textContent).toContain("Answered by you");
 
-		// 9. Open 1-click Tag Implementation DAG (#mobile-redesign)
+		// 9. Open 1-click Tag Implementation DAG (#mobile-redesign) & verify Design #235 declutter checks
 		const openDagBtn = container.querySelector<HTMLButtonElement>('[data-open-tag-dag="mobile-redesign"]');
 		expect(openDagBtn).not.toBeNull();
 		openDagBtn?.click();
 
-		const dagRegion = container.querySelector("#tag-dag-region");
+		const dagRegion = container.querySelector<HTMLElement>("#tag-dag-region");
 		expect(dagRegion).not.toBeNull();
 		expect(dagRegion?.getAttribute("data-ask-card")).toBe("tag:mobile-redesign");
 		expect(dagRegion?.querySelectorAll("[data-dag-stage-col]").length).toBe(3);
@@ -549,18 +549,73 @@ describe("Tasks & Roles v8 client module (Task #240)", () => {
 		expect(dagRegion?.textContent).toContain("Stage 2 · Parallel Build & Rollout");
 		expect(dagRegion?.textContent).toContain("Stage 3 · Verify & Ship");
 
-		const dagEdges = dagRegion?.querySelectorAll("svg.dag-edges-svg path.dag-edge") ?? [];
+		// [DAG-HEADER-1-ROW]: <= 1 child above .dag-board, <= 1 child below .dag-board, 0 .handoff-bar strips
+		const dagBoard = dagRegion?.querySelector<HTMLElement>(".dag-board");
+		expect(dagBoard).not.toBeNull();
+		const regionChildren = Array.from(dagRegion?.children ?? []);
+		const boardIdx = dagBoard ? regionChildren.indexOf(dagBoard) : -1;
+		expect(boardIdx).toBe(1);
+		expect(regionChildren.slice(0, boardIdx).length).toBeLessThanOrEqual(1);
+		expect(regionChildren.slice(boardIdx + 1).length).toBeLessThanOrEqual(1);
+		expect(dagRegion?.querySelectorAll(".handoff-bar").length).toBe(0);
+		expect(dagRegion?.querySelector(".dag-header-row")).not.toBeNull();
+		expect(dagRegion?.querySelector(".dag-footer-unblock")?.textContent).toContain("How to unblock:");
+		expect(dagRegion?.querySelector("select[data-dag-tag-select]")).not.toBeNull();
+
+		// [DAG-NODE-MAX-3-TEXT] & [DAG-NO-EDGE-TEXT]: <= 3 leaf text elements per node card, 0 edge/root text in cards
+		const nodeCards = dagRegion?.querySelectorAll<HTMLElement>(
+			"[data-dag-stage-col] .dag-node-card, [data-dag-stage-col] .task-node",
+		);
+		expect(nodeCards?.length).toBe(7);
+		for (const card of nodeCards ?? []) {
+			const textEls = Array.from(card.querySelectorAll("*")).filter((el) =>
+				Array.from(el.childNodes).some((n) => n.nodeType === 3 && n.nodeValue && n.nodeValue.trim().length > 0),
+			);
+			expect(textEls.length).toBeLessThanOrEqual(3);
+			const cardText = (card.textContent ?? "").trim();
+			expect(/Depends on:|Unlocks|Root blocker/i.test(cardText)).toBe(false);
+		}
+		// Root blocker visual marker on #765 (since #221 was answered above)
+		expect(dagRegion?.querySelector('[data-dag-node="765"]')?.getAttribute("data-root-blocker-node")).toBe("true");
+		expect(dagRegion?.querySelector('[data-dag-node="765"] .dag-root-marker[data-root-blocker="true"]')).not.toBeNull();
+
+		// [DAG-NO-COL-REFLOW-ON-DETAILS]: clicking node status/Details opens single out-of-column .dag-detail-panel
+		const colHeightsBefore = Array.from(dagRegion?.querySelectorAll<HTMLElement>("[data-dag-stage-col]") ?? []).map(
+			(c) => Math.round(c.getBoundingClientRect().height),
+		);
+		dagRegion?.querySelector<HTMLButtonElement>('.task-detail-toggle-btn[data-task-id="221"]')?.click();
+		expect(container.querySelectorAll("#tag-dag-region [data-dag-stage-col] .task-detail-drawer").length).toBe(0);
+		expect(container.querySelectorAll("#tag-dag-region .dag-detail-panel").length).toBe(1);
+		expect(container.querySelector('#tag-dag-region .dag-detail-panel[data-dag-detail-panel="221"]')).not.toBeNull();
+		const colHeightsAfter221 = Array.from(
+			container.querySelectorAll<HTMLElement>("#tag-dag-region [data-dag-stage-col]"),
+		).map((c) => Math.round(c.getBoundingClientRect().height));
+		expect(colHeightsAfter221).toEqual(colHeightsBefore);
+
+		// Switching Details to #230 replaces #221 (at most 1 panel open) and causes 0px height change
+		container
+			.querySelector<HTMLButtonElement>('#tag-dag-region .task-detail-toggle-btn[data-task-id="230"]')
+			?.click();
+		expect(container.querySelectorAll("#tag-dag-region .dag-detail-panel").length).toBe(1);
+		expect(container.querySelector('#tag-dag-region .dag-detail-panel[data-dag-detail-panel="230"]')).not.toBeNull();
+		container.querySelector<HTMLButtonElement>('#tag-dag-region [data-close-dag-detail="230"]')?.click();
+		expect(container.querySelectorAll("#tag-dag-region .dag-detail-panel").length).toBe(0);
+
+		const dagEdges = container.querySelectorAll("#tag-dag-region svg.dag-edges-svg path.dag-edge");
 		expect(dagEdges.length).toBeGreaterThanOrEqual(4);
 		for (const edge of dagEdges) {
 			const d = edge.getAttribute("d") ?? "";
 			expect(d).toMatch(/^M\s+-?\d+.*C\s+/);
 		}
 
-		// Filter DAG by department station in handoff strip
-		const feStation = dagRegion?.querySelector<HTMLButtonElement>('.handoff-step[data-step-role="frontend"]');
+		// Filter DAG by department station in corner legend (.dag-dept-legend)
+		const feStation = container.querySelector<HTMLButtonElement>(
+			'#tag-dag-region .dag-dept-legend .handoff-step[data-step-role="frontend"]',
+		);
+		expect(feStation).not.toBeNull();
 		feStation?.click();
 		expect(container.querySelectorAll("#tag-dag-region [data-dag-node]").length).toBe(2);
-		container.querySelector<HTMLButtonElement>(".clear-handoff-btn")?.click();
+		container.querySelector<HTMLButtonElement>("#tag-dag-region .clear-handoff-btn")?.click();
 		expect(container.querySelectorAll("#tag-dag-region [data-dag-node]").length).toBe(7);
 
 		// 10. Switch to Roles & Queues Bento view
@@ -883,5 +938,71 @@ describe("Tasks & Roles v8 client module (Task #240)", () => {
 		expect(() => sortTasksByUrgency(null as unknown as UiRoleTask[])).toThrow(/array/);
 		expect(() => computeAttentionSummary(null as unknown as UiRoleTask[])).toThrow(/array/);
 		expect(() => mountTasksRolesV8Surface(null as unknown as HTMLElement)).toThrow(/HTMLElement/);
+	});
+
+	it("enforces the 8-card stage column ceiling with +N more toggle and urgency sorting on dense Tag DAGs (Design #235)", () => {
+		const dataset = createReferenceDataset();
+		const rolesReworkAsk = dataset.askGroups.find((a) => a.key === "tag:roles-rework")!;
+		// Add 10 extra Stage-2 tasks depending on architecture #498 so Stage 2 has 12 tasks total (> 8 ceiling)
+		const extraStage2Tasks: UiRoleTask[] = Array.from({ length: 10 }, (_, idx) => ({
+			id: 900 + idx,
+			displayId: 900 + idx,
+			role: idx % 2 === 0 ? "frontend" : "qa",
+			roleTitle: idx % 2 === 0 ? "Frontend" : "QA",
+			title: `Dense Stage 2 verification task #${900 + idx}`,
+			status: idx === 0 ? "blocked" : "done",
+			lifecycleStatus: idx === 0 ? "blocked" : "live",
+			statusTone: idx === 0 ? "blocked" : "live",
+			appOrSystem: "pi-web-ui",
+			appLabel: "Pi Web UI",
+			tags: ["roles-rework"],
+			dependsOnRefs: ["architecture #498"],
+			createdAt: 1762537000000 + idx,
+			updatedAt: 1762541000000 + idx,
+		}));
+		rolesReworkAsk.tasks = [...(rolesReworkAsk.tasks ?? []), ...extraStage2Tasks];
+		dataset.tasks = dataset.askGroups.flatMap((g) => g.tasks ?? []);
+
+		const container = document.createElement("div");
+		document.body.appendChild(container);
+		const controller = mountTasksRolesV8Surface(container, {
+			dataset,
+			initialState: { activeTagDag: "mobile-redesign" },
+		});
+
+		// Switch tag DAG via <select data-dag-tag-select> to dense #roles-rework
+		const tagSelect = container.querySelector<HTMLSelectElement>("#tag-dag-region [data-dag-tag-select]");
+		expect(tagSelect).not.toBeNull();
+		if (tagSelect) {
+			tagSelect.value = "roles-rework";
+			tagSelect.dispatchEvent(new Event("change", { bubbles: true }));
+		}
+
+		const stage1Col = container.querySelector<HTMLElement>('#tag-dag-region [data-dag-stage-col="1"]');
+		expect(stage1Col).not.toBeNull();
+		expect(stage1Col?.getAttribute("data-total-stage-nodes")).toBe("12");
+
+		// Default cap: <= 8 cards rendered, blocker (#900) surfaced first, +4 more button shown
+		const defaultCards = stage1Col?.querySelectorAll(".dag-node-card") ?? [];
+		expect(defaultCards.length).toBe(8);
+		expect(defaultCards[0]?.getAttribute("data-task-id")).toBe("900");
+
+		const overflowBtn = stage1Col?.querySelector<HTMLButtonElement>(".dag-col-overflow-btn");
+		expect(overflowBtn).not.toBeNull();
+		expect(overflowBtn?.textContent).toContain("+4 more (12 total)");
+
+		// Click +4 more -> reveals all 12 tasks in Stage 2
+		overflowBtn?.click();
+		const expandedCol = container.querySelector<HTMLElement>('#tag-dag-region [data-dag-stage-col="1"]');
+		expect(expandedCol?.querySelectorAll(".dag-node-card").length).toBe(12);
+		expect(expandedCol?.querySelector(".dag-col-overflow-btn")?.textContent).toContain("Show top 8");
+
+		// Click again -> collapses back to 8
+		expandedCol?.querySelector<HTMLButtonElement>(".dag-col-overflow-btn")?.click();
+		expect(
+			container.querySelectorAll('#tag-dag-region [data-dag-stage-col="1"] .dag-node-card').length,
+		).toBe(8);
+
+		controller.destroy();
 	});
 });

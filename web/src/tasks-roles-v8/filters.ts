@@ -31,6 +31,8 @@ export interface TasksRolesV8FilterState {
 	handoffRoleFilter: Record<string, string | null>;
 	collapsedAsks: Record<string, boolean>;
 	expandedTasks: Record<number, boolean>;
+	activeDagDetailTaskId: number | null;
+	expandedDagStageCols: Record<string, boolean>;
 	expandedRoles: Record<string, boolean>;
 	idleExpanded: boolean;
 	answeredTasks: Record<number, string>;
@@ -75,6 +77,8 @@ export function createInitialFilterState(overrides: Partial<TasksRolesV8FilterSt
 		handoffRoleFilter: {},
 		collapsedAsks: {},
 		expandedTasks: {},
+		activeDagDetailTaskId: null,
+		expandedDagStageCols: {},
 		expandedRoles: {},
 		idleExpanded: false,
 		answeredTasks: {},
@@ -191,6 +195,8 @@ export function resetAllFilters(state: TasksRolesV8FilterState): TasksRolesV8Fil
 		searchQuery: "",
 		openDropdown: null,
 		handoffRoleFilter: {},
+		activeDagDetailTaskId: null,
+		expandedDagStageCols: {},
 	};
 }
 

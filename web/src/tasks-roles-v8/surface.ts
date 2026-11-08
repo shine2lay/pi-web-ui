@@ -9,11 +9,16 @@ import {
 } from "./card-surface";
 import { buildTaskDag, installGlobalBuildTaskDag, type TaskDagResult } from "./dag";
 import {
+	DAG_SHORT_STATUS_LABEL,
+	DAG_STAGE_CARD_CEILING,
+	DAG_STAGE_PRIORITY,
 	drawAllDagEdges,
 	renderDagBoard,
+	renderDagDetailPanel,
 	renderTagDagRegion,
 	renderTaskNode,
 	renderUnifiedTasksPanel,
+	sortStageNodesForCeiling,
 } from "./dag-surface";
 import {
 	createInitialFilterState,
@@ -33,11 +38,15 @@ import type { TasksRolesV8Dataset } from "./types";
 
 export {
 	createReferenceDataset,
+	DAG_SHORT_STATUS_LABEL,
+	DAG_STAGE_CARD_CEILING,
+	DAG_STAGE_PRIORITY,
 	drawAllDagEdges,
 	escapeHtml,
 	renderAttentionNoteBar,
 	renderCompactFilterBar,
 	renderDagBoard,
+	renderDagDetailPanel,
 	renderDeliveryPipelineMeter,
 	renderDepartmentStrip,
 	renderRolesBentoView,
@@ -50,6 +59,7 @@ export {
 	renderUnifiedTasksPanel,
 	renderWhyModal,
 	ROLLUP_META,
+	sortStageNodesForCeiling,
 	STATUS_META,
 	V8_REFERENCE_DATASET,
 };
@@ -454,12 +464,20 @@ export function mountTasksRolesV8Surface(
 		filterRegion?.querySelectorAll<HTMLButtonElement>("[data-open-tag-dag]").forEach((btn) => {
 			btn.addEventListener("click", () => {
 				const tagId = btn.getAttribute("data-open-tag-dag") || "";
+				const nextActiveTagDag = state.activeTagDag === tagId ? null : tagId;
 				state = {
 					...state,
 					openDropdown: null,
-					activeTagDag: state.activeTagDag === tagId ? null : tagId,
+					activeTagDag: nextActiveTagDag,
+					activeDagDetailTaskId: null,
 				};
 				refresh();
+				if (nextActiveTagDag) {
+					const regionEl = container.querySelector<HTMLElement>("#tag-dag-region");
+					if (regionEl && typeof regionEl.scrollIntoView === "function") {
+						regionEl.scrollIntoView({ block: "start" });
+					}
+				}
 			});
 		});
 
@@ -486,10 +504,55 @@ export function mountTasksRolesV8Surface(
 		viewRegion.querySelectorAll<HTMLButtonElement>("[data-open-tag-dag]").forEach((btn) => {
 			btn.addEventListener("click", () => {
 				const tagId = btn.getAttribute("data-open-tag-dag") || "";
+				const nextActiveTagDag = state.activeTagDag === tagId ? null : tagId;
 				state = {
 					...state,
 					openDropdown: null,
-					activeTagDag: state.activeTagDag === tagId ? null : tagId,
+					activeTagDag: nextActiveTagDag,
+					activeDagDetailTaskId: null,
+				};
+				refresh();
+				if (nextActiveTagDag) {
+					const regionEl = container.querySelector<HTMLElement>("#tag-dag-region");
+					if (regionEl && typeof regionEl.scrollIntoView === "function") {
+						regionEl.scrollIntoView({ block: "start" });
+					}
+				}
+			});
+		});
+
+		viewRegion.querySelectorAll<HTMLSelectElement>("[data-dag-tag-select]").forEach((sel) => {
+			sel.addEventListener("change", (e) => {
+				const nextTag = (e.target as HTMLSelectElement).value || null;
+				state = {
+					...state,
+					activeTagDag: nextTag,
+					activeDagDetailTaskId: null,
+				};
+				refresh();
+			});
+		});
+
+		viewRegion.querySelectorAll<HTMLButtonElement>("[data-stage-overflow-toggle]").forEach((btn) => {
+			btn.addEventListener("click", () => {
+				const key = btn.getAttribute("data-stage-overflow-toggle") || "";
+				if (!key) return;
+				state = {
+					...state,
+					expandedDagStageCols: {
+						...state.expandedDagStageCols,
+						[key]: !state.expandedDagStageCols[key],
+					},
+				};
+				refresh();
+			});
+		});
+
+		viewRegion.querySelectorAll<HTMLButtonElement>("[data-close-dag-detail]").forEach((btn) => {
+			btn.addEventListener("click", () => {
+				state = {
+					...state,
+					activeDagDetailTaskId: null,
 				};
 				refresh();
 			});
@@ -528,13 +591,20 @@ export function mountTasksRolesV8Surface(
 		viewRegion.querySelectorAll<HTMLButtonElement>(".task-detail-toggle-btn").forEach((btn) => {
 			btn.addEventListener("click", () => {
 				const taskId = Number(btn.getAttribute("data-task-id"));
-				state = {
-					...state,
-					expandedTasks: {
-						...state.expandedTasks,
-						[taskId]: !state.expandedTasks[taskId],
-					},
-				};
+				if (btn.hasAttribute("data-dag-detail-btn") || btn.closest("[data-dag-board]")) {
+					state = {
+						...state,
+						activeDagDetailTaskId: state.activeDagDetailTaskId === taskId ? null : taskId,
+					};
+				} else {
+					state = {
+						...state,
+						expandedTasks: {
+							...state.expandedTasks,
+							[taskId]: !state.expandedTasks[taskId],
+						},
+					};
+				}
 				refresh();
 			});
 		});
@@ -626,7 +696,7 @@ export function mountTasksRolesV8Surface(
 	}
 
 	function hasOpenOverlay(): boolean {
-		return Boolean(whyModalOpen || state.openDropdown);
+		return Boolean(whyModalOpen || state.openDropdown || state.activeDagDetailTaskId !== null);
 	}
 
 	function closeTopOverlay(): boolean {
@@ -639,6 +709,12 @@ export function mountTasksRolesV8Surface(
 		}
 		if (state.openDropdown) {
 			state = { ...state, openDropdown: null };
+			refresh();
+			options.onOverlayChange?.(hasOpenOverlay());
+			return true;
+		}
+		if (state.activeDagDetailTaskId !== null) {
+			state = { ...state, activeDagDetailTaskId: null };
 			refresh();
 			options.onOverlayChange?.(hasOpenOverlay());
 			return true;
