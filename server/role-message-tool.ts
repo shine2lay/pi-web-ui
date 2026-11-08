@@ -43,13 +43,11 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 		name: MESSAGE_ROLE_TOOL_NAME,
 		label: "Message another role",
 		description:
-			"Message a role: question, request, fyi or reply (replyTo). Delivered after its current turn; replies return to the asking chat. " +
-			"Questions/requests/replies wake; fyi waits. Answers arrive later. No secrets. " +
+			"Message a role (question/request/fyi/reply via replyTo); delivered after its turn (fyi waits, others wake; answers arrive later; no secrets). " +
 			`${BOARD_ROUTING_RULE} ` +
-			"So to tell several roles the same general info, post it on the board. " +
-			`Capped roles: ${ROLE_MESSAGE_POLICY.ordinary.acceptedPerOrigin} messages per rolling hour; Ops/Temper hourly-exempt only. ` +
-			`Chain 1 to ${ROLE_MESSAGE_POLICY.depth.unapprovedThrough} free; ${ROLE_MESSAGE_POLICY.depth.unapprovedThrough + 1} to ${ROLE_MESSAGE_POLICY.depth.lowerThrough} authorised lead/COO grant; ${ROLE_MESSAGE_POLICY.depth.ownerFrom} or more Owner. Use approval when asked.`,
-		promptSnippet: "message another role's chat (question / request / fyi / reply); answers come later as new messages",
+			`Rate cap: ${ROLE_MESSAGE_POLICY.ordinary.acceptedPerOrigin} messages per rolling hour (Ops/Temper hourly-exempt). ` +
+			`Chain 1 to ${ROLE_MESSAGE_POLICY.depth.unapprovedThrough} free; ${ROLE_MESSAGE_POLICY.depth.unapprovedThrough + 1} to ${ROLE_MESSAGE_POLICY.depth.lowerThrough} lead/COO grant; ${ROLE_MESSAGE_POLICY.depth.ownerFrom} or more Owner (use approval).`,
+		promptSnippet: "message another role (question/request/fyi/reply); answers arrive later",
 		parameters: Type.Object({
 			to: Type.Optional(
 				Type.String({ description: "The receiving role's id (from the roles list in your role section)." }),

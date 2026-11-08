@@ -8609,3 +8609,14 @@ on, backtest, cost and result: `docs/stall-watch.md`.
 - Checks: `tests/unit/tool-manager.test.ts`, `tests/unit/notes-check-list.test.ts`.
 - Undo: revert this commit and `pi-web-deploy` it (and revert the companion `pi-queue` commit + `pi-web-deploy restart`).
 
+## prompt-audit-part2: compact owner_question/message_role/board prompts, gate MCP & coding skills, and clean stale identity/board entries on load
+
+- `local` (Ops #793; owner via COO rm-e95665f6, rm-84806eb0, rm-d023efe7, 2026-11-08: prompt audit items 1, 3, 4 and stale 6 am report / `memory_*` / Board cleanup). Hypothesis H-PROMPT-AUDIT-793 (`/home/shinelay/kept-from-tmp/2026-11-08/prompt-audit-793/HYPOTHESIS.md`).
+- `server/owner-question-tool.ts`, `server/role-message-tool.ts`, `server/board-tool.ts`: removes duplicate `promptGuidelines` from `makeOwnerQuestionTool` (keeping the rules concisely in `DESCRIPTION`), and compacts `BOARD_ROUTING_RULE` and the top-level descriptions of `message_role` and `board`.
+- `server/tool-manager.ts`, `server/agent-service.ts`: strips `mcp` and `mcpScript` (`NON_TECHNICAL_MCP_OFF_TOOL_NAMES`) in `getRoleOffToolNames` for `NON_TECHNICAL_ROLES` (`coo`, `product`, `marketing`); filters `fork-rebase`, `pi-control-chrome-release`, and `mcp-scripting` (`CODING_ONLY_SKILL_NAMES`) in `composeInputs` via `filterSkillsForRoleAndTools` for `NON_CODING_ROLES` (`coo`, `product`, `marketing`, `docs`), and strips `mcp-scripting` whenever `mcpScript` is not in the session's active tools.
+- `server/identities.ts`: adds `cleanIdentityPromptAndAbout` and applies it idempotently in `loadIdentities` (archiving prior text via `archiveText` into `<role>/archive/` before `writeWhole` when changed) to strip stale lines referencing automatic 6 am reports, `role-reports`, the 6:30 am morning brief, and retired `memory_search` / `memory_read` / `memory_write` ("shared daily log"), and deduplicate non-heading lines in `about.md` that repeat lines in the role's prompt.
+- `server/role-board.ts`: adds `cleanSupersededBoardPosts` and applies it idempotently in `RoleBoard.load()` to close superseded `AGENTS.md` Board orders and resolved October news posts while keeping active November orders open.
+- Checks: `tests/unit/owner-question-tool.test.ts`, `tests/unit/tool-manager.test.ts`, `tests/unit/identities.test.ts`, `tests/unit/role-board.test.ts`, `tests/unit/role-message-policy.test.ts`, `tests/unit/tool-prompt-hygiene.test.ts`, `tests/unit/notes-check-list.test.ts`.
+- Undo: revert this commit (restoring any archived `<role>/archive/{prompt,about}-*.md` files if desired) and `pi-web-deploy` it.
+
+

@@ -73,6 +73,56 @@ export const BOARD_NEWS_CUT = 600;
 export const BOARD_FIRST_NEWS_DAYS = 3;
 /** Posts one turn-start note shows at most (the rest: board read). */
 export const BOARD_NOTE_POSTS_MAX = 20;
+/** Superseded Board orders already baked into the compacted 29-rule AGENTS.md, closed idempotently on load. */
+export const SUPERSEDED_AGENTS_MD_BOARD_ORDER_IDS = [
+	"bp-8a65f327",
+	"bp-dbadd8c2",
+	"bp-e0e303b3",
+	"bp-1cdfdf0b",
+	"bp-9f3fee6c",
+	"bp-78a122ac",
+	"bp-30ad5a38",
+	"bp-341f05c9",
+	"bp-45861886",
+	"bp-c9066ed2",
+	"bp-01909100",
+	"bp-cb2437be",
+] as const;
+/** Resolved October news posts closed idempotently on load. */
+export const RESOLVED_OCTOBER_NEWS_POST_IDS = [
+	"bp-1bb7238a",
+	"bp-30b58ba9",
+	"bp-faad2485",
+	"bp-feac52fa",
+	"bp-3963c270",
+	"bp-411dd312",
+] as const;
+export const RESOLVED_OCTOBER_NEWS_CUTOFF_MS = Date.parse("2026-11-01T00:00:00Z");
+export const SUPERSEDED_BOARD_CLEANUP_NOTE =
+	"Superseded: baked into AGENTS.md / resolved October news (owner prompt audit 2026-11-08)";
+const SUPERSEDED_ORDER_ID_SET = new Set<string>(SUPERSEDED_AGENTS_MD_BOARD_ORDER_IDS);
+const RESOLVED_OCTOBER_NEWS_ID_SET = new Set<string>(RESOLVED_OCTOBER_NEWS_POST_IDS);
+
+/** Idempotently close superseded AGENTS.md Board orders and resolved October news posts on store load. */
+export function cleanSupersededBoardPosts(posts: BoardPostRecord[], now: number = Date.now()): boolean {
+	let changed = false;
+	for (const p of posts) {
+		if (p.closed) continue;
+		const isSupersededOrder = SUPERSEDED_ORDER_ID_SET.has(p.id);
+		const isResolvedOctoberNews =
+			RESOLVED_OCTOBER_NEWS_ID_SET.has(p.id) ||
+			(p.kind === "news" && p.at < RESOLVED_OCTOBER_NEWS_CUTOFF_MS && now >= RESOLVED_OCTOBER_NEWS_CUTOFF_MS);
+		if (!isSupersededOrder && !isResolvedOctoberNews) continue;
+		p.closed = {
+			at: now,
+			by: "owner",
+			note: SUPERSEDED_BOARD_CLEANUP_NOTE,
+		};
+		if (p.pending) delete p.pending;
+		changed = true;
+	}
+	return changed;
+}
 /** A direct turn not delivered by then is given up (the role still sees the order at its next turn). */
 const GIVE_UP_MS = 24 * 3600_000;
 /** A send that got in but never landed is sent again once the chat has been idle this long. */
@@ -559,7 +609,18 @@ export class RoleBoard {
 					!!p && typeof p.id === "string" && typeof p.seq === "number" && (p.kind === "order" || p.kind === "news"),
 			);
 			const seq = Math.max(typeof raw.seq === "number" ? raw.seq : 0, ...posts.map((p) => p.seq), 0);
-			return { v: 1, epoch: raw.epoch, seq, posts };
+			const loaded: BoardFile = { v: 1, epoch: raw.epoch, seq, posts };
+			if (cleanSupersededBoardPosts(loaded.posts, this.now())) {
+				try {
+					mkdirSync(dirname(this.file), { recursive: true });
+					const tmp = `${this.file}.${process.pid}.tmp`;
+					writeFileSync(tmp, `${JSON.stringify(loaded, null, "\t")}\n`);
+					renameSync(tmp, this.file);
+				} catch (err) {
+					this.log(`couldn't save cleanup: ${(err as Error).message}`);
+				}
+			}
+			return loaded;
 		} catch (err) {
 			const aside = `${this.file}.bad-${this.now()}`;
 			try {

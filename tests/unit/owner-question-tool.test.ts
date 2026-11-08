@@ -102,16 +102,16 @@ describe("only in COO's home chat, only with routing on", () => {
 		expect(await none.call({ action: "list" })).toMatchObject({ ok: false, text: ROUTING_OFF });
 	});
 
-	it("the tool's actions are list, release, hold and return: none answers for the owner", () => {
+	it("the tool's actions are list, release, hold and return: none answers for the owner, with no duplicate promptGuidelines", () => {
 		const { tool } = setup();
 		expect(tool.name).toBe(OWNER_QUESTION_TOOL);
+		expect(tool.promptGuidelines).toBeUndefined();
 		const action = (tool.parameters as { properties: { action: { anyOf: Array<{ const: string }> } } }).properties
 			.action;
 		expect(action.anyOf.map((a) => a.const)).toEqual(["list", "release", "hold", "return"]);
-		const guidance = [tool.description, ...(tool.promptGuidelines ?? [])].join("\n");
-		expect(guidance).toMatch(/never answer/i);
-		for (const w of ["consent", "spending", "publishing", "pauses", "stops"]) expect(guidance).toContain(w);
-		expect(guidance).toMatch(/return only when/i);
+		expect(tool.description).toMatch(/never answer/i);
+		for (const w of ["consent", "spending", "publishing", "pauses", "stops"]) expect(tool.description).toContain(w);
+		expect(tool.description).toMatch(/only when it is clearly/i);
 	});
 });
 

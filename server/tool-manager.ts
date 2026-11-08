@@ -318,9 +318,19 @@ export const CODING_ALLOWED_ROLES = [
 
 export const NON_CODING_ROLES = ["coo", "product", "marketing", "docs"] as const;
 
+/** MCP tools (`mcp`, `mcpScript`) stripped for non-technical roles (`coo`, `product`, `marketing`). */
+export const NON_TECHNICAL_MCP_OFF_TOOL_NAMES = ["mcp", "mcpScript"] as const;
+export const NON_TECHNICAL_ROLES = ["coo", "product", "marketing"] as const;
+export const NON_TECHNICAL_MCP_OFF_ROLES = NON_TECHNICAL_ROLES;
+
+/** Coding/release-only global skills stripped from `<available_skills>` for `NON_CODING_ROLES`
+ *  (and `mcp-scripting` whenever `mcpScript` is not in the session's active tools). */
+export const CODING_ONLY_SKILL_NAMES = ["fork-rebase", "pi-control-chrome-release", "mcp-scripting"] as const;
+
 const TEMPER_ALLOWED_ROLE_SET = new Set<string>(TEMPER_ALLOWED_ROLES);
 const CODING_ALLOWED_ROLE_SET = new Set<string>(CODING_ALLOWED_ROLES);
 const NON_CODING_ROLE_SET = new Set<string>(NON_CODING_ROLES);
+const NON_TECHNICAL_ROLE_SET = new Set<string>(NON_TECHNICAL_ROLES);
 
 /** Returns the set of tool names stripped by role-specific gating for `role` (and `taskChat` mode).
  *  Unroled general chats (`role` empty/null/undefined) have no role-specific tool restrictions. */
@@ -337,7 +347,38 @@ export function getRoleOffToolNames(role?: string | null, taskChat = false): Set
 	if (NON_CODING_ROLE_SET.has(r) || !CODING_ALLOWED_ROLE_SET.has(r)) {
 		for (const name of CODING_ROLE_TOOL_NAMES) off.add(name);
 	}
+	if (NON_TECHNICAL_ROLE_SET.has(r)) {
+		for (const name of NON_TECHNICAL_MCP_OFF_TOOL_NAMES) off.add(name);
+	}
 	return off;
+}
+
+/** Returns the set of skill names stripped from `<available_skills>` for `role` and `activeTools`.
+ *  - `fork-rebase`, `pi-control-chrome-release`, and `mcp-scripting` are stripped for `NON_CODING_ROLES`
+ *    (`coo`, `product`, `marketing`, `docs`).
+ *  - `mcp-scripting` is also stripped whenever `mcpScript` is not in `activeTools`. */
+export function getRoleOffSkillNames(role?: string | null, activeTools?: Iterable<string>): Set<string> {
+	const off = new Set<string>();
+	const r = typeof role === "string" ? role.trim().toLowerCase() : "";
+	if (r && (NON_CODING_ROLE_SET.has(r) || !CODING_ALLOWED_ROLE_SET.has(r))) {
+		for (const name of CODING_ONLY_SKILL_NAMES) off.add(name);
+	}
+	if (activeTools !== undefined) {
+		const active = activeTools instanceof Set ? activeTools : new Set(activeTools);
+		if (!active.has("mcpScript")) off.add("mcp-scripting");
+	}
+	return off;
+}
+
+/** Filters `<available_skills>` entries by role and active tools (`getRoleOffSkillNames`). */
+export function filterSkillsForRoleAndTools<T extends { name: string }>(
+	skills: readonly T[],
+	role?: string | null,
+	activeTools?: Iterable<string>,
+): T[] {
+	const off = getRoleOffSkillNames(role, activeTools);
+	if (off.size === 0) return [...skills];
+	return skills.filter((s) => !off.has(s.name));
 }
 
 /** Pi tool exposures that wait for their owner to switch them on. Pi declares a "deferred" tool to

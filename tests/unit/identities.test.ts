@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClientSession, personaFirst } from "../../server/agent-service.js";
 import {
+	cleanIdentityPromptAndAbout,
 	fileIdentityIds,
 	identityCommandLine,
 	IdentityFileIndex,
@@ -676,5 +677,61 @@ describe("the about page and notebook reach the model", () => {
 		expect(personaFirst(first)).toBe(first);
 		const none = [ext("/pkgs/pi-identity/index.ts")];
 		expect(personaFirst(none)).toBe(none);
+	});
+
+	it("loadIdentities cleans stale 6 am report / role-reports / 6:30 am brief / memory_* lines and deduplicates repeated about.md lines with archive backup", () => {
+		const cooDir = join(idDir, "coo");
+		mkdirSync(cooDir, { recursive: true });
+		writeFileSync(join(cooDir, "identity.json"), JSON.stringify({ id: "coo", title: "COO" }));
+		const rawPrompt = [
+			"# How you work: COO",
+			"",
+			"- Keep the owner up to date on everything going on.",
+			"- One standing request from the owner (2026-10-06): the morning brief at about 6:30 am Pacific, after the 6 am reports.",
+			"- Check `role-reports status --date <day>` before sending.",
+			"- Write to the shared daily log with `memory_write` or search via `memory_search` / `memory_read`.",
+			"- Ask focused clarification questions.",
+			"",
+		].join("\n");
+		const rawAbout = [
+			"# COO",
+			"",
+			"**Focus:** keeping the owner up to date across every role.",
+			"Not this role's: building features directly.",
+			"**Where it looks:** roles_overview and the board.",
+			"- Keep the owner up to date on everything going on.",
+			"- One standing request from the owner (2026-10-06): the morning brief at about 6:30 am Pacific, after the 6 am reports.",
+			"- Use `role-reports` and `memory_search` when needed.",
+			"- Unique safety rule only in about.md.",
+			"",
+		].join("\n");
+		writeFileSync(join(cooDir, "prompt.md"), rawPrompt);
+		writeFileSync(join(cooDir, "about.md"), rawAbout);
+
+		const direct = cleanIdentityPromptAndAbout(rawPrompt, rawAbout);
+		expect(direct.promptChanged).toBe(true);
+		expect(direct.aboutChanged).toBe(true);
+		expect(direct.prompt).not.toMatch(
+			/6:30\s*am|6\s*am\s+reports|role-reports|memory_write|memory_search|memory_read/i,
+		);
+		expect(direct.about).not.toMatch(/6:30\s*am|6\s*am\s+reports|role-reports|memory_search/i);
+		expect(direct.about).not.toContain("Keep the owner up to date on everything going on.");
+		expect(direct.about).toContain("**Focus:** keeping the owner up to date across every role.");
+		expect(direct.about).toContain("Not this role's: building features directly.");
+		expect(direct.about).toContain("Unique safety rule only in about.md.");
+
+		loadIdentities(idDir);
+		const onDiskPrompt = readFileSync(join(cooDir, "prompt.md"), "utf8");
+		const onDiskAbout = readFileSync(join(cooDir, "about.md"), "utf8");
+		expect(onDiskPrompt).toBe(direct.prompt);
+		expect(onDiskAbout).toBe(direct.about);
+		const archives = readdirSync(join(cooDir, "archive")).sort();
+		expect(archives.some((f) => f.startsWith("prompt-"))).toBe(true);
+		expect(archives.some((f) => f.startsWith("about-"))).toBe(true);
+
+		// Second pass is idempotent: no further changes or rewrites.
+		const second = cleanIdentityPromptAndAbout(onDiskPrompt, onDiskAbout);
+		expect(second.promptChanged).toBe(false);
+		expect(second.aboutChanged).toBe(false);
 	});
 });

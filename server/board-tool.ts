@@ -26,7 +26,7 @@ export { BOARD_TOOL_NAME };
 
 /** The owner's routing rule, as the board and message_role descriptions give it. */
 export const BOARD_ROUTING_RULE =
-	"The owner's routing rule: if a role has something waiting (a running turn, an open queue task or an unanswered request), a message goes directly to it, to wake its session; general info goes on the board.";
+	"Routing rule: if a role has something waiting, message it directly; general info goes on the board (to tell several roles the same general info, post it on the board).";
 
 /** Ops #688 (owner, Oct 31, via COO rm-911e1fa9: "agent to agent messaging should be token efficient, i am
  *  not going to read it, so it should as compact with info as possible"): the pointer that ends the board's
@@ -110,13 +110,10 @@ export function makeBoardTool(host: BoardToolHost): ToolDefinition {
 		name: BOARD_TOOL_NAME,
 		label: "Roles' board",
 		description:
-			"The roles' shared board: one post for news or the owner's orders that several roles need, instead of the same message to each. " +
+			"Roles' shared board for multi-role news or owner orders (ownerWords required). " +
 			`${BOARD_ROUTING_RULE} ` +
-			"Direct requests, questions and replies stay on message_role. " +
-			"news: general info; it wakes nobody. order: only the owner's orders, in his words (ownerWords); the board sends it directly to listed roles with something waiting. " +
-			'Others read posts at their next turn, as one "[Board]" note. No department directives. Ack an order once you have acted on it.',
-		promptSnippet:
-			"the roles' shared board: read posts, post news (or the owner's orders, in his words) for several roles, ack an order you did, close your post",
+			'news wakes nobody; order wakes listed roles with something waiting and shows as "[Board]" at next turn for others. Ack orders when done; no department directives.',
+		promptSnippet: "roles' shared board: read/post news or owner orders, ack orders, close posts",
 		parameters: Type.Object({
 			action: Type.String({
 				description:

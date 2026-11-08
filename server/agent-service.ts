@@ -295,6 +295,8 @@ import {
 	ASK_USER_QUESTION_TOOL_NAME,
 	BROWSER_PAGE_TOOL_NAME,
 	effectiveDisabledAgentTools,
+	filterSkillsForRoleAndTools,
+	getRoleOffSkillNames,
 	getRoleOffToolNames,
 	isAgentToolEnabled,
 	isTerminalGuidanceOn,
@@ -5070,13 +5072,22 @@ export class ClientSession {
 		contextFiles: { path: string; content: string }[];
 		skills: { name: string; description: string; filePath: string }[];
 		preset?: string;
+		role?: string | null;
 	}): PromptComposerInputs {
 		const preset = src.preset ?? this.conv?.agentPreset ?? this.settingsSvc.current.defaultAgentPreset ?? "standard";
+		const role =
+			src.role !== undefined
+				? src.role
+				: this.conv
+					? (this.identityOf(this.conv)?.id ?? (this.conv.session ? this.sessionRoleId(this.conv.session) : undefined))
+					: undefined;
 		// 技能名录指纹观测（只打日志，不干预组装；预览与 run 共用此入口，
 		// 变化才记一行，首轮静默）。用未注文的目录（fill 前），全文注入不影响指纹。
 		this.noteSkillCatalogDigest(src.skills);
 		const showSkills = presetShowsSkillCatalog(preset);
-		const effectiveSkills = showSkills ? this.fillSkillContents(src.skills) : [];
+		const filteredSkills = showSkills ? filterSkillsForRoleAndTools(src.skills, role, src.selectedTools) : [];
+		const effectiveSkills = showSkills ? this.fillSkillContents(filteredSkills) : [];
+		const offSkills = getRoleOffSkillNames(role, src.selectedTools);
 		return {
 			cwd: src.cwd,
 			systemPromptFile: this.lastBaseSystemPrompt || undefined,
@@ -5099,7 +5110,9 @@ export class ClientSession {
 			lang: this.getLang(),
 			contextFiles: src.contextFiles,
 			skills: effectiveSkills,
-			skillsFullText: showSkills ? normalizeSkillList(this.settingsSvc.current.skillsFullText) : [],
+			skillsFullText: showSkills
+				? normalizeSkillList(this.settingsSvc.current.skillsFullText).filter((name) => !offSkills.has(name))
+				: [],
 		};
 	}
 
@@ -5135,6 +5148,7 @@ export class ClientSession {
 		contextFiles: { path: string; content: string }[];
 		skills: { name: string; description: string; filePath: string }[];
 		preset?: string;
+		role?: string | null;
 	}): string {
 		const tpl = (this.settingsSvc.current.promptTemplate ?? "").trim();
 		const ovs = this.settingsSvc.current.promptOverrides ?? {};
@@ -5176,6 +5190,7 @@ export class ClientSession {
 			}
 			const loader = sess.resourceLoader;
 			const preset = conv?.agentPreset ?? this.settingsSvc.current.defaultAgentPreset ?? "standard";
+			const role = this.identityOf(conv)?.id ?? this.sessionRoleId(sess);
 			const texts = resolveSectionTexts(
 				this.composeInputs({
 					cwd,
@@ -5189,6 +5204,7 @@ export class ClientSession {
 						filePath: (s as { filePath?: string }).filePath ?? "",
 					})),
 					preset,
+					role,
 				}),
 			);
 			// 模板/覆盖渲染（无自定义模板时用默认模板渲染完整提示词，确保与真实 run 规则一致且包含预设过滤）。
@@ -6451,6 +6467,8 @@ export class ClientSession {
 											filePath: s.filePath ?? "",
 										})),
 										preset: currentPreset,
+										role:
+											(conv ? this.identityOf(conv)?.id : undefined) ?? (sess ? this.sessionRoleId(sess) : undefined),
 									});
 									return rendered ? { systemPrompt: rendered } : undefined;
 								});

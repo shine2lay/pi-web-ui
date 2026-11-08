@@ -171,17 +171,10 @@ type Params = {
 
 const DESCRIPTION =
 	"Owner questions held for you (COO) before the owner sees them, each with a card in this chat. " +
-	"list: what is held now. release: send it to the owner now with a plain note he reads first (and a recommendation). " +
+	"list: what is held now. release: send it to the owner now with a plain note he reads first (no ids, paths or code, at most 600 characters) and a recommendation; always release what only the owner can give (consent, spending, publishing, his pauses and stops). " +
 	"hold: keep it while you gather context, up to 2 hours each time, renewable. " +
-	"return: hand an ask_user_question question back to the chat that asked, when it is clearly that chat's own call. " +
+	"return: hand an ask_user_question question back to the chat that asked, only when it is clearly that chat's own call. " +
 	"You never answer for the owner. One still held when your turn ends with no action goes to him at once.";
-
-const GUIDELINES = [
-	"owner_question: gather the context a held question needs, and never answer it for the owner.",
-	"owner_question: always release what only the owner can give: consent, spending, publishing, his pauses and his own stops.",
-	"owner_question: prefer release with a plain note (no ids, paths or code, at most 600 characters) and a recommendation.",
-	"owner_question: return only when the question is clearly the asking role's own call; hold only while you gather context.",
-];
 
 export function makeOwnerQuestionTool(host: OwnerQuestionToolHost): ToolDefinition {
 	return defineTool({
@@ -189,7 +182,6 @@ export function makeOwnerQuestionTool(host: OwnerQuestionToolHost): ToolDefiniti
 		label: "Owner question",
 		description: DESCRIPTION,
 		promptSnippet: "owner_question: release, hold or return owner questions held for COO",
-		promptGuidelines: GUIDELINES,
 		parameters: Type.Object({
 			action: Type.Union(
 				[Type.Literal("list"), Type.Literal("release"), Type.Literal("hold"), Type.Literal("return")],

@@ -28,13 +28,17 @@ import {
 	BOARD_NOTE_POSTS_MAX,
 	BOARD_POSTS_PER_HOUR,
 	BOARD_VIEW,
+	RESOLVED_OCTOBER_NEWS_POST_IDS,
 	RoleBoard as RoleBoardBase,
+	SUPERSEDED_AGENTS_MD_BOARD_ORDER_IDS,
+	SUPERSEDED_BOARD_CLEANUP_NOTE,
 	audienceOf,
 	boardChatState,
 	boardNote,
 	boardOrderIdOf,
 	boardOrderText,
 	boardRoleStateOf,
+	cleanSupersededBoardPosts,
 	cutText,
 	openOrdersFor,
 	postShownIn,
@@ -974,5 +978,81 @@ describe("the board tool", () => {
 		const one = (await beta.run({ action: "read", id: ids[3] })).content[0].text;
 		expect(one).toContain(`Order ${ids[3]} · from owner`);
 		expect(readBy()).toEqual([ids[3]]);
+	});
+
+	it("closes superseded AGENTS.md orders and resolved October news on load while keeping active November orders", () => {
+		const f = three();
+		const novNow = Date.parse("2026-11-08T17:00:00Z");
+		const octAt = Date.parse("2026-10-25T12:00:00Z");
+		const novAt = Date.parse("2026-11-03T18:00:00Z");
+		const posts = [
+			...SUPERSEDED_AGENTS_MD_BOARD_ORDER_IDS.map((id, idx) => ({
+				id,
+				seq: idx + 1,
+				at: octAt + idx * 1000,
+				from: "owner",
+				kind: "order" as const,
+				to: "all" as const,
+				title: `Superseded order ${id}`,
+				text: "Now in AGENTS.md",
+			})),
+			...RESOLVED_OCTOBER_NEWS_POST_IDS.map((id, idx) => ({
+				id,
+				seq: 100 + idx,
+				at: octAt + idx * 1000,
+				from: "ops",
+				kind: "news" as const,
+				to: "all" as const,
+				title: `October news ${id}`,
+				text: "Resolved in October",
+			})),
+			{
+				id: "bp-2ddb2a83",
+				seq: 200,
+				at: novAt,
+				from: "owner",
+				via: "architecture",
+				kind: "order" as const,
+				to: "all" as const,
+				title: "Pause all Project 3 work",
+				text: "Keep paused.",
+			},
+			{
+				id: "bp-bc056d81",
+				seq: 201,
+				at: novAt + 1000,
+				from: "owner",
+				kind: "order" as const,
+				to: "all" as const,
+				title: "Show&Tell prototype",
+				text: "Active.",
+			},
+			{
+				id: "bp-e987c481",
+				seq: 202,
+				at: novAt + 2000,
+				from: "owner",
+				kind: "order" as const,
+				to: "all" as const,
+				title: "Two lanes",
+				text: "Active.",
+			},
+		];
+		mkdirSync(dirname(store), { recursive: true });
+		writeFileSync(store, JSON.stringify({ v: 1, epoch: "e1", seq: 202, posts }));
+		const b = new RoleBoard(store, f.host, () => novNow);
+		for (const id of [...SUPERSEDED_AGENTS_MD_BOARD_ORDER_IDS, ...RESOLVED_OCTOBER_NEWS_POST_IDS]) {
+			expect(b.byId(id)?.closed).toEqual({
+				at: novNow,
+				by: "owner",
+				note: SUPERSEDED_BOARD_CLEANUP_NOTE,
+			});
+		}
+		for (const activeId of ["bp-2ddb2a83", "bp-bc056d81", "bp-e987c481"]) {
+			expect(b.byId(activeId)?.closed).toBeUndefined();
+		}
+		// Idempotent on second pass.
+		const saved = JSON.parse(readFileSync(store, "utf8"));
+		expect(cleanSupersededBoardPosts(saved.posts, novNow + 60_000)).toBe(false);
 	});
 });

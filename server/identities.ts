@@ -28,11 +28,11 @@ import { execFile } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { IdentityFileName, IdentitySaveError, UiChatIdentity, UiIdentityInfo } from "./protocol.js";
 // identity-config: a role's settings (prompt, skills, tool limits, unique), its prompt and the drafts waiting
 // for the owner are read, checked and saved with pi-identity's own rules (identity-config.ts, identity-roles.ts).
-import { focusOf, loadSettings, PROMPT_MAX, roleCaps, type Settings } from "./identity-config.js";
+import { focusOf, loadSettings, parseRoleConfig, PROMPT_MAX, roleCaps, type Settings } from "./identity-config.js";
 import { rulesCap } from "./identity-notes.js";
 import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 import {
@@ -103,6 +103,190 @@ export function samePath(a: string | null | undefined, b: string | null | undefi
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 
+const STALE_IDENTITY_LINE_RE =
+	/\b(?:6(?::00)?\s*am\s+reports?|role-reports|6:30\s*am\b|morning\s+briefs?|memory_(?:search|read|write)|shared\s+daily\s+logs?)\b/i;
+
+const IDENTITY_HEADING_RE = /^\s*(?:#{1,6}\s|\*\*[^*]+\*\*:?\s*$)/;
+const IDENTITY_SECONDARY_HEADING_RE = /^\s*(?:#{2,6}\s|\*\*[^*]+\*\*:?\s*$)/;
+const IDENTITY_SCOPE_LINE_RE =
+	/^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?(?:focus|not\s+this\s+(?:role|identity)'s|where\s+it\s+looks|folders)\b/i;
+
+function normalizeIdentityCompareLine(line: string): string {
+	return line
+		.trim()
+		.replace(/^[-*+]\s+/, "")
+		.replace(/\*\*|__|`/g, "")
+		.replace(/\s+/g, " ")
+		.replace(/[.;:,]+$/, "")
+		.trim()
+		.toLowerCase();
+}
+
+function isStaleIdentityLine(line: string): boolean {
+	return STALE_IDENTITY_LINE_RE.test(line);
+}
+
+function stripEmptySecondarySections(lines: string[], originalLines: string[]): string[] {
+	const hadBodyBefore = new Set<number>();
+	let currentHeading = -1;
+	for (let i = 0; i < originalLines.length; i++) {
+		const raw = originalLines[i]!;
+		if (IDENTITY_HEADING_RE.test(raw)) {
+			currentHeading = IDENTITY_SECONDARY_HEADING_RE.test(raw) ? i : -1;
+		} else if (raw.trim() && currentHeading !== -1) {
+			hadBodyBefore.add(currentHeading);
+		}
+	}
+	if (hadBodyBefore.size === 0) return lines;
+	const out: string[] = [];
+	let i = 0;
+	while (i < lines.length) {
+		const line = lines[i]!;
+		if (IDENTITY_SECONDARY_HEADING_RE.test(line)) {
+			let j = i + 1;
+			while (j < lines.length && !lines[j]!.trim()) j++;
+			const nextIsHeadingOrEnd = j >= lines.length || IDENTITY_HEADING_RE.test(lines[j]!);
+			if (nextIsHeadingOrEnd) {
+				i = j;
+				continue;
+			}
+		}
+		out.push(line);
+		i++;
+	}
+	return out;
+}
+
+function formatCleanedIdentityText(original: string, keptLines: string[], changed: boolean): string {
+	if (!changed) return original;
+	const joined = keptLines
+		.join("\n")
+		.replace(/^\n+/, "")
+		.replace(/\n{3,}/g, "\n\n");
+	if (!joined.trim()) return "";
+	return original.endsWith("\n") ? `${joined.replace(/\n+$/, "")}\n` : joined.replace(/\n+$/, "");
+}
+
+function stampFileOf(d: Date): string {
+	const p = (x: number) => String(x).padStart(2, "0");
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+/** Archive prior text of a role's prompt or about file into `<dir>/archive/<base>-<stamp>.md` before overwriting. */
+export function archiveText(dir: string, target: string, old: string, now: Date = new Date()): string | null {
+	if (!old.trim()) return null;
+	const base = basename(target, ".md");
+	const archivePath = join(dir, "archive", `${base}-${stampFileOf(now)}.md`);
+	writeWhole(archivePath, old);
+	return archivePath;
+}
+
+/**
+ * Clean stale lines referencing automatic 6 am reports, `role-reports`, the 6:30 am morning brief, and
+ * retired `memory_search` / `memory_read` / `memory_write` ("shared daily log") from a role's prompt and
+ * `about.md`, and deduplicate non-heading lines in `about.md` that repeat lines in `prompt` (or earlier in `about.md`).
+ */
+export function cleanIdentityPromptAndAbout(
+	prompt: string,
+	about: string,
+): { prompt: string; about: string; promptChanged: boolean; aboutChanged: boolean } {
+	const promptOrigLines = prompt ? prompt.split("\n") : [];
+	let promptRemoved = false;
+	const promptFiltered: string[] = [];
+	const promptNormSet = new Set<string>();
+	for (const line of promptOrigLines) {
+		if (line.trim() && isStaleIdentityLine(line)) {
+			promptRemoved = true;
+			continue;
+		}
+		promptFiltered.push(line);
+		if (line.trim() && !IDENTITY_HEADING_RE.test(line)) {
+			const norm = normalizeIdentityCompareLine(line);
+			if (norm) promptNormSet.add(norm);
+		}
+	}
+	const promptKept = promptRemoved ? stripEmptySecondarySections(promptFiltered, promptOrigLines) : promptFiltered;
+	const nextPrompt = formatCleanedIdentityText(prompt, promptKept, promptRemoved);
+	const promptChanged = nextPrompt !== prompt;
+
+	const aboutOrigLines = about ? about.split("\n") : [];
+	let aboutRemoved = false;
+	const aboutFiltered: string[] = [];
+	const seenAboutNorm = new Set<string>(promptNormSet);
+	for (const line of aboutOrigLines) {
+		const trimmed = line.trim();
+		if (!trimmed) {
+			aboutFiltered.push(line);
+			continue;
+		}
+		if (isStaleIdentityLine(line)) {
+			aboutRemoved = true;
+			continue;
+		}
+		if (!IDENTITY_HEADING_RE.test(line) && !IDENTITY_SCOPE_LINE_RE.test(line)) {
+			const norm = normalizeIdentityCompareLine(line);
+			if (norm && seenAboutNorm.has(norm)) {
+				aboutRemoved = true;
+				continue;
+			}
+			if (norm) seenAboutNorm.add(norm);
+		}
+		aboutFiltered.push(line);
+	}
+	const aboutKept = aboutRemoved ? stripEmptySecondarySections(aboutFiltered, aboutOrigLines) : aboutFiltered;
+	const nextAbout = formatCleanedIdentityText(about, aboutKept, aboutRemoved);
+	const aboutChanged = nextAbout !== about;
+
+	return {
+		prompt: nextPrompt,
+		about: nextAbout,
+		promptChanged,
+		aboutChanged,
+	};
+}
+
+function cleanIdentityFilesOnDisk(
+	dir: string,
+	raw: Record<string, unknown>,
+	settings: Settings,
+	now = new Date(),
+): void {
+	try {
+		const { config } = parseRoleConfig(raw, settings);
+		const promptPaths: string[] = [];
+		if (config.prompt !== null) {
+			const configured = promptPathOf(dir, config);
+			if (existsSync(configured)) promptPaths.push(configured);
+		}
+		const rolePromptPath = join(dir, "role-prompt.md");
+		if (existsSync(rolePromptPath) && !promptPaths.includes(rolePromptPath)) {
+			promptPaths.push(rolePromptPath);
+		}
+		const cleanedPrompts: string[] = [];
+		for (const pPath of promptPaths) {
+			const currentPrompt = readTextOrEmpty(pPath);
+			const res = cleanIdentityPromptAndAbout(currentPrompt, "");
+			if (res.promptChanged) {
+				archiveText(dir, pPath, currentPrompt, now);
+				writeWhole(pPath, res.prompt);
+			}
+			cleanedPrompts.push(res.prompt);
+		}
+		const aboutPath = join(dir, "about.md");
+		if (existsSync(aboutPath)) {
+			const currentAbout = readTextOrEmpty(aboutPath);
+			const combinedPrompt = cleanedPrompts.join("\n");
+			const res = cleanIdentityPromptAndAbout(combinedPrompt, currentAbout);
+			if (res.aboutChanged) {
+				archiveText(dir, aboutPath, currentAbout, now);
+				writeWhole(aboutPath, res.about);
+			}
+		}
+	} catch {
+		// Never fail loadIdentities on a read-only or transient disk error.
+	}
+}
+
 /** dir 里的每个身份（一个文件夹一个，带 identity.json），加上坏掉的那些的问题。规则同 pi-identity 的 loadIdentities。 */
 export function loadIdentities(
 	dir: string,
@@ -147,6 +331,7 @@ export function loadIdentities(
 			problems.push(`${name}: an id is lowercase letters, digits and dashes`);
 			continue;
 		}
+		cleanIdentityFilesOnDisk(d, o, settings);
 		const homeChat = str(o.homeChat);
 		const past = Array.isArray(o.pastHomeChats) ? o.pastHomeChats.map(str).filter(Boolean) : [];
 		identities.push({

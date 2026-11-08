@@ -36,7 +36,12 @@ import {
 	CODING_ROLE_TOOL_NAMES,
 	CODING_ALLOWED_ROLES,
 	NON_CODING_ROLES,
+	NON_TECHNICAL_ROLES,
+	NON_TECHNICAL_MCP_OFF_TOOL_NAMES,
+	CODING_ONLY_SKILL_NAMES,
 	getRoleOffToolNames,
+	getRoleOffSkillNames,
+	filterSkillsForRoleAndTools,
 	presetAllowsPluginTools,
 	presetHasQuestionnaire,
 	presetShowsSkillCatalog,
@@ -312,6 +317,8 @@ describe("tool_manage 出入口", () => {
 			"temper_workflows",
 			"temper_start_run",
 			"temper_run_status",
+			"mcp",
+			"mcpScript",
 			...CODING_ROLE_TOOL_NAMES,
 		];
 
@@ -369,6 +376,46 @@ describe("tool_manage 出入口", () => {
 			for (const t of CODING_ROLE_TOOL_NAMES) {
 				expect(s.peek()).not.toContain(t);
 			}
+		}
+
+		// 4b. mcp and mcpScript stripped for non-technical roles (coo, product, marketing), kept for technical roles (including docs).
+		for (const role of allRoles) {
+			const s = fakeSet(fullCatalog);
+			applyAgentToolsGating(s, [], undefined, "linux", false, role);
+			const isNonTech = (NON_TECHNICAL_ROLES as readonly string[]).includes(role);
+			for (const t of NON_TECHNICAL_MCP_OFF_TOOL_NAMES) {
+				if (isNonTech) expect(s.peek()).not.toContain(t);
+				else expect(s.peek()).toContain(t);
+			}
+		}
+
+		// 4c. Coding-only skills (fork-rebase, pi-control-chrome-release, mcp-scripting) stripped for NON_CODING_ROLES,
+		// and mcp-scripting stripped whenever mcpScript is not active.
+		const sampleSkills = [
+			{ name: "fork-rebase", description: "rebase", filePath: "/s/fork-rebase/SKILL.md" },
+			{ name: "pi-control-chrome", description: "chrome", filePath: "/s/chrome/SKILL.md" },
+			{ name: "pi-control-chrome-release", description: "release", filePath: "/s/release/SKILL.md" },
+			{ name: "mcp-scripting", description: "mcp", filePath: "/s/mcp/SKILL.md" },
+		];
+		for (const role of NON_CODING_ROLES) {
+			const filtered = filterSkillsForRoleAndTools(sampleSkills, role, ["mcp", "mcpScript"]);
+			expect(filtered.map((s) => s.name)).toEqual(["pi-control-chrome"]);
+			for (const name of CODING_ONLY_SKILL_NAMES) {
+				expect(getRoleOffSkillNames(role, ["mcp", "mcpScript"]).has(name)).toBe(true);
+			}
+		}
+		for (const role of ["ops", "backend", undefined]) {
+			expect(filterSkillsForRoleAndTools(sampleSkills, role, ["mcp", "mcpScript"]).map((s) => s.name)).toEqual([
+				"fork-rebase",
+				"pi-control-chrome",
+				"pi-control-chrome-release",
+				"mcp-scripting",
+			]);
+			expect(filterSkillsForRoleAndTools(sampleSkills, role, ["mcp"]).map((s) => s.name)).toEqual([
+				"fork-rebase",
+				"pi-control-chrome",
+				"pi-control-chrome-release",
+			]);
 		}
 
 		// 5. Worker mode + non-coding role (e.g. product task chat): strips TASK_CHAT_OFF_TOOL_NAMES, temper_*, and coding tools; keeps Worker tools.
