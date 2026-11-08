@@ -71,6 +71,7 @@ import { deepFreeze } from "./deep-freeze.js";
 import { piQueueReaders } from "./pi-queue-readers.js";
 import { requesterOf } from "./queue-requester.js";
 import { checkPatch, normProfile, normLaunch, patchProfile } from "./queue-profile.js";
+import { normTags, resolveInheritedTags } from "./shared/task-tags.js";
 import type {
 	UiTaskQueue,
 	UiTaskQueueBlock,
@@ -363,6 +364,34 @@ export function roleTaskRefLabel(r: { name: string; id: number }, role: string |
 const current = (s: State) =>
 	s.tasks.find((t) => !t.lane && (t.status === "working" || t.status === "asking" || t.status === "stuck"));
 
+export { normTags, resolveInheritedTags };
+
+const LAND_ID_RE = /^land-\d+-[0-9a-f]+$/i;
+const COMMIT_SHA_RE = /^[0-9a-f]{7,40}$/i;
+const REPO_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
+
+function deliveryOf(raw: unknown): UiTaskQueueTask["delivery"] | undefined {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+	const d = raw as Record<string, unknown>;
+	const repo = typeof d.repo === "string" && REPO_SLUG_RE.test(d.repo.trim()) ? d.repo.trim() : undefined;
+	const rawLandId =
+		typeof d.landId === "string" ? d.landId.trim() : typeof d.land_id === "string" ? d.land_id.trim() : "";
+	const landId = rawLandId && LAND_ID_RE.test(rawLandId) ? rawLandId : undefined;
+	const rawCommit =
+		typeof d.landedCommit === "string"
+			? d.landedCommit.trim()
+			: typeof d.landed_commit === "string"
+				? d.landed_commit.trim()
+				: "";
+	const landedCommit = rawCommit && COMMIT_SHA_RE.test(rawCommit) ? rawCommit.toLowerCase() : undefined;
+	if (!repo && !landId && !landedCommit) return undefined;
+	return {
+		...(repo ? { repo } : {}),
+		...(landId ? { landId } : {}),
+		...(landedCommit ? { landedCommit } : {}),
+	};
+}
+
 /** pi-queue's normTouches: trimmed, lower case, inner spaces collapsed, no duplicates; undefined = not a list. */
 export function normTouches(raw: unknown): string[] | undefined {
 	if (!Array.isArray(raw)) return undefined;
@@ -592,6 +621,13 @@ function apply(s: State, raw: unknown): void {
 			const origin = requesterOf(op.origin);
 			if (origin) task.origin = origin;
 		}
+		const tags =
+			op.tags !== undefined
+				? normTags(op.tags)
+				: op.op === "add"
+					? resolveInheritedTags(undefined, task.origin?.inputs)
+					: undefined;
+		if (tags?.length) task.tags = tags;
 		if (op.op === "add" && (op.approval === "dialog" || op.approval === "auto")) task.approval = op.approval;
 		setParent(
 			task,
@@ -634,6 +670,11 @@ function apply(s: State, raw: unknown): void {
 			task.plan = planOf(op.plan);
 			task.approval = op.approval === "dialog" || op.approval === "auto" ? op.approval : undefined;
 			setParent(task, nextParent(task.parent, parentGiven(op)));
+			if (op.tags !== undefined) {
+				const tags = normTags(op.tags);
+				if (tags?.length) task.tags = tags;
+				else delete task.tags;
+			}
 			const touches = normTouches(op.touches);
 			if (touches) task.touches = touches;
 			// queue-side-by-side: after is replaced when given ([] clears it), kept when not.
@@ -899,7 +940,7 @@ function apply(s: State, raw: unknown): void {
 			task.wait.overAt = num(op.ts);
 			if (op.failed) task.wait.failed = cap(String(op.failed), NOTE_MAX);
 			return;
-		case "done":
+		case "done": {
 			task.status = "done";
 			task.question = undefined;
 			task.choices = undefined;
@@ -910,8 +951,12 @@ function apply(s: State, raw: unknown): void {
 			task.block = undefined;
 			task.summary = str(op.summary, NOTE_MAX);
 			task.doneAt = num(op.ts);
+			const delivery = deliveryOf(op.delivery ?? op);
+			if (delivery) task.delivery = delivery;
+			else delete task.delivery;
 			endHold(task);
 			return;
+		}
 		case "drop":
 			// queue-drop (owner 2026-10-17): the queue's main chat (its lead) ended an open task without it being
 			// done, with a reason (pi-queue's queue_control drop). It stays in the list, dropped, until cleared.
@@ -1043,6 +1088,8 @@ function taskOf(raw: unknown): Task {
 	);
 	const touches = normTouches(c.touches);
 	if (touches) t.touches = touches;
+	const tags = normTags(c.tags);
+	if (tags?.length) t.tags = tags;
 	const after = normAfter(c.after, c.id);
 	if (after?.length) t.after = after;
 	const profile = normProfile(c.profile);
@@ -1094,6 +1141,10 @@ function taskOf(raw: unknown): Task {
 	if (outside) t.outside = outside;
 	if (typeof c.summary === "string") t.summary = cap(c.summary, NOTE_MAX);
 	else if (status === "done") t.summary = "";
+	if (status === "done") {
+		const delivery = deliveryOf(c.delivery);
+		if (delivery) t.delivery = delivery;
+	}
 	const dropped = rec(c.dropped);
 	if (dropped)
 		t.dropped = { why: oneLine(dropped.why, TASK_QUEUE_DROP_WHY_MAX) || "no reason given", at: num(dropped.at) };
@@ -1336,6 +1387,32 @@ function emptyReplayState(queueId: string | undefined): State {
 	};
 }
 
+function applyTagsAndDeliveryOnly(s: State, entries: readonly TaskQueueEntryLike[]): State {
+	for (const e of entries) {
+		if (!isQueueEntry(e) || !e.data || typeof e.data !== "object") continue;
+		const op = e.data as Record<string, unknown>;
+		if (op.v !== 1 || !isId(op.id)) continue;
+		const task = s.tasks.find((t) => t.id === op.id);
+		if (!task) continue;
+		if (op.op === "add" || op.op === "assigned") {
+			const tags =
+				op.tags !== undefined
+					? normTags(op.tags)
+					: op.op === "add"
+						? resolveInheritedTags(undefined, task.origin?.inputs)
+						: undefined;
+			if (tags?.length) task.tags = tags;
+		} else if (op.op === "update" && op.tags !== undefined) {
+			const tags = normTags(op.tags);
+			if (tags?.length) task.tags = tags;
+			else delete task.tags;
+		} else if (op.op === "done" && task.status === "done" && !task.delivery) {
+			const delivery = deliveryOf(op.delivery ?? op);
+			if (delivery) task.delivery = delivery;
+		}
+	}
+	return s;
+}
 /** Whether a session entry is one of the queue's own changes. */
 function isQueueEntry(e: TaskQueueEntryLike | undefined): boolean {
 	return !!e && e.type === "custom" && e.customType === TASK_QUEUE_ENTRY_TYPE;
@@ -1372,7 +1449,9 @@ function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | u
 		}
 		if (readers) {
 			try {
-				const out = deepFreeze(stateOf(readers.replay(entries, queueId), queueId));
+				const out = deepFreeze(
+					applyTagsAndDeliveryOnly(stateOf(readers.replay(entries, queueId), queueId), entries),
+				);
 				for (let i = start + kept; i < entries.length; i++) slot.prefix.push(entries[i]);
 				slot.out = out;
 				keepReplaySlot(key, slot, formerLast);
@@ -1399,7 +1478,9 @@ function replayState(entries: readonly TaskQueueEntryLike[], queueId: string | u
 	noteRead(read, entries, start);
 	if (readers) {
 		try {
-			const out = deepFreeze(stateOf(readers.replay(entries, queueId), queueId));
+			const out = deepFreeze(
+				applyTagsAndDeliveryOnly(stateOf(readers.replay(entries, queueId), queueId), entries),
+			);
 			keepReplaySlot(key, { reader: readerFn, prefix: entries.slice(start), out });
 			countReplay(source, missed);
 			return out;

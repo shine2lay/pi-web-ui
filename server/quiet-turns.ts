@@ -105,7 +105,7 @@ export const FOR_OWNER_HINT = "This answers a question you asked for the owner";
 
 const RM = "rm-[0-9a-f]{8}";
 const ROLE_HEAD = new RegExp(
-	`^\\[Role message ${RM} from [a-z0-9][a-z0-9._-]* \\(.*\\), sent from its .* \\u00b7 (?:question|request|fyi|reply to ${RM}|reply)\\]$`,
+	`^\\[Role message ${RM} from [a-z0-9][a-z0-9._-]* \\(.*\\), sent from its .* \\u00b7 (?:question|request|fyi|reply to ${RM}|reply)\\](?: \\[tags: [a-z0-9-, ]+\\])?$`,
 );
 const REPORT_HEAD = new RegExp(`^\\[Role message ${RM} from the app \\u00b7 6 am report \\u00b7 [^\\]]+\\]$`);
 /** progress-feed (task #85): role-messages.ts roleMessageHeader for a poke. */

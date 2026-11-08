@@ -48,6 +48,7 @@ import { StringDecoder } from "node:string_decoder";
 import { deadEndWaysOut } from "./dead-end.js";
 import { checkInitiative } from "./decision-records.js";
 import { samePath, type IdentityDef } from "./identities.js";
+import { checkTags } from "./shared/task-tags.js";
 import type {
 	UiRoleMessage,
 	UiRoleMessageKind,
@@ -222,6 +223,8 @@ export interface RoleMessageRecord {
 	ownerChannel?: OwnerChannel | null;
 	/** decision-records: the initiative it is part of (a short id; a reply without one takes its original's). */
 	initiative?: string;
+	/** Optional normalized tag slugs (1-16 items, ^[a-z0-9][a-z0-9-]{0,59}$). */
+	tags?: string[];
 	/** role-message-ladder (#122): the chain's root id ("root-…"), or "legacy-<id>" for a chain that began before
 	 *  the ladder (anchored on that record; never reset to hop 1). Absent on records from before the ladder. */
 	root?: string;
@@ -249,7 +252,7 @@ export type RoleMessageCausality =
  *  chain memory, role-messages-chains.jsonl, for ROLE_MESSAGE_CHAIN_MEMORY_MS). */
 export type RoleMessageChainFact = Pick<
 	RoleMessageRecord,
-	"id" | "chain" | "hash" | "target" | "root" | "parent" | "guard"
+	"id" | "chain" | "hash" | "target" | "root" | "parent" | "guard" | "tags"
 >;
 /** A dropped record's chain facts, when it was dropped, and (#379) how it ended; facts kept before #379 have no state. */
 type RoleMessageDroppedFact = RoleMessageChainFact & { at: number; state?: RoleMessageRecord["state"] };
@@ -422,6 +425,7 @@ export interface RoleMessageDraft {
 	replyTo: string | null;
 	forOwner?: { ownerIds: string[]; ownerChannel?: OwnerChannel };
 	initiative: string;
+	tags?: string[];
 }
 
 export interface RoleMessageSendInput {
@@ -431,6 +435,8 @@ export interface RoleMessageSendInput {
 	replyTo?: unknown;
 	/** decision-records: optional initiative id (lowercase letters, digits, dashes; at most 60). */
 	initiative?: unknown;
+	/** Optional tag slugs (1-16 items, lowercase letters, digits, dashes; at most 60 chars each). */
+	tags?: unknown;
 }
 
 export type RoleMessageSendResult =
@@ -478,7 +484,7 @@ export function chatLabel(o: { taskId?: number; isHome: boolean; title?: string 
 
 type HeaderParts = Pick<
 	RoleMessageRecord,
-	"id" | "from" | "kind" | "replyTo" | "report" | "poke" | "stall" | "ci" | "script"
+	"id" | "from" | "kind" | "replyTo" | "report" | "poke" | "stall" | "ci" | "script" | "tags"
 >;
 
 /** progress-feed (task #85): what an ask for a progress update tells the lead to do with it. turn-status
@@ -519,7 +525,8 @@ export function roleMessageHeader(r: HeaderParts): string {
 	if (r.kind === "report")
 		return `[Role message ${r.id} from the app \u00b7 6 am report \u00b7 ${r.report?.date ?? "?"}]`;
 	const what = r.kind === "reply" && r.replyTo ? `reply to ${r.replyTo}` : r.kind;
-	return `[Role message ${r.id} from ${r.from.role} (${oneLine(r.from.title)}), sent from its ${r.from.chat} · ${what}]`;
+	const tags = r.tags?.length ? ` [tags: ${r.tags.join(", ")}]` : "";
+	return `[Role message ${r.id} from ${r.from.role} (${oneLine(r.from.title)}), sent from its ${r.from.chat} · ${what}]${tags}`;
 }
 
 /** quiet-turns: a reply that answers a question asked for the owner starts a turn that is his to read.
@@ -1043,6 +1050,7 @@ export class RoleMessages {
 			...(m.root ? { root: m.root } : {}),
 			...(m.parent ? { parent: m.parent } : {}),
 			...(m.guard ? { guard: m.guard } : {}),
+			...(m.tags?.length ? { tags: [...m.tags] } : {}),
 			state: m.state, // #379: how it ended (the ladder settles a delivery it never saw confirmed from this)
 			at,
 		}));
@@ -1817,7 +1825,7 @@ export class RoleMessages {
 		chain: number,
 		extra: { root?: string; parent?: string; target?: string; guard?: RoleMessageGuardTag } = {},
 	): RoleMessageRecord {
-		const { kind, replyTo, forOwner, initiative } = draft;
+		const { kind, replyTo, forOwner, initiative, tags } = draft;
 		return {
 			id,
 			at,
@@ -1838,6 +1846,7 @@ export class RoleMessages {
 					}
 				: {}),
 			...(initiative ? { initiative } : {}),
+			...(tags?.length ? { tags: [...tags] } : {}),
 			...(extra.target ? { target: extra.target } : {}),
 			...(extra.root ? { root: extra.root } : {}),
 			...(extra.parent ? { parent: extra.parent } : {}),
@@ -1932,6 +1941,8 @@ export class RoleMessages {
 		}
 		const initiativeCheck = checkInitiative(input.initiative);
 		if (!initiativeCheck.ok) return { ok: false, error: initiativeCheck.error };
+		const tagsCheck = checkTags(input.tags);
+		if (!tagsCheck.ok) return { ok: false, error: tagsCheck.error };
 		const replyTo = typeof input.replyTo === "string" ? input.replyTo.trim() : "";
 		let original: RoleMessageRecord | undefined;
 		if (kind === "reply") {
@@ -2024,6 +2035,8 @@ export class RoleMessages {
 				: original
 					? (original.initiative ?? this.host.initiativeOf?.(original.id) ?? "")
 					: "";
+		const rawTags = tagsCheck.value !== undefined ? tagsCheck.value : original?.tags;
+		const tags = rawTags?.length ? [...rawTags] : undefined;
 		return {
 			ok: true,
 			draft: {
@@ -2033,6 +2046,7 @@ export class RoleMessages {
 				replyTo: kind === "reply" ? replyTo : null,
 				...(forOwner ? { forOwner } : {}),
 				initiative,
+				...(tags ? { tags } : {}),
 			},
 		};
 	}

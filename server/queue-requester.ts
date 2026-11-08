@@ -1,5 +1,6 @@
 import { mergeOwnerLastWrote } from "./owner-input-time.js";
 import type { UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
+import { checkTags } from "./shared/task-tags.js";
 
 export const REQUESTER_INPUTS_MAX = 32;
 const exact = (re: RegExp, value: unknown): value is string =>
@@ -22,7 +23,7 @@ export function requesterInputOf(raw: unknown): UiTaskRequesterInput | undefined
 	}
 	if (
 		o.kind !== "role" ||
-		!keys(o, ["kind", "role", "id", "message", "forOwner", "ownerIds"]) ||
+		!keys(o, ["kind", "role", "id", "message", "forOwner", "ownerIds", "tags"]) ||
 		!exact(/^[a-z0-9][a-z0-9-]{0,39}$/u, o.role) ||
 		!exact(/^rm-[a-f0-9-]{8,64}$/u, o.id) ||
 		(o.message !== "question" && o.message !== "request" && o.message !== "reply") ||
@@ -37,6 +38,8 @@ export function requesterInputOf(raw: unknown): UiTaskRequesterInput | undefined
 			o.ownerIds.some((id) => !inputId(id) || !id.startsWith("rs-")))
 	)
 		return;
+	const checkedTags = checkTags(o.tags);
+	if (!checkedTags.ok) return;
 	return {
 		kind: "role",
 		role: o.role,
@@ -44,6 +47,7 @@ export function requesterInputOf(raw: unknown): UiTaskRequesterInput | undefined
 		message: o.message,
 		...(o.forOwner === true ? { forOwner: true as const } : {}),
 		...(Array.isArray(o.ownerIds) ? { ownerIds: [...o.ownerIds] as string[] } : {}),
+		...(checkedTags.value?.length ? { tags: checkedTags.value } : {}),
 	};
 }
 

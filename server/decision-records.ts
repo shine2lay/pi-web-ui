@@ -946,7 +946,7 @@ function parseEntry(text: string): Record<string, any> | undefined {
 // ---------------------------------------------------------------------------
 
 export const ROLE_MESSAGE_HEADER =
-	/^\[Role message (rm-[0-9a-f]{8}) from ([a-z][a-z0-9-]*) \((.*?)\), sent from its (.*?) · (.+?)\]$/;
+	/^\[Role message (rm-[0-9a-f]{8}) from ([a-z][a-z0-9-]*) \((.*?)\), sent from its (.*?) · (.+?)\](?: \[tags: [a-z0-9-, ]+\])?$/;
 
 export interface BackfillCounts {
 	message: number;

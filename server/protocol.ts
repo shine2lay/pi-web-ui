@@ -383,6 +383,7 @@ export type UiTaskRequesterInput =
 			message: "question" | "request" | "reply";
 			forOwner?: true;
 			ownerIds?: string[];
+			tags?: string[];
 	  }
 	| { kind: "unknown" };
 export interface UiTaskRequester {
@@ -483,6 +484,10 @@ export interface UiTaskQueueTask {
 	hold?: UiTaskQueueHold;
 	/** roles-panel: where it belongs, as its own queue entry says (pi-work-management); absent: not recorded. */
 	parent?: UiTaskParent;
+	/** Normalized multi-tag slugs (1-16 items, ^[a-z0-9][a-z0-9-]{0,59}$). */
+	tags?: string[];
+	/** Delivery receipt recorded on queue_done (optional repo, wt-land id, landed commit SHA). */
+	delivery?: { repo?: string; landId?: string; landedCommit?: string };
 }
 
 /** roles-panel: where a task belongs: a project (its initiative comes through the project), an initiative
@@ -2348,12 +2353,252 @@ export interface UiRoleDoneTask {
 	at: number;
 }
 
+export type TouchKind =
+	| "repo" // Git repository checkout / worktree lane (e.g. "pi-web-ui repo", "rollcall repo")
+	| "deploy" // Service deploy / restart lane (e.g. "pi-web-deploy", "wt deploy rollcall", "inkflow-deploy")
+	| "service" // Live daemon / runtime singleton (e.g. "temper-dev", "standee", "scheduler")
+	| "config" // Shared host/agent config file (e.g. "pi settings.json", "wt.yaml")
+	| "artifact"; // Shared document / contract / proof folder (e.g. "roles-initiatives-rework contract folder")
+
+export interface UiNormalizedTouch {
+	/** Exact raw touch string as declared on the task (used verbatim by pi-queue lane scheduling). */
+	raw: string;
+	/** Canonical top-level system or application slug for UI filtering and grouping. */
+	appOrSystem: string;
+	/** Canonical git repository key when this touch maps to a repo or service deploy target. */
+	repo?: string;
+	/** Classification of the resource touched. */
+	kind: TouchKind;
+	/** True when concurrent tasks with this touch may safely run in parallel under AGENTS.md Rule 26. */
+	shareable: boolean;
+}
+
+export type UiTaskLifecycleStatus =
+	| "paused" // Explicitly paused (task.paused === true) or role queue stopped while task is not terminal
+	| "stuck" // Waiting on the Owner ("Needs you": queue_stuck with needs_owner or escalated to owner)
+	| "asking" // Waiting on department Lead ("Needs lead": ask_lead / queue_stuck at lead tier)
+	| "blocked" // Blocked on other queued tasks (on[]) and/or a named external need/lead deliverable
+	| "waiting" // Waiting on a read-only shell check (queue_wait) that is not an active wt-land or deploy job
+	| "queued" // Waiting in queue to start (sub-classified by queuedDetail.reason)
+	| "working" // Worker chat actively executing task, not yet in wt land or service deploy
+	| "landing" // wt land job is queued or running for this task's worktree/branch/commit
+	| "landed" // Commit landed on target branch of a deployable repo, but live service has not yet deployed it
+	| "deploying" // wt deploy or pi-web-deploy is actively running for a commit that includes this task's landed commit
+	| "live" // Code-bearing task whose landed commit is verified live on the target service
+	| "done" // Completed task (queue_done) with no deployable code commit
+	| "dropped"; // Cancelled via queue_control(action="drop")
+
+export type DeployPendingReason =
+	| "not_deployed_yet" // No deploy has run since this commit landed
+	| "commit_behind" // Live service is on an older commit (isAncestor(landedCommit, liveCommit) === false)
+	| "last_deploy_failed" // Most recent deploy attempt for this repo failed
+	| "health_unverified"; // Deploy finished but health endpoint did not confirm commit
+
+export interface UiTaskDeliveryState {
+	/** Canonical repository key ("pi-web-ui", "rollcall", "inkflow", "temper-ai", "show-and-tell", "agent-tools"). */
+	repo: string;
+	/** True when `repo` has a live runtime service deploy target. */
+	deployableService: boolean;
+	/** Bound wt-land-queue job id (e.g. "land-1762541000-a1b2c3"), if any. */
+	landId?: string;
+	/** Current status of the bound wt-land-queue record. */
+	landStatus?: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+	/** Commit SHA (40-char or short hex) landed on the target branch by this task. */
+	landedCommit?: string;
+	/** Timestamp (ms) when the commit landed on the target branch. */
+	landedAt?: number;
+	/** Current deploy status from ~/.local/state/wt-deploy/<repo>.json or ~/.pi-web-ui/deploy-status.json. */
+	deployStatus?: "deploying" | "succeeded" | "failed" | "rolled_back";
+	/** Commit SHA currently live on the service (from healthCommit / liveCommit). */
+	liveCommit?: string;
+	/** Timestamp (ms) when the deploy containing `landedCommit` finished. */
+	deployedAt?: number;
+	/** Populated when lifecycleStatus === "landed" (explains why it is not yet "live"). */
+	deployPendingReason?: DeployPendingReason;
+	/** Error message if the bound land or deploy failed. */
+	error?: string;
+}
+
+export type UiGroupRollupStatus =
+	| "needs_you"
+	| "needs_lead"
+	| "stalled"
+	| "deploying"
+	| "landing"
+	| "working"
+	| "landed_pending_deploy"
+	| "queued"
+	| "paused"
+	| "live"
+	| "done"
+	| "dropped";
+
+export type UiStatusTone =
+	| "needs_you"
+	| "needs_lead"
+	| "blocked"
+	| "waiting"
+	| "paused"
+	| "queued"
+	| "working"
+	| "landed"
+	| "deploying"
+	| "live"
+	| "dropped";
+
+export interface UiTaskGroupRollup {
+	/** Group key: tag slug, project slug, or initiative slug. */
+	key: string;
+	/** Group kind. */
+	kind: "tag" | "project" | "initiative";
+	/** Deterministic headline status from the 9-tier hierarchy. */
+	rollupStatus: UiGroupRollupStatus;
+	/** Semantic color token. */
+	statusTone: UiStatusTone;
+	/** Actionable instruction explaining how to unblock this group when stalled/blocked/paused/needs_you/needs_lead. */
+	howToUnblock?: string;
+	/** Root blocker task ref (e.g. "design #217") at the front of the dependency chain when stalled/blocked. */
+	rootBlockerRef?: string;
+	/** Total tasks in this group. */
+	totalTasks: number;
+	/** Count of tasks per UiTaskLifecycleStatus. */
+	countsByStatus: Partial<Record<UiTaskLifecycleStatus, number>>;
+	/** True when rollupStatus is an active state AND at least one peer task in the same group is blocked or waiting. */
+	hasBlockedPeers: boolean;
+	/** Distinct roles participating in this group, sorted alphabetically. */
+	roles: string[];
+	/** Distinct normalized appOrSystem values touched by tasks in this group. */
+	appsOrSystems: string[];
+	/** Most recent task activity timestamp (ms) across the group. */
+	updatedAt: number;
+}
+
+export type TaskDepDeadlockReason =
+	| "target_not_found"
+	| "target_dropped"
+	| "target_paused"
+	| "queue_stopped"
+	| "target_stuck"
+	| "cycle_detected";
+
+export interface UiResolvedTaskDep {
+	/** Verbatim reference string from `on` or `after` (e.g. "#12" or "backend #412"). */
+	ref: string;
+	/** Resolved role id (e.g. "backend"). */
+	role?: string;
+	/** Resolved numeric task id (e.g. 412). */
+	taskId?: number;
+	/** Target task's title (when found in `queuesByRole`). */
+	title?: string;
+	/** Target task's current resolved lifecycle status. */
+	lifecycleStatus?: UiTaskLifecycleStatus;
+	/** True when the dependency is satisfied (target status === "done"). */
+	satisfied: boolean;
+	/** True if target task has `paused === true`. */
+	paused?: boolean;
+	/** True if target role's queue has `queueRunning === false`. */
+	queueStopped?: boolean;
+	/** If target task itself is blocked/waiting/stuck, a 1-line summary of what target is waiting on. */
+	targetBlockerSummary?: string;
+	/** Populated whenever the dependency cannot complete without human/lead intervention. */
+	deadlockReason?: TaskDepDeadlockReason;
+}
+
+export interface UiRoleTaskBlocked {
+	/** Raw task references from queue_blocked(on=...). */
+	on?: string[];
+	/** Cross-queue resolved dependency records for each entry in `on`. */
+	resolvedOn?: UiResolvedTaskDep[];
+	/** Number of entries in `resolvedOn` with `satisfied === false`. */
+	unsatisfiedCount: number;
+	/** External requirement in plain words from queue_blocked(need=...). */
+	need?: string;
+	/** Rule 24: role id of the department lead who owes the deliverable or go-ahead. */
+	lead?: string;
+	/** Rule 24: concrete deliverable owed by `lead`. */
+	owes?: string;
+	/** Timestamp (ms) when the task entered `blocked`. */
+	sinceAt: number;
+	/** Rule 24: timestamp (ms) when the accountable lead's checkpoint is due. */
+	checkpointDueAt?: number;
+	/** True when `now >= checkpointDueAt` and the task is still blocked. */
+	checkpointOverdue?: boolean;
+	/** Count of automated checkpoint reminders sent so far. */
+	remindersSent?: number;
+	/** Timestamp (ms) when the next reminder or escalation will fire. */
+	nextReminderAt?: number;
+	/** Deterministic 1-line human-readable summary of what this task is waiting on. */
+	unblockSummary: string;
+	/** Explicit actionable instruction stating how to unblock this task. */
+	howToUnblock: string;
+}
+
+export interface UiRoleTaskWait {
+	/** Plain-English description from queue_wait(what=...), e.g. "temper restart" or "wt land-status land-...". */
+	what: string;
+	/** Read-only shell check command (capped at 240 chars). */
+	checkCmd: string;
+	/** Timestamp (ms) when queue_wait started. */
+	sinceAt: number;
+	/** Poll interval in ms (everyMinutes * 60_000, default 120_000). */
+	everyMs: number;
+	/** Expected completion timestamp in ms (sinceAt + expectMinutes * 60_000). */
+	expectByAt: number;
+	/** Give-up escalation timestamp in ms (sinceAt + giveUpHours * 3_600_000). */
+	giveUpAt: number;
+	/** True when `now >= expectByAt` and check has not yet exited 0. */
+	overdue: boolean;
+	/** Timestamp (ms) of the most recent check run. */
+	lastCheckedAt?: number;
+	/** Exit code of the most recent check run (1 = still waiting, >1 = check error). */
+	lastExitCode?: number;
+	/** Sanitized last stdout/stderr snippet (up to 240 chars) from the check run. */
+	lastOutput?: string;
+	/** Actionable instruction stating how this wait resolves or how to unblock it when overdue/failing. */
+	howToUnblock: string;
+}
+
+export type QueuedWaitReason =
+	| "ready"
+	| "after"
+	| "lane_busy"
+	| "slot_full"
+	| "queue_stopped";
+
+export interface UiRoleTaskQueuedDetail {
+	/** Deterministic reason why this queued task has not started yet. */
+	reason: QueuedWaitReason;
+	/** Resolved status of every task in `after: (number | string)[]`. */
+	resolvedAfter?: UiResolvedTaskDep[];
+	/** Tasks in this queue currently holding a conflicting touch/lane when `reason === "lane_busy"`. */
+	conflictingTasks?: Array<{ id: number; title: string; touch: string }>;
+	/** Single-line explanation (e.g. "After #496 (working)" or "Lane busy: standee held by #495"). */
+	summary: string;
+}
+
+export interface UiTouchSystemSummary {
+	appOrSystem: string;
+	repo?: string;
+	activeTaskCount: number;
+	totalTaskCount: number;
+	tags: string[];
+}
+
 /** roles-overview: a task of a role's home queue. */
 export interface UiRoleTask {
 	/** Original proposal inputs, separate from plan approval. */
 	requester?: UiTaskRequester;
 	id: number;
+	role?: string;
 	status: "ready" | "working" | "asking" | "stuck" | "waiting" | "blocked" | "done" | "dropped";
+	/** Resolved 12-state execution & delivery lifecycle status. */
+	lifecycleStatus?: UiTaskLifecycleStatus;
+	/** Distinct semantic color/tone category. */
+	statusTone?: UiStatusTone;
+	/** Actionable 1-line instruction for any non-moving task. */
+	howToUnblock?: string;
+	/** Canonical upstream task refs (`"<role> #<id>"`, union of `blocked.on` and `after`). */
+	dependsOnRefs?: string[];
 	title: string;
 	/** queue-drop: dropped: why and when its lead dropped it (UiRoleQueue.dropped). */
 	dropped?: { why: string; at: number };
@@ -2381,6 +2626,39 @@ export interface UiRoleTask {
 	paused?: UiTaskQueueHold;
 	/** roles-panel: where it belongs, from its queue entry (absent: not recorded). */
 	parent?: UiTaskParent;
+	initiative?: string;
+	project?: string;
+	/** Normalized multi-tag slugs (1-16 items, ^[a-z0-9][a-z0-9-]{0,59}$). */
+	tags?: string[];
+	/** Verbatim raw touch strings from the task definition. */
+	touches?: string[];
+	/** Canonical normalized touch descriptors for App/System filtering and lane visibility. */
+	normalizedTouches?: UiNormalizedTouch[];
+	standalone?: boolean;
+	createdAt?: number;
+	startedAt?: number;
+	finishedAt?: number;
+	updatedAt?: number;
+	origin?: UiTaskRequester;
+	goal?: string;
+	doneSummary?: string;
+	/** Populated when the task has a bound wt-land job, landed commit, or service deploy state. */
+	delivery?: UiTaskDeliveryState;
+	/** Populated when status === "waiting". */
+	wait?: UiRoleTaskWait;
+	/** Populated when status === "blocked". */
+	blocked?: UiRoleTaskBlocked;
+	/** Populated when status === "stuck" or status === "asking". */
+	stuck?: {
+		question: string;
+		choices?: string[];
+		needsOwner?: { kind: string; why: string };
+		sinceAt: number;
+		tier: "lead" | "owner";
+	};
+	after?: (number | string)[];
+	/** Populated when status === "queued" (explains why it is waiting in the queue). */
+	queuedDetail?: UiRoleTaskQueuedDetail;
 	/** roles-panel: blocked on a lead (rule 24): who owes it, what, when it is due, the reminders sent so far
 	 *  and the leads reminded next if that lead stays silent (then the owner). */
 	owing?: UiRoleTaskOwing;
@@ -2554,6 +2832,28 @@ export interface UiWorkPageTask extends UiWorkTaskRef {
 	withLead?: string;
 	/** live-progress: done: its queue_done summary, clipped to 300 characters (docs/live-progress.md). */
 	doneSummary?: string;
+	/** Normalized multi-tag slugs (1-16 items, ^[a-z0-9][a-z0-9-]{0,59}$). */
+	tags?: string[];
+	/** Verbatim raw touch strings from the task definition. */
+	touches?: string[];
+	/** Canonical normalized touch descriptors for App/System filtering and lane visibility. */
+	normalizedTouches?: UiNormalizedTouch[];
+	/** Resolved 12-state execution & delivery lifecycle status. */
+	lifecycleStatus?: UiTaskLifecycleStatus;
+	/** Distinct semantic color/tone category. */
+	statusTone?: UiStatusTone;
+	/** Actionable 1-line instruction for any non-moving task. */
+	howToUnblock?: string;
+	/** Canonical upstream task refs (`"<role> #<id>"`, union of `blocked.on` and `after`). */
+	dependsOnRefs?: string[];
+	/** Populated when the task has a bound wt-land job, landed commit, or service deploy state. */
+	delivery?: UiTaskDeliveryState;
+	/** Populated when state === "waiting". */
+	wait?: UiRoleTaskWait;
+	/** Enriched cross-queue blocked resolution details. */
+	blockedDetail?: UiRoleTaskBlocked;
+	/** Populated when state === "ready" (explains why it is waiting in the queue). */
+	queuedDetail?: UiRoleTaskQueuedDetail;
 }
 
 /** initiatives-plan-data: a kind of registry change (pi-queue's work log ops). */
@@ -2637,6 +2937,10 @@ export interface UiWorkPage {
 	 *  a TL;DR line needing him), as the Roles page lists them: one naming a project or its initiative means it
 	 *  waits on the owner. Additive: absent from an older server. */
 	ownerAsks?: UiWorkOwnerAsk[];
+	/** Multi-tag group roll-ups across all roles, sorted by priority. */
+	tagGroups?: UiTaskGroupRollup[];
+	/** Pre-aggregated index of appOrSystem -> tags for App/System filtering. */
+	touchSystems?: UiTouchSystemSummary[];
 }
 
 /** dead-end (Ops #483): one open question to the owner that isn't a task's. */
@@ -3292,6 +3596,10 @@ export interface UiRolesOverview {
 	 *  (chains stop at that boundary; nobody can approve more), with the reason its start logged and since = when this
 	 *  server started. Absent: not known yet (still starting) or this server has no such step. */
 	approvals?: UiMessageApprovals;
+	/** Multi-tag group roll-ups across all roles, sorted by priority. */
+	tagGroups?: UiTaskGroupRollup[];
+	/** Pre-aggregated index of appOrSystem -> tags for App/System filtering. */
+	touchSystems?: UiTouchSystemSummary[];
 }
 
 /** ladder-alarm: the approval step's state as the Roles page shows it. */

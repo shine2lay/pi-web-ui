@@ -76,6 +76,12 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 						'Optional: the initiative it belongs to, a short id (lowercase letters, digits, dashes; at most 60; like "team-in-temper"). A reply without one keeps its original\'s.',
 				}),
 			),
+			tags: Type.Optional(
+				Type.Array(Type.String(), {
+					description:
+						'Optional: tag slugs for grouping related work across roles (1-16 items, lowercase letters, digits, dashes; at most 60 chars each, e.g. ["roles-rework", "glanceability"]). A reply without tags inherits the original message\'s tags; pass [] to clear.',
+				}),
+			),
 			grant: Type.Optional(
 				Type.String({
 					description:
@@ -151,7 +157,14 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 				}
 				return { content: [{ type: "text", text: out.text }], details: out.details ?? {} };
 			}
-			const input = { to: p.to, kind: p.kind, text: p.text, replyTo: p.replyTo, initiative: p.initiative };
+			const input = {
+				to: p.to,
+				kind: p.kind,
+				text: p.text,
+				replyTo: p.replyTo,
+				initiative: p.initiative,
+				...(p.tags !== undefined ? { tags: p.tags } : {}),
+			};
 			const res = guard ? await guard.send(sender, { ...input, grant: p.grant }, _id) : service.send(sender, input);
 			if (!res.ok) {
 				service.noteRefused(sender, p.to, p.kind, res.error);
@@ -181,6 +194,7 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 					chain: r.chain,
 					state: res.paused ? "held" : "waiting",
 					...(r.initiative ? { initiative: r.initiative } : {}),
+					...(r.tags?.length ? { tags: r.tags } : {}),
 				},
 			};
 		},

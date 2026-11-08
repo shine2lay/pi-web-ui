@@ -19759,6 +19759,7 @@ export class AgentService {
 					...(record.forOwner === true
 						? { forOwner: true, ...(record.ownerIds ? { ownerIds: record.ownerIds } : {}) }
 						: {}),
+					...(record.tags?.length ? { tags: record.tags } : {}),
 				})
 			: undefined;
 		return {
