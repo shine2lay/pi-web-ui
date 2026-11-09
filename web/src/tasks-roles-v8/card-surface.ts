@@ -552,7 +552,7 @@ export function renderUnifiedTaskCard(params: {
 	const monogram = roleTitle.slice(0, 2).toUpperCase();
 
 	return `
-    <article class="unified-task-item task-row" data-task-id="${task.id}" data-display-task-id="${displayId}" data-status-tone="${escapeHtml(tone)}" data-task-expanded="${isTaskExpanded ? "true" : "false"}">
+    <article class="unified-task-item unified-task-card task-row" data-task-id="${task.id}" data-display-task-id="${displayId}" data-status-tone="${escapeHtml(tone)}" data-task-expanded="${isTaskExpanded ? "true" : "false"}">
       <div class="unified-task-line">
         <div class="task-card-top">
           <div class="task-card-heading">

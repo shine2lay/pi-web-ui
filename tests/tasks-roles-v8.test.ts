@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	applyFilters,
 	buildFilterDropdownModels,
 	buildTaskDag,
 	checkTags,
@@ -10,11 +11,14 @@ import {
 	computeGroupRollup,
 	createInitialFilterState,
 	createReferenceDataset,
+	DEFAULT_TIME_WINDOW_MS,
 	deriveV8DatasetFromRolesOverview,
 	matchesTaskFilters,
 	mountTasksRolesV8Surface,
 	normalizeTouch,
 	normalizeTouches,
+	PAGE_SIZE,
+	paginateTasks,
 	renderDeliveryPipelineMeter,
 	renderStatusBadge,
 	renderTaskCallouts,
@@ -1004,5 +1008,50 @@ describe("Tasks & Roles v8 client module (Task #240)", () => {
 		).toBe(8);
 
 		controller.destroy();
+	});
+
+	it("filters out tasks older than 7 days when search is empty, searches all tasks when query is non-empty, and paginates at 20 per page", () => {
+		const nowMs = 1_762_560_000_000;
+		const dataset = createReferenceDataset();
+		const ask = dataset.askGroups[0]!;
+		const oldTask: UiRoleTask = {
+			id: 950,
+			displayId: 950,
+			role: "backend",
+			roleTitle: "Backend",
+			title: "Historical billing migration #950",
+			status: "done",
+			lifecycleStatus: "live",
+			statusTone: "live",
+			appOrSystem: "pi-web-ui",
+			appLabel: "Pi Web UI",
+			tags: ["mobile-redesign"],
+			dependsOnRefs: [],
+			createdAt: nowMs - 14 * 86_400_000,
+			updatedAt: nowMs - 14 * 86_400_000,
+			updatedAtMs: nowMs - 14 * 86_400_000,
+		};
+		ask.tasks = [...(ask.tasks ?? []), oldTask];
+		dataset.tasks = dataset.askGroups.flatMap((g) => g.tasks ?? []);
+
+		expect(DEFAULT_TIME_WINDOW_MS).toBe(7 * 86_400_000);
+		expect(PAGE_SIZE).toBe(20);
+
+		const defaultFiltered = applyFilters(dataset, createInitialFilterState(), nowMs);
+		expect(defaultFiltered.some((t) => t.id === 950)).toBe(false);
+
+		const searchedFiltered = applyFilters(dataset, createInitialFilterState({ search: "Historical billing" }), nowMs);
+		expect(searchedFiltered.map((t) => t.id)).toEqual([950]);
+
+		const items = Array.from({ length: 45 }, (_, i) => i + 1);
+		const p1 = paginateTasks(items, 1, 20);
+		expect(p1.items.length).toBe(20);
+		expect(p1.totalPages).toBe(3);
+		expect(p1.hasPrev).toBe(false);
+		expect(p1.hasNext).toBe(true);
+		const p3 = paginateTasks(items, 3, 20);
+		expect(p3.items).toEqual([41, 42, 43, 44, 45]);
+		expect(p3.hasPrev).toBe(true);
+		expect(p3.hasNext).toBe(false);
 	});
 });

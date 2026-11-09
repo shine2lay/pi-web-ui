@@ -82,10 +82,13 @@ export function renderRolesBentoView(params: {
 		askBuckets: Array<{ ask: UiTaskGroupRollup; deptTasks: UiRoleTask[] }>;
 	}> = [];
 
+	const effectiveNowMs = state.nowMs ?? dataset.nowMs ?? Date.now();
 	for (const dept of dataset.departments) {
 		const askBuckets: Array<{ ask: UiTaskGroupRollup; deptTasks: UiRoleTask[] }> = [];
 		for (const ask of dataset.askGroups) {
-			const deptTasks = (ask.tasks ?? []).filter((t) => t.role === dept.id && matchesTaskFilters(t, state, ask));
+			const deptTasks = (ask.tasks ?? []).filter(
+				(t) => t.role === dept.id && matchesTaskFilters(t, state, ask, effectiveNowMs),
+			);
 			if (deptTasks.length > 0) {
 				askBuckets.push({ ask, deptTasks });
 			}

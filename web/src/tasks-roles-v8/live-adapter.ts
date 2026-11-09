@@ -13,6 +13,7 @@ import type { RolesState } from "../roles-state.js";
 import {
 	computeGroupRollup,
 	normalizeTouches,
+	parseTimestampMs,
 	statusToneForLifecycle,
 	type TasksRolesV8Dataset,
 	type UiNormalizedTouch,
@@ -87,12 +88,17 @@ export interface LiveTasksRolesAdaptedResult {
 }
 
 /** Flexible task input accepting protocol UiRoleTask, UiWorkPageTask, or v8 task fields. */
-type AdaptableTaskInput = Omit<Partial<ProtocolUiRoleTask>, "status" | "delivery" | "blocked" | "wait" | "paused"> & {
+type AdaptableTaskInput = Omit<
+	Partial<ProtocolUiRoleTask>,
+	"status" | "delivery" | "blocked" | "wait" | "paused" | "updatedAt"
+> & {
 	id: number;
 	status: UiRoleTaskRawStatus;
 	text?: string;
 	summary?: string;
 	endedAt?: number;
+	updatedAt?: number | string;
+	updatedAtMs?: number;
 	question?: string;
 	choices?: readonly string[];
 	pipelineStage?: 1 | 2 | 3 | 4 | 5;
@@ -752,6 +758,22 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 		const pipelineStage = rawTask.pipelineStage ?? existingTask?.pipelineStage;
 		const chatTitle = rawTask.chat?.title ?? existingTask?.chat?.title;
 
+		const explicitUpdatedAtMs =
+			parseTimestampMs(rawTask.updatedAtMs) ?? parseTimestampMs(rawTask.updatedAt) ?? existingTask?.updatedAtMs;
+		const resolvedCreatedAt =
+			parseTimestampMs(rawTask.createdAt) ??
+			existingTask?.createdAt ??
+			parseTimestampMs(rawTask.startedAt) ??
+			parseTimestampMs(rawTask.latest?.ts) ??
+			now;
+		const resolvedUpdatedAt =
+			explicitUpdatedAtMs ??
+			parseTimestampMs(rawTask.finishedAt) ??
+			parseTimestampMs(rawTask.endedAt) ??
+			existingTask?.updatedAt ??
+			parseTimestampMs(rawTask.latest?.ts) ??
+			now;
+
 		const adapted: UiRoleTask = {
 			id: internalId,
 			displayId,
@@ -790,14 +812,9 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 						},
 					}
 				: {}),
-			createdAt: rawTask.createdAt ?? existingTask?.createdAt ?? rawTask.startedAt ?? rawTask.latest?.ts ?? now,
-			updatedAt:
-				rawTask.updatedAt ??
-				rawTask.finishedAt ??
-				rawTask.endedAt ??
-				existingTask?.updatedAt ??
-				rawTask.latest?.ts ??
-				now,
+			createdAt: resolvedCreatedAt,
+			updatedAt: resolvedUpdatedAt,
+			...(explicitUpdatedAtMs !== undefined ? { updatedAtMs: explicitUpdatedAtMs } : {}),
 		};
 
 		tasksByKey.set(taskKey, adapted);
@@ -835,6 +852,9 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 			if (!tasksByKey.has(`${role.id}:${d.id}`) && (!doneLifecycle || doneLifecycle === "done")) {
 				continue;
 			}
+			const dUpdatedAt = parseTimestampMs(
+				(d as { updatedAt?: unknown; updatedAtMs?: unknown }).updatedAtMs ?? (d as { updatedAt?: unknown }).updatedAt,
+			);
 			addAdaptedTask(
 				{
 					id: d.id,
@@ -842,7 +862,8 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 					status: "done",
 					...(doneLifecycle ? { lifecycleStatus: doneLifecycle } : {}),
 					...(d.summary ? { doneSummary: d.summary } : {}),
-					...(d.at ? { finishedAt: d.at, updatedAt: d.at } : {}),
+					...(d.at ? { finishedAt: d.at } : {}),
+					...(dUpdatedAt !== undefined ? { updatedAt: dUpdatedAt, updatedAtMs: dUpdatedAt } : {}),
 				},
 				role.id,
 				roleTitle,
@@ -957,8 +978,14 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 	for (const tg of [...(overview?.tagGroups ?? []), ...(workPage?.tagGroups ?? [])]) {
 		const tgRich = tg as Partial<UiTaskGroupRollup>;
 		for (const t of tgRich.tasks ?? []) {
+			const tUpdatedAtMs = parseTimestampMs(
+				(t as { updatedAtMs?: unknown; updatedAt?: unknown }).updatedAtMs ?? (t as { updatedAt?: unknown }).updatedAt,
+			);
 			addAdaptedTask(
-				t as unknown as AdaptableTaskInput,
+				{
+					...(t as unknown as AdaptableTaskInput),
+					...(tUpdatedAtMs !== undefined ? { updatedAt: tUpdatedAtMs, updatedAtMs: tUpdatedAtMs } : {}),
+				},
 				t.role || "workspace",
 				t.roleTitle || shortRoleTitle(t.role || "workspace"),
 				!t.paused,
@@ -983,6 +1010,11 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 		const rawState = wpTask.state || "working";
 		const pProj = wpTask.parent && "project" in wpTask.parent ? wpTask.parent.project : undefined;
 		const pInit = wpTask.parent && "initiative" in wpTask.parent ? wpTask.parent.initiative : undefined;
+		const wpUpdatedAtMs = parseTimestampMs(
+			(wpTask as { updatedAtMs?: unknown; updatedAt?: unknown }).updatedAtMs ??
+				(wpTask as { updatedAt?: unknown }).updatedAt ??
+				wpTask.stateAt,
+		);
 		addAdaptedTask(
 			{
 				id: wpTask.task,
@@ -1006,7 +1038,7 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 				...(wpTask.needsYou ? { question: wpTask.needsYou.text } : {}),
 				...(wpTask.chat ? { chat: { file: wpTask.chat } } : {}),
 				createdAt: wpTask.added,
-				...(wpTask.stateAt ? { updatedAt: wpTask.stateAt } : {}),
+				...(wpUpdatedAtMs !== undefined ? { updatedAt: wpUpdatedAtMs, updatedAtMs: wpUpdatedAtMs } : {}),
 			},
 			roleId,
 			shortRoleTitle(roleId),
@@ -1075,6 +1107,10 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 				if (!shouldAdaptExactTasks) continue;
 				for (const t of proj.tasks ?? []) {
 					const roleId = t.roleId || cleanTagSlug(t.role ?? "workspace") || "workspace";
+					const tUpdatedAtMs = parseTimestampMs(
+						(t as { updatedAtMs?: unknown; updatedAt?: unknown }).updatedAtMs ??
+							(t as { updatedAt?: unknown }).updatedAt,
+					);
 					addAdaptedTask(
 						{
 							id: t.id,
@@ -1084,6 +1120,7 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 							...(t.question ? { question: t.question } : {}),
 							...(t.choices ? { choices: [...t.choices] } : {}),
 							...(t.withLead ? { withLead: t.withLead } : {}),
+							...(tUpdatedAtMs !== undefined ? { updatedAt: tUpdatedAtMs, updatedAtMs: tUpdatedAtMs } : {}),
 						},
 						roleId,
 						shortRoleTitle(roleId, t.role),
@@ -1097,6 +1134,9 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 			if (!shouldAdaptExactTasks) continue;
 			for (const t of initAny.tasks ?? []) {
 				const roleId = t.roleId || cleanTagSlug(t.role ?? "workspace") || "workspace";
+				const tUpdatedAtMs = parseTimestampMs(
+					(t as { updatedAtMs?: unknown; updatedAt?: unknown }).updatedAtMs ?? (t as { updatedAt?: unknown }).updatedAt,
+				);
 				addAdaptedTask(
 					{
 						id: t.id,
@@ -1106,6 +1146,7 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 						...(t.question ? { question: t.question } : {}),
 						...(t.choices ? { choices: [...t.choices] } : {}),
 						...(t.withLead ? { withLead: t.withLead } : {}),
+						...(tUpdatedAtMs !== undefined ? { updatedAt: tUpdatedAtMs, updatedAtMs: tUpdatedAtMs } : {}),
 					},
 					roleId,
 					shortRoleTitle(roleId, t.role),
@@ -1289,6 +1330,7 @@ export function buildLiveTasksRolesV8Dataset(input: LiveTasksRolesAdapterInput):
 			idleDepartments,
 			touchSystems,
 			allTags,
+			...(input.now !== undefined ? { nowMs: input.now } : {}),
 		},
 		mode,
 		asksByTaskId,

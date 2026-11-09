@@ -7,7 +7,10 @@ import {
 import { buildTaskDag, computeBezierPath, type TaskDagNode, type TaskDagResult } from "./dag";
 import {
 	effectiveTaskLifecycleStatus,
+	isTaskWithinDefaultWindow,
 	matchesTaskFilters,
+	PAGE_SIZE,
+	paginateTasks,
 	sortTasksByUrgency,
 	type TasksRolesV8FilterState,
 } from "./filters";
@@ -351,20 +354,43 @@ export function renderUnifiedTasksPanel(params: {
 	activeDagBoards?: Map<string, TaskDagResult>;
 }): string {
 	const { dataset, state, activeDagBoards } = params;
-	const allTasksWithContext: Array<{ task: UiRoleTask; ask: UiTaskGroupRollup }> = [];
+	const allTasksWithContext: Array<{ task: UiRoleTask; ask?: UiTaskGroupRollup }> = [];
+	const seenTaskIds = new Set<number>();
 	for (const ask of dataset.askGroups) {
 		for (const t of ask.tasks ?? []) {
-			allTasksWithContext.push({ task: t, ask });
+			if (!seenTaskIds.has(t.id)) {
+				allTasksWithContext.push({ task: t, ask });
+				seenTaskIds.add(t.id);
+			}
+		}
+	}
+	for (const t of dataset.tasks) {
+		if (!seenTaskIds.has(t.id)) {
+			allTasksWithContext.push({ task: t });
+			seenTaskIds.add(t.id);
 		}
 	}
 
-	const matchingItems = allTasksWithContext.filter(({ task, ask }) => matchesTaskFilters(task, state, ask));
+	const effectiveNowMs = state.nowMs ?? dataset.nowMs ?? Date.now();
+	const isSearching = Boolean((state.searchQuery ?? state.search ?? "").trim());
+	const windowTasksCount = allTasksWithContext.filter(({ task }) =>
+		isTaskWithinDefaultWindow(task, effectiveNowMs),
+	).length;
+	const olderTasksCount = Math.max(0, allTasksWithContext.length - windowTasksCount);
+
+	const matchingItems = allTasksWithContext.filter(({ task, ask }) =>
+		matchesTaskFilters(task, state, ask, effectiveNowMs),
+	);
 
 	if (matchingItems.length === 0) {
+		const olderHint =
+			!isSearching && olderTasksCount > 0
+				? ` (${olderTasksCount} older ${olderTasksCount === 1 ? "task is" : "tasks are"} searchable via the search box)`
+				: "";
 		return `
       <div class="state-card">
         <h2 style="margin-top:0;">No tasks match your current filter</h2>
-        <p>Try clearing one of the selected department, state, or tag filters.</p>
+        <p>Try clearing one of the selected department, state, or tag filters${escapeHtml(olderHint)}.</p>
         <button type="button" class="choice-btn" id="empty-reset-btn">Reset all filters</button>
       </div>
     `;
@@ -379,9 +405,20 @@ export function renderUnifiedTasksPanel(params: {
 		matchingItems.map((m) => m.task),
 		state.answeredTasks,
 	);
+	const rawStatePage = (state as unknown as { page?: unknown }).page;
+	const requestedPage =
+		typeof state.currentPage === "number" && state.currentPage >= 1
+			? state.currentPage
+			: typeof rawStatePage === "number" && rawStatePage >= 1
+				? rawStatePage
+				: 1;
+	const pageSize = state.pageSize ?? PAGE_SIZE;
+	const pageInfo = paginateTasks(sortedTasks, requestedPage, pageSize);
+	const pageTasks = pageInfo.items;
+
 	const askByTaskId = new Map(allTasksWithContext.map((m) => [m.task.id, m.ask]));
 
-	const rowsHtml = sortedTasks
+	const rowsHtml = pageTasks
 		.map((task) =>
 			renderUnifiedTaskCard({
 				task,
@@ -392,7 +429,12 @@ export function renderUnifiedTasksPanel(params: {
 		)
 		.join("");
 
-	const allDetailsOpen = sortedTasks.every((task) => Boolean(state.expandedTasks[task.id]));
+	const allDetailsOpen = pageTasks.length > 0 && pageTasks.every((task) => Boolean(state.expandedTasks[task.id]));
+	const tierCountLabel = isSearching
+		? `${sortedTasks.length} of ${allTasksWithContext.length} tasks · All-time search`
+		: olderTasksCount > 0
+			? `${sortedTasks.length} of ${windowTasksCount} tasks (7d · +${olderTasksCount} older searchable)`
+			: `${sortedTasks.length} of ${allTasksWithContext.length} tasks · Last 7 days`;
 
 	return `
     ${tagDagDrawerHtml}
@@ -400,7 +442,7 @@ export function renderUnifiedTasksPanel(params: {
       <div class="unified-tasks-header">
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <h2 style="margin:0; font-size:15px; font-weight:800; color:var(--text-primary);">All Available Tasks Across Departments</h2>
-          <span class="tier-count-pill">${sortedTasks.length} of ${allTasksWithContext.length} tasks</span>
+          <span class="tier-count-pill" data-window-mode="${isSearching ? "all-time" : "7d"}">${escapeHtml(tierCountLabel)}</span>
         </div>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           ${
@@ -418,6 +460,17 @@ export function renderUnifiedTasksPanel(params: {
       <div class="unified-task-list">
         ${rowsHtml}
       </div>
+      <nav class="tasks-pagination-bar" data-tasks-pagination aria-label="Tasks pagination">
+        <button type="button" class="chip-btn pagination-btn" data-page-prev="${Math.max(1, pageInfo.page - 1)}" ${pageInfo.hasPrev ? "" : "disabled"} aria-disabled="${pageInfo.hasPrev ? "false" : "true"}" aria-label="Previous page">
+          ← Previous
+        </button>
+        <span class="pagination-status" data-pagination-status aria-live="polite">
+          Page ${pageInfo.page} of ${pageInfo.totalPages} · Showing ${pageInfo.startIndex}–${pageInfo.endIndex} of ${pageInfo.totalItems} ${pageInfo.totalItems === 1 ? "task" : "tasks"}
+        </span>
+        <button type="button" class="chip-btn pagination-btn" data-page-next="${Math.min(pageInfo.totalPages, pageInfo.page + 1)}" ${pageInfo.hasNext ? "" : "disabled"} aria-disabled="${pageInfo.hasNext ? "false" : "true"}" aria-label="Next page">
+          Next →
+        </button>
+      </nav>
     </section>
   `;
 }

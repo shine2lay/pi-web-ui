@@ -1,4 +1,15 @@
-import type { UiRoleTask, UiTaskGroupRollup, UiTaskLifecycleStatus, V8DepartmentSummary, V8TagOption } from "./types";
+import type {
+	TasksRolesV8Dataset,
+	UiRoleTask,
+	UiTaskGroupRollup,
+	UiTaskLifecycleStatus,
+	V8DepartmentSummary,
+	V8TagOption,
+} from "./types";
+
+export const DEFAULT_TIME_WINDOW_MS = 7 * 86_400_000;
+export const PAGE_SIZE = 20;
+export const DEFAULT_PAGE_SIZE = PAGE_SIZE;
 
 export type V8StatusFilterId =
 	| "all"
@@ -22,6 +33,10 @@ export interface TasksRolesV8FilterState {
 	touch: string;
 	deptFilter: string;
 	searchQuery: string;
+	search?: string;
+	currentPage?: number;
+	pageSize?: number;
+	nowMs?: number;
 	activeTagDag: string | null;
 	selectedTags: string[];
 	tagMatchMode: "any" | "all";
@@ -37,6 +52,20 @@ export interface TasksRolesV8FilterState {
 	idleExpanded: boolean;
 	answeredTasks: Record<number, string>;
 }
+
+export type V8FilterState = Omit<Partial<TasksRolesV8FilterState>, "page"> & {
+	page?: "initiatives" | "roles" | number;
+	currentPage?: number;
+	pageSize?: number;
+	dept?: string;
+	app?: string;
+	state?: V8StatusFilterId;
+	tag?: string;
+	search?: string;
+	needsAttentionOnly?: boolean;
+	onlyOnYou?: boolean;
+	nowMs?: number;
+};
 
 /**
  * Deterministic urgency rank across all 12 lifecycle states (`stuck` / `ON YOU` first,
@@ -59,21 +88,39 @@ export const TASK_URGENCY_RANK: Readonly<Record<UiTaskLifecycleStatus, number>> 
 	dropped: 12,
 };
 
-export function createInitialFilterState(overrides: Partial<TasksRolesV8FilterState> = {}): TasksRolesV8FilterState {
+export function createInitialFilterState(overrides: V8FilterState = {}): TasksRolesV8FilterState {
+	const rawPage = overrides.page;
+	const viewPage: "initiatives" | "roles" = rawPage === "roles" ? "roles" : "initiatives";
+	const currentPage =
+		typeof overrides.currentPage === "number" && overrides.currentPage >= 1
+			? Math.floor(overrides.currentPage)
+			: typeof rawPage === "number" && rawPage >= 1
+				? Math.floor(rawPage)
+				: 1;
+	const pageSize =
+		typeof overrides.pageSize === "number" && overrides.pageSize >= 1 ? Math.floor(overrides.pageSize) : PAGE_SIZE;
+	const searchQuery = overrides.searchQuery ?? overrides.search ?? "";
+	const deptFilter = overrides.deptFilter ?? overrides.dept ?? "all";
+	const touch = overrides.touch ?? overrides.app ?? "all";
+	const statusFilter: V8StatusFilterId = overrides.onlyOnYou
+		? "needs_you"
+		: overrides.needsAttentionOnly
+			? "needs_attention"
+			: (overrides.statusFilter ?? overrides.state ?? "all");
+	const selectedTags =
+		overrides.selectedTags ??
+		(overrides.tag && overrides.tag !== "all" ? [overrides.tag.trim().replace(/^#/, "")] : []);
+
+	const { page: _omitPage, ...restOverrides } = overrides;
+
 	return {
-		page: "initiatives",
 		theme: "dark",
 		scheme: "stone",
 		mode: "normal",
-		touch: "all",
-		deptFilter: "all",
-		searchQuery: "",
 		activeTagDag: null,
-		selectedTags: [],
 		tagMatchMode: "any",
 		openDropdown: null,
 		ddSearch: { dept: "", app: "", state: "", tag: "" },
-		statusFilter: "all",
 		handoffRoleFilter: {},
 		collapsedAsks: {},
 		expandedTasks: {},
@@ -82,7 +129,16 @@ export function createInitialFilterState(overrides: Partial<TasksRolesV8FilterSt
 		expandedRoles: {},
 		idleExpanded: false,
 		answeredTasks: {},
-		...overrides,
+		...restOverrides,
+		page: viewPage,
+		touch,
+		deptFilter,
+		searchQuery,
+		search: searchQuery,
+		currentPage,
+		pageSize,
+		statusFilter,
+		selectedTags,
 	};
 }
 
@@ -158,6 +214,7 @@ export function toggleNeedsAttentionFilter(state: TasksRolesV8FilterState): Task
 	return {
 		...state,
 		statusFilter: state.statusFilter === "needs_attention" ? "all" : "needs_attention",
+		currentPage: 1,
 	};
 }
 
@@ -165,6 +222,7 @@ export function toggleOnlyOnYouFilter(state: TasksRolesV8FilterState): TasksRole
 	return {
 		...state,
 		statusFilter: state.statusFilter === "needs_you" ? "all" : "needs_you",
+		currentPage: 1,
 	};
 }
 
@@ -175,6 +233,7 @@ export function toggleSelectedTag(state: TasksRolesV8FilterState, tagId: string)
 	return {
 		...state,
 		selectedTags: exists ? state.selectedTags.filter((t) => t !== trimmed) : [...state.selectedTags, trimmed],
+		currentPage: 1,
 	};
 }
 
@@ -182,6 +241,7 @@ export function toggleTagMatchMode(state: TasksRolesV8FilterState): TasksRolesV8
 	return {
 		...state,
 		tagMatchMode: state.tagMatchMode === "any" ? "all" : "any",
+		currentPage: 1,
 	};
 }
 
@@ -193,6 +253,8 @@ export function resetAllFilters(state: TasksRolesV8FilterState): TasksRolesV8Fil
 		statusFilter: "all",
 		selectedTags: [],
 		searchQuery: "",
+		search: "",
+		currentPage: 1,
 		openDropdown: null,
 		handoffRoleFilter: {},
 		activeDagDetailTaskId: null,
@@ -200,26 +262,49 @@ export function resetAllFilters(state: TasksRolesV8FilterState): TasksRolesV8Fil
 	};
 }
 
+/**
+ * Checks whether a task falls within the 1-week default time window (`updatedAtMs == null || updatedAtMs >= nowMs - DEFAULT_TIME_WINDOW_MS`).
+ */
+export function isTaskWithinDefaultWindow(
+	task: Pick<UiRoleTask, "updatedAtMs">,
+	nowMs: number = Date.now(),
+	windowMs: number = DEFAULT_TIME_WINDOW_MS,
+): boolean {
+	if (task.updatedAtMs == null || !Number.isFinite(task.updatedAtMs)) {
+		return true;
+	}
+	return task.updatedAtMs >= nowMs - windowMs;
+}
+
 export function matchesTaskFilters(
 	task: UiRoleTask,
-	state: Pick<
-		TasksRolesV8FilterState,
-		"deptFilter" | "touch" | "searchQuery" | "selectedTags" | "tagMatchMode" | "statusFilter" | "answeredTasks"
-	>,
+	state: V8FilterState = {},
 	askGroup?: Partial<UiTaskGroupRollup>,
+	nowMs?: number,
 ): boolean {
 	if (!task || typeof task !== "object") {
 		throw new Error("matchesTaskFilters requires a valid task object.");
 	}
-	if (state.deptFilter && state.deptFilter !== "all" && task.role !== state.deptFilter) {
+	const searchRaw = (state.searchQuery ?? state.search ?? "").trim();
+	const effectiveNowMs = nowMs ?? state.nowMs ?? Date.now();
+
+	if (!searchRaw) {
+		if (!isTaskWithinDefaultWindow(task, effectiveNowMs)) {
+			return false;
+		}
+	}
+
+	const deptFilter = state.deptFilter ?? state.dept ?? "all";
+	if (deptFilter && deptFilter !== "all" && task.role !== deptFilter) {
 		return false;
 	}
 	const appOrSystem = task.appOrSystem ?? askGroup?.appOrSystem;
-	if (state.touch && state.touch !== "all" && appOrSystem !== state.touch) {
+	const touchFilter = state.touch ?? state.app ?? "all";
+	if (touchFilter && touchFilter !== "all" && appOrSystem !== touchFilter) {
 		return false;
 	}
-	if (state.searchQuery && state.searchQuery.trim().length > 0) {
-		const q = state.searchQuery.trim().toLowerCase();
+	if (searchRaw.length > 0) {
+		const q = searchRaw.toLowerCase();
 		const taskTags = task.tags ?? askGroup?.tags ?? [];
 		const tagTokens = taskTags.flatMap((t) => [t, `#${t}`]).join(" ");
 		const touchesRaw = (task.touches ?? []).join(" ");
@@ -247,41 +332,129 @@ export function matchesTaskFilters(
 			.toLowerCase();
 		if (!haystack.includes(q)) return false;
 	}
-	if (state.selectedTags && state.selectedTags.length > 0) {
+	const selectedTags =
+		state.selectedTags ?? (state.tag && state.tag !== "all" ? [state.tag.trim().replace(/^#/, "")] : []);
+	if (selectedTags && selectedTags.length > 0) {
 		const taskTags = task.tags ?? askGroup?.tags ?? [];
 		if (state.tagMatchMode === "all") {
-			const hasAll = state.selectedTags.every((t) => taskTags.includes(t));
+			const hasAll = selectedTags.every((t) => taskTags.includes(t));
 			if (!hasAll) return false;
 		} else {
-			const hasAny = state.selectedTags.some((t) => taskTags.includes(t));
+			const hasAny = selectedTags.some((t) => taskTags.includes(t));
 			if (!hasAny) return false;
 		}
 	}
-	if (state.statusFilter && state.statusFilter !== "all") {
+	const statusFilter: V8StatusFilterId = state.onlyOnYou
+		? "needs_you"
+		: state.needsAttentionOnly
+			? "needs_attention"
+			: (state.statusFilter ?? state.state ?? "all");
+	if (statusFilter && statusFilter !== "all") {
 		const effSt = effectiveTaskLifecycleStatus(task, state.answeredTasks);
-		if (state.statusFilter === "needs_attention" && !["stuck", "blocked", "waiting", "asking"].includes(effSt)) {
+		if (statusFilter === "needs_attention" && !["stuck", "blocked", "waiting", "asking"].includes(effSt)) {
 			return false;
 		}
-		if (state.statusFilter === "needs_you" && effSt !== "stuck") return false;
-		if (state.statusFilter === "blocked" && effSt !== "blocked") return false;
-		if (state.statusFilter === "waiting" && !["waiting", "asking"].includes(effSt)) {
+		if (statusFilter === "needs_you" && effSt !== "stuck") return false;
+		if (statusFilter === "blocked" && effSt !== "blocked") return false;
+		if (statusFilter === "waiting" && !["waiting", "asking"].includes(effSt)) {
 			return false;
 		}
-		if (state.statusFilter === "asking" && effSt !== "asking") return false;
-		if (state.statusFilter === "blocked_waiting" && !["blocked", "waiting", "asking", "paused"].includes(effSt)) {
+		if (statusFilter === "asking" && effSt !== "asking") return false;
+		if (statusFilter === "blocked_waiting" && !["blocked", "waiting", "asking", "paused"].includes(effSt)) {
 			return false;
 		}
-		if (state.statusFilter === "working" && !["working", "queued"].includes(effSt)) {
+		if (statusFilter === "working" && !["working", "queued"].includes(effSt)) {
 			return false;
 		}
-		if (state.statusFilter === "landing_deploying" && !["landing", "landed", "deploying"].includes(effSt)) {
+		if (statusFilter === "landing_deploying" && !["landing", "landed", "deploying"].includes(effSt)) {
 			return false;
 		}
-		if (state.statusFilter === "live_done" && !["live", "done"].includes(effSt)) {
+		if (statusFilter === "live_done" && !["live", "done"].includes(effSt)) {
 			return false;
 		}
 	}
 	return true;
+}
+
+/**
+ * Applies the 1-week default time window (when search is empty) or all-time search (when search is non-empty),
+ * plus department, app/touch, state, and tag filters, returning tasks sorted by urgency.
+ */
+export function applyFilters(
+	datasetOrTasks: TasksRolesV8Dataset | ReadonlyArray<UiRoleTask>,
+	filters: V8FilterState = {},
+	nowMs?: number,
+): UiRoleTask[] {
+	if (Array.isArray(datasetOrTasks)) {
+		const effectiveNowMs = nowMs ?? filters.nowMs ?? Date.now();
+		const matched = datasetOrTasks.filter((task) => matchesTaskFilters(task, filters, undefined, effectiveNowMs));
+		return sortTasksByUrgency(matched, filters.answeredTasks);
+	}
+	if (!datasetOrTasks || typeof datasetOrTasks !== "object" || !("tasks" in datasetOrTasks)) {
+		throw new Error("applyFilters requires a TasksRolesV8Dataset or an array of tasks.");
+	}
+	const ds = datasetOrTasks as TasksRolesV8Dataset;
+	const effectiveNowMs = nowMs ?? filters.nowMs ?? ds.nowMs ?? Date.now();
+	const askByTaskId = new Map<number, UiTaskGroupRollup>();
+	const allTasks: UiRoleTask[] = [];
+	const seenIds = new Set<number>();
+	for (const ask of ds.askGroups ?? []) {
+		for (const t of ask.tasks ?? []) {
+			askByTaskId.set(t.id, ask);
+			if (!seenIds.has(t.id)) {
+				seenIds.add(t.id);
+				allTasks.push(t);
+			}
+		}
+	}
+	for (const t of ds.tasks ?? []) {
+		if (!seenIds.has(t.id)) {
+			seenIds.add(t.id);
+			allTasks.push(t);
+		}
+	}
+	const matched = allTasks.filter((task) =>
+		matchesTaskFilters(task, filters, askByTaskId.get(task.id), effectiveNowMs),
+	);
+	return sortTasksByUrgency(matched, filters.answeredTasks);
+}
+
+export interface PaginatedTasksResult<T> {
+	items: T[];
+	page: number;
+	pageSize: number;
+	totalItems: number;
+	totalPages: number;
+	startIndex: number;
+	endIndex: number;
+	hasPrev: boolean;
+	hasNext: boolean;
+}
+
+export function paginateTasks<T>(
+	tasks: ReadonlyArray<T>,
+	page: number = 1,
+	pageSize: number = PAGE_SIZE,
+): PaginatedTasksResult<T> {
+	const safePageSize = Math.max(1, Math.floor(pageSize || PAGE_SIZE));
+	const totalItems = tasks.length;
+	const totalPages = Math.max(1, Math.ceil(totalItems / safePageSize));
+	const clampedPage = Math.max(1, Math.min(totalPages, Math.floor(page || 1)));
+	const startOffset = (clampedPage - 1) * safePageSize;
+	const items = tasks.slice(startOffset, startOffset + safePageSize);
+	const startIndex = totalItems === 0 ? 0 : startOffset + 1;
+	const endIndex = totalItems === 0 ? 0 : Math.min(totalItems, startOffset + items.length);
+	return {
+		items,
+		page: clampedPage,
+		pageSize: safePageSize,
+		totalItems,
+		totalPages,
+		startIndex,
+		endIndex,
+		hasPrev: clampedPage > 1,
+		hasNext: clampedPage < totalPages,
+	};
 }
 
 export interface DropdownOptionItem {

@@ -192,6 +192,7 @@ export interface MountTasksRolesV8Options {
 	onOpenChat?: (chatFile: string) => void;
 	onRetryLoad?: () => void;
 	onOverlayChange?: (open: boolean) => void;
+	onPageChange?: (page: number) => void;
 }
 
 export interface MountedTasksRolesV8Controller {
@@ -349,7 +350,7 @@ export function mountTasksRolesV8Surface(
 		});
 
 		heroRegion?.querySelector<HTMLButtonElement>("#clear-attention-filter-btn")?.addEventListener("click", () => {
-			state = { ...state, statusFilter: "all" };
+			state = { ...state, statusFilter: "all", currentPage: 1 };
 			refresh();
 		});
 
@@ -394,6 +395,7 @@ export function mountTasksRolesV8Surface(
 					...state,
 					deptFilter: btn.getAttribute("data-dept-id") || "all",
 					openDropdown: null,
+					currentPage: 1,
 				};
 				refresh();
 			});
@@ -410,6 +412,7 @@ export function mountTasksRolesV8Surface(
 					touch,
 					openDropdown: null,
 					selectedTags: state.selectedTags.filter((id) => validTagIds.has(id)),
+					currentPage: 1,
 				};
 				refresh();
 			});
@@ -422,6 +425,7 @@ export function mountTasksRolesV8Surface(
 					...state,
 					statusFilter: state.statusFilter === sf && sf !== "all" ? "all" : sf,
 					openDropdown: null,
+					currentPage: 1,
 				};
 				refresh();
 			});
@@ -441,7 +445,7 @@ export function mountTasksRolesV8Surface(
 		});
 
 		filterRegion?.querySelector<HTMLButtonElement>("#clear-tags-btn")?.addEventListener("click", () => {
-			state = { ...state, selectedTags: [] };
+			state = { ...state, selectedTags: [], currentPage: 1 };
 			refresh();
 		});
 
@@ -452,7 +456,8 @@ export function mountTasksRolesV8Surface(
 
 		const searchInput = filterRegion?.querySelector<HTMLInputElement>("#task-search-input");
 		searchInput?.addEventListener("input", (e) => {
-			state = { ...state, searchQuery: (e.target as HTMLInputElement).value || "" };
+			const val = (e.target as HTMLInputElement).value || "";
+			state = { ...state, searchQuery: val, search: val, currentPage: 1 };
 			if (viewRegion) {
 				activeDagBoards.clear();
 				viewRegion.innerHTML = renderViewRegion({ dataset, state, activeDagBoards, showPrototypeChrome });
@@ -496,8 +501,39 @@ export function mountTasksRolesV8Surface(
 					...state,
 					deptFilter: nextDept,
 					openDropdown: null,
+					currentPage: 1,
 				};
 				refresh();
+			});
+		});
+
+		viewRegion.querySelectorAll<HTMLButtonElement>("[data-page-prev]").forEach((btn) => {
+			btn.addEventListener("click", () => {
+				if (btn.disabled) return;
+				const attrVal = Number(btn.getAttribute("data-page-prev"));
+				const cur = state.currentPage ?? 1;
+				const nextPage = Number.isFinite(attrVal) && attrVal >= 1 ? Math.floor(attrVal) : Math.max(1, cur - 1);
+				state = {
+					...state,
+					currentPage: nextPage,
+				};
+				refresh();
+				options.onPageChange?.(nextPage);
+			});
+		});
+
+		viewRegion.querySelectorAll<HTMLButtonElement>("[data-page-next]").forEach((btn) => {
+			btn.addEventListener("click", () => {
+				if (btn.disabled) return;
+				const attrVal = Number(btn.getAttribute("data-page-next"));
+				const cur = state.currentPage ?? 1;
+				const nextPage = Number.isFinite(attrVal) && attrVal >= 1 ? Math.floor(attrVal) : cur + 1;
+				state = {
+					...state,
+					currentPage: nextPage,
+				};
+				refresh();
+				options.onPageChange?.(nextPage);
 			});
 		});
 
@@ -803,7 +839,36 @@ export function mountTasksRolesV8Surface(
 	return {
 		getState: () => ({ ...state }),
 		setState: (patch) => {
-			state = { ...state, ...patch };
+			const rawPatchPage = (patch as { page?: unknown }).page;
+			const filterChanged =
+				patch.deptFilter !== undefined ||
+				patch.touch !== undefined ||
+				patch.statusFilter !== undefined ||
+				patch.selectedTags !== undefined ||
+				patch.tagMatchMode !== undefined ||
+				patch.searchQuery !== undefined ||
+				patch.search !== undefined;
+			const nextSearchQuery = patch.searchQuery ?? patch.search ?? state.searchQuery;
+			const nextPageTab =
+				typeof rawPatchPage === "string" && (rawPatchPage === "roles" || rawPatchPage === "initiatives")
+					? rawPatchPage
+					: state.page;
+			const nextCurrentPage =
+				patch.currentPage !== undefined
+					? patch.currentPage
+					: typeof rawPatchPage === "number" && Number.isFinite(rawPatchPage) && rawPatchPage >= 1
+						? Math.floor(rawPatchPage)
+						: filterChanged
+							? 1
+							: state.currentPage;
+			state = {
+				...state,
+				...patch,
+				page: nextPageTab,
+				searchQuery: nextSearchQuery,
+				search: nextSearchQuery,
+				currentPage: nextCurrentPage,
+			};
 			refresh();
 		},
 		getDataset: () => dataset,

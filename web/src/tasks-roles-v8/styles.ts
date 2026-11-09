@@ -1740,6 +1740,34 @@ html[data-theme="light"][data-scheme="graphite"],
   color: var(--text-primary);
 }
 
+.tasks-pagination-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 14px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-default);
+}
+.pagination-btn {
+  min-height: 30px;
+  min-width: 30px;
+  padding: 4px 12px;
+  font-weight: 600;
+  box-shadow: var(--keycap-shadow);
+}
+.pagination-btn:disabled,
+.pagination-btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pagination-status {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
 @media (max-width: 980px) {
   .dag-columns {
     grid-template-columns: 1fr !important;

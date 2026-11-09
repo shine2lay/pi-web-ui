@@ -5,6 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiRolesOverview, UiWorkPage } from "../../server/protocol.js";
 import { InitiativesExactView } from "../../web/src/components/InitiativesExactView.js";
 import { RolesExactView } from "../../web/src/components/RolesExactView.js";
+import {
+	applyFilters,
+	createInitialFilterState,
+	DEFAULT_TIME_WINDOW_MS,
+	mountTasksRolesV8Surface,
+	PAGE_SIZE,
+	resetAllFilters,
+	toggleNeedsAttentionFilter,
+	toggleOnlyOnYouFilter,
+	toggleSelectedTag,
+} from "../../web/src/tasks-roles-v8/index.js";
 import { buildLiveTasksRolesV8Dataset } from "../../web/src/tasks-roles-v8/live-adapter.js";
 
 function sampleLiveOverview(): UiRolesOverview {
@@ -567,5 +578,265 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 		expect(t765?.howToUnblock).toBe("Answer architecture #450's owner question");
 		expect(t765?.howToUnblock?.toLowerCase().startsWith("how to unblock:")).toBe(false);
 		expect(t765?.wait?.howToUnblock).toBe("Waiting on deploy check");
+	});
+
+	it("enforces 1-week default window across all 3 adaptation paths while keeping older tasks searchable", () => {
+		const nowMs = 1_762_560_000_000;
+		const recentEpochMs = nowMs - 2 * 86_400_000; // 2 days ago
+		const olderEpochMs = nowMs - 10 * 86_400_000; // 10 days ago (> 7d cutoff)
+		const olderIso = new Date(nowMs - 14 * 86_400_000).toISOString(); // 14 days ago ISO
+
+		const overview = sampleLiveOverview();
+		// 1) Role queue task (section 1/2): older deployed task #501 with ISO updatedAt
+		const beRole = overview.roles.find((r) => r.id === "backend")!;
+		beRole.queue?.active.push({
+			id: 501,
+			title: "Legacy auth migration #501 from two weeks ago",
+			status: "done",
+			lifecycleStatus: "live",
+			statusTone: "live",
+			tags: ["roles-initiatives-v8"],
+			touches: ["pi-web-ui"],
+			updatedAt: olderIso as unknown as number,
+		});
+		// Recent role queue task #502 within 7 days
+		beRole.queue?.active.push({
+			id: 502,
+			title: "Recent auth polish #502 from two days ago",
+			status: "done",
+			lifecycleStatus: "live",
+			statusTone: "live",
+			tags: ["roles-initiatives-v8"],
+			touches: ["pi-web-ui"],
+			updatedAt: recentEpochMs,
+		});
+
+		// 2) tagGroups task (section 3a): older landed task #503
+		const tagGroups = ((overview as unknown as { tagGroups?: Array<Record<string, unknown>> }).tagGroups ??= []);
+		tagGroups.push({
+			key: "tag:legacy-initiative",
+			kind: "tag",
+			title: "#legacy-initiative",
+			tags: ["legacy-initiative"],
+			rollupStatus: "live",
+			statusTone: "live",
+			totalTasks: 1,
+			countsByStatus: { live: 1 },
+			hasBlockedPeers: false,
+			roles: ["ops"],
+			appsOrSystems: ["pi-web-ui"],
+			updatedAt: olderEpochMs,
+			tasks: [
+				{
+					id: 503,
+					role: "ops",
+					roleTitle: "Ops",
+					title: "Ancient tagGroup deploy #503",
+					status: "done",
+					lifecycleStatus: "live",
+					statusTone: "live",
+					paused: false,
+					appOrSystem: "pi-web-ui",
+					appLabel: "pi-web-ui",
+					tags: ["legacy-initiative"],
+					normalizedTouches: [],
+					dependsOnRefs: [],
+					createdAt: olderEpochMs,
+					updatedAt: olderEpochMs,
+				},
+			],
+		});
+
+		// 3) workPage.tasks (section 3b): older landed task #504
+		const workPage = sampleLiveWorkPage();
+		workPage.tasks.push({
+			queue: "frontend",
+			queueName: "frontend",
+			task: 504,
+			title: "Old workPage landed card #504",
+			state: "done",
+			lifecycleStatus: "landed",
+			statusTone: "landed",
+			tags: ["roles-initiatives-v8"],
+			touches: ["pi-web-ui"],
+			parent: { standalone: true },
+			added: olderEpochMs,
+			stateAt: olderEpochMs,
+			...({ updatedAt: olderEpochMs } as Record<string, unknown>),
+		});
+
+		const res = buildLiveTasksRolesV8Dataset({
+			overview,
+			workPage,
+			now: nowMs,
+		});
+
+		// Verify updatedAtMs populated across all 3 adaptation paths and >7d tasks remain in dataset.tasks
+		const t501 = res.dataset.tasks.find((t) => (t.displayId ?? t.id) === 501);
+		const t502 = res.dataset.tasks.find((t) => (t.displayId ?? t.id) === 502);
+		const t503 = res.dataset.tasks.find((t) => (t.displayId ?? t.id) === 503);
+		const t504 = res.dataset.tasks.find((t) => (t.displayId ?? t.id) === 504);
+		expect(t501?.updatedAtMs).toBe(Date.parse(olderIso));
+		expect(t502?.updatedAtMs).toBe(recentEpochMs);
+		expect(t503?.updatedAtMs).toBe(olderEpochMs);
+		expect(t504?.updatedAtMs).toBe(olderEpochMs);
+		expect(DEFAULT_TIME_WINDOW_MS).toBe(7 * 86_400_000);
+
+		// When search is empty: default 1-week window excludes #501, #503, #504 and keeps #502 + recent tasks
+		const defaultVisible = applyFilters(res.dataset, createInitialFilterState({ search: "" }), nowMs);
+		const defaultIds = defaultVisible.map((t) => t.displayId ?? t.id);
+		expect(defaultIds).toContain(502);
+		expect(defaultIds).toContain(221);
+		expect(defaultIds).not.toContain(501);
+		expect(defaultIds).not.toContain(503);
+		expect(defaultIds).not.toContain(504);
+
+		// When search is non-empty: searches all tasks in dataset.tasks including >7d tasks
+		const search501 = applyFilters(res.dataset, createInitialFilterState({ search: "Legacy auth" }), nowMs);
+		expect(search501.map((t) => t.displayId ?? t.id)).toEqual([501]);
+
+		const search503 = applyFilters(res.dataset, createInitialFilterState({ search: "Ancient tagGroup" }), nowMs);
+		expect(search503.map((t) => t.displayId ?? t.id)).toEqual([503]);
+
+		const search504 = applyFilters(res.dataset, createInitialFilterState({ search: "#504" }), nowMs);
+		expect(search504.map((t) => t.displayId ?? t.id)).toEqual([504]);
+
+		// Mount surface and verify DOM count pill and live search input behavior
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		const ctrl = mountTasksRolesV8Surface(host, {
+			dataset: res.dataset,
+			initialState: { page: "initiatives", nowMs },
+			showPrototypeChrome: false,
+		});
+
+		const countPill = host.querySelector<HTMLElement>(".unified-tasks-header .tier-count-pill");
+		expect(countPill?.getAttribute("data-window-mode")).toBe("7d");
+		expect(countPill?.textContent).toContain("4 of 4 tasks (7d · +3 older searchable)");
+		expect(host.querySelectorAll(".unified-task-card").length).toBe(4);
+		expect(host.textContent).not.toContain("Legacy auth migration #501");
+
+		const searchInput = host.querySelector<HTMLInputElement>("#task-search-input")!;
+		searchInput.value = "Legacy auth";
+		searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+		const countPillAfterSearch = host.querySelector<HTMLElement>(".unified-tasks-header .tier-count-pill");
+		expect(countPillAfterSearch?.getAttribute("data-window-mode")).toBe("all-time");
+		expect(countPillAfterSearch?.textContent).toContain("1 of 7 tasks · All-time search");
+		expect(host.querySelectorAll(".unified-task-card").length).toBe(1);
+		expect(host.textContent).toContain("Legacy auth migration #501");
+
+		ctrl.destroy();
+	});
+
+	it("paginates Unified Tasks View at 20 tasks/page, navigates via Prev/Next, and resets to page 1 on filter or search changes", () => {
+		const nowMs = 1_762_560_000_000;
+		const overview = sampleLiveOverview();
+		const feRole = overview.roles.find((r) => r.id === "frontend")!;
+
+		// Add 42 recent tasks so total recent tasks = 45 (3 pages: 20, 20, 5) + 2 older tasks (>7d)
+		for (let i = 1; i <= 42; i++) {
+			feRole.queue?.queued.push({
+				id: 1000 + i,
+				title: `Paginated recent task #${1000 + i}`,
+				status: "ready",
+				lifecycleStatus: "queued",
+				statusTone: "queued",
+				tags: ["roles-initiatives-v8"],
+				touches: ["pi-web-ui"],
+				updatedAt: nowMs - i * 60_000,
+			});
+		}
+		feRole.queue?.active.push({
+			id: 2001,
+			title: "Searchable archive task #2001",
+			status: "done",
+			lifecycleStatus: "live",
+			statusTone: "live",
+			tags: ["roles-initiatives-v8"],
+			touches: ["pi-web-ui"],
+			updatedAt: nowMs - 20 * 86_400_000,
+		});
+
+		const res = buildLiveTasksRolesV8Dataset({
+			overview,
+			workPage: sampleLiveWorkPage(),
+			now: nowMs,
+		});
+
+		expect(PAGE_SIZE).toBe(20);
+
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		const ctrl = mountTasksRolesV8Surface(host, {
+			dataset: res.dataset,
+			initialState: { page: "initiatives", nowMs },
+			showPrototypeChrome: false,
+		});
+
+		// Page 1: 20 cards, Prev disabled, Next enabled
+		expect(host.querySelectorAll(".unified-task-card").length).toBe(20);
+		const status1 = host.querySelector<HTMLElement>("[data-pagination-status]");
+		expect(status1?.textContent).toContain("Page 1 of 3 · Showing 1–20 of 45 tasks");
+		const prev1 = host.querySelector<HTMLButtonElement>("[data-page-prev]")!;
+		const next1 = host.querySelector<HTMLButtonElement>("[data-page-next]")!;
+		expect(prev1.disabled).toBe(true);
+		expect(next1.disabled).toBe(false);
+
+		// Navigate to Page 2
+		next1.click();
+		expect(ctrl.getState().currentPage).toBe(2);
+		expect(host.querySelectorAll(".unified-task-card").length).toBe(20);
+		expect(host.querySelector<HTMLElement>("[data-pagination-status]")?.textContent).toContain(
+			"Page 2 of 3 · Showing 21–40 of 45 tasks",
+		);
+		expect(host.querySelector<HTMLButtonElement>("[data-page-prev]")?.disabled).toBe(false);
+		expect(host.querySelector<HTMLButtonElement>("[data-page-next]")?.disabled).toBe(false);
+
+		// Navigate to Page 3 (last page: 5 tasks, Next disabled)
+		host.querySelector<HTMLButtonElement>("[data-page-next]")!.click();
+		expect(ctrl.getState().currentPage).toBe(3);
+		expect(host.querySelectorAll(".unified-task-card").length).toBe(5);
+		expect(host.querySelector<HTMLElement>("[data-pagination-status]")?.textContent).toContain(
+			"Page 3 of 3 · Showing 41–45 of 45 tasks",
+		);
+		expect(host.querySelector<HTMLButtonElement>("[data-page-prev]")?.disabled).toBe(false);
+		expect(host.querySelector<HTMLButtonElement>("[data-page-next]")?.disabled).toBe(true);
+
+		// Navigate back to Page 2 via Previous
+		host.querySelector<HTMLButtonElement>("[data-page-prev]")!.click();
+		expect(ctrl.getState().currentPage).toBe(2);
+		expect(host.querySelector<HTMLElement>("[data-pagination-status]")?.textContent).toContain(
+			"Page 2 of 3 · Showing 21–40 of 45 tasks",
+		);
+
+		// Changing department filter resets page to 1
+		host.querySelector<HTMLButtonElement>('.dept-filter-btn[data-dept-id="frontend"]')?.click();
+		expect(ctrl.getState().currentPage).toBe(1);
+		expect(host.querySelector<HTMLElement>("[data-pagination-status]")?.textContent).toContain(
+			"Page 1 of 3 · Showing 1–20 of 43 tasks",
+		);
+
+		// Advance to page 2 again, then type in search input -> resets to page 1 and finds >7d task #2001
+		host.querySelector<HTMLButtonElement>("[data-page-next]")!.click();
+		expect(ctrl.getState().currentPage).toBe(2);
+
+		const searchInput = host.querySelector<HTMLInputElement>("#task-search-input")!;
+		searchInput.value = "Searchable archive task #2001";
+		searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+		expect(ctrl.getState().currentPage).toBe(1);
+		expect(host.querySelectorAll(".unified-task-card").length).toBe(1);
+		expect(host.querySelector<HTMLElement>("[data-pagination-status]")?.textContent).toContain(
+			"Page 1 of 1 · Showing 1–1 of 1 task",
+		);
+
+		// Pure state helper resets also reset currentPage to 1
+		const page2State = createInitialFilterState({ currentPage: 2 });
+		expect(toggleNeedsAttentionFilter(page2State).currentPage).toBe(1);
+		expect(toggleOnlyOnYouFilter(page2State).currentPage).toBe(1);
+		expect(toggleSelectedTag(page2State, "roles-initiatives-v8").currentPage).toBe(1);
+		expect(resetAllFilters(page2State).currentPage).toBe(1);
+
+		ctrl.destroy();
 	});
 });

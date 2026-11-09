@@ -12,6 +12,7 @@ import {
 	buildLiveTasksRolesV8Dataset,
 	createReferenceDataset,
 	mountTasksRolesV8Surface,
+	PAGE_SIZE,
 	type MountedTasksRolesV8Controller,
 } from "../tasks-roles-v8";
 import { reloadWorkPage, useWorkPage } from "../work-page-state";
@@ -141,11 +142,19 @@ function RolesV8Surface({ active, dialogs = [], onOpen, onAbout }: RolesExactVie
 				page: "initiatives",
 				theme: detectInitialTheme(),
 				mode: initialAdapted.mode,
+				currentPage: 1,
+				pageSize: PAGE_SIZE,
 			},
 			dataset: initialAdapted.dataset,
 			syncDocumentTheme: true,
 			showPrototypeChrome: useRefData,
 			exposeWindowGlobals: true,
+			onPageChange: () => {
+				const panel = container.querySelector<HTMLElement>(".unified-tasks-panel");
+				if (panel && typeof panel.scrollIntoView === "function") {
+					panel.scrollIntoView({ block: "nearest" });
+				}
+			},
 			onOpenChat: (chatFile) => {
 				const cur = current.current;
 				const matchTask = cur.adapted.dataset.tasks.find((t) => t.chat?.file === chatFile);
@@ -214,6 +223,32 @@ function RolesV8Surface({ active, dialogs = [], onOpen, onAbout }: RolesExactVie
 			<div
 				ref={host}
 				className="roles-exact-host"
+				onClick={(ev) => {
+					const target = ev.target instanceof HTMLElement ? ev.target : null;
+					const prevBtn = target?.closest<HTMLButtonElement>("[data-page-prev]");
+					if (prevBtn && !prevBtn.disabled && controllerRef.current) {
+						const nextPage = Number(prevBtn.getAttribute("data-page-prev"));
+						if (
+							Number.isFinite(nextPage) &&
+							nextPage >= 1 &&
+							controllerRef.current.getState().currentPage !== nextPage
+						) {
+							controllerRef.current.setState({ currentPage: Math.floor(nextPage) });
+						}
+						return;
+					}
+					const nextBtn = target?.closest<HTMLButtonElement>("[data-page-next]");
+					if (nextBtn && !nextBtn.disabled && controllerRef.current) {
+						const nextPage = Number(nextBtn.getAttribute("data-page-next"));
+						if (
+							Number.isFinite(nextPage) &&
+							nextPage >= 1 &&
+							controllerRef.current.getState().currentPage !== nextPage
+						) {
+							controllerRef.current.setState({ currentPage: Math.floor(nextPage) });
+						}
+					}
+				}}
 				style={{
 					width: "100%",
 					height: "100%",

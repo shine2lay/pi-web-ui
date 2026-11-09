@@ -403,6 +403,7 @@ export interface UiRoleTask {
 	startedAt?: number;
 	finishedAt?: number;
 	updatedAt: number;
+	updatedAtMs?: number;
 	origin?: UiTaskRequester;
 	goal?: string;
 	doneSummary?: string;
@@ -427,6 +428,32 @@ export interface UiRoleTask {
 	after?: (number | string)[];
 	queuedDetail?: UiRoleTaskQueuedDetail;
 	chat?: { file: string; title?: string };
+}
+
+export type V8Task = UiRoleTask;
+export type { V8FilterState } from "./filters";
+
+/**
+ * Parses an epoch-ms number, numeric string, or ISO timestamp string into epoch milliseconds.
+ * Returns `undefined` when the value is absent, zero, or not a valid positive timestamp.
+ */
+export function parseTimestampMs(raw: unknown): number | undefined {
+	if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+		return raw;
+	}
+	if (typeof raw === "string") {
+		const trimmed = raw.trim();
+		if (!trimmed) return undefined;
+		if (/^\d+(\.\d+)?$/.test(trimmed)) {
+			const num = Number(trimmed);
+			if (Number.isFinite(num) && num > 0) return num;
+		}
+		const parsed = Date.parse(trimmed);
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return parsed;
+		}
+	}
+	return undefined;
 }
 
 export interface UiTaskGroupRollup {
@@ -488,6 +515,7 @@ export interface TasksRolesV8Dataset {
 	idleDepartments: Array<{ id: string; title: string; note: string }>;
 	touchSystems: Array<{ id: string; label: string; count: number }>;
 	allTags: V8TagOption[];
+	nowMs?: number;
 }
 
 const DEPLOYABLE_REPOS = new Set(["pi-web-ui", "rollcall", "inkflow", "temper-ai", "show-and-tell"]);
@@ -978,6 +1006,9 @@ export function deriveV8TaskFromLegacyTask(
 	const { paused: rawPaused, ...restLegacy } = legacy;
 	const displayId = legacy.displayId ?? legacy.id;
 	const taskKey = legacy.taskKey ?? `${role}:${displayId}`;
+	const parsedUpdatedAtMs = parseTimestampMs(
+		(legacy as { updatedAtMs?: unknown }).updatedAtMs ?? (legacy as { updatedAt?: unknown }).updatedAt,
+	);
 	return {
 		...restLegacy,
 		id: legacy.id,
@@ -998,7 +1029,8 @@ export function deriveV8TaskFromLegacyTask(
 		...(latestTldr ? { latestTldr } : {}),
 		dependsOnRefs: legacy.dependsOnRefs ?? [],
 		createdAt: legacy.createdAt ?? 0,
-		updatedAt: legacy.updatedAt ?? 0,
+		updatedAt: parsedUpdatedAtMs ?? legacy.updatedAt ?? 0,
+		...(parsedUpdatedAtMs !== undefined ? { updatedAtMs: parsedUpdatedAtMs } : {}),
 	};
 }
 
