@@ -262,14 +262,31 @@ export function resetAllFilters(state: TasksRolesV8FilterState): TasksRolesV8Fil
 	};
 }
 
+export const OPEN_TASK_LIFECYCLE_STATUSES: ReadonlySet<UiTaskLifecycleStatus> = new Set<UiTaskLifecycleStatus>([
+	"stuck",
+	"asking",
+	"blocked",
+	"waiting",
+	"working",
+	"landing",
+	"deploying",
+	"queued",
+	"paused",
+]);
+
 /**
  * Checks whether a task falls within the 1-week default time window (`updatedAtMs == null || updatedAtMs >= nowMs - DEFAULT_TIME_WINDOW_MS`).
+ * Non-terminal open tasks (`stuck`, `asking`, `blocked`, `waiting`, `working`, `landing`, `deploying`, `queued`, `paused`)
+ * always remain visible in the default view regardless of `updatedAtMs`; the 7-day cutoff applies only to terminal tasks.
  */
 export function isTaskWithinDefaultWindow(
-	task: Pick<UiRoleTask, "updatedAtMs">,
+	task: Pick<UiRoleTask, "updatedAtMs"> & Partial<Pick<UiRoleTask, "lifecycleStatus">>,
 	nowMs: number = Date.now(),
 	windowMs: number = DEFAULT_TIME_WINDOW_MS,
 ): boolean {
+	if (task.lifecycleStatus && OPEN_TASK_LIFECYCLE_STATUSES.has(task.lifecycleStatus)) {
+		return true;
+	}
 	if (task.updatedAtMs == null || !Number.isFinite(task.updatedAtMs)) {
 		return true;
 	}

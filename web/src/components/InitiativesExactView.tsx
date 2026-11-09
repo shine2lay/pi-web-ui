@@ -12,10 +12,10 @@ import {
 	type InitiativeFontBytes,
 } from "../initiatives-u0/surface";
 import { liveVisibleAt, subscribePageLive } from "../page-live";
-import { resolveQuestionAction, type NativeDialogSummary } from "../roles-answer-actions";
+import { type NativeDialogSummary } from "../roles-answer-actions";
 import { projectExactRoles } from "../roles-exact-model";
 import { reloadRoles, useRoles } from "../roles-state";
-import type { NeedsYouItem, UsefulOpenTarget } from "../roles-useful-model";
+import type { UsefulOpenTarget } from "../roles-useful-model";
 import { useEscapeKey } from "../shortcut-stack";
 import type { WorkPageFeed } from "../initiatives-page/model";
 import {
@@ -25,6 +25,7 @@ import {
 	type MountedTasksRolesV8Controller,
 } from "../tasks-roles-v8";
 import { reloadWorkPage, useWorkPage } from "../work-page-state";
+import { handleLiveV8TaskAnswer, markLiveV8TaskAnswered, type LiveV8AnswerDialogState } from "./live-v8-task-answer";
 import { RoleAnswerDialog } from "./RoleAnswerDialog";
 
 export interface InitiativesExactViewProps {
@@ -84,7 +85,7 @@ function InitiativesV8Surface(props: InitiativesExactViewProps) {
 	const workState = props.work ?? workHook;
 	const connection = useAppField("status");
 	const [now, setNow] = useState(() => Date.now());
-	const [answer, setAnswer] = useState<{ item: NeedsYouItem; from: HTMLElement } | null>(null);
+	const [answer, setAnswer] = useState<LiveV8AnswerDialogState | null>(null);
 	const [overlayOpen, setOverlayOpen] = useState(false);
 	const host = useRef<HTMLDivElement>(null);
 	const controllerRef = useRef<MountedTasksRolesV8Controller | null>(null);
@@ -170,35 +171,38 @@ function InitiativesV8Surface(props: InitiativesExactViewProps) {
 			},
 			onAnswerQuestion: (taskId, choice) => {
 				const cur = current.current;
-				const task = cur.adapted.dataset.tasks.find((t) => t.id === taskId);
-				const matchNeed =
-					cur.rolesModel.needs.items.find(
-						(n) => n.link?.focus?.id === String(taskId) || n.key.endsWith(`:${taskId}`),
-					) ?? (task ? cur.rolesModel.needs.items.find((n) => n.roleId === task.role) : undefined);
 				const fromEl = document.activeElement instanceof HTMLElement ? document.activeElement : container;
-				if (matchNeed) {
-					const inlineResolved = resolveQuestionAction(cur.rolesModel.needs, matchNeed, cur.dialogs, "inline");
-					if (inlineResolved) {
-						setAnswer({ item: inlineResolved.item, from: fromEl });
-						return;
-					}
-					const chatResolved = resolveQuestionAction(cur.rolesModel.needs, matchNeed, cur.dialogs, "chat");
-					if (chatResolved && chatResolved.action.kind === "chat" && cur.props.onOpenChat) {
-						cur.props.onOpenChat(chatResolved.action.target);
-						return;
-					}
-				}
-				if (cur.props.onAnswer) {
-					cur.props.onAnswer(
-						{ initiative: task?.initiative ?? task?.tags?.[0] ?? "general", ask: String(taskId) },
-						choice,
-					);
-					return;
-				}
-				const fallbackChat = cur.adapted.chatByTaskId.get(taskId) ?? (task?.chat ? { file: task.chat.file } : null);
-				if (fallbackChat && cur.props.onOpenChat) {
-					cur.props.onOpenChat(fallbackChat);
-				}
+				return handleLiveV8TaskAnswer({
+					taskId,
+					choice,
+					adapted: cur.adapted,
+					needs: cur.rolesModel.needs,
+					dialogs: cur.dialogs,
+					connected: cur.connection === "open",
+					fromEl,
+					getController: () => controllerRef.current,
+					openDialog: (dialogState) => setAnswer(dialogState),
+					openChat: cur.props.onOpenChat
+						? (target) => cur.props.onOpenChat?.(target)
+						: (target) => {
+								const matchTask = cur.adapted.dataset.tasks.find((t) => t.id === taskId);
+								cur.props.onOpen({
+									kind: "source",
+									initiative: matchTask?.initiative ?? matchTask?.tags?.[0] ?? "general",
+									ref: target.file,
+								});
+							},
+					onFallbackAnswer: (task, displayId, pickedChoice) => {
+						if (cur.props.onAnswer) {
+							cur.props.onAnswer(
+								{ initiative: task?.initiative ?? task?.tags?.[0] ?? "general", ask: String(displayId) },
+								pickedChoice,
+							);
+							return true;
+						}
+						return false;
+					},
+				});
 			},
 			onRetryLoad: () => {
 				reloadRoles();
@@ -248,12 +252,30 @@ function InitiativesV8Surface(props: InitiativesExactViewProps) {
 					background: "var(--bg-canvas, #0E0F11)",
 				}}
 			/>
-			{active && answer && props.onOpenChat && (
+			{active && answer && (
 				<RoleAnswerDialog
 					item={answer.item}
 					needs={rolesModel.needs}
 					connected={connection === "open"}
-					onOpen={props.onOpenChat}
+					initialView={answer.initialView}
+					initialChoice={answer.initialChoice}
+					onAnswered={(summary) => {
+						markLiveV8TaskAnswered(controllerRef.current, answer.taskId, summary);
+						reloadRoles();
+						reloadWorkPage();
+					}}
+					onOpen={(target) => {
+						if (props.onOpenChat) {
+							props.onOpenChat(target);
+						} else {
+							const matchTask = adapted.dataset.tasks.find((t) => t.id === answer.taskId);
+							props.onOpen({
+								kind: "source",
+								initiative: matchTask?.initiative ?? matchTask?.tags?.[0] ?? "general",
+								ref: target.file,
+							});
+						}
+					}}
 					onClose={(back) => {
 						const from = answer.from;
 						setAnswer(null);

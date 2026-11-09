@@ -17,12 +17,25 @@ import type { UiRoleAskView } from "../types";
 
 type Stage = "loading" | "ready" | "sending" | "sent" | "error";
 type ErrorKey = ReturnType<typeof roleAnswerError>;
+
+function buildInitialDrafts(view: UiRoleAskView | null, initialChoice?: string): RoleAnswerDrafts {
+	if (!view || !initialChoice || initialChoice === "Answer question") return new Map();
+	const firstField = view.fields[0];
+	if (!firstField) return new Map();
+	const matched = firstField.options.find((o) => o.value === initialChoice || o.label === initialChoice);
+	if (!matched) return new Map();
+	return new Map([[firstField.id, { selected: [matched.value], text: "" }]]);
+}
+
 export function RoleAnswerDialog({
 	item,
 	needs,
 	connected,
 	onClose,
 	onOpen,
+	initialView,
+	initialChoice,
+	onAnswered,
 }: {
 	item: NeedsYouItem;
 	/** The current list: the dialog closes once its ask has left it (roles-small-fixes N3). */
@@ -30,16 +43,19 @@ export function RoleAnswerDialog({
 	connected: boolean;
 	onClose: (back: boolean) => void;
 	onOpen: (target: UsefulOpenTarget) => void;
+	initialView?: UiRoleAskView | null;
+	initialChoice?: string;
+	onAnswered?: (summary: string) => void;
 }) {
 	const t = useT();
 	const dialog = useRef<HTMLDialogElement>(null);
 	const close = useRef<HTMLButtonElement>(null);
 	const mounted = useRef(false);
-	const stageRef = useRef<Stage>("loading");
-	const [stage, setStage] = useState<Stage>("loading");
+	const stageRef = useRef<Stage>(initialView ? "ready" : "loading");
+	const [stage, setStage] = useState<Stage>(initialView ? "ready" : "loading");
 	const [error, setError] = useState<ErrorKey>("raUnavailable");
-	const [view, setView] = useState<UiRoleAskView | null>(null);
-	const [drafts, setDrafts] = useState<RoleAnswerDrafts>(new Map());
+	const [view, setView] = useState<UiRoleAskView | null>(initialView ?? null);
+	const [drafts, setDrafts] = useState<RoleAnswerDrafts>(() => buildInitialDrafts(initialView ?? null, initialChoice));
 	const move = (next: Stage) => {
 		stageRef.current = next;
 		setStage(next);
@@ -62,6 +78,10 @@ export function RoleAnswerDialog({
 		if (!item.answer || !connected) {
 			setError("raOffline");
 			move("error");
+		} else if (initialView) {
+			setView(initialView);
+			setDrafts(buildInitialDrafts(initialView, initialChoice));
+			move("ready");
 		} else
 			void openRoleAsk(item.answer.key).then((reply) => {
 				if (!current || stageRef.current !== "loading") return;
@@ -72,6 +92,7 @@ export function RoleAnswerDialog({
 					return;
 				}
 				setView(form);
+				setDrafts(buildInitialDrafts(form, initialChoice));
 				move("ready");
 			});
 		return () => {
@@ -105,8 +126,11 @@ export function RoleAnswerDialog({
 		move("sending"); // synchronous guard: a second click cannot enter
 		const reply = await answerRoleAsk(item.answer.key, view.id, view.revision, form.answers);
 		if (!mounted.current || !isStage("sending")) return;
-		if (reply.ok === true) move("sent");
-		else {
+		if (reply.ok === true) {
+			move("sent");
+			const summary = form.answers[0]?.selected[0] ?? form.answers[0]?.text?.trim() ?? initialChoice ?? "Answered";
+			onAnswered?.(summary);
+		} else {
 			setError(roleAnswerError(reply.error));
 			move("error");
 		}

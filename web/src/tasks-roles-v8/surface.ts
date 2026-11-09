@@ -22,6 +22,8 @@ import {
 } from "./dag-surface";
 import {
 	createInitialFilterState,
+	effectiveTaskLifecycleStatus,
+	isTaskWithinDefaultWindow,
 	resetAllFilters,
 	toggleNeedsAttentionFilter,
 	toggleOnlyOnYouFilter,
@@ -115,8 +117,13 @@ export function renderTasksRolesV8Shell(params: {
 }): string {
 	const { dataset, state, activeDagBoards, whyModalOpen = false, showPrototypeChrome = true } = params;
 	const activeDeptCount = dataset.departments.length;
-	const onYouCount = dataset.tasks.filter((t) => t.lifecycleStatus === "stuck").length;
-	const subtitleSummary = `${dataset.tasks.length} tasks across ${activeDeptCount} active departments · ${onYouCount} on you`;
+	const effectiveNowMs = state.nowMs ?? dataset.nowMs ?? Date.now();
+	const isSearching = Boolean((state.searchQuery ?? state.search ?? "").trim());
+	const windowTasks = isSearching
+		? dataset.tasks
+		: dataset.tasks.filter((t) => isTaskWithinDefaultWindow(t, effectiveNowMs));
+	const onYouCount = windowTasks.filter((t) => effectiveTaskLifecycleStatus(t, state.answeredTasks) === "stuck").length;
+	const subtitleSummary = `${windowTasks.length} tasks across ${activeDeptCount} active departments · ${onYouCount} on you`;
 
 	const primaryTabsHtml = showPrototypeChrome
 		? `<nav class="seg-group" aria-label="Primary views">
@@ -168,7 +175,7 @@ export function renderTasksRolesV8Shell(params: {
 
       <main id="main-content">
         <section id="hero-region" aria-label="Attention summary">
-          ${renderAttentionNoteBar(dataset.tasks, state)}
+          ${renderAttentionNoteBar(windowTasks, state)}
         </section>
         <section id="filter-region" aria-label="System and tag filters">
           ${renderCompactFilterBar(dataset, state)}
@@ -188,7 +195,7 @@ export interface MountTasksRolesV8Options {
 	syncDocumentTheme?: boolean;
 	showPrototypeChrome?: boolean;
 	exposeWindowGlobals?: boolean;
-	onAnswerQuestion?: (taskId: number, choice: string) => void;
+	onAnswerQuestion?: (taskId: number, choice: string) => void | boolean | Promise<void | boolean>;
 	onOpenChat?: (chatFile: string) => void;
 	onRetryLoad?: () => void;
 	onOverlayChange?: (open: boolean) => void;
@@ -690,6 +697,12 @@ export function mountTasksRolesV8Surface(
 			btn.addEventListener("click", () => {
 				const taskId = Number(btn.getAttribute("data-task-id"));
 				const choice = btn.getAttribute("data-choice") || "";
+				if (options.onAnswerQuestion) {
+					const res = options.onAnswerQuestion(taskId, choice);
+					if (!showPrototypeChrome || res === false || (res && typeof (res as Promise<unknown>).then === "function")) {
+						return;
+					}
+				}
 				state = {
 					...state,
 					answeredTasks: {
@@ -697,7 +710,6 @@ export function mountTasksRolesV8Surface(
 						[taskId]: choice,
 					},
 				};
-				options.onAnswerQuestion?.(taskId, choice);
 				refresh();
 			});
 		});

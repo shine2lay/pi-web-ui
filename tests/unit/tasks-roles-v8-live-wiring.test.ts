@@ -2,13 +2,17 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UiRolesOverview, UiWorkPage } from "../../server/protocol.js";
+import type { ClientMessage, UiRolesOverview, UiWorkPage } from "../../server/protocol.js";
+import { resetAppGlobals, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
 import { InitiativesExactView } from "../../web/src/components/InitiativesExactView.js";
 import { RolesExactView } from "../../web/src/components/RolesExactView.js";
+import { disconnectRoleAnswers, receiveRoleAnswer } from "../../web/src/roles-answer-state.js";
+import { receiveRoles, resetRolesState } from "../../web/src/roles-state.js";
 import {
 	applyFilters,
 	createInitialFilterState,
 	DEFAULT_TIME_WINDOW_MS,
+	isTaskWithinDefaultWindow,
 	mountTasksRolesV8Surface,
 	PAGE_SIZE,
 	resetAllFilters,
@@ -277,6 +281,10 @@ function sampleLiveWorkPage(): UiWorkPage {
 
 describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 	afterEach(() => {
+		disconnectRoleAnswers();
+		setAppSend(null);
+		resetAppGlobals();
+		resetRolesState();
 		document.body.innerHTML = "";
 	});
 
@@ -838,5 +846,212 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 		expect(resetAllFilters(page2State).currentPage).toBe(1);
 
 		ctrl.destroy();
+	});
+
+	it("keeps >7-day open/stuck tasks visible in the default window and matches topbar/attention-note-bar Needs-you counts 1:1 (#245)", () => {
+		const nowMs = 1_762_749_600_000; // Nov 8, 2026
+		const nov1StuckMs = 1_762_067_160_000; // Nov 1, 2026 (>7 days ago)
+		const oldDoneMs = nowMs - 14 * 86_400_000; // 14 days ago
+
+		const overview = sampleLiveOverview();
+		// Add a second recent stuck task on frontend (#242)
+		const feRole = overview.roles.find((r) => r.id === "frontend")!;
+		feRole.queue?.active.push({
+			id: 242,
+			title: "Frontend #242 waiting on owner choice",
+			status: "stuck",
+			lifecycleStatus: "stuck",
+			statusTone: "needs_you",
+			stuck: {
+				question: "Ship compact header on mobile?",
+				choices: ["Ship compact header", "Keep standard header"],
+				sinceAt: nowMs - 3_600_000,
+				tier: "owner",
+			},
+			updatedAt: nowMs - 3_600_000,
+			chat: { file: "/tmp/frontend-242.jsonl" },
+		});
+
+		// Add ops #658 stuck since Nov 1 (>7 days old)
+		const opsRole = overview.roles.find((r) => r.id === "ops")!;
+		opsRole.status = "needs-you";
+		opsRole.queue?.active.push({
+			id: 658,
+			title: "Ops #658 hold from Nov 1 waiting on owner",
+			status: "stuck",
+			lifecycleStatus: "stuck",
+			statusTone: "needs_you",
+			stuck: {
+				question: "Lift the hold on ops #658 or drop the task?",
+				choices: ["Drop #658", "Keep hold"],
+				sinceAt: nov1StuckMs,
+				tier: "owner",
+			},
+			updatedAt: nov1StuckMs,
+			chat: { file: "/tmp/ops-658.jsonl" },
+		});
+
+		// Add an old terminal (live) task on backend (#501, 14 days old)
+		const beRole = overview.roles.find((r) => r.id === "backend")!;
+		beRole.queue?.active.push({
+			id: 501,
+			title: "Old deployed backend task #501",
+			status: "done",
+			lifecycleStatus: "live",
+			statusTone: "live",
+			updatedAt: oldDoneMs,
+		});
+
+		const res = buildLiveTasksRolesV8Dataset({
+			overview,
+			workPage: sampleLiveWorkPage(),
+			now: nowMs,
+		});
+
+		const t658 = res.dataset.tasks.find((t) => (t.displayId ?? t.id) === 658)!;
+		const t501 = res.dataset.tasks.find((t) => (t.displayId ?? t.id) === 501)!;
+		expect(isTaskWithinDefaultWindow(t658, nowMs)).toBe(true);
+		expect(isTaskWithinDefaultWindow(t501, nowMs)).toBe(false);
+
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		const ctrl = mountTasksRolesV8Surface(host, {
+			dataset: res.dataset,
+			initialState: { page: "initiatives", nowMs },
+			showPrototypeChrome: false,
+		});
+
+		const noteBar = host.querySelector(".attention-note-bar");
+		expect(noteBar?.textContent).toContain("3 Needs you");
+		expect(host.querySelector(".brand-subtitle")?.textContent).toContain("3 on you");
+
+		// All 3 stuck cards (#221, #242, #658) are visible in the default view (1:1 match with "3 Needs you")
+		const visibleStuckCards = host.querySelectorAll('.unified-task-card[data-status-tone="needs_you"]');
+		expect(visibleStuckCards.length).toBe(3);
+		const visibleStuckIds = Array.from(visibleStuckCards).map((el) => Number(el.getAttribute("data-display-task-id")));
+		expect(visibleStuckIds).toEqual([221, 242, 658]);
+
+		// Filtering to "Only Needs you (3)" shows all 3 stuck tasks
+		host.querySelector<HTMLButtonElement>("#filter-only-on-you-btn")?.click();
+		expect(host.querySelectorAll(".unified-task-card").length).toBe(3);
+
+		ctrl.destroy();
+	});
+
+	it("wires live inline .answer-choice-btn in RolesExactView through roles_ask_open + roles_ask_answer and only marks answeredTasks after server ok: true (#245)", async () => {
+		const sent: ClientMessage[] = [];
+		setAppSend((msg) => {
+			sent.push(msg);
+			return true;
+		});
+		setAppGlobals({ status: "open", ready: true });
+
+		const overview = sampleLiveOverview();
+		receiveRoles({
+			type: "roles",
+			asks: 1,
+			checkedAt: 1_762_560_000_000,
+			overview,
+		});
+
+		const container = document.createElement("div");
+		document.body.appendChild(container);
+		const root = createRoot(container);
+
+		await act(async () => {
+			root.render(
+				createElement(RolesExactView, {
+					active: true,
+					onOpen: vi.fn(),
+					onAbout: vi.fn(),
+				}),
+			);
+		});
+
+		// Expand Design #221 details drawer
+		const detailBtn = container.querySelector<HTMLButtonElement>('.task-detail-toggle-btn[data-task-id="221"]');
+		expect(detailBtn).not.toBeNull();
+		await act(async () => {
+			detailBtn?.click();
+		});
+
+		const choiceBtn = container.querySelector<HTMLButtonElement>(
+			'[data-task-detail="221"] .answer-choice-btn[data-choice="Approve v8 (Recommended)"]',
+		);
+		expect(choiceBtn).not.toBeNull();
+
+		// Click the inline choice button in live mode
+		await act(async () => {
+			choiceBtn?.click();
+		});
+
+		// Must send roles_ask_open and NOT mark the task answered before server confirmation
+		const openMsg = sent.find(
+			(m): m is Extract<ClientMessage, { type: "roles_ask_open" }> => m.type === "roles_ask_open",
+		);
+		expect(openMsg).toBeDefined();
+		expect(openMsg?.key).toBe("design:task:221");
+		expect(container.querySelector('[data-task-detail="221"]')?.textContent).not.toContain("Answered by you");
+		expect(container.querySelector(".attention-note-bar")?.textContent).toContain("1 Needs you");
+
+		// Server responds to roles_ask_open with the single-question ask form
+		await act(async () => {
+			receiveRoleAnswer({
+				type: "roles_ask",
+				reqId: openMsg!.reqId,
+				ok: true,
+				ask: {
+					id: "ask-221",
+					revision: "a".repeat(64),
+					kind: "stuck",
+					title: "Tasks & Roles v8 prototype signoff",
+					fields: [
+						{
+							id: "q1",
+							text: "Approve v8 carbon + warm-gold palette for live build?",
+							options: [
+								{ value: "Approve v8 (Recommended)", label: "Approve v8 (Recommended)" },
+								{ value: "Keep v7", label: "Keep v7" },
+							],
+							multi: false,
+							allowText: false,
+						},
+					],
+				},
+			});
+		});
+
+		// Must now send roles_ask_answer with the selected option; still not marked answered until roles_ask_result ok: true
+		const answerMsg = sent.find(
+			(m): m is Extract<ClientMessage, { type: "roles_ask_answer" }> => m.type === "roles_ask_answer",
+		);
+		expect(answerMsg).toBeDefined();
+		expect(answerMsg).toMatchObject({
+			type: "roles_ask_answer",
+			key: "design:task:221",
+			askId: "ask-221",
+			revision: "a".repeat(64),
+			answers: [{ id: "q1", selected: ["Approve v8 (Recommended)"] }],
+		});
+		expect(container.querySelector('[data-task-detail="221"]')?.textContent).not.toContain("Answered by you");
+
+		// Server confirms roles_ask_result ok: true
+		await act(async () => {
+			receiveRoleAnswer({
+				type: "roles_ask_result",
+				reqId: answerMsg!.reqId,
+				ok: true,
+			});
+		});
+
+		// Now the task is marked answered locally and Roles reload is triggered
+		expect(container.querySelector('[data-task-detail="221"]')?.textContent).toContain(
+			'✓ Answered by you: "Approve v8 (Recommended)"',
+		);
+		expect(container.querySelector(".attention-note-bar")?.textContent).toContain("0 Needs you");
+
+		await act(async () => {
+			root.unmount();
+		});
 	});
 });

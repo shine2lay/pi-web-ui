@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppField } from "../app-globals";
 import { liveVisibleAt, subscribePageLive } from "../page-live";
-import { resolveQuestionAction, type NativeDialogSummary } from "../roles-answer-actions";
+import { type NativeDialogSummary } from "../roles-answer-actions";
 import { projectExactRoles } from "../roles-exact-model";
 import { createExactRolesView } from "../roles-exact-view";
 import { acknowledgeRenderedRolesUsage, reloadRoles, useRoles } from "../roles-state";
@@ -16,6 +16,7 @@ import {
 	type MountedTasksRolesV8Controller,
 } from "../tasks-roles-v8";
 import { reloadWorkPage, useWorkPage } from "../work-page-state";
+import { handleLiveV8TaskAnswer, markLiveV8TaskAnswered, type LiveV8AnswerDialogState } from "./live-v8-task-answer";
 import { RoleAnswerDialog } from "./RoleAnswerDialog";
 
 /** The real update/refit completion seam, also exercised with a synthetic bound DOM. */
@@ -71,7 +72,7 @@ function RolesV8Surface({ active, dialogs = [], onOpen, onAbout }: RolesExactVie
 	const work = useWorkPage(active);
 	const connection = useAppField("status");
 	const [now, setNow] = useState(() => Date.now());
-	const [answer, setAnswer] = useState<{ item: NeedsYouItem; from: HTMLElement } | null>(null);
+	const [answer, setAnswer] = useState<LiveV8AnswerDialogState | null>(null);
 	const [overlayOpen, setOverlayOpen] = useState(false);
 	const host = useRef<HTMLDivElement>(null);
 	const controllerRef = useRef<MountedTasksRolesV8Controller | null>(null);
@@ -161,29 +162,21 @@ function RolesV8Surface({ active, dialogs = [], onOpen, onAbout }: RolesExactVie
 				const target = (matchTask ? cur.adapted.chatByTaskId.get(matchTask.id) : undefined) ?? { file: chatFile };
 				cur.onOpen(target);
 			},
-			onAnswerQuestion: (taskId, _choice) => {
+			onAnswerQuestion: (taskId, choice) => {
 				const cur = current.current;
-				const task = cur.adapted.dataset.tasks.find((t) => t.id === taskId);
-				const matchNeed =
-					cur.model.needs.items.find((n) => n.link?.focus?.id === String(taskId) || n.key.endsWith(`:${taskId}`)) ??
-					(task ? cur.model.needs.items.find((n) => n.roleId === task.role) : undefined);
 				const fromEl = document.activeElement instanceof HTMLElement ? document.activeElement : container;
-				if (matchNeed) {
-					const inlineResolved = resolveQuestionAction(cur.model.needs, matchNeed, cur.dialogs, "inline");
-					if (inlineResolved) {
-						setAnswer({ item: inlineResolved.item, from: fromEl });
-						return;
-					}
-					const chatResolved = resolveQuestionAction(cur.model.needs, matchNeed, cur.dialogs, "chat");
-					if (chatResolved && chatResolved.action.kind === "chat") {
-						cur.onOpen(chatResolved.action.target);
-						return;
-					}
-				}
-				const fallbackChat = cur.adapted.chatByTaskId.get(taskId) ?? (task?.chat ? { file: task.chat.file } : null);
-				if (fallbackChat) {
-					cur.onOpen(fallbackChat);
-				}
+				return handleLiveV8TaskAnswer({
+					taskId,
+					choice,
+					adapted: cur.adapted,
+					needs: cur.model.needs,
+					dialogs: cur.dialogs,
+					connected: cur.connection === "open",
+					fromEl,
+					getController: () => controllerRef.current,
+					openDialog: (dialogState) => setAnswer(dialogState),
+					openChat: (target) => cur.onOpen(target),
+				});
 			},
 			onRetryLoad: () => {
 				reloadRoles();
@@ -263,6 +256,13 @@ function RolesV8Surface({ active, dialogs = [], onOpen, onAbout }: RolesExactVie
 					item={answer.item}
 					needs={model.needs}
 					connected={connection === "open"}
+					initialView={answer.initialView}
+					initialChoice={answer.initialChoice}
+					onAnswered={(summary) => {
+						markLiveV8TaskAnswered(controllerRef.current, answer.taskId, summary);
+						reloadRoles();
+						reloadWorkPage();
+					}}
 					onOpen={onOpen}
 					onClose={(back) => {
 						const from = answer.from;
