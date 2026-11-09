@@ -202,7 +202,7 @@ export function normalizeRepoSlug(raw: string | undefined): string | undefined {
 
 export function isDeployableServiceRepo(repo: string | undefined, hasDeployRecord: boolean = false): boolean {
 	if (!repo) return false;
-	return DEPLOYABLE_SERVICE_REPOS.has(repo) || hasDeployRecord;
+	return Boolean(hasDeployRecord);
 }
 
 const LAND_ID_TOKEN_RE = /\b(?:land-\d+-[0-9a-f]+|\d+-[0-9a-f]{6,})\b/gi;
@@ -264,19 +264,27 @@ function parseTimestampMs(raw: number | string | null | undefined): number | und
 // ---------------------------------------------------------------------------
 
 const ancestryCache = new Map<string, boolean>();
-const pendingAncestryChecks = new Set<string>();
+const pendingAncestryChecks = new Map<string, Promise<void>>();
 
-function scheduleAsyncAncestorCheck(repo: string, landedCommit: string, liveCommit: string): void {
-	const key = `${repo}:${landedCommit}:${liveCommit}`;
-	if (ancestryCache.has(key) || pendingAncestryChecks.has(key)) return;
-	const repoRoot = REPO_ROOT_BY_SLUG[repo];
-	if (!repoRoot) return;
-	pendingAncestryChecks.add(key);
-	execFile(
-		"git",
-		["-C", repoRoot, "merge-base", "--is-ancestor", landedCommit, liveCommit],
-		{ timeout: 3_000 },
-		(err) => {
+function scheduleAsyncAncestorCheck(
+	repo: string,
+	landedCommit: string,
+	liveCommit: string,
+	repoRoots?: Readonly<Record<string, string>>,
+): Promise<void> {
+	const landed = landedCommit.trim().toLowerCase();
+	const live = liveCommit.trim().toLowerCase();
+	if (!landed || !live || live.startsWith(landed) || landed.startsWith(live)) {
+		return Promise.resolve();
+	}
+	const key = `${repo}:${landed}:${live}`;
+	if (ancestryCache.has(key)) return Promise.resolve();
+	const existing = pendingAncestryChecks.get(key);
+	if (existing) return existing;
+	const repoRoot = repoRoots?.[repo] ?? REPO_ROOT_BY_SLUG[repo];
+	if (!repoRoot) return Promise.resolve();
+	const promise = new Promise<void>((resolve) => {
+		execFile("git", ["-C", repoRoot, "merge-base", "--is-ancestor", landed, live], { timeout: 3_000 }, (err) => {
 			pendingAncestryChecks.delete(key);
 			// git merge-base --is-ancestor exits 0 when true, 1 when false, >1 on error/missing commit
 			if (!err) {
@@ -284,8 +292,11 @@ function scheduleAsyncAncestorCheck(repo: string, landedCommit: string, liveComm
 			} else if (typeof (err as { code?: unknown }).code === "number" && (err as { code?: number }).code === 1) {
 				ancestryCache.set(key, false);
 			}
-		},
-	);
+			resolve();
+		});
+	});
+	pendingAncestryChecks.set(key, promise);
+	return promise;
 }
 
 /**
@@ -479,23 +490,31 @@ export function resolveTaskDeliveryState(
 		repo = singleTouchedRepo;
 	}
 
-	if (!repo && !landId && !landedCommit) {
+	if (!repo && !landId && !landedCommit && !options?.evidence?.live) {
 		return undefined;
 	}
 
-	const resolvedRepo = repo ?? singleTouchedRepo ?? "workspace";
+	const resolvedRepo = repo ?? singleTouchedRepo ?? (options?.evidence?.live ? "pi-web-ui" : "workspace");
 	const deployRecord = findMatchingDeployRecord(resolvedRepo, options);
-	const deployableService = isDeployableServiceRepo(resolvedRepo, Boolean(deployRecord));
+	const deployableService = isDeployableServiceRepo(
+		resolvedRepo,
+		Boolean(deployRecord) || Boolean(options?.evidence?.live) || Boolean(waitDeployCommit),
+	);
 	const landStatus = normalizeLandStatus(landRecord?.status);
 	const landedAt = parseTimestampMs(landRecord?.finishedAt) ?? options?.evidence?.checkedAt;
 
-	const deployStatus = normalizeDeployStatus(deployRecord?.status);
+	let deployStatus = normalizeDeployStatus(deployRecord?.status);
 	const liveCommitRaw = deployRecord?.healthCommit ?? deployRecord?.liveCommit ?? deployRecord?.commit;
-	const liveCommit =
+	let liveCommit =
 		typeof liveCommitRaw === "string" && HEX_SHA_RE.test(liveCommitRaw.trim())
 			? liveCommitRaw.trim().toLowerCase()
 			: undefined;
-	const deployedAt = parseTimestampMs(deployRecord?.finishedAt) ?? options?.evidence?.installedAt;
+	let deployedAt = parseTimestampMs(deployRecord?.finishedAt) ?? options?.evidence?.installedAt;
+	if (options?.evidence?.live === true) {
+		deployStatus = deployStatus ?? "succeeded";
+		liveCommit = liveCommit ?? landedCommit;
+		deployedAt = deployedAt ?? options.evidence.installedAt;
+	}
 	const error =
 		(typeof deployRecord?.error === "string" && deployRecord.error.trim()) ||
 		(landStatus === "failed" && typeof landRecord?.detail === "string" && landRecord.detail.trim()) ||
@@ -668,6 +687,24 @@ export function resolveTaskLifecycleAndDelivery(
 
 	// 9. Done
 	if (rawStatus === "done") {
+		if (options?.evidence?.live === true) {
+			return {
+				lifecycleStatus: "live",
+				statusTone: "live",
+				...(delivery
+					? {
+							delivery: {
+								...delivery,
+								deployStatus: "succeeded",
+								...(options.evidence.installedAt !== undefined && delivery.deployedAt === undefined
+									? { deployedAt: options.evidence.installedAt }
+									: {}),
+							},
+						}
+					: {}),
+			};
+		}
+
 		if (!delivery?.landedCommit || !delivery.deployableService) {
 			return {
 				lifecycleStatus: "done",
@@ -1081,6 +1118,55 @@ export interface LiveDeploySnapshotPaths {
 	wtDeployNestedDir?: string;
 	piWebDataDir?: string;
 	piWebDeployStateDir?: string;
+	piWebDeployLiveDir?: string;
+}
+
+/**
+ * Warms the git ancestry cache for all candidate `(repo, landedCommit, liveCommit)` pairs
+ * across tasks before synchronous `taskOf` / `resolveTaskLifecycleAndDelivery` calls run.
+ */
+export async function warmDeliveryAncestryCache(
+	tasks: ReadonlyArray<{ role?: string; task: TaskDeliveryInput } | TaskDeliveryInput>,
+	snapshots?: DeployStateSnapshots & { repoRoots?: Readonly<Record<string, string>> },
+): Promise<void> {
+	const promises: Promise<void>[] = [];
+	for (const entry of tasks) {
+		const isWrapped =
+			entry !== null &&
+			typeof entry === "object" &&
+			"task" in entry &&
+			entry.task !== null &&
+			typeof entry.task === "object";
+		const task = isWrapped ? (entry as { role?: string; task: TaskDeliveryInput }).task : (entry as TaskDeliveryInput);
+		const role = isWrapped ? ((entry as { role?: string; task: TaskDeliveryInput }).role ?? task.role) : task.role;
+		if (
+			task.status !== "done" &&
+			task.status !== "waiting" &&
+			task.status !== "working" &&
+			task.status !== "in_progress"
+		) {
+			continue;
+		}
+		const normalizedTask: TaskDeliveryInput =
+			task.doneSummary === undefined && task.summary !== undefined ? { ...task, doneSummary: task.summary } : task;
+		const delivery = resolveTaskDeliveryState(normalizedTask, { ...snapshots, role });
+		if (!delivery?.landedCommit || !delivery.deployableService) continue;
+		const deployRecord = findMatchingDeployRecord(delivery.repo, snapshots);
+		const targetDeployCommit = deployRecord?.targetCommit ?? deployRecord?.commit ?? delivery.liveCommit;
+		if (targetDeployCommit) {
+			promises.push(
+				scheduleAsyncAncestorCheck(delivery.repo, delivery.landedCommit, targetDeployCommit, snapshots?.repoRoots),
+			);
+		}
+		if (delivery.liveCommit && delivery.liveCommit !== targetDeployCommit) {
+			promises.push(
+				scheduleAsyncAncestorCheck(delivery.repo, delivery.landedCommit, delivery.liveCommit, snapshots?.repoRoots),
+			);
+		}
+	}
+	if (promises.length > 0) {
+		await Promise.all(promises);
+	}
 }
 
 let cachedSnapshots: { stamp: string; data: DeployStateSnapshots } | null = null;
@@ -1120,6 +1206,9 @@ export function readLiveDeploySnapshots(paths?: LiveDeploySnapshotPaths): Deploy
 		paths?.piWebDeployStateDir ??
 		process.env.PI_WEB_DEPLOY_STATE_DIR ??
 		path.join(home, ".local", "state", "pi-web-deploy");
+	const piWebDeployLiveDir =
+		paths?.piWebDeployLiveDir ?? process.env.PI_WEB_DEPLOY_LIVE_DIR ?? "/home/shinelay/projects/pi-web-ui";
+	const piWebDeployMarkerFile = path.join(piWebDeployLiveDir, "dist", ".pi-web-deploy.json");
 
 	const stamp = [
 		safeStatStamp(landQueueDir),
@@ -1127,6 +1216,7 @@ export function readLiveDeploySnapshots(paths?: LiveDeploySnapshotPaths): Deploy
 		safeStatStamp(wtDeployNestedDir),
 		safeStatStamp(path.join(piWebDataDir, "deploy-status.json")),
 		safeStatStamp(path.join(piWebDeployStateDir, "state.json")),
+		safeStatStamp(piWebDeployMarkerFile),
 	].join("|");
 
 	if (cachedSnapshots && cachedSnapshots.stamp === stamp) {
@@ -1268,6 +1358,26 @@ export function readLiveDeploySnapshots(paths?: LiveDeploySnapshotPaths): Deploy
 				...(typeof piWebState.deployed_at === "string" ? { finishedAt: piWebState.deployed_at } : {}),
 			};
 			wtDeployRecords.set("pi-web-ui", piWebDeployRecord);
+		} else {
+			const piWebMarker = readJsonSafe(piWebDeployMarkerFile);
+			const commit =
+				typeof piWebMarker?.commit === "string" && HEX_SHA_RE.test(piWebMarker.commit.trim())
+					? piWebMarker.commit.trim().toLowerCase()
+					: undefined;
+			if (piWebMarker && commit) {
+				piWebDeployRecord = {
+					repo: "pi-web-ui",
+					status: "succeeded",
+					commit,
+					liveCommit: commit,
+					healthCommit: commit,
+					healthOk: true,
+					...(typeof piWebMarker.deployedAt === "string" || typeof piWebMarker.deployedAt === "number"
+						? { finishedAt: piWebMarker.deployedAt }
+						: {}),
+				};
+				wtDeployRecords.set("pi-web-ui", piWebDeployRecord);
+			}
 		}
 	}
 
@@ -1312,6 +1422,8 @@ export class DeliveryStateCache {
 						...(stateRoot ? { wtDeployStateDir: path.join(stateRoot, "wt-deploy") } : {}),
 						...(wtState ? { wtDeployNestedDir: path.join(wtState, "deploy") } : {}),
 						...(hostPaths.deployStatusFile ? { piWebDataDir: path.dirname(hostPaths.deployStatusFile) } : {}),
+						...(stateRoot ? { piWebDeployStateDir: path.join(stateRoot, "pi-web-deploy") } : {}),
+						...(hostPaths.deployLive ? { piWebDeployLiveDir: hostPaths.deployLive } : {}),
 					}
 				: undefined,
 		);

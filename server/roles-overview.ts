@@ -59,6 +59,7 @@ import {
 	computeTouchSystems,
 	DeliveryStateCache,
 	type DeployStateSnapshots,
+	warmDeliveryAncestryCache,
 } from "./shared/task-delivery-resolver.js";
 import { briefOfAsk } from "./owner-card-brief.js";
 import { taskQueueFromEntries, taskQueueHeld, taskQueueLaneUse } from "./task-queue.js";
@@ -329,6 +330,7 @@ export class RolesOverviewReader {
 		// Pre-read each role's home chat once so `queuesByRole` is available for cross-role blocker resolution.
 		const preHomes = new Map<string, PreReadHome>();
 		const queuesByRole = new Map<string, QueueSnapshotForDeps>();
+		const allPreTasks: Array<{ role: string; task: UiTaskQueueTask }> = [];
 		for (const def of defs) {
 			const home = def.homeChat ? await this.paths.check(def.homeChat) : null;
 			if (!home) {
@@ -348,9 +350,15 @@ export class RolesOverviewReader {
 					lanesAtOnce: q.lanesAtOnce,
 					tasks: q.tasks,
 				});
+				for (const t of q.tasks) {
+					allPreTasks.push({ role: def.id, task: t });
+				}
 			} catch {
 				preHomes.set(def.id, { home, problem: true });
 			}
+		}
+		if (allPreTasks.length > 0 && deploySnapshots) {
+			await warmDeliveryAncestryCache(allPreTasks, deploySnapshots);
 		}
 		// roles-sent: only roles on the page count, as senders and as receivers.
 		const onPage = new Set(defs.map((d) => d.id));
@@ -751,7 +759,19 @@ export class RolesOverviewReader {
 			for (const t of tasks) {
 				if (t.status === "done") {
 					done++;
-					const doneRow = taskOf(t, def.id, undefined, baseTaskOpts);
+					let ev: UiRoleTask["evidence"];
+					try {
+						ev =
+							evidence && t.chat?.file
+								? await evidence.of({ file: t.chat.file, status: t.status, doneAt: t.doneAt })
+								: undefined;
+					} catch {
+						ev = undefined;
+					}
+					const doneRow = taskOf(t, def.id, undefined, {
+						...baseTaskOpts,
+						...(ev ? { evidence: ev } : {}),
+					});
 					resolvedDoneById.set(t.id, doneRow);
 					allRoleTasks?.push(doneRow);
 					continue;

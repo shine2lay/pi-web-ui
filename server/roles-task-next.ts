@@ -23,8 +23,13 @@ import {
 	computeGroupRollup,
 	computeTagGroups,
 	computeTouchSystems,
+	DeliveryStateCache,
 	type DeployStateSnapshots,
+	isDeployableServiceRepo,
+	readLiveDeploySnapshots,
+	resolveTaskDeliveryState,
 	resolveTaskLifecycleAndDelivery,
+	warmDeliveryAncestryCache,
 } from "./shared/task-delivery-resolver.js";
 import { normalizeTouches } from "./shared/touch-normalizer.js";
 import { taskRefLabel } from "./task-queue.js";
@@ -34,11 +39,16 @@ export {
 	computeGroupRollup,
 	computeTagGroups,
 	computeTouchSystems,
+	DeliveryStateCache,
+	isDeployableServiceRepo,
+	readLiveDeploySnapshots,
 	resolveBlockedState,
 	resolveQueuedDetail,
+	resolveTaskDeliveryState,
 	resolveTaskDeps,
 	resolveTaskLifecycleAndDelivery,
 	resolveWaitState,
+	warmDeliveryAncestryCache,
 };
 
 type Display = Pick<UiRoleTask, "next" | "queueEvent">;
@@ -164,7 +174,12 @@ export function taskOf(
 				repo: options.evidence.repo,
 				commit: options.evidence.commit,
 				checkedAt: "at" in options.evidence.checked ? options.evidence.checked.at : undefined,
-				installedAt: "at" in options.evidence.installed ? options.evidence.installed.at : undefined,
+				installedAt:
+					"at" in options.evidence.installed
+						? options.evidence.installed.at
+						: "at" in options.evidence.live
+							? options.evidence.live.at
+							: undefined,
 				live: "at" in options.evidence.live,
 			}
 		: undefined;

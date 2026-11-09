@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,12 +11,15 @@ import {
 	computeGroupRollup,
 	computeTagGroups,
 	computeTouchSystems,
+	DeliveryStateCache,
+	readLiveDeploySnapshots,
 	resolveBlockedState,
 	resolveQueuedDetail,
 	resolveTaskDeps,
 	resolveTaskLifecycleAndDelivery,
 	resolveWaitState,
 	taskOf,
+	warmDeliveryAncestryCache,
 } from "../../server/roles-task-next.js";
 import { checkTags, resolveInheritedTags } from "../../server/shared/task-tags.js";
 import { normalizeTouch, normalizeTouches } from "../../server/shared/touch-normalizer.js";
@@ -699,5 +702,331 @@ describe("Track B2 Additional Lifecycle, Blocker, and Overview/WorkPage Integrat
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	it("reads dist/.pi-web-deploy.json in readLiveDeploySnapshots and DeliveryStateCache when deploy-status.json and state.json are absent", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "ri-pi-web-deploy-marker-"));
+		try {
+			const wtState = join(dir, "state", "wt");
+			const deployLive = join(dir, "pi-web-ui");
+			mkdirSync(join(wtState, "deploy"), { recursive: true });
+			mkdirSync(join(deployLive, "dist"), { recursive: true });
+
+			const markerCommit = "3844a8cf061d7cc3f507846fa7358ab6c1bc0f44";
+			const deployedAt = "2026-11-09T04:16:59.708Z";
+			writeFileSync(
+				join(deployLive, "dist", ".pi-web-deploy.json"),
+				JSON.stringify({
+					commit: markerCommit,
+					short: "3844a8cf",
+					action: "deploy",
+					deployedAt,
+				}),
+			);
+
+			const snapshots = readLiveDeploySnapshots({
+				landQueueDir: join(dir, "state", "wt-land-queue"),
+				wtDeployStateDir: join(dir, "state", "wt-deploy"),
+				wtDeployNestedDir: join(wtState, "deploy"),
+				piWebDataDir: join(dir, "pi-web-data"),
+				piWebDeployStateDir: join(dir, "state", "pi-web-deploy"),
+				piWebDeployLiveDir: deployLive,
+			});
+
+			expect(snapshots.piWebDeployRecord).toEqual({
+				repo: "pi-web-ui",
+				status: "succeeded",
+				commit: markerCommit,
+				liveCommit: markerCommit,
+				healthCommit: markerCommit,
+				healthOk: true,
+				finishedAt: deployedAt,
+			});
+			const mapRecord = (snapshots.wtDeployRecords as ReadonlyMap<string, unknown>)?.get("pi-web-ui");
+			expect(mapRecord).toEqual(snapshots.piWebDeployRecord);
+
+			const cache = new DeliveryStateCache(() => ({
+				wtState,
+				deployLive,
+				deployStage: join(dir, "stage"),
+				deployStatusFile: join(dir, "pi-web-data", "deploy-status.json"),
+			}));
+			const cachedSnapshots = await cache.loadSnapshots();
+			expect(cachedSnapshots.piWebDeployRecord).toEqual(snapshots.piWebDeployRecord);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves done tasks with options.evidence.live === true to live with deployedAt, and wires done-task evidence in RolesOverviewReader", async () => {
+		const installedAt = 1_762_559_123_000;
+		const resolved = resolveTaskLifecycleAndDelivery(
+			{
+				id: 121,
+				role: "backend",
+				status: "done",
+				touches: ["pi-web-ui repo"],
+				delivery: {
+					repo: "pi-web-ui",
+					landedCommit: "fc4288fc",
+				},
+			},
+			{
+				evidence: {
+					repo: "pi-web-ui",
+					commit: "fc4288fc",
+					checkedAt: installedAt - 5_000,
+					installedAt,
+					live: true,
+				},
+			},
+		);
+		expect(resolved).toMatchObject({
+			lifecycleStatus: "live",
+			statusTone: "live",
+			delivery: {
+				repo: "pi-web-ui",
+				deployableService: true,
+				landedCommit: "fc4288fc",
+				liveCommit: "fc4288fc",
+				deployStatus: "succeeded",
+				deployedAt: installedAt,
+			},
+		});
+
+		// Verify RolesOverviewReader.read() passes evidence for done tasks to taskOf
+		const dir = mkdtempSync(join(tmpdir(), "ri-done-evidence-"));
+		try {
+			const opsHome = join(dir, "ops-home.jsonl");
+			const taskChatId = "12345678-aaaa-bbbb-cccc-1234567890ab";
+			const taskChatFile = join(dir, `2026-11-08T10-00-00_${taskChatId}.jsonl`);
+			const runsFile = join(dir, "runs.json");
+			const jobsFile = join(dir, "jobs.json");
+			const wtState = join(dir, "state", "wt");
+			const deployLive = join(dir, "pi-web-ui");
+			const deployStage = join(dir, "pi-web-ui-stage");
+			mkdirSync(wtState, { recursive: true });
+			mkdirSync(join(deployLive, "dist"), { recursive: true });
+			mkdirSync(deployStage, { recursive: true });
+			writeFileSync(runsFile, "[]\n");
+			writeFileSync(jobsFile, "{}\n");
+			writeFileSync(
+				taskChatFile,
+				`${JSON.stringify({ type: "session", id: taskChatId, timestamp: "2026-11-08T10:00:00.000Z" })}\n`,
+			);
+
+			const landedSha = "5b090006bdb27472a44ab81a47b3a56e083c540b";
+			writeFileSync(
+				join(wtState, "branches.jsonl"),
+				`${JSON.stringify({
+					v: 1,
+					at: "2026-11-08T10:01:00.000Z",
+					repo: deployLive,
+					branch: "ops-task-794",
+					chat: taskChatId,
+				})}\n`,
+			);
+			writeFileSync(
+				join(wtState, "lands.jsonl"),
+				`${JSON.stringify({
+					v: 1,
+					at: "2026-11-08T10:05:00.000Z",
+					committedAt: "2026-11-08T10:04:00.000Z",
+					repo: deployLive,
+					branch: "ops-task-794",
+					commit: landedSha,
+				})}\n`,
+			);
+			writeFileSync(
+				join(deployStage, "history.jsonl"),
+				`${JSON.stringify({
+					commit: landedSha,
+					startedAt: "2026-11-08T10:06:00.000Z",
+					endedAt: "2026-11-08T10:07:00.000Z",
+					result: "swapped",
+					up: true,
+					restart: "ok",
+					checks: {
+						at: "2026-11-08T10:07:05.000Z",
+						results: [{ name: "health", status: "pass" }],
+					},
+				})}\n`,
+			);
+			writeFileSync(
+				join(deployLive, "dist", ".pi-web-deploy.json"),
+				JSON.stringify({
+					commit: landedSha,
+					short: "5b090006",
+					action: "deploy",
+					deployedAt: "2026-11-08T10:07:05.000Z",
+				}),
+			);
+
+			const homeLines = [
+				JSON.stringify({ type: "session", id: "sess-ops", timestamp: "2026-11-08T10:00:00.000Z" }),
+				JSON.stringify({
+					type: "custom",
+					customType: TASK_QUEUE_ENTRY_TYPE,
+					id: "q1",
+					timestamp: "2026-11-08T10:00:00.000Z",
+					data: {
+						v: 1,
+						ts: Date.parse("2026-11-08T10:00:00.000Z"),
+						op: "add",
+						id: 794,
+						text: "Default effort switch",
+						plan: samplePlan("Default effort switch"),
+						tags: ["roles-rework"],
+						touches: ["pi-web-ui repo"],
+					},
+				}),
+				JSON.stringify({
+					type: "custom",
+					customType: TASK_QUEUE_ENTRY_TYPE,
+					id: "q2",
+					timestamp: "2026-11-08T10:00:10.000Z",
+					data: {
+						v: 1,
+						ts: Date.parse("2026-11-08T10:00:10.000Z"),
+						op: "start",
+						id: 794,
+						lane: true,
+						running: true,
+					},
+				}),
+				JSON.stringify({
+					type: "custom",
+					customType: TASK_QUEUE_ENTRY_TYPE,
+					id: "q3",
+					timestamp: "2026-11-08T10:00:11.000Z",
+					data: {
+						v: 1,
+						ts: Date.parse("2026-11-08T10:00:11.000Z"),
+						op: "chat",
+						id: 794,
+						file: taskChatFile,
+						title: "Task #794",
+					},
+				}),
+				JSON.stringify({
+					type: "custom",
+					customType: TASK_QUEUE_ENTRY_TYPE,
+					id: "q4",
+					timestamp: "2026-11-08T10:08:00.000Z",
+					data: {
+						v: 1,
+						ts: Date.parse("2026-11-08T10:08:00.000Z"),
+						op: "done",
+						id: 794,
+						summary: "Deployed via pi-web-deploy",
+					},
+				}),
+			];
+			writeFileSync(opsHome, `${homeLines.join("\n")}\n`);
+
+			const host: RolesOverviewHost = {
+				identities: () => [
+					{
+						id: "ops",
+						title: "Ops",
+						dir: join(dir, "id-ops"),
+						homeChat: opsHome,
+						role: { config: {} },
+					} as unknown as IdentityDef,
+				],
+				chatState: () => "idle",
+				asks: () => [],
+				openRequestsTo: () => ({ open: 0 }),
+				latestReportTo: () => undefined,
+				rolePaused: () => false,
+				sessionRoots: () => [dir],
+				reportRunsFile: () => runsFile,
+				schedulerJobsFile: () => jobsFile,
+				evidencePaths: () => ({ wtState, deployLive, deployStage }),
+				now: () => Date.parse("2026-11-08T10:10:00.000Z"),
+			};
+
+			const reader = new RolesOverviewReader(host);
+			const overview = await reader.read();
+			const group = overview.tagGroups?.find((g) => g.key === "roles-rework");
+			expect(group?.countsByStatus.live).toBe(1);
+			expect(group?.countsByStatus.landed).toBe(0);
+			expect(group?.rollupStatus).toBe("live");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves done tasks in show-and-tell, inkflow, and temper-ai without a deploy state file to done instead of landed (not_deployed_yet)", () => {
+		for (const repo of ["show-and-tell", "inkflow", "temper-ai"]) {
+			const res = resolveTaskLifecycleAndDelivery(
+				{
+					id: 50,
+					role: "backend",
+					status: "done",
+					touches: [`${repo} repo`],
+					doneSummary: `Landed commit aabbccddeeff0011 in ${repo}.`,
+					delivery: {
+						repo,
+						landedCommit: "aabbccddeeff0011",
+					},
+				},
+				{
+					wtDeployRecords: {},
+				},
+			);
+			expect(res).toMatchObject({
+				lifecycleStatus: "done",
+				statusTone: "live",
+				delivery: {
+					repo,
+					deployableService: false,
+					landedCommit: "aabbccddeeff0011",
+				},
+			});
+			expect(res.delivery?.deployPendingReason).toBeUndefined();
+		}
+	});
+
+	it("warms git ancestry cache via warmDeliveryAncestryCache before taskOf so first-load calls do not falsely return commit_behind", async () => {
+		// fc4288fc is an ancestor of 3844a8cf061d7cc3f507846fa7358ab6c1bc0f44 in pi-web-ui
+		const ancestorSha = "fc4288fc";
+		const liveSha = "3844a8cf061d7cc3f507846fa7358ab6c1bc0f44";
+		const deploySnapshots = {
+			piWebDeployRecord: {
+				repo: "pi-web-ui",
+				status: "succeeded",
+				commit: liveSha,
+				liveCommit: liveSha,
+				healthCommit: liveSha,
+				healthOk: true,
+			},
+		};
+		const queueTask = {
+			id: 793,
+			status: "done" as const,
+			addedAt: 1_000,
+			doneAt: 2_000,
+			plan: samplePlan("Prompt audit part 2"),
+			touches: ["pi-web-ui repo"],
+			summary: `Landed commit ${ancestorSha} and deployed.`,
+			delivery: {
+				repo: "pi-web-ui",
+				landedCommit: ancestorSha,
+			},
+		};
+
+		await warmDeliveryAncestryCache([{ role: "ops", task: queueTask }], {
+			...deploySnapshots,
+			repoRoots: { "pi-web-ui": process.cwd() },
+		});
+
+		const row = taskOf(queueTask, "ops", undefined, {
+			deploySnapshots,
+			now: 3_000,
+		});
+		expect(row.lifecycleStatus).toBe("live");
+		expect(row.statusTone).toBe("live");
+		expect(row.delivery?.deployPendingReason).toBeUndefined();
 	});
 });
