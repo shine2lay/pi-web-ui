@@ -126,7 +126,10 @@
 }
 
 .ovk-activity-action {
-	color: var(--accent-text);
+	/* 12px label: the paper accent measured 4.07:1 here, so the verb carries its weight instead of the
+	   accent hue (Design tokens.json: the accent is never small text). */
+	color: var(--text);
+	font-weight: 600;
 }
 
 .ovk-activity-summary {
@@ -329,7 +332,8 @@
 .ovk-drawer-tab[aria-selected="true"] {
 	background: var(--accent-soft);
 	border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-	color: var(--accent-text);
+	/* Same as the workspace tabs: accent on the border and tint, --text on the 12px label. */
+	color: var(--text);
 	font-weight: 600;
 }
 

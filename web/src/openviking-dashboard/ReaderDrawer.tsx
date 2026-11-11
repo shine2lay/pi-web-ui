@@ -6,7 +6,7 @@
  * personal memory stays metadata only, whatever the API happened to return (R-ISOLATION-1).
  */
 
-import { useEffect, useId, useRef, useState, type ReactElement } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import type { OpenVikingDisclosureTier } from "../../../server/openviking/types.js";
 import type { OpenVikingDrawerModel } from "./view-model-types.js";
 
@@ -25,6 +25,14 @@ export function ReaderDrawer({
 		setActiveTier(model.tiers[0]?.tier ?? "L0");
 	}, [model.rowKey, model.tiers]);
 
+	// A dialog that never gets focus is a lie: `aria-modal="true"` tells a screen reader the rest of the
+	// page is inert, and the Escape handler below only fires while focus is inside. Measured on the live
+	// page (#259 Task 3): after opening a row, focus stayed on the row button, twelve Tab presses never
+	// reached the drawer (it sits behind every remaining row in DOM order) and Escape did nothing.
+	useEffect(() => {
+		drawerRef.current?.focus();
+	}, [model.rowKey]);
+
 	const shown = model.tiers.find((tier) => tier.tier === activeTier) ?? model.tiers[0];
 
 	return (
@@ -42,7 +50,9 @@ export function ReaderDrawer({
 					event.preventDefault();
 					event.stopPropagation();
 					onClose();
+					return;
 				}
+				if (event.key === "Tab") keepTabInside(event, drawerRef.current);
 			}}
 		>
 			<header className="ovk-drawer-head">
@@ -120,6 +130,29 @@ export function ReaderDrawer({
 			) : null}
 		</div>
 	);
+}
+
+const DRAWER_FOCUS_STOPS = 'button, [href], select, textarea, input, [tabindex]:not([tabindex="-1"])';
+
+/** Tab and Shift+Tab cycle inside the open drawer, which is what `aria-modal="true"` promises. */
+function keepTabInside(event: KeyboardEvent<HTMLDivElement>, drawer: HTMLDivElement | null): void {
+	if (!drawer) return;
+	const stops = [...drawer.querySelectorAll<HTMLElement>(DRAWER_FOCUS_STOPS)].filter(
+		(stop) => !stop.hasAttribute("disabled"),
+	);
+	const first = stops[0];
+	const last = stops.at(-1);
+	if (!first || !last) return;
+	const active = drawer.ownerDocument.activeElement;
+	if (event.shiftKey && (active === first || active === drawer)) {
+		event.preventDefault();
+		last.focus();
+		return;
+	}
+	if (!event.shiftKey && active === last) {
+		event.preventDefault();
+		first.focus();
+	}
 }
 
 function ProvenanceItem({

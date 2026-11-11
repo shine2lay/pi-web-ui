@@ -168,6 +168,40 @@ describe("openviking dashboard drawer — keyboard path", () => {
 		expect(document.activeElement).toBe(control);
 	});
 
+	// #259 (Task 3) measured the live page: the drawer opened with focus still on the row button, so a
+	// real Escape keypress never reached the dialog's handler and Tab had to cross every remaining row
+	// before it could enter the drawer. The three assertions below are that keyboard path, not a
+	// synthetic Escape dispatched straight at the dialog element.
+	it("moves focus into the drawer when it opens", () => {
+		const container = renderExplorer();
+		const control = opener(memoryRows(container)[0]!);
+		focus(control);
+		click(control);
+		const panel = drawer(container)!;
+		expect(panel.contains(document.activeElement)).toBe(true);
+	});
+
+	it("closes on Escape pressed where the focus actually is after opening", () => {
+		const container = renderExplorer();
+		const control = opener(memoryRows(container)[1]!);
+		focus(control);
+		click(control);
+		pressKey(document.activeElement as HTMLElement, "Escape");
+		expect(drawer(container)).toBeNull();
+		expect(document.activeElement).toBe(control);
+	});
+
+	it("keeps Tab inside the open drawer, which is what aria-modal promises", () => {
+		const container = renderExplorer();
+		click(opener(memoryRows(container)[0]!));
+		const panel = drawer(container)!;
+		const stops = [...panel.querySelectorAll<HTMLElement>("button")];
+		const last = stops.at(-1)!;
+		focus(last);
+		pressKey(last, "Tab");
+		expect(panel.contains(document.activeElement)).toBe(true);
+	});
+
 	it("marks the open row as expanded while the drawer is open", () => {
 		const container = renderExplorer();
 		const control = opener(memoryRows(container)[0]!);

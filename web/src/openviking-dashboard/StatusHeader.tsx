@@ -20,7 +20,9 @@ export function StatusHeader({
 	readonly lastCommit: OpenVikingDisplayValue;
 }): ReactElement {
 	return (
-		<header className="ovk-status-header" data-component="status-header">
+		// A <header> here would be a second `banner` landmark next to the app's top bar (axe
+		// landmark-no-duplicate-banner + landmark-unique, measured on the live page in #259).
+		<div className="ovk-status-header" data-component="status-header">
 			<div className="ovk-status-main">
 				<div className="ovk-status-identity">
 					<h2 className="ovk-status-title">OpenViking Memory Observability</h2>
@@ -49,7 +51,7 @@ export function StatusHeader({
 					<span data-source-field={model.lastAnswered.sourceField}>{model.lastAnswered.text}</span>
 				</p>
 			) : null}
-		</header>
+		</div>
 	);
 }
 

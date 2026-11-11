@@ -14,6 +14,16 @@
 	--ovk-gap: 16px;
 	--ovk-pad: 16px;
 	--ovk-radius: 10px;
+	/* Status words are 12px text, so they owe WCAG AA 4.5:1 on their own tint. A per-theme colour table
+	   cannot do it (about 30 themes set --green/--amber/--red), so each status colour is pulled towards
+	   that theme's own --text until it clears AA in both directions: light themes darken, dark themes
+	   lighten. Measured on the live page (#259): paper healthy 5.03:1, stale 5.05:1, unreachable 6.16:1;
+	   dark 8.34 / 9.04 / 6.77:1. Design's tokens.json asks for 5.04:1 (healthy) and 4.72:1 (stale) in
+	   the paper theme and for stale to stay 25 deg or more from red in hue (this mix sits 32.9 deg
+	   away), so the mix lands on Design's own numbers without one literal colour per theme. */
+	--ovk-healthy-text: color-mix(in oklab, var(--green) 78%, var(--text));
+	--ovk-stale-text: color-mix(in oklab, var(--amber-fg) 50%, var(--text));
+	--ovk-unreachable-text: color-mix(in oklab, var(--red) 78%, var(--text));
 	display: flex;
 	flex-direction: column;
 	gap: var(--ovk-gap);
@@ -177,12 +187,12 @@
 }
 
 .ovk-pill[data-health-state="healthy"] {
-	color: var(--green);
+	color: var(--ovk-healthy-text);
 	border-color: color-mix(in srgb, var(--green) 55%, transparent);
 	background: var(--green-soft);
 }
 .ovk-pill[data-health-state="stale"] {
-	color: var(--amber-fg);
+	color: var(--ovk-stale-text);
 	border-color: color-mix(in srgb, var(--amber) 55%, transparent);
 	background: color-mix(in srgb, var(--amber) 16%, transparent);
 }
@@ -190,7 +200,7 @@
 	color: var(--text-dim);
 }
 .ovk-pill[data-health-state="server-unreachable"] {
-	color: var(--red);
+	color: var(--ovk-unreachable-text);
 	border-color: color-mix(in srgb, var(--red) 55%, transparent);
 	background: var(--red-soft);
 }
@@ -313,7 +323,11 @@
 .ovk-tab[aria-selected="true"] {
 	background: var(--accent-soft);
 	border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-	color: var(--accent-text);
+	/* The accent stays on the border and the tint; the label is --text. Design's tokens.json says the
+	   accent is "used for outlines and focus, never as small text", and the paper accent measured
+	   4.2:1 as a 13px label on its own tint. The selected tab still reads as selected: tint, accent
+	   border and 600 weight. */
+	color: var(--text);
 	font-weight: 600;
 }
 
