@@ -33,7 +33,7 @@ Browser code formats values only and **never** computes sums, averages, percenta
 |---|---|---|---|
 | `observer.mode_label` | `/health` + `/api/v1/observer/system` + `rollout-state.json` | `"Offline"` if down; `"Degraded Local Fallback"` if stale; else `"Active (15/15 Roles Live)"` | `30s` |
 | `observer.roles_online_count`, `observer.roles_total_count` | `/api/v1/fs/ls?uri=viking://agent/memories` | Reachable roles (`0..15`, `null` if down); total `15` | `30s` |
-| `observer.daemon_bind`, `observer.queue_depth` | `/health` + `/api/v1/observer/queue` | `"127.0.0.1:1933"`; `Pending + In Progress` in `TOTAL` (`null` if down; G1) | `30s` |
+| `observer.daemon_bind`, `observer.queue_depth` | `/health` (bind only) | `"127.0.0.1:1933"`; queue depth **unavailable in v1** (`R-QUEUE-DEPTH-1`, G1) | `30s` |
 | `metrics.slot_hit_rate_pct`, `metrics.avg_injected_tokens`, `metrics.turns_sampled_24h` | `metrics.jsonl` (`turn_start`, 24h) | Injected count; `%` with `l0_hits > 0`; mean `tokens_est` (G2) | `5m` |
 | `changelog.commits_24h`, `changelog.promotions_24h`, `changelog.rejected_24h` | `memory-changelog.jsonl` (24h) | `session_commit`; `preference_write`+`resource_sync`; `preference_write_blocked` (G4) | `15m` |
 | `slots[].slot_id`, `slots[].uri_prefix`, `slots[].hit_rate_pct`, `slots[].avg_tokens`, `slots[].state` | `metrics.jsonl` (`turn_start`, 24h) | Slots 1–5; per-slot telemetry if present, else `null` / `"unmeasured-gap"` (G3) | `5m` |
@@ -41,14 +41,14 @@ Browser code formats values only and **never** computes sums, averages, percenta
 | `events[].id`, `events[].action`, `events[].role`, `events[].uri`, `events[].l0_abstract`, `events[].guard_verdict`, `events[].ts` | `memory-changelog.jsonl` + `metrics.jsonl` | Maps live actions to `commit`, `promote_shared`, `reject_noise`, `sidecar_timeout`; redacts `agent` `summary_1line` | `15m` |
 
 ### Contract-vs-Live Gaps for Ops
-- **G1 (`/api/v1/observer/queue`):** ASCII table in `result.status`; parse `TOTAL` (`Pending + In Progress`) or `null`.
+- **G1 — SETTLED:** `result.status` is an ASCII table; render unavailable, never `0`, never scraped (`R-QUEUE-DEPTH-1`, §8b).
 - **G2 (`metrics.jsonl` vs. §8):** §8 `l0_hit_count`, `l1_expanded_count`, `injected_tokens_est`, `extracted_count`, `dedup_skipped_count` -> live `l0_hits`, `l1_reads`, `tokens_est`, `extracted`, `dedup_skipped`.
 - **G3 (Per-slot metrics):** Logs turn totals (`l0_hits`, `tokens_est`), not per-slot (`Slot 1..5`). Return `null` (`"unmeasured-gap"`) until Ops logs `slots[]`.
 - **G4 (`memory-changelog.jsonl` vs. §9):** §9 `add|update|delete|reject_preference_candidate` -> live `session_commit`, `preference_write`, `resource_sync`, `preference_write_blocked`.
 - **G5 (`rollout-state.json`):** Only `{"pending_wt_land_syncs":[...]}` (no `stage`/`updated_at`); report `stage: null`.
 - **G6 (`migration-verification.json`):** `checked_at`/`source_files[]` vs. §9 `verified_at`/`total_checked`.
 - **G7 (`seen-role-messages.json`):** `{"seen":{...},"updatedAt":"..."}` vs. §6 flat map.
-- **G8 (`viking://user/memories`):** `0.5.4` requires `viking://user/default/memories` on `/api/v1/fs/ls`.
+- **G8 — SETTLED:** wording only; canonical form `viking://user/default/memories` (`R-URI-CANONICAL-1`, §8b).
 
 ## Obsolete Code and Tests to Delete
 
