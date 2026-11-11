@@ -248,6 +248,16 @@ describe("openviking dashboard — production source guards", () => {
 		}
 	});
 
+	it("paints the filter selects itself, big enough that iOS Safari does not zoom (#259)", () => {
+		const css = readFileSync(join(seamDir, "openviking-dashboard-rows.css"), "utf8");
+		const base = css.slice(css.indexOf(".ovk-select {"));
+		expect(base).toMatch(/appearance:\s*none/);
+		expect(base).toMatch(/-webkit-appearance:\s*none/);
+		const phone = css.slice(css.indexOf("@media (max-width: 480px)"));
+		expect(phone).toContain(".ovk-select");
+		expect(phone).toMatch(/font-size:\s*16px/);
+	});
+
 	it("has no Task 1 stub left: Task 2 (#258) implements the seam", () => {
 		const marker = ["OPENVIKING", "SEAM", "NOT", "IMPLEMENTED"].join("_");
 		const left = seamFiles().filter((file) => readFileSync(file, "utf8").includes(marker));

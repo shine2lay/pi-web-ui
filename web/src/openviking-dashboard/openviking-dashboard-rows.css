@@ -164,15 +164,45 @@
 	color: var(--text-faint);
 }
 
+/*
+ * The filter selects paint their own surface and arrow: with `appearance: auto` WebKit and iOS
+ * Safari ignore `background-color` and draw a light native control under `var(--text)`, which in
+ * the dark palette is near-white on near-white. The 16px floor at phone widths keeps iOS Safari
+ * from zooming the page when the control takes focus.
+ */
 .ovk-select {
+	appearance: none;
+	-webkit-appearance: none;
 	min-height: 28px;
-	padding: 2px 8px;
+	padding: 2px 26px 2px 8px;
 	border: 1px solid var(--border);
 	border-radius: 7px;
-	background: var(--bg-elev2);
+	background-color: var(--bg-elev2);
+	background-image:
+		linear-gradient(45deg, transparent 50%, currentColor 50%),
+		linear-gradient(135deg, currentColor 50%, transparent 50%);
+	background-position:
+		right 13px center,
+		right 8px center;
+	background-size:
+		5px 5px,
+		5px 5px;
+	background-repeat: no-repeat;
 	color: var(--text);
 	font: inherit;
 	font-size: 12px;
+}
+
+.ovk-select option {
+	background-color: var(--bg-elev2);
+	color: var(--text);
+}
+
+@media (max-width: 480px) {
+	.ovk-select {
+		min-height: 32px;
+		font-size: 16px;
+	}
 }
 
 /* ---------- tooltips ---------- */
