@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Acceptance assertion runner for OpenViking Memory Dashboard (openviking-dashboard).
-# Exit codes: 0 = every assertion below passes (A01-A39), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
+# Exit codes: 0 = every assertion below passes (A01-A41), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
 # Task #269 appends A18-A23 (state honesty, summary/detail parity, drawer integrity, role isolation, focus/keyboard, unmeasured slots); exit 0 now means all 23 pass.
 # Task #275 appends A24-A28 (drawer honours and follows state, neutral unmeasured slots, error card 3 / Tab 3 parity, no role liveness claim); exit 0 now means all 28 pass.
 # A26 reads slot fields and uri_prefix values from server/openviking/types.ts; a missing or unreadable types file is exit 2.
@@ -12,6 +12,9 @@
 # A32/A34/A36 read pill labels and status icons from design.md §Screen States and mode labels / timestamp fields from types.ts; missing is exit 2.
 # Task #286 appends A38-A39 (observer.last_reachable_at gates no state, pill, mode badge or verdict; null never reads as recent). The prototype
 # takes a last_reachable_at variant as ?state=<screen>_reach-<null|3s|1m|18m|3d> (prototype-only, like ?state=); exit 0 now means all 39 pass.
+# Task #289 appends A40-A41 (a sync-caused stale reads the stale_badge the server sends, with no age or duration in that row; when both causes
+# hold the badge is the age). The stale screen takes a stale_badge variant as ?state=stale_badge-<age|sync|both|mixed>; exit 0 now means all 41 pass.
+# A40/A41 read the allowed stale_badge values per source from spec-states.md §4; a missing or unparseable file is exit 2.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,6 +69,11 @@ export OV_SPEC_PATH
 OV_DESIGN_PATH="${SCRIPT_DIR}/design.md"
 [[ ! -f "${OV_DESIGN_PATH}" ]] && emit_exit2 "feature design not found: ${OV_DESIGN_PATH}" "${PROTO_PATH}"
 export OV_DESIGN_PATH
+
+# Task #289 (A40/A41): spec-states.md §4 owns the stale_badge value set per source; never restated in this checker
+OV_STATES_PATH="${SCRIPT_DIR}/spec-states.md"
+[[ ! -f "${OV_STATES_PATH}" ]] && emit_exit2 "feature operational states not found: ${OV_STATES_PATH}" "${PROTO_PATH}"
+export OV_STATES_PATH
 
 python3 - "${PROTO_PATH}" "${TOKENS_PATH}" "${JSON_OUT}" <<'PYEOF'
 import json, math, pathlib, re, sys
@@ -153,6 +161,24 @@ for _line in (_states_sec.group(1).splitlines() if _states_sec else []):
         STATUS_ICONS.update(re.findall(r'data-icon="([\w-]+)"', _line))
 if set(HEALTH_LABELS) != {"healthy", "stale", "zero-activity", "server-unreachable"} or len(STATUS_ICONS) != 4:
     exit2(f"could not read 4 health labels and icons from design.md §Screen States: {HEALTH_LABELS}, {STATUS_ICONS}")
+
+# Task #289 (A40/A41): spec-states.md §4 -> the stale_badge values each source may send (ruling rm-b5272a3e)
+try:
+    states_src = pathlib.Path(os.environ["OV_STATES_PATH"]).read_text(encoding="utf-8")
+except Exception as exc:
+    exit2(f"failed to read feature operational states: {exc}")
+BADGE_VALUES = {}
+for _fams, _vals in re.findall(r"((?:`\w+\.stale_badge`(?:\s+and\s+)?)+)\s+(?:is|are)\s+`([^`]+)`", states_src):
+    _vs = [v.strip().strip('"') for v in _vals.split("|")]
+    for _fam in re.findall(r"`(\w+)\.stale_badge`", _fams):
+        BADGE_VALUES[_fam] = _vs
+AGE_BADGE = {f: [v for v in vs if re.fullmatch(r">\s*\d+[smhd]", v)] for f, vs in BADGE_VALUES.items()}
+_sync_vals = {v for vs in BADGE_VALUES.values() for v in vs if v != "null" and not re.fullmatch(r">\s*\d+[smhd]", v)}
+if (len(BADGE_VALUES) < 3 or any(len(v) != 1 for v in AGE_BADGE.values()) or len(_sync_vals) != 1
+        or any("null" not in vs for vs in BADGE_VALUES.values())):
+    exit2(f"could not read one age value, one sync value and null per source from spec-states.md §4: {BADGE_VALUES}")
+SYNC_BADGE = _sync_vals.pop()
+AGE_BADGE = {f: v[0] for f, v in AGE_BADGE.items()}
 
 # Task #284 (A33/A34): types.ts -> observer.mode_label values and every timestamp field, named as the page cites it (family.field)
 _mode = re.search(r"export type OpenVikingModeLabel\s*=\s*([^;]+);", types_src)
@@ -1469,6 +1495,102 @@ try:
                     if v != "null" and ZERO_RE.search(t):
                         a39_bad.append(f"{tag}: reading '{t[:70]}' contains '{ZERO_RE.search(t).group(0)}'")
         record("A39-NULL-NOT-JUST-NOW", len(a39_bad) == 0, f"violations={a39_bad[:10]} (total={len(a39_bad)})", f"error: null -> exactly '{REACH_NULL_TEXT}' with no duration/0/dash/just now; 3s -> 'Last answered 3s ago' (never 0m); 18m -> 'Last answered 18m ago'; other screens show no {REACH_FIELD} reading")
+
+        # ---- A40-A41 (task #289): stale_badge names the true reason (spec-states.md §4, architecture ruling rm-b5272a3e) ----
+        # What the server sends for each stale fixture: the stale_badge per source, and whether a wt land sync is pending.
+        # A pending sync is global (rollout-state.json), so no source is null while one waits; within cadence it reads the
+        # sync value, past cadence the age. None is the default stale screen (?state=stale); the rest are ?state=stale_badge-<variant>.
+        BADGE_FIXTURES = {
+            None:    ({"observer": SYNC_BADGE, "entries": AGE_BADGE["entries"], "audit": AGE_BADGE["audit"]}, True),
+            "age":   ({"observer": AGE_BADGE["observer"], "entries": AGE_BADGE["entries"], "audit": AGE_BADGE["audit"]}, False),
+            "sync":  ({"observer": SYNC_BADGE, "entries": SYNC_BADGE, "audit": SYNC_BADGE}, True),
+            "both":  ({"observer": AGE_BADGE["observer"], "entries": AGE_BADGE["entries"], "audit": AGE_BADGE["audit"]}, True),
+            "mixed": ({"observer": None, "entries": None, "audit": AGE_BADGE["audit"]}, False),
+        }
+        SYNC_FIELD = "auxiliary.rollout.pending_wt_land_syncs"
+        DURATION_RE = re.compile(r"\b\d+\s?(?:s|sec|secs|m|min|mins|h|hr|hrs|d)\b", re.I)
+        SYNC_PROGRESS_RE = re.compile(r"sync[a-z]*\b[^.]*?(?:waiting to land|still landing|landing|in progress)|(?:waiting to land|still landing|in progress)[^.]*?\bsync", re.I)
+        BADGE_SNAPSHOT_JS = "(syncField) => {" + JS_HELPERS + r"""
+            const nodes = [...document.querySelectorAll('[data-source-field$=".stale_badge"]')];
+            const syncNodes = [...document.querySelectorAll(`[data-source-field="${syncField}"]`)];
+            const state = nodes.map(el => ({ fam: (el.getAttribute('data-source-field') || '').split('.')[0],
+                                             text: norm(el.textContent), shown: false, marked: false, rowId: null, row: '' }));
+            let syncShown = false;
+            const sweep = () => {
+                nodes.forEach((el, i) => {
+                    if (!vis(el)) return;
+                    const r = el.closest('[data-stale-row]');
+                    state[i].shown = true;
+                    state[i].marked = !!el.closest('[data-stale-badge="true"]');
+                    state[i].rowId = r ? r.getAttribute('data-stale-row') : null;
+                    state[i].row = r ? norm(r.innerText) : '';
+                });
+                if (!syncShown) syncShown = syncNodes.some(vis);
+            };
+            sweep();
+            for (const t of tabs()) { openTab(t); sweep(); }
+            tabs()[0]?.click();
+            return { badges: state.filter(s => s.shown), syncShown };
+        }"""
+
+        # A40: every stale pill prints the stale_badge the server sends, verbatim; a sync-caused stale says so and carries no age
+        # or duration in its row; a null stale_badge shows no reading at all (the live screen, where all three are null, included)
+        a40_bad, a41_bad, a40_sync_seen, a41_age_seen = [], [], 0, 0
+        badge_texts = {}
+        for variant, (want, sync_pending) in BADGE_FIXTURES.items():
+            page.goto(f"{file_url}?state=stale" + (f"_badge-{variant}" if variant else ""), wait_until="load")
+            snap = page.evaluate(BADGE_SNAPSHOT_JS, SYNC_FIELD)
+            seen = {}
+            for b in snap["badges"]:
+                seen.setdefault(b["fam"], []).append(b)
+            badge_texts[variant] = {f: sorted(b["text"] for b in bs) for f, bs in seen.items()}
+            tag = f"stale_badge-{variant or 'default'}"
+            for fam, expect in want.items():
+                got = seen.get(fam, [])
+                if expect is None:
+                    if got:
+                        a40_bad.append(f"{tag}:{fam}: stale_badge is null but the page reads {[g['text'][:30] for g in got]}")
+                    continue
+                if len(got) != 1:
+                    a40_bad.append(f"{tag}:{fam}: {len(got)} visible {fam}.stale_badge readings, expected 1 ('{expect}')")
+                    continue
+                b = got[0]
+                if b["text"] not in BADGE_VALUES[fam]:
+                    a40_bad.append(f"{tag}:{fam}: reads '{b['text'][:40]}', not one of {BADGE_VALUES[fam]} (spec-states.md §4)")
+                if not b["marked"]:
+                    a40_bad.append(f"{tag}:{fam}: reading '{b['text'][:40]}' carries no [data-stale-badge=\"true\"]")
+                if b["rowId"] != fam:
+                    a40_bad.append(f"{tag}:{fam}: reading sits in row '{b['rowId']}', expected [data-stale-row=\"{fam}\"]")
+                if expect == SYNC_BADGE:
+                    a40_sync_seen += 1
+                    if b["text"] != SYNC_BADGE:
+                        a40_bad.append(f"{tag}:{fam}: sync-caused stale reads '{b['text'][:40]}', expected '{SYNC_BADGE}'")
+                    dur = DURATION_RE.search(b["row"])
+                    if dur:
+                        a40_bad.append(f"{tag}:{fam}: '{SYNC_BADGE}' row says '{dur.group(0)}' in '{b['row'][:70]}'")
+                    if not SYNC_PROGRESS_RE.search(b["row"]):
+                        a40_bad.append(f"{tag}:{fam}: '{SYNC_BADGE}' row does not say a sync is still landing ('{b['row'][:70]}')")
+                elif sync_pending:
+                    a41_age_seen += 1
+                    if b["text"] == SYNC_BADGE:
+                        a41_bad.append(f"{tag}:{fam}: age past cadence with a sync pending reads '{SYNC_BADGE}', expected the age '{expect}'")
+                    elif b["text"] != expect:
+                        a41_bad.append(f"{tag}:{fam}: reads '{b['text'][:40]}', expected the age '{expect}'")
+                    if fam == "observer" and not SYNC_PROGRESS_RE.search(b["row"]):
+                        a41_bad.append(f"{tag}:{fam}: row '{b['row'][:70]}' drops the pending sync it is also stale for")
+            if sync_pending and not snap["syncShown"]:
+                a41_bad.append(f"{tag}: no visible {SYNC_FIELD} reading, so the fixture never shows a sync is pending")
+        page.goto(f"{file_url}?state=live", wait_until="load")
+        for b in page.evaluate(BADGE_SNAPSHOT_JS, SYNC_FIELD)["badges"]:
+            a40_bad.append(f"live:{b['fam']}: reads '{b['text'][:40]}' while every stale_badge is null")
+        if a40_sync_seen < 2:
+            a40_bad.append(f"only {a40_sync_seen} '{SYNC_BADGE}' readings across the fixtures (need the daemon card and a panel)")
+        record("A40-SYNC-STALE-READS-ITS-BADGE", len(a40_bad) == 0, f"syncReadings={a40_sync_seen}, fixtures={badge_texts}, violations={a40_bad[:10]} (total={len(a40_bad)})", f"every stale pill prints its source's stale_badge verbatim ({BADGE_VALUES}); a '{SYNC_BADGE}' row says a sync is still landing and holds no age or duration; null shows no reading")
+
+        # A41: age wins. In a fixture where both causes hold, each source past its cadence still reads the age, never the sync value
+        if a41_age_seen < 3 or badge_texts.get("both") == badge_texts.get("sync") or not badge_texts.get("both"):
+            a41_bad.append(f"age-with-sync readings={a41_age_seen}, both={badge_texts.get('both')}, sync={badge_texts.get('sync')} (need a both-causes fixture that differs from the sync-only one)")
+        record("A41-AGE-WINS-OVER-PENDING-SYNC", len(a41_bad) == 0, f"ageWithSyncReadings={a41_age_seen}, both={badge_texts.get('both')}, sync={badge_texts.get('sync')}, violations={a41_bad[:10]} (total={len(a41_bad)})", f"with a sync pending and the age past cadence the badge is the age ({AGE_BADGE}), never '{SYNC_BADGE}'; the daemon row still names the pending sync; every sync-pending fixture shows {SYNC_FIELD}")
 
         browser.close()
 except Exception as exc:
