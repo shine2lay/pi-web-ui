@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Acceptance assertion runner for OpenViking Memory Dashboard (openviking-dashboard).
-# Exit codes: 0 = every assertion below passes (A01-A41), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
+# Exit codes: 0 = every assertion below passes (A01-A43), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
 # Task #269 appends A18-A23 (state honesty, summary/detail parity, drawer integrity, role isolation, focus/keyboard, unmeasured slots); exit 0 now means all 23 pass.
 # Task #275 appends A24-A28 (drawer honours and follows state, neutral unmeasured slots, error card 3 / Tab 3 parity, no role liveness claim); exit 0 now means all 28 pass.
 # A26 reads slot fields and uri_prefix values from server/openviking/types.ts; a missing or unreadable types file is exit 2.
@@ -15,6 +15,11 @@
 # Task #289 appends A40-A41 (a sync-caused stale reads the stale_badge the server sends, with no age or duration in that row; when both causes
 # hold the badge is the age). The stale screen takes a stale_badge variant as ?state=stale_badge-<age|sync|both|mixed>; exit 0 now means all 41 pass.
 # A40/A41 read the allowed stale_badge values per source from spec-states.md §4; a missing or unparseable file is exit 2.
+# Task #290 appends A42-A43 (on the Offline screen every row's L1/L2 states that row's own reason, and the screen promises
+# text comes back only for the layers the daemon serves); exit 0 now means all 43 pass. A42 classifies each row from the
+# page's own live rendering, so no copy list lives in this checker.
+# Task #290 lead amendments (same standing as A03/A04): A24's offline-wording branch applies only to daemon-served layers
+# (A42 proves the marking), and A21 runs over all five states instead of ?state=live only.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1591,6 +1596,100 @@ try:
         if a41_age_seen < 3 or badge_texts.get("both") == badge_texts.get("sync") or not badge_texts.get("both"):
             a41_bad.append(f"age-with-sync readings={a41_age_seen}, both={badge_texts.get('both')}, sync={badge_texts.get('sync')} (need a both-causes fixture that differs from the sync-only one)")
         record("A41-AGE-WINS-OVER-PENDING-SYNC", len(a41_bad) == 0, f"ageWithSyncReadings={a41_age_seen}, both={badge_texts.get('both')}, sync={badge_texts.get('sync')}, violations={a41_bad[:10]} (total={len(a41_bad)})", f"with a sync pending and the age past cadence the badge is the age ({AGE_BADGE}), never '{SYNC_BADGE}'; the daemon row still names the pending sync; every sync-pending fixture shows {SYNC_FIELD}")
+
+        # ---- A42-A43 (task #290, VERIFICATION-4 M4-1): on the Offline screen every row keeps its own reason ----
+        # An outage can only withhold what the daemon serves. A layer that is already unavailable while :1933 answers
+        # -- role isolation (R-ISOLATION-1), or a mount that keeps no copy of the text -- is withheld by a permanent
+        # boundary, so its sentence must not change when the daemon stops answering; only a layer the daemon really
+        # serves may read the offline sentence. Which row is which is read from the page's own live rendering, so this
+        # checker dictates no copy: it compares the Offline screen against what the same row says while the daemon answers.
+        ROW_REASON_JS = "() => {" + JS_HELPERS + r"""
+            const drawer = document.querySelector('[data-component="reader-drawer"]');
+            if (!drawer) return { rows: [], error: 'missing reader drawer' };
+            const dfield = (name) => drawer.querySelector(`[data-drawer-field="${name}"]`) || drawer.querySelector(`#drawer-${name}-body`);
+            const read = (k) => { const el = dfield(k); return { text: norm(el ? el.textContent : ''), reason: (el && el.getAttribute('data-layer-reason')) || '' }; };
+            const rows = [];
+            for (const t of tabs()) {
+                const panel = openTab(t);
+                if (!panel || !vis(panel)) continue;
+                for (const row of rowsIn(panel)) {
+                    if (row.getAttribute('aria-expanded') === 'true') row.click();
+                    row.click();
+                    rows.push({ key: row.getAttribute('data-item-key') || rowUri(row), tab: t.getAttribute('data-tab'), uri: rowUri(row), l1: read('l1'), l2: read('l2') });
+                    const close = drawer.querySelector('[data-slot="drawer-close"]');
+                    if (close && vis(drawer)) close.click();
+                }
+            }
+            tabs()[0]?.click();
+            return { rows, error: null };
+        }"""
+        page.goto(f"{file_url}?state=live", wait_until="load")
+        live_layers = page.evaluate(ROW_REASON_JS)
+        page.goto(f"{file_url}?state=error", wait_until="load")
+        offline_layers = page.evaluate(ROW_REASON_JS)
+        ROLE_URI = "viking://agent/memories/"
+        GAP_RE = re.compile(r"unavailable|isolat", re.I)
+        OUTAGE_RE = re.compile(r"while offline|not answering|unreachable|\boffline\b", re.I)
+        OFFLINE_SENTENCE_RE = re.compile(r"unavailable while offline", re.I)
+        a42_bad = [e for e in [live_layers.get("error"), offline_layers.get("error")] if e]
+        live_by_key = {r["key"]: r for r in live_layers["rows"]}
+        a42_seen = {"role-isolation": 0, "structural": 0, "daemon": 0}
+        for r in offline_layers["rows"]:
+            base = live_by_key.get(r["key"])
+            if base is None:
+                a42_bad.append(f"{r['key']}: on the Offline screen but not on the live screen, so its own reason cannot be read")
+                continue
+            role = r["uri"].startswith(ROLE_URI)
+            for k in ["l1", "l2"]:
+                own = bool(GAP_RE.search(base[k]["text"] or ""))
+                want = "role-isolation" if role else ("structural" if own else "daemon")
+                a42_seen[want] += 1
+                if role and not own:
+                    a42_bad.append(f"{r['key']}:{k.upper()}: role-isolated row shows layer text while the daemon answers ('{base[k]['text'][:44]}')")
+                if r[k]["reason"] != want:
+                    a42_bad.append(f"{r['key']}:{k.upper()}: marked data-layer-reason={r[k]['reason']!r}, its live reading says {want!r}")
+                if want == "daemon":
+                    if not OFFLINE_SENTENCE_RE.search(r[k]["text"] or ""):
+                        a42_bad.append(f"{r['key']}:{k.upper()}: daemon-served layer reads '{r[k]['text'][:44]}', not the offline sentence")
+                    if r[k]["text"] == base[k]["text"]:
+                        a42_bad.append(f"{r['key']}:{k.upper()}: still shows the daemon's text while 127.0.0.1:1933 is down")
+                elif r[k]["text"] != base[k]["text"]:
+                    blamed = OUTAGE_RE.search(r[k]["text"] or "")
+                    why = f"the outage ('{r[k]['text'][:44]}')" if blamed else f"'{r[k]['text'][:44]}'"
+                    a42_bad.append(f"{r['key']}:{k.upper()}: own {want} reason '{base[k]['text'][:44]}' replaced with {why}")
+        for kind in ["role-isolation", "structural", "daemon"]:
+            if a42_seen[kind] == 0:
+                a42_bad.append(f"no {kind} layer among the {len(offline_layers['rows'])} rows of the Offline screen, so the rule proves nothing")
+        record("A42-OFFLINE-ROW-KEEPS-ITS-REASON", len(a42_bad) == 0, f"offlineRows={len(offline_layers['rows'])}, layers={a42_seen}, violations={a42_bad[:10]} (total={len(a42_bad)})", "?state=error: a layer already unavailable while the daemon answers keeps that same sentence (role isolation, or a mount that keeps no copy), only a daemon-served layer reads 'unavailable while offline', and every layer's data-layer-reason matches its live reading")
+
+        # A43: the Offline screen promises text comes back only for the layers the daemon serves, never for every row it lists
+        page.goto(f"{file_url}?state=error", wait_until="load")
+        offline_text = page.evaluate("() => {" + JS_HELPERS + r"""
+            const out = [];
+            const grab = () => { const t = document.body.innerText || ''; if (!out.includes(t)) out.push(t); };
+            grab();
+            for (const t of tabs()) { openTab(t); grab(); }
+            tabs()[0]?.click();
+            return out;
+        }""")
+        PROMISE_RE = re.compile(r"\b(?:opens?|comes?|returns?|appears?|reappears?|loads?)\b[^.;\n]*\b(?:again|back)\b", re.I)
+        EVERY_ROW_RE = re.compile(r"\b(?:their|these|those|all|every|each)\b", re.I)
+        SERVED_RE = re.compile(r"\bread from\b[^.;\n]*\b(?:daemon|127\.0\.0\.1:1933)\b|\b(?:daemon|127\.0\.0\.1:1933)\b[^.;\n]*\b(?:serves|sends|reads)\b", re.I)
+        a43_bad, a43_promises = [], []
+        for txt in offline_text:
+            for piece in re.split(r"[.;\n]+", txt):
+                s = re.sub(r"\s+", " ", piece).strip()
+                if not s or not PROMISE_RE.search(s) or s in a43_promises:
+                    continue
+                a43_promises.append(s)
+                every = EVERY_ROW_RE.search(s)
+                if every:
+                    a43_bad.append(f"promises it for every row it lists ({every.group(0)!r}): '{s[:90]}'")
+                if not SERVED_RE.search(s):
+                    a43_bad.append(f"promise never names what the daemon serves: '{s[:90]}'")
+        if not a43_promises:
+            a43_bad.append("the Offline screen never says what comes back when the daemon answers")
+        record("A43-OFFLINE-PROMISE-IS-SCOPED", len(a43_bad) == 0, f"promises={[p[:70] for p in a43_promises]}, violations={a43_bad[:10]} (total={len(a43_bad)})", "?state=error: every sentence promising text comes back names the daemon-served layers it is limited to, never promises it for every listed row, and at least one such sentence exists")
 
         browser.close()
 except Exception as exc:
