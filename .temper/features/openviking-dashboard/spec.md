@@ -8,15 +8,15 @@ Pinned to `.temper/features/openviking-dashboard/design.md` (`design #274`, `28c
 ## API and State Contract
 
 ### 1. Read-Only & Sources
-- **Read-Only:** Zero write actions. `server/index.ts` exposes only `GET /api/openviking/{overview,entries,audit}` (`2000ms` timeout; non-`GET` -> `405`). No writes to `:1933` or `/home/shinelay/.pi/openviking/`.
-- **Sources:** `http://127.0.0.1:1933` (`/health`, `/api/v1/system/status`, `/api/v1/observer/system`, `/api/v1/fs/ls`, `/api/v1/content/{abstract,overview,read}`) and `/home/shinelay/.pi/openviking/{memory-changelog.jsonl,metrics.jsonl,rollout-state.json,resource-sync-state.json,migration-verification.json,seen-role-messages.json}`.
+- **Read-Only:** `server/index.ts` exposes only `GET /api/openviking/{overview,entries,audit}` (`2000ms` timeout; non-`GET` -> `405`). No writes to `:1933` or `/home/shinelay/.pi/openviking/`.
+- **Sources:** `http://127.0.0.1:1933` (`/health`, `/api/v1/{system/status,observer/system,fs/ls}`, `/api/v1/content/{abstract,overview,read}`) and `/home/shinelay/.pi/openviking/{memory-changelog.jsonl,metrics.jsonl,rollout-state.json,resource-sync-state.json,migration-verification.json,seen-role-messages.json}`.
 
 ### 2. Cross-Role Isolation (`R-NAMESPACE-1`, `R-ISOLATION-1`)
 - Role memories (`viking://agent/memories/...`) are isolated per role (`X-OpenViking-Agent: <role>`).
 - **Allowed across roles:** Counts, sizes, `modTime`, latencies, sync states (`/api/v1/fs/ls`, `metrics.jsonl`).
-- **Forbidden across roles:** Never expose another role's `viking://agent/memories/...` content (`l0_abstract`, `l1_overview`, `l2_content`, `summary_1line`). `/api/openviking/entries` reads `/api/v1/content/*` **only** for shared URIs (`viking://resources/...`, `viking://user/default/memories/...`); cross-role `agent` rows set `l0_abstract: "[Isolated per-role memory — metadata only (R-ISOLATION-1)]"` and `l1_overview`/`l2_content: null` (`403`). `/api/openviking/audit` redacts `summary_1line` on `agent` rows.
+- **Forbidden across roles:** Never expose another role's `viking://agent/memories/...` content. `/api/openviking/entries` reads `/api/v1/content/*` **only** for shared URIs (`viking://resources/...`, `viking://user/default/memories/...`); cross-role `agent` rows set `l0_abstract: "[Isolated per-role memory — metadata only (R-ISOLATION-1)]"` and `l1_overview`/`l2_content: null` (`403`). `/api/openviking/audit` redacts `summary_1line` on `agent` rows.
 
-### 3. Endpoints (`server/index.ts`)
+### 3. Endpoints
 - **`GET /api/openviking/overview` (`200`):** `{ screen_state: "live"|"stale"|"empty"|"error", observer, metrics, changelog, slots, auxiliary: { rollout, resource_sync, migration, dedup } }`.
 - **`GET /api/openviking/entries?scope=all|resources|user|agent&role=<role>` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|null, entries }` (`updated_at`, `provenance`).
 - **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|null, events }` (`action`: `"commit"|"role_memory_write"|"promote_shared"|"reject_noise"|"sidecar_timeout"`, `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
@@ -29,21 +29,24 @@ Behaviour contract only. Each state's visuals (token, label, glyph + `data-icon`
 - **`error` (`R-FAIL-1..3`):** `/health` fails (`data-health-state="server-unreachable"`). `:1933` fields return `null` -> `— (Unreachable)` (`data-unreachable-value="true"`), never `0`/`Healthy`; JSONL panels still show counts + staleness.
 - **`loading`:** `[data-screen-state="loading"]` skeletons; never fake `0` counters.
 - **No role liveness (v1):** nothing measures it: no panel, label or header may state or imply a role is live, online or healthy; folder count never feeds `screen_state`, `mode_label` or a degraded verdict.
+- **`last_reachable_at` `null`:** no `/health` `"ok"` since this server started; never a duration, `0` or dash that could read as recent.
+- **`last_reachable_at` gates nothing:** best-effort; feeds no `screen_state`, `mode_label`, degraded verdict or alarm.
 
 ## Canonical State and Formula Owners
 
 Browser code formats values only and **never** computes sums, averages, percentages, or health verdicts (`A07`).
 
-| Figure (`data-source-field`) | Source (`:1933` / `/home/shinelay/.pi/openviking/`) | Formula / Field | Cadence |
+| Figure (`data-source-field`) | Source (§1) | Formula / Field | Cadence |
 |---|---|---|---|
 | `observer.mode_label` | `/health` + `/api/v1/observer/system` + `rollout-state.json` | `"Offline"` if down; `"Degraded Local Fallback"` if stale; else `"Active"` | `30s` |
 | `observer.role_memory_folder_count`, `observer.roles_total_count` | Wrapper partition enumeration of canonical `viking://user/<role>/memories` (not alias `viking://agent/memories`) | Partitions found (`0..15`, `null` if down) as `"N role memory folders"`; total `15` (role list) | `30s` |
 | `observer.daemon_bind`, `observer.queue_depth` | `/health` (bind only) | `"127.0.0.1:1933"`; `queue_depth` always `null` (G1) | `30s` |
+| `observer.last_reachable_at` | Last `/health` `"ok"` (in-memory) | ISO, held while down, else `null` (§4); not `checked_at` (request time) | `30s` |
 | `metrics.{slot_hit_rate_pct,avg_injected_tokens,turns_sampled_24h}` | `metrics.jsonl` (`turn_start`, 24h) | Injected count; `%` with `l0_hits > 0`; mean `tokens_est` (G2) | `5m` |
 | `changelog.{session_commits_24h,promotions_24h,rejected_24h}` | `memory-changelog.jsonl` (24h) | Session commits only (see below); `preference_write`+`resource_sync`; `preference_write_blocked` (G4) | `15m` |
 | `slots[].{slot_id,uri_prefix,hit_rate_pct,avg_tokens,state}` | `metrics.jsonl` (`turn_start`, 24h) | Slots 1–5; per-slot telemetry if present, else `null` / `"unmeasured-gap"` (G3) | `5m` |
-| `entries[].{uri,scope,role,layers,l0_abstract,l1_overview,l2_content}` | `/api/v1/fs/ls` + `/api/v1/content/*` | Lists `resources`, `user/default/memories` (G8), `user/<role>/memories`; redacts `agent` content | `15m` |
-| `events[].{id,action,role,uri,l0_abstract,guard_verdict,ts}` | `memory-changelog.jsonl` + `metrics.jsonl` | §3 `action` by URI namespace + `source`, never the verb (contract `R-CHANGELOG-1d`): `commit` = session commits only; other personal-URI writes (`migration`, `lead_direct`) = `role_memory_write`; redacts `agent` `summary_1line` | `15m` |
+| `entries[].{uri,scope,role,layers,l0_abstract,l1_overview,l2_content}` | `/api/v1/fs/ls` + `/api/v1/content/*` | Lists `resources`, `user/default/memories` (G8), `user/<role>/memories` | `15m` |
+| `events[].{id,action,role,uri,l0_abstract,guard_verdict,ts}` | `memory-changelog.jsonl` + `metrics.jsonl` | §3 `action` by URI namespace + `source`, never the verb (contract `R-CHANGELOG-1d`): `commit` = session commits only; other personal-URI writes (`migration`, `lead_direct`) = `role_memory_write` | `15m` |
 
 ### Session Commits (`changelog.session_commits_24h`, was `commits_24h`; ruling rm-9724bae9)
 - **Counts only a session committing its own work:** `queue_done` session commits + lead-200k session commits (live: `add` to `viking://session/<id>`, `source` `queue_done` / `session_commit_200k`; pre-rename name `session_commit`).
@@ -54,10 +57,10 @@ Browser code formats values only and **never** computes sums, averages, percenta
 
 ### Contract-vs-Live Gaps for Ops
 - **G1 — SETTLED:** `result.status` is an ASCII table; render unavailable, never `0`, never scraped (`R-QUEUE-DEPTH-1`, §8b).
-- **G2 (`metrics.jsonl` vs. §8):** §8 `l0_hit_count`, `l1_expanded_count`, `injected_tokens_est`, `extracted_count`, `dedup_skipped_count` -> live `l0_hits`, `l1_reads`, `tokens_est`, `extracted`, `dedup_skipped`.
-- **G3 (Per-slot metrics):** Logs turn totals (`l0_hits`, `tokens_est`), not per-slot (`Slot 1..5`). Return `null` (`"unmeasured-gap"`) until Ops logs `slots[]`.
-- **G4 — PASS live (Ops #810):** writers emit contract `action`s; old rows keep `session_commit`, `preference_write`, `resource_sync`, `preference_write_blocked`.
-- **G5 (`rollout-state.json`):** Only `{"pending_wt_land_syncs":[...]}` (no `stage`/`updated_at`); report `stage: null`.
+- **G2 (`metrics.jsonl`):** §8 `{l0_hit,l1_expanded,extracted,dedup_skipped}_count`, `injected_tokens_est` -> live `{l0_hits,l1_reads,extracted,dedup_skipped,tokens_est}`.
+- **G3 (per-slot):** turn totals only; `null` / `"unmeasured-gap"` until Ops logs `slots[]`.
+- **G4 — PASS live (Ops #810):** writers emit contract `action`s; old rows keep `{session_commit,preference_write,resource_sync,preference_write_blocked}`.
+- **G5 (`rollout-state.json`):** Only `{"pending_wt_land_syncs":[...]}`; report `stage: null`.
 - **G6 (`migration-verification.json`):** `checked_at`/`source_files[]` vs. §9 `verified_at`/`total_checked`.
 - **G7 (`seen-role-messages.json`):** absent live; contract §4.4 Live status.
 - **G8 — SETTLED:** wording only; canonical form `viking://user/default/memories` (`R-URI-CANONICAL-1`, §8b).
