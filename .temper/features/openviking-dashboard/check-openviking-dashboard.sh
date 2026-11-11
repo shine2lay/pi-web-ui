@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Acceptance assertion runner for OpenViking Memory Dashboard (openviking-dashboard).
-# Exit codes: 0 = every assertion below passes (A01-A44), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
+# Exit codes: 0 = every assertion below passes (A01-A45), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
 # Task #269 appends A18-A23 (state honesty, summary/detail parity, drawer integrity, role isolation, focus/keyboard, unmeasured slots); exit 0 now means all 23 pass.
 # Task #275 appends A24-A28 (drawer honours and follows state, neutral unmeasured slots, error card 3 / Tab 3 parity, no role liveness claim); exit 0 now means all 28 pass.
 # A26 reads slot fields and uri_prefix values from server/openviking/types.ts; a missing or unreadable types file is exit 2.
@@ -23,6 +23,14 @@
 # Task #296 appends A44 (every element carrying data-source-field, in all five states, holds at most one reading outside its
 # nested field spans, and that reading is the kind its field's type in types.ts yields -- the generalisation of S4-1 and S5-1);
 # exit 0 now means all 44 pass. The figure-kind -> field pairing table is built from server/openviking/types.ts, never restated here.
+# Task #299 appends A45 (a summary card's hero line is a measure that moves: it cites a field whose type yields a percentage or a
+# count, never a constant identity such as the daemon address, and in every state it either shows that measure or says honestly
+# that it is not measured / not reachable; the daemon address keeps its place in the supporting line beside the pill);
+# exit 0 now means all 45 pass. The hero's allowed figure kinds come from the same types.ts table A44 builds.
+# Task #299 lead amendment (same standing as A03/A04): observer.retrieval_hit_rate_pct joins VALID_SOURCES -- it is a field of
+# OpenVikingObserverSummary in types.ts that the page may cite, and card 1's hero now does.
+#
+# Assertion ids are append-only: A45 is new coverage, and no earlier assertion's limit was loosened to make it fit.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -329,7 +337,7 @@ def contrast_ratio(c1, c2):
 
 VALID_SOURCES = {
     "observer.mode_label", "observer.role_memory_folder_count", "observer.roles_total_count",
-    "observer.daemon_bind", "observer.queue_depth", "observer.checked_at",
+    "observer.daemon_bind", "observer.queue_depth", "observer.checked_at", "observer.retrieval_hit_rate_pct",
     "metrics.slot_hit_rate_pct", "metrics.avg_injected_tokens", "metrics.turns_sampled_24h", "metrics.last_recorded_at",
     "changelog.session_commits_24h", "changelog.promotions_24h", "changelog.rejected_24h", "changelog.last_event_at",
     "slots[].slot_id", "slots[].uri_prefix", "slots[].hit_rate_pct", "slots[].avg_tokens", "slots[].state", "slots[].last_sampled_at",
@@ -1877,6 +1885,75 @@ try:
             if n == 0:
                 a44_bad.append(f"no {kind} figure among the {a44_figures} walked, so the rule proves nothing for that kind")
         record("A44-FIGURE-CITES-ITS-FIELD", len(a44_bad) == 0, f"figures={a44_figures}, proved={a44_proved}, violations={a44_bad[:10]} (total={len(a44_bad)})", "live/stale/empty/error/loading: every [data-source-field] element holds at most one reading outside its nested field spans, and that reading is what its type in types.ts yields (a percentage for a _pct field, a count for a number or list, an age for a timestamp, only its own words for a string)")
+
+        # ---- A45 (task #299, product rm-c44149ef): a card's hero line is a measure that moves ----
+        # Card 1 spent its biggest type on "127.0.0.1:1933": a constant the reader already knows, while the pill beside it
+        # carried the whole verdict. A hero answers "where do we stand?", so it has to be a reading that can be different
+        # tomorrow -- a percentage or a count -- and it has to stay honest when that reading is missing: in loading it is a
+        # placeholder, while :1933 is down a server-fed hero reads unreachable, and in a window with nothing in it the hero
+        # never repeats the live reading as if it were current. The identity (the bind) keeps its place beside the pill.
+        HERO_SCAN_JS = "() => {" + JS_HELPERS + r"""
+            return [...document.querySelectorAll('[data-component="summary-card"]')].map(c => {
+                const hero = c.querySelector('[data-field="metric"]');
+                const title = c.querySelector('[data-field="title"]');
+                const status = c.querySelector('[data-field="status"]');
+                const bind = c.querySelector('[data-source-field="observer.daemon_bind"]');
+                return {
+                    card: c.getAttribute('data-card-id') || '',
+                    hero: hero ? norm(hero.textContent) : null,
+                    heroVis: vis(hero),
+                    field: hero ? (hero.getAttribute('data-source-field') || '') : '',
+                    unreach: !!hero && hero.getAttribute('data-unreachable-value') === 'true',
+                    heroPx: hero ? parseFloat(getComputedStyle(hero).fontSize) : 0,
+                    titlePx: title ? parseFloat(getComputedStyle(title).fontSize) : 0,
+                    bindInStatus: !!bind && !!status && status.contains(bind) && vis(bind),
+                    bindText: bind ? norm(bind.textContent) : ''
+                };
+            });
+        }"""
+        ADDRESS_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
+        a45_bad, a45_heroes, a45_bind_states = [], {}, []
+        for st in STATES5:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            for h in page.evaluate(HERO_SCAN_JS):
+                card, hero, field = h["card"], h["hero"], h["field"]
+                if not h["heroVis"] or not hero:
+                    a45_bad.append(f"{st}:{card}: no visible hero line")
+                    continue
+                a45_heroes.setdefault(card, {})[st] = hero
+                if h["bindInStatus"] and ADDRESS_RE.search(h["bindText"]):
+                    a45_bind_states.append(f"{st}:{card}")
+                if h["titlePx"] and h["heroPx"] < 1.4 * h["titlePx"]:
+                    a45_bad.append(f"{st}:{card}: hero type is {h['heroPx']}px against a {h['titlePx']}px title, so it does not lead the card")
+                if ADDRESS_RE.search(hero):
+                    a45_bad.append(f"{st}:{card}: hero '{hero[:50]}' is the daemon address, which reads the same every day; identity belongs beside the pill")
+                ts_type = FIELD_TYPE.get(field)
+                if ts_type is None:
+                    a45_bad.append(f"{st}:{card}: hero cites '{field}', which no dashboard response sends")
+                    continue
+                kind = field_kind(field, ts_type)
+                if kind not in ("percent", "count"):
+                    a45_bad.append(f"{st}:{card}: hero cites {field}: {ts_type}, which yields a {kind}, not a measure that moves")
+                reads = figure_readings(hero, FIELD_LITERALS[field])
+                if reads and reads[0][0] != kind:
+                    a45_bad.append(f"{st}:{card}: hero reading '{reads[0][1]}' is a {reads[0][0]}, but {field}: {ts_type} yields a {kind}")
+                if st == "loading" and reads:
+                    a45_bad.append(f"{st}:{card}: hero '{hero[:50]}' prints a figure before any response arrived")
+                if st == "live" and len(reads) != 1:
+                    a45_bad.append(f"{st}:{card}: hero '{hero[:50]}' shows {len(reads)} readings; the live hero is exactly one measure")
+                if st == "error":
+                    served_by_daemon = source_of(field)[0] == "server"
+                    if served_by_daemon and (reads or not h["unreach"]):
+                        a45_bad.append(f"{st}:{card}: hero '{hero[:50]}' still reads as a current figure while 127.0.0.1:1933 does not answer")
+                    if not served_by_daemon and not reads:
+                        a45_bad.append(f"{st}:{card}: hero '{hero[:50]}' drops a figure its local log still holds while offline")
+                if st == "empty" and a45_heroes.get(card, {}).get("live") == hero:
+                    a45_bad.append(f"{st}:{card}: hero repeats its live reading '{hero[:50]}' in a window with nothing in it")
+        if len(a45_heroes) < 3 or any(len(v) != len(STATES5) for v in a45_heroes.values()):
+            a45_bad.append(f"only {sum(len(v) for v in a45_heroes.values())} hero readings walked over {len(a45_heroes)} cards, so the rule proves nothing")
+        if len(set(a45_bind_states)) < len(STATES5):
+            a45_bad.append(f"the daemon address is not in a card's supporting status line in every state: {sorted(set(a45_bind_states))}")
+        record("A45-CARD-HERO-IS-A-MEASURE", len(a45_bad) == 0, f"heroes={ {c: list(v.values()) for c, v in a45_heroes.items()} }, bindBesidePill={sorted(set(a45_bind_states))}, violations={a45_bad[:10]} (total={len(a45_bad)})", "live/stale/empty/error/loading: every summary card's hero is its card's largest text and cites a field whose type yields a percentage or a count (never an address or another constant identity); live shows exactly one such reading, loading shows none, a daemon-served hero reads unreachable while :1933 is down, a local-log hero keeps its figure, the empty window never repeats the live reading, and the daemon address sits beside a pill in every state")
 
         browser.close()
 except Exception as exc:
