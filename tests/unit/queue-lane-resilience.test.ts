@@ -284,6 +284,13 @@ describe("queue-resilience: one role's stuck lane never stops the others (Archit
 				await gates.get(r)?.promise;
 				return { sessionFile: at(`${r}.jsonl`), conversationId: r, started: Promise.resolve() };
 			});
+		// #813: qa keeps the place it is given until its gate opens, so only FIFO order (not a quick qa open
+		// handing the place straight on, as Q-LANE-1 says it must) can keep security waiting.
+		gates.set("qa", gate());
+		h.opens.set("qa#5", async () => {
+			await gates.get("qa")?.promise;
+			return { sessionFile: at("qa.jsonl"), conversationId: "qa", started: Promise.resolve() };
+		});
 		try {
 			const blocked = blockers.map((r, i) => track(runQueueStartChat(h.host, startOf(r, i + 1))));
 			await sleep(20);

@@ -294,14 +294,24 @@ export function taskQueueCommandLine(action: unknown, id: unknown): string | nul
 	return null;
 }
 
-/** queue-done-hidden: one entry of a transcript, read from the start. */
-export function taskChatHeadEntry(raw: unknown): boolean | undefined {
+/**
+ * queue-done-hidden + queue-resilience (Q-ISO-1): one entry of a transcript, read from the start: the queue chat
+ * (`from.file`) of a queued task's own chat, null when it isn't one (a message came first, or no queue chat),
+ * undefined when this entry doesn't tell.
+ */
+export function taskChatOriginEntry(raw: unknown): string | null | undefined {
 	if (!raw || typeof raw !== "object") return undefined;
 	const e = raw as { type?: unknown; customType?: unknown; data?: unknown };
-	if (e.type === "message") return false;
+	if (e.type === "message") return null;
 	if (e.type !== "custom" || e.customType !== TASK_QUEUE_ENTRY_TYPE) return undefined;
 	const op = (e.data ?? {}) as { op?: unknown; from?: unknown };
-	return op.op === "assigned" ? chatOf(op.from) !== null : undefined;
+	return op.op === "assigned" ? (chatOf(op.from)?.file ?? null) : undefined;
+}
+
+/** queue-done-hidden: one entry of a transcript, read from the start. */
+export function taskChatHeadEntry(raw: unknown): boolean | undefined {
+	const origin = taskChatOriginEntry(raw);
+	return origin === undefined ? undefined : origin !== null;
 }
 
 /** queue-done-hidden: whether these entries (oldest first) are a queued task's own chat. */
@@ -315,23 +325,28 @@ export function isQueueTaskChatEntries(entries: Iterable<unknown>): boolean {
 
 /** queue-done-hidden: whether the transcript at `file` is a queued task's own chat. */
 export async function isQueueTaskChatFile(file: string, maxBytes = 1024 * 1024): Promise<boolean> {
+	return (await queueTaskChatOrigin(file, maxBytes)) !== null;
+}
+
+/** queue-resilience (Q-ISO-1): the queue chat of the queued task whose own chat is at `file`; null if it isn't one. */
+export async function queueTaskChatOrigin(file: string, maxBytes = 1024 * 1024): Promise<string | null> {
 	let fh: FileHandle | undefined;
 	try {
 		fh = await open(file, "r");
 		const decoder = new StringDecoder("utf8");
 		const chunk = Buffer.alloc(64 * 1024);
 		let carry = "";
-		const verdictOf = (line: string): boolean | undefined => {
+		const verdictOf = (line: string): string | null | undefined => {
 			if (!line.includes('"type":"message"') && !line.includes(`"${TASK_QUEUE_ENTRY_TYPE}"`)) return undefined;
 			try {
-				return taskChatHeadEntry(JSON.parse(line));
+				return taskChatOriginEntry(JSON.parse(line));
 			} catch {
 				return undefined;
 			}
 		};
 		for (let pos = 0; pos < maxBytes;) {
 			const { bytesRead } = await fh.read(chunk, 0, Math.min(chunk.length, maxBytes - pos), pos);
-			if (!bytesRead) return verdictOf(carry + decoder.end()) === true;
+			if (!bytesRead) return verdictOf(carry + decoder.end()) ?? null;
 			pos += bytesRead;
 			const lines = (carry + decoder.write(chunk.subarray(0, bytesRead))).split("\n");
 			carry = lines.pop() ?? "";
@@ -340,9 +355,9 @@ export async function isQueueTaskChatFile(file: string, maxBytes = 1024 * 1024):
 				if (verdict !== undefined) return verdict;
 			}
 		}
-		return false;
+		return null;
 	} catch {
-		return false;
+		return null;
 	} finally {
 		await fh?.close().catch(() => {});
 	}

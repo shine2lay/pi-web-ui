@@ -8,11 +8,15 @@
 // - the deadlines (Q-WATCHDOG-1) and the error a timed-out lane operation rejects with (Q-WATCHDOG-2);
 // - the log line and the owner's Telegram alarm built from one stall record (Q-WATCHDOG-2, Q-ALARM-2);
 // - heap/RSS sampling, as read-only telemetry that never gates or pauses a lane (Q-HEAP-1/2);
-// - whether a chat is still working, so nothing here ever closes or disposes a working chat (Q-WATCHDOG-3).
-// Pure apart from process.memoryUsage(); never sends or logs by itself.
+// - whether a chat is still working, so nothing here ever closes or disposes a working chat (Q-WATCHDOG-3);
+// - QueueLaneWatchdog: one host's no-progress timers, the race that frees a stalled operation's lane, the log
+//   line and the owner's alarm with its per-(role, lane) cooldown (Q-WATCHDOG-1/2, Q-ALARM-1).
+// What it frees (the lane lock, the ceiling slot, the pseudo client's generation) is queue-chat-lane.ts's: the
+// caller hands it in as `free`. Nothing here closes, releases or disposes a chat.
 // ---------------------------------------------------------------------------
 
-import type { OwnerTelegramNotice } from "./owner-telegram.js";
+import type { OwnerTelegramNotice, OwnerTelegramResult } from "./owner-telegram.js";
+import { hasActiveSubagentRun, hasPendingWaitSubscription } from "./wait-subscription-scan.js";
 
 /** Q-WATCHDOG-1: Phase A (opening a task chat, or one close/home operation) without progress. */
 export const QUEUE_LANE_DEADLINE_MS = 60_000;
@@ -192,4 +196,173 @@ export function queueChatIsWorking(a: QueueChatActivity | null | undefined): boo
 		a.hasActiveSubagentRun === true ||
 		a.hasPendingWaitSubscription === true
 	);
+}
+
+/** Q-WATCHDOG-3: what an open chat is doing, from its session, its sends on their way and its blocking terminals. */
+export function queueChatActivityOf(
+	session: { isStreaming: boolean; isCompacting: boolean; sessionFile: string | undefined },
+	sendsInFlight: number | undefined,
+	blockingTerminals: number,
+): QueueChatActivity {
+	const sessionId = session.sessionFile;
+	return {
+		isStreaming: session.isStreaming,
+		isCompacting: session.isCompacting,
+		sendsInFlight: sendsInFlight ?? 0,
+		blockingTerminals,
+		// pi-subagents' runs and wait subscriptions on disk (read as displaceActive reads them).
+		hasActiveSubagentRun: !!sessionId && hasActiveSubagentRun({ sessionId }),
+		hasPendingWaitSubscription: !!sessionId && hasPendingWaitSubscription({ sessionId }),
+	};
+}
+
+/** Q-WATCHDOG-2 Phase B: a task chat whose first turn runs, or whose first message is on its way. */
+export function queueTurnUnderWay(a: QueueChatActivity | null | undefined): boolean {
+	return a?.isStreaming === true || (a?.sendsInFlight ?? 0) > 0;
+}
+
+/** What the watchdog reads from its host (AgentService; tests give their own). */
+export interface QueueWatchdogHost {
+	/** Q-WATCHDOG-1 / Q-ISO-3 / Q-ALARM-1 limits (tests shorten them). */
+	queueLaneTuning?: QueueLaneTuning;
+	/** Q-ALARM-2: send the owner's alarm (owner-telegram.ts sendOwnerTelegram with the telegram_send tool). */
+	sendQueueAlarm?(notice: OwnerTelegramNotice): Promise<OwnerTelegramResult>;
+	/** Q-HEAP-2: read-only telemetry (default process.memoryUsage). */
+	queueMemoryUsage?(): QueueMemoryUsage;
+}
+
+/** Where one lane operation is: what a stall record says about it besides the times. */
+export interface QueueLaneWatchStart {
+	role: string;
+	lane: QueueLaneKind;
+	phase: QueueLanePhase;
+	deadlineMs: number;
+	taskId?: number | null;
+	sessionFile?: string | null;
+	conversationId?: string | null;
+}
+
+/** Q-WATCHDOG-1: one lane operation's no-progress deadline. */
+export interface QueueLaneWatch {
+	/** Progress: the operation entered `phase`; the deadline starts again. */
+	progress(phase: QueueLanePhase): void;
+	/** The operation ended: no expiry any more. */
+	stop(): void;
+	/** Settles with the stall record once the deadline passed without progress; never once stopped. */
+	readonly expired: Promise<QueueLaneStall>;
+}
+
+/**
+ * One host's watchdog: no-progress timers for its lane operations, and the owner's alarm with its cooldown per
+ * (role, lane) (Q-ALARM-1). Heap and RSS are only read for the record (Q-HEAP-1/2).
+ */
+export class QueueLaneWatchdog {
+	/** When each (role, lane) last paged the owner (a send under way counts). */
+	private readonly pagedAt = new Map<string, number>();
+
+	constructor(private readonly host: QueueWatchdogHost) {}
+
+	get tuning(): ResolvedQueueLaneTuning {
+		return resolveQueueLaneTuning(this.host.queueLaneTuning);
+	}
+
+	/** Start the deadline of one lane operation in its first phase. */
+	watch(start: QueueLaneWatchStart): QueueLaneWatch {
+		let phase = start.phase;
+		let since = Date.now();
+		let stopped = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let fire!: (stall: QueueLaneStall) => void;
+		const expired = new Promise<QueueLaneStall>((resolve) => {
+			fire = resolve;
+		});
+		const arm = () => {
+			if (timer) clearTimeout(timer);
+			timer = setTimeout(() => {
+				if (stopped) return;
+				stopped = true;
+				fire({
+					role: start.role,
+					lane: start.lane,
+					phase,
+					elapsedMs: Date.now() - since,
+					deadlineMs: start.deadlineMs,
+					taskId: start.taskId ?? null,
+					sessionFile: start.sessionFile ?? null,
+					conversationId: start.conversationId ?? null,
+					...sampleQueueHeap(this.host.queueMemoryUsage?.()),
+				});
+			}, start.deadlineMs);
+			timer.unref?.();
+		};
+		arm();
+		return {
+			progress(next) {
+				if (stopped) return;
+				phase = next;
+				since = Date.now();
+				arm();
+			},
+			stop() {
+				stopped = true;
+				if (timer) clearTimeout(timer);
+			},
+			expired,
+		};
+	}
+
+	/**
+	 * Q-WATCHDOG-2: `work` under `watch`. On expiry: `free` (only the lane lock, the ceiling slot and the pseudo
+	 * client's generation; never a chat, Q-WATCHDOG-3), log and page (report), then settle with `fallback`'s answer
+	 * when it has one (Phase B: the first turn is under way), else reject with QueueLaneWatchdogError.
+	 */
+	async guard<T>(
+		watch: QueueLaneWatch,
+		work: Promise<T>,
+		free: () => void,
+		fallback?: (stall: QueueLaneStall) => T | undefined,
+	): Promise<T> {
+		const stalled = watch.expired.then((stall): T => {
+			free();
+			this.report(stall);
+			const answer = fallback?.(stall);
+			if (answer !== undefined) return answer;
+			throw new QueueLaneWatchdogError(stall);
+		});
+		try {
+			return await Promise.race([work, stalled]);
+		} finally {
+			watch.stop();
+		}
+	}
+
+	/** Q-WATCHDOG-2 + Q-ALARM-1: log the stall and page the owner, unless this (role, lane) paged within the cooldown. */
+	report(stall: QueueLaneStall): void {
+		console.warn(queueLaneStallLogLine(stall));
+		const send = this.host.sendQueueAlarm;
+		if (!send) return;
+		const key = `${stall.role}/${stall.lane}`;
+		const now = Date.now();
+		const last = this.pagedAt.get(key);
+		if (last !== undefined && now - last < this.tuning.alarmCooldownMs) return;
+		this.pagedAt.set(key, now);
+		// A send that surely didn't go out doesn't start the cooldown: the next stall pages again.
+		const notSent = (why: string) => {
+			if (this.pagedAt.get(key) === now) this.pagedAt.delete(key);
+			console.warn(`[queue-watchdog] owner alarm for ${key} not sent: ${why}`);
+		};
+		let sending: Promise<OwnerTelegramResult>;
+		try {
+			sending = send.call(this.host, queueLaneStallAlarm(stall));
+		} catch (err) {
+			notSent(err instanceof Error ? err.message : String(err));
+			return;
+		}
+		sending.then(
+			(r) => {
+				if (!r.ok && !r.maybeSent) notSent(r.error);
+			},
+			(err: unknown) => notSent(err instanceof Error ? err.message : String(err)),
+		);
+	}
 }

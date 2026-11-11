@@ -1,13 +1,27 @@
+// ---------------------------------------------------------------------------
+// queue-chat-lane.ts — the queue's per-role lanes, pseudo clients and open ceiling (Architecture #516)
+// ---------------------------------------------------------------------------
+// Contract: ~/architecture-dept/conventions/queue-resilience.md. Every role (department) has its own three lanes
+// (Q-ISO-1, Q-LANE-1): `open` (opening a queued task's chat), `close` (closing a finished task's chat) and `home`
+// (opening a queue chat for a question or a "/queue ..." line). One operation runs on a lane at a time; at most
+// MAX_CONCURRENT_ROLE_OPENS roles open task chats at once, the rest wait in FIFO order (Q-ISO-3). Each lane
+// operation runs under queue-lane-watchdog.ts's deadlines: a stalled one gets its lane (and ceiling place) taken
+// back and the owner paged, without any chat being closed (Q-WATCHDOG-1..3, Q-ALARM-1/2).
+// ---------------------------------------------------------------------------
+
 import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
-import type { OwnerTelegramNotice, OwnerTelegramResult } from "./owner-telegram.js";
-import { makeChain, type QueueChatStart, waitUntil } from "./queue-host.js";
+import { type QueueChatStart, waitUntil } from "./queue-host.js";
 import {
 	QUEUE_CLOSE_DEADLINE_MS,
 	type QueueChatActivity,
 	type QueueLaneKind,
-	type QueueLaneTuning,
-	type QueueMemoryUsage,
+	type QueueLanePhase,
+	type QueueLaneWatch,
+	QueueLaneWatchdog,
+	type QueueWatchdogHost,
+	queueChatIsWorking,
+	queueTurnUnderWay,
 	UNASSIGNED_QUEUE_ROLE,
 } from "./queue-lane-watchdog.js";
 import { isQueueTaskChatEntries, isQueueTaskChatFile, TASK_QUEUE_ENTRY_TYPE } from "./task-queue.js";
@@ -16,10 +30,10 @@ import { chatOf } from "./task-queue-fields.js";
 export type QueueLaneChain = <T>(fn: () => Promise<T>) => Promise<T>;
 
 // ---------------------------------------------------------------------------
-// Per-role lane keys and pseudo clients (Q-ISO-1, Q-ISO-1a; Architecture #516, Ops #812 seam)
+// Per-role lane keys and pseudo clients (Q-ISO-1, Q-ISO-1a)
 // ---------------------------------------------------------------------------
 
-/** Q-ISO-1a: the queue's pseudo clients' base ids (agent-service.ts:2654-2655 keeps its own copy until Ops #813). */
+/** Q-ISO-1a: the queue's pseudo clients' base ids (getProjectModel keeps reading QUEUE_TASKS_CLIENT_ID's). */
 export const QUEUE_TASKS_CLIENT_ID = "carry-on:queue";
 export const QUEUE_HOME_CLIENT_ID = "carry-on:queue-home";
 
@@ -63,7 +77,7 @@ export interface QueueLaneRoleLookup {
 	/** The role of an open chat: its task queue's home chat's role, else its identity. */
 	roleOfOpenChat?(file: string): string | undefined;
 	/** A task chat's queue chat, from its persisted pi-queue `assigned` entry's `from.file`. */
-	queueChatOfTaskFile?(file: string): Promise<string | undefined> | string | undefined;
+	queueChatOfTaskFile?(file: string): Promise<string | null | undefined> | string | null | undefined;
 }
 
 /** Q-ISO-1: what a lane operation knows about whose it is. */
@@ -73,7 +87,7 @@ export interface QueueLaneRoleSource {
 	file?: string;
 }
 
-function usableRole(role: string | undefined): string | undefined {
+function usableRole(role: string | null | undefined): string | undefined {
 	const r = role?.trim();
 	return r && ROLE_KEY.test(r) ? r : undefined;
 }
@@ -106,7 +120,7 @@ export async function resolveQueueLaneRoleKey(
 	const explicit = usableRole(src.roleId);
 	if (explicit) return explicit;
 	if (!lookup) return UNASSIGNED_QUEUE_ROLE;
-	const ask = async (fn: () => Promise<string | undefined> | string | undefined) => {
+	const ask = async <T>(fn: () => Promise<T> | T): Promise<T | undefined> => {
 		try {
 			return await fn();
 		} catch {
@@ -126,6 +140,10 @@ export async function resolveQueueLaneRoleKey(
 	return (persisted && usableRole(await ask(() => lookup.roleOfHomeChat(persisted)))) || UNASSIGNED_QUEUE_ROLE;
 }
 
+// ---------------------------------------------------------------------------
+// The host as the lanes see it (AgentService; tests give their own)
+// ---------------------------------------------------------------------------
+
 export interface QueueCloseSessionView {
 	isStreaming?: boolean;
 	isCompacting?: boolean;
@@ -139,70 +157,17 @@ export interface QueueCloseClientView {
 	releaseQueueChat(file: string): boolean;
 }
 
-export interface QueueCloseHostContext {
+export interface QueueCloseHostContext extends QueueWatchdogHost {
 	clients: Map<string, QueueCloseClientView>;
 	stateStore: { removeRecent(path: string): void };
 	queueSessionFor(file: string): QueueCloseSessionView | null;
-	queueCloseChain?: QueueLaneChain;
+	/** Q-WATCHDOG-1: how long closing waits for a finished task's chat to go idle (default 15 minutes). */
 	queueCloseDeadlineMs?: number;
+	/** Q-ISO-1: how a lane operation's role is found; missing: every operation is "__unassigned__". */
+	queueLaneRoles?: QueueLaneRoleLookup;
+	/** Q-WATCHDOG-2/3: what the open chat with this transcript is doing (null: it isn't open). */
+	queueChatActivity?(file: string): QueueChatActivity | null;
 }
-
-/**
- * Wait (up to `queueCloseDeadlineMs`, default 15 minutes) for a finished task's chat to go idle,
- * then release it on the dedicated `queueCloseChain` (separate from `queueTasksChain` so closing
- * a finished chat never blocks opening a new task chat). If the chat is still streaming or compacting
- * at the deadline, log loudly naming the chat and leave it open (never disposing a chat mid-turn).
- */
-export async function runQueueCloseChat(
-	host: QueueCloseHostContext,
-	file: string,
-	onRecentChanged: () => void,
-): Promise<boolean> {
-	const deadlineMs =
-		typeof host.queueCloseDeadlineMs === "number" &&
-		Number.isFinite(host.queueCloseDeadlineMs) &&
-		host.queueCloseDeadlineMs > 0
-			? host.queueCloseDeadlineMs
-			: QUEUE_CLOSE_DEADLINE_MS;
-	const settled = await waitUntil(
-		() => {
-			const session = host.queueSessionFor(file);
-			return !session || (!session.isStreaming && !session.isCompacting);
-		},
-		deadlineMs,
-		500,
-	);
-	if (!settled) {
-		const busy = host.queueSessionFor(file);
-		const name = busy?.sessionManager?.getSessionName?.()?.trim() || basename(file);
-		console.warn(
-			`[queue-lanes] finished task chat "${name}" (${file}) is still busy after ${deadlineMs}ms; leaving it open so its turn is not cut off`,
-		);
-		return false;
-	}
-	const open = host.queueSessionFor(file);
-	const taskChat = open ? isQueueTaskChatEntries(open.sessionManager.getEntries()) : await isQueueTaskChatFile(file);
-	const closeChain = (host.queueCloseChain ??= makeChain());
-	return closeChain(async () => {
-		if (taskChat) host.stateStore.removeRecent(resolve(file));
-		for (const cs of host.clients.values()) {
-			try {
-				if (cs.releaseQueueChat(file)) return true;
-			} catch {
-				// try the next client
-			}
-		}
-		if (taskChat) onRecentChanged();
-		return taskChat;
-	});
-}
-
-// ---------------------------------------------------------------------------
-// Lane entry points (Q-LANE-1). Ops #812 seam: these carry today's behaviour unchanged (the three process-wide
-// chains of agent-service.ts:20543-20545 and the two shared pseudo clients) and are not wired yet; Q-ASSERT-1..6
-// fail against them. Ops #813 makes them per role with the open ceiling, the watchdog and the alarm, and moves
-// agent-service.ts's inline startChat / questions.prepare / queueRunCommand onto them.
-// ---------------------------------------------------------------------------
 
 /** An open chat as the home lane runs a "/queue ..." line in it. */
 export interface QueueLaneSessionView extends QueueCloseSessionView {
@@ -223,61 +188,208 @@ export interface QueueLaneClient {
 	openChatForQueue(file: string): Promise<QueueLaneSessionView | null>;
 }
 
-/** The queue host as the lanes see it (AgentService). */
+/** The queue host as the open and home lanes see it (AgentService). */
 export interface QueueLaneHostContext extends QueueCloseHostContext {
 	queueSessionFor(file: string): QueueLaneSessionView | null;
-	/** Attach the pseudo client `clientId`, run `fn` through it, detach (AgentService.withQueueClient). */
+	/** Attach the pseudo client `clientId` with a fresh sink, run `fn` through it, detach (withQueueClient). */
 	withQueueClient<T>(clientId: string, fn: (cs: QueueLaneClient) => Promise<T>): Promise<T>;
-	/** Q-ISO-1: how a lane operation's role is found; missing: every operation is "__unassigned__". */
-	queueLaneRoles?: QueueLaneRoleLookup;
-	/** Q-WATCHDOG-1 / Q-ISO-3 / Q-ALARM-1 limits (tests shorten them). */
-	queueLaneTuning?: QueueLaneTuning;
-	/** Q-WATCHDOG-2/3: whether the chat with this transcript is still at work. */
-	queueChatActivity?(file: string): QueueChatActivity | null;
-	/** Q-ALARM-2: send the owner's alarm (owner-telegram.ts sendOwnerTelegram with the telegram_send tool). */
-	sendQueueAlarm?(notice: OwnerTelegramNotice): Promise<OwnerTelegramResult>;
-	/** Q-HEAP-2: read-only telemetry (default process.memoryUsage). */
-	queueMemoryUsage?(): QueueMemoryUsage;
-	queueTasksChain?: QueueLaneChain;
-	queueHomeChain?: QueueLaneChain;
 }
 
 /** Q-ISO-1: the role a lane operation belongs to. */
-export function queueLaneRoleOf(host: QueueLaneHostContext, src: QueueLaneRoleSource): Promise<string> {
+export function queueLaneRoleOf(host: QueueCloseHostContext, src: QueueLaneRoleSource): Promise<string> {
 	return resolveQueueLaneRoleKey(src, host.queueLaneRoles);
 }
 
-/**
- * Q-LANE-1: the lane a role's operation of this kind runs on. Seam (Ops #812): still the process-wide chain of
- * that kind whatever the role, as agent-service.ts has it; Ops #813 returns the role's own lane.
- */
-export function queueRoleLane(host: QueueLaneHostContext, roleKey: string, lane: QueueLaneKind): QueueLaneChain {
-	checkedRoleKey(roleKey);
-	if (lane === "open") return (host.queueTasksChain ??= makeChain());
-	if (lane === "close") return (host.queueCloseChain ??= makeChain());
-	return (host.queueHomeChain ??= makeChain());
+// ---------------------------------------------------------------------------
+// One host's lanes and the open ceiling (Q-LANE-1, Q-ISO-3)
+// ---------------------------------------------------------------------------
+
+/** One host's lanes: the tail of each (role, lane), its pseudo client's generation, the open ceiling, the watchdog. */
+interface QueueLanes {
+	tails: Map<string, Promise<void>>;
+	gens: Map<string, number>;
+	opens: { active: number; waiting: Array<() => void> };
+	watchdog: QueueLaneWatchdog;
 }
 
-/** Q-LANE-1 lanes.open: pi-queue's startChat (agent-service.ts:20652-20657 today). */
+const lanesByHost = new WeakMap<object, QueueLanes>();
+
+function lanesOf(host: QueueCloseHostContext): QueueLanes {
+	let lanes = lanesByHost.get(host);
+	if (!lanes) {
+		const opens = { active: 0, waiting: [] };
+		lanes = { tails: new Map(), gens: new Map(), opens, watchdog: new QueueLaneWatchdog(host) };
+		lanesByHost.set(host, lanes);
+	}
+	return lanes;
+}
+
+/** Wait for the lane `key`; the answer frees it (the first call; the watchdog's and the operation's may race). */
+async function enterLane(lanes: QueueLanes, key: string): Promise<() => void> {
+	const before = lanes.tails.get(key) ?? Promise.resolve();
+	let free!: () => void;
+	const mine = new Promise<void>((r) => {
+		free = r;
+	});
+	const tail = before.then(() => mine);
+	lanes.tails.set(key, tail);
+	void tail.then(() => {
+		if (lanes.tails.get(key) === tail) lanes.tails.delete(key);
+	});
+	await before;
+	return free;
+}
+
+/** Q-ISO-3: a place under the open ceiling; `admitted` settles once it is this operation's turn (FIFO, never dropped). */
+function joinOpenCeiling(lanes: QueueLanes, max: number): { admitted: Promise<void>; free: () => void } {
+	const opens = lanes.opens;
+	let inside = false;
+	let admit!: () => void;
+	const admitted = new Promise<void>((r) => {
+		admit = () => {
+			inside = true;
+			r();
+		};
+	});
+	if (opens.active < max) {
+		opens.active++;
+		admit();
+	} else opens.waiting.push(admit);
+	const free = () => {
+		if (!inside) return;
+		inside = false;
+		const next = opens.waiting.shift();
+		if (next) next();
+		else opens.active--;
+	};
+	return { admitted, free };
+}
+
+/** Q-WATCHDOG-2: the role's next operation on this lane uses a new pseudo client; then the lane is freed. */
+function rotateAndFree(lanes: QueueLanes, key: string, gen: number, free: () => void): void {
+	if ((lanes.gens.get(key) ?? 0) === gen) lanes.gens.set(key, gen + 1);
+	free();
+}
+
+/** Q-LANE-1: run `fn` on a role's lane of this kind, no watchdog (the lane entry points below add it). */
+export function queueRoleLane(host: QueueCloseHostContext, roleKey: string, lane: QueueLaneKind): QueueLaneChain {
+	const key = queueLaneKey(roleKey, lane);
+	return async (fn) => {
+		const leave = await enterLane(lanesOf(host), key);
+		try {
+			return await fn();
+		} finally {
+			leave();
+		}
+	};
+}
+
+/** Q-LANE-1 + Q-WATCHDOG-1/2: `work` on a role's close or home lane under the Phase A deadline. */
+async function onRoleLane<T>(
+	host: QueueCloseHostContext,
+	role: string,
+	lane: "close" | "home",
+	phase: QueueLanePhase,
+	sessionFile: string,
+	work: (gen: number, watch: QueueLaneWatch) => Promise<T>,
+): Promise<T> {
+	const lanes = lanesOf(host);
+	const { watchdog } = lanes;
+	const key = queueLaneKey(role, lane);
+	const leave = await enterLane(lanes, key);
+	const gen = lanes.gens.get(key) ?? 0;
+	const watch = watchdog.watch({ role, lane, phase, deadlineMs: watchdog.tuning.laneDeadlineMs, sessionFile });
+	try {
+		return await watchdog.guard(watch, work(gen, watch), () => rotateAndFree(lanes, key, gen, leave));
+	} finally {
+		watch.stop();
+		leave();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Lane entry points (Q-LANE-1), called by agent-service.ts's queue host
+// ---------------------------------------------------------------------------
+
+/**
+ * Q-LANE-1 lanes.open: pi-queue's startChat. The role's open lane and a place under the ceiling are held only while
+ * the chat opens and its first prompt goes out (Phase A); waiting for pi to take that prompt (Phase B) runs outside
+ * them (Ops #629). A Phase A stall frees both and rotates the pseudo client; a Phase B stall answers with the chat
+ * when its first turn is under way, else rejects (Q-WATCHDOG-2).
+ */
 export async function runQueueStartChat(
 	host: QueueLaneHostContext,
 	o: QueueChatStart,
 ): Promise<{ sessionFile: string; conversationId?: string }> {
 	const role = await queueLaneRoleOf(host, { entries: o.entries });
-	const opened = await queueRoleLane(
-		host,
+	const taskId = queueTaskIdOf(o.entries);
+	const lanes = lanesOf(host);
+	const { watchdog } = lanes;
+	const tuning = watchdog.tuning;
+	const key = queueLaneKey(role, "open");
+	const leave = await enterLane(lanes, key);
+	const place = joinOpenCeiling(lanes, tuning.maxConcurrentOpens);
+	// Q-ALARM-1: a long wait for a place pages the owner; the role keeps its place (Q-ISO-3: never dropped).
+	const deadlineMs = tuning.ceilingWaitDeadlineMs;
+	const queued = watchdog.watch({ role, lane: "open", phase: "queued_ceiling", deadlineMs, taskId });
+	void queued.expired.then((stall) => watchdog.report(stall));
+	await place.admitted;
+	queued.stop();
+	const gen = lanes.gens.get(key) ?? 0;
+	const free = () => {
+		place.free();
+		leave();
+	};
+	const watch = watchdog.watch({
 		role,
-		"open",
-	)(() => host.withQueueClient(QUEUE_TASKS_CLIENT_ID, (cs) => cs.openTaskChat(o)));
-	await opened.started;
-	return { sessionFile: opened.sessionFile, conversationId: opened.conversationId };
+		lane: "open",
+		phase: "attaching_client",
+		deadlineMs: tuning.laneDeadlineMs,
+		taskId,
+	});
+	const start: QueueChatStart = {
+		...o,
+		onPrepared: (launch) => {
+			watch.progress("starting_prompt");
+			return o.onPrepared ? o.onPrepared(launch) : true;
+		},
+	};
+	let opened: QueueOpenedTaskChat;
+	try {
+		opened = await watchdog.guard(
+			watch,
+			host.withQueueClient(queueTasksClientIdFor(role, gen), async (cs) => {
+				watch.progress("creating_runtime");
+				return cs.openTaskChat(start);
+			}),
+			() => rotateAndFree(lanes, key, gen, free),
+		);
+	} finally {
+		free();
+	}
+	const answer = { sessionFile: opened.sessionFile, conversationId: opened.conversationId };
+	const turn = watchdog.watch({
+		role,
+		lane: "open",
+		phase: "awaiting_turn_start",
+		deadlineMs: tuning.startTurnDeadlineMs,
+		taskId,
+		...answer,
+	});
+	return watchdog.guard(
+		turn,
+		opened.started.then(() => answer),
+		() => {},
+		() => (queueTurnUnderWay(host.queueChatActivity?.(opened.sessionFile)) ? answer : undefined),
+	);
 }
 
-/** Q-LANE-1 lanes.home: run a "/queue ..." line in a chat, opening it if it isn't (agent-service.ts:20796-20811). */
+/** Q-LANE-1 lanes.home: run a "/queue ..." line in a chat, opening it if it isn't (an open one takes no lane). */
 export async function runQueueCommand(host: QueueLaneHostContext, file: string, line: string): Promise<boolean> {
-	const run = async (session: QueueLaneSessionView | null): Promise<boolean> => {
+	const run = async (session: QueueLaneSessionView | null, watch?: QueueLaneWatch): Promise<boolean> => {
 		// No /queue command (pi-queue isn't loaded there): prompt() would send the line to the model.
 		if (!session?.extensionRunner?.getCommand?.("queue") || !session.prompt) return false;
+		watch?.progress("running_home_action");
 		await session.prompt(line);
 		return true;
 	};
@@ -285,29 +397,72 @@ export async function runQueueCommand(host: QueueLaneHostContext, file: string, 
 	if (open) return run(open);
 	if (!existsSync(file)) return false;
 	const role = await queueLaneRoleOf(host, { file });
-	return queueRoleLane(
-		host,
-		role,
-		"home",
-	)(() =>
-		host.withQueueClient(QUEUE_HOME_CLIENT_ID, async (cs) =>
-			run(host.queueSessionFor(file) ?? (await cs.openChatForQueue(file))),
+	return onRoleLane(host, role, "home", "switching_home_session", file, (gen, watch) =>
+		host.withQueueClient(queueHomeClientIdFor(role, gen), async (cs) =>
+			run(host.queueSessionFor(file) ?? (await cs.openChatForQueue(file)), watch),
 		),
 	);
 }
 
-/** Q-LANE-1 lanes.home: open a question's chat if it isn't open (questions.prepare, agent-service.ts:20611-20620). */
+/** Q-LANE-1 lanes.home: open a question's chat if it isn't open (questions.prepare). */
 export async function runQueueHomePrepare(host: QueueLaneHostContext, file: string): Promise<void> {
 	if (host.queueSessionFor(file)) return;
 	const role = await queueLaneRoleOf(host, { file });
-	await queueRoleLane(
-		host,
-		role,
-		"home",
-	)(() =>
-		host.withQueueClient(QUEUE_HOME_CLIENT_ID, async (cs) => {
+	await onRoleLane(host, role, "home", "switching_home_session", file, (gen) =>
+		host.withQueueClient(queueHomeClientIdFor(role, gen), async (cs) => {
 			if (!host.queueSessionFor(file) && !(await cs.openChatForQueue(file)))
 				throw new Error("question session could not be opened");
 		}),
 	);
+}
+
+/**
+ * Q-LANE-1 lanes.close: wait (up to `queueCloseDeadlineMs`, default 15 minutes, outside any lane) for a finished
+ * task's chat to stop working, then release it on its role's close lane (separate from opening, so closing a
+ * finished chat never blocks a new task chat). Still working at the deadline: log loudly naming the chat and
+ * leave it open (Ops #771). Q-WATCHDOG-3: a working chat is never released, removed or disposed.
+ */
+export async function runQueueCloseChat(
+	host: QueueCloseHostContext,
+	file: string,
+	onRecentChanged: () => void,
+): Promise<boolean> {
+	const deadlineMs =
+		typeof host.queueCloseDeadlineMs === "number" &&
+		Number.isFinite(host.queueCloseDeadlineMs) &&
+		host.queueCloseDeadlineMs > 0
+			? host.queueCloseDeadlineMs
+			: QUEUE_CLOSE_DEADLINE_MS;
+	const working = () => {
+		const session = host.queueSessionFor(file);
+		if (session?.isStreaming || session?.isCompacting) return true;
+		return !!session && queueChatIsWorking(host.queueChatActivity?.(file));
+	};
+	const busyName = () => host.queueSessionFor(file)?.sessionManager?.getSessionName?.()?.trim() || basename(file);
+	if (!(await waitUntil(() => !working(), deadlineMs, 500))) {
+		console.warn(
+			`[queue-lanes] finished task chat "${busyName()}" (${file}) is still busy after ${deadlineMs}ms; leaving it open so its turn is not cut off`,
+		);
+		return false;
+	}
+	const open = host.queueSessionFor(file);
+	const taskChat = open ? isQueueTaskChatEntries(open.sessionManager.getEntries()) : await isQueueTaskChatFile(file);
+	const role = await queueLaneRoleOf(host, { file });
+	return onRoleLane(host, role, "close", "releasing_chat", file, async () => {
+		// It may have started working again while this waited for its role's close lane.
+		if (working()) {
+			console.warn(`[queue-lanes] finished task chat "${busyName()}" (${file}) is busy again; leaving it open`);
+			return false;
+		}
+		if (taskChat) host.stateStore.removeRecent(resolve(file));
+		for (const cs of host.clients.values()) {
+			try {
+				if (cs.releaseQueueChat(file)) return true;
+			} catch {
+				// try the next client
+			}
+		}
+		if (taskChat) onRecentChanged();
+		return taskChat;
+	});
 }

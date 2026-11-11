@@ -533,12 +533,14 @@ import {
 } from "./queue-owner.js";
 import {
 	isQueueTaskChatEntries,
+	queueTaskChatOrigin,
 	TASK_QUEUE_ENTRY_TYPE,
 	taskQueueCommandLine,
 	taskQueueFromEntries,
 	taskQueueShareableFrom,
 } from "./task-queue.js";
-import { type QueueCloseHostContext, runQueueCloseChat } from "./queue-chat-lane.js";
+import * as queueLanes from "./queue-chat-lane.js";
+import { queueChatActivityOf } from "./queue-lane-watchdog.js";
 import {
 	type ChatState,
 	chatStateFrom,
@@ -2648,12 +2650,9 @@ const CARRY_ON_CLIENT_PREFIX = "carry-on:";
 /** wake-reopen: the pseudo client (a carry-on one) that reopens a closed chat for its scheduled wake-up. */
 const WAKE_REOPEN_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}wake`;
 const WAKE_REOPEN_SINK = (): void => {};
-/** queue-lanes: the pseudo clients through which the queue host (queue-host.ts) opens chats: one
- *  starts the task chats, the other opens a chat to run a queue command in it. Carry-on ones: they
- *  get past the carry-on gate and start on a blank chat. */
-const QUEUE_TASKS_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}queue`;
-const QUEUE_HOME_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}queue-home`;
-const QUEUE_HOST_SINK = (): void => {};
+/** queue-lanes + queue-resilience (Q-ISO-1a): the queue's pseudo clients (queue-chat-lane.ts) are carry-on ones: they
+ *  get past the carry-on gate and start on a blank chat. Task chats' default model is the base id's. */
+const { QUEUE_TASKS_CLIENT_ID } = queueLanes;
 /** role-messages: the pseudo client (a carry-on one) that opens a role's chat to deliver a role message. */
 const ROLE_MESSAGES_CLIENT_ID = `${CARRY_ON_CLIENT_PREFIX}role-messages`;
 /** role-messages: how long a delivery waits for its prompt's receipt. */
@@ -7429,6 +7428,20 @@ export class ClientSession {
 			}
 		}
 		return null;
+	}
+
+	/** queue-resilience (Q-ISO-1): an open chat's role: its task queue's home chat's, else its own identity's. */
+	static queueLaneRoleOf(file: string): string | undefined {
+		const c = ClientSession.sharedConvs.get(ClientSession.conversationIdBySessionFile(file) ?? "");
+		if (!c) return undefined;
+		const queueChat = ClientSession.taskQueueOfConv(c).from?.file;
+		return homeChatOf(queueChat, identityRegistry().identities)?.id ?? ClientSession.identityOfConv(c)?.id;
+	}
+
+	/** queue-resilience (Q-WATCHDOG-2/3): what the open chat with this transcript is doing; null: it isn't open. */
+	static queueChatActivity(file: string) {
+		const c = ClientSession.sharedConvs.get(ClientSession.conversationIdBySessionFile(file) ?? "");
+		return c ? queueChatActivityOf(c.session, c.sendsInFlight, c.terminals.countBlockingLive()) : null;
 	}
 
 	findOpenConversationByRole(role: string): string | null {
@@ -15491,7 +15504,7 @@ export class ClientSession {
 	private markRecentSeen(conv: Conversation | undefined): void {
 		// queue-done-hidden: the queue opening (or moving through) chats isn't the user looking at them: a
 		// finished task's chat stays out of Recent chats, and a green light stays on.
-		if (this.clientId === QUEUE_TASKS_CLIENT_ID || this.clientId === QUEUE_HOME_CLIENT_ID) return;
+		if (queueLanes.isQueuePseudoClientId(this.clientId)) return;
 		const path = conv?.session.sessionFile;
 		if (!path) return;
 		const abs = resolve(path);
@@ -20539,17 +20552,25 @@ export class AgentService {
 
 	/** queue-lanes: taken back down in disposeAll. */
 	private uninstallQueueHost: (() => void) | null = null;
-	/** queue-lanes: one task chat opened at a time, one finished task chat closed at a time, one home chat opened at a time. */
-	private queueTasksChain = makeChain();
-	private queueCloseChain = makeChain();
-	private queueHomeChain = makeChain();
+	/** queue-resilience (Q-ISO-1): whose a queue lane operation is, for queue-chat-lane.ts's per-role lanes. */
+	readonly queueLaneRoles: queueLanes.QueueLaneRoleLookup = {
+		roleOfHomeChat: (file) => homeChatOf(file, identityRegistry().identities)?.id,
+		roleOfOpenChat: (file) => ClientSession.queueLaneRoleOf(file),
+		queueChatOfTaskFile: (file) => queueTaskChatOrigin(file),
+	};
+	/** queue-resilience (Q-ALARM-2): the owner's stall alarm by telegram_send (index.ts hands it to installQueueHost). */
+	sendQueueAlarm: queueLanes.QueueLaneHostContext["sendQueueAlarm"];
+	/** queue-resilience (Q-WATCHDOG-2/3): what the open chat with this transcript is doing. */
+	readonly queueChatActivity = (file: string) => ClientSession.queueChatActivity(file);
 
 	/**
 	 * queue-lanes: offer pi-queue a way to run queued tasks in chats of their own (queue-host.ts).
-	 * The command-line pi has none; there tasks run in the queue's chat as before.
+	 * The command-line pi has none; there tasks run in the queue's chat as before. Each role opens, closes and
+	 * runs queue commands on lanes of its own (queue-chat-lane.ts, Architecture #516).
 	 */
-	installQueueHost(): void {
+	installQueueHost(sendAlarm?: queueLanes.QueueLaneHostContext["sendQueueAlarm"]): void {
 		if (this.uninstallQueueHost) return;
+		this.sendQueueAlarm = sendAlarm;
 		// telegram-answers: a stuck task's answer from elsewhere (Telegram, the Queue tab) goes into its
 		// chat the way a scheduled wake-up does: the chat is opened (or switched to) and gets the text.
 		// queue-paused: what a plugin sends a paused task's chat goes in without a turn.
@@ -20609,15 +20630,7 @@ export class AgentService {
 		const questions = nativeQuestionHost({
 			session: (file) => this.queueSessionFor(file),
 			roles: () => identityRegistry(true).identities,
-			prepare: async (file) => {
-				if (this.queueSessionFor(file)) return;
-				await this.queueHomeChain(() =>
-					this.withQueueClient(QUEUE_HOME_CLIENT_ID, async (cs) => {
-						if (!this.queueSessionFor(file) && !(await cs.openChatForQueue(file)))
-							throw new Error("question session could not be opened");
-					}),
-				);
-			},
+			prepare: (file) => queueLanes.runQueueHomePrepare(this as unknown as queueLanes.QueueLaneHostContext, file),
 			dispatch: (file, command) => this.queueRunCommand(file, command),
 		});
 		ClientSession.admitQuestionAnswer = questions.admitOwnerAnswer;
@@ -20647,15 +20660,9 @@ export class AgentService {
 			deadEnd: async (req) => deadEndAnswer(await this.readWorkPage(), req, Date.now()),
 			previewLaunch: (request, cwd, sourceSessionId) =>
 				previewExistingQueueLaunch(request, cwd, sourceSessionId, this.clients.values()),
-			// task-chat-start (Ops #629): the chain only covers opening the chat and sending its first prompt;
+			// task-chat-start (Ops #629): the role's open lane only covers opening the chat and sending its first prompt;
 			// waiting for pi to take it (a slow before_agent_start step) doesn't hold up the next task's start.
-			startChat: async (o) => {
-				const opened = await this.queueTasksChain(() =>
-					this.withQueueClient(QUEUE_TASKS_CLIENT_ID, (cs) => cs.openTaskChat(o)),
-				);
-				await opened.started;
-				return { sessionFile: opened.sessionFile, conversationId: opened.conversationId };
-			},
+			startChat: (o) => queueLanes.runQueueStartChat(this as unknown as queueLanes.QueueLaneHostContext, o),
 			runCommand: (file, line) => this.queueRunCommand(file, line),
 			closeChat: (file) => this.queueCloseChat(file),
 			chatState: async (file) => this.queueChatState(file),
@@ -20766,16 +20773,18 @@ export class AgentService {
 			console.log(`[stall-watch] opened ${opened} of ${owing} queue chat(s) owing a task its "Back to task"`);
 	}
 
-	/** queue-lanes: do something through one of the queue's pseudo clients; open windows list the result. */
+	/** queue-lanes: do something through one of the queue's pseudo clients (a fresh sink each time, Q-ISO-1a); open
+	 *  windows list the result. */
 	private async withQueueClient<T>(clientId: string, fn: (cs: ClientSession) => Promise<T>): Promise<T> {
 		if (this.quiesced) throw new Error("the server is busy (quiesced)");
-		const cs = await this.attach(clientId, QUEUE_HOST_SINK);
+		const sink = (): void => {};
+		const cs = await this.attach(clientId, sink);
 		try {
 			return await fn(cs);
 		} finally {
 			this.pokeExternalRunning(clientId);
 			// Nobody watches through this client: its chats count as unwatched (their done ring rings).
-			this.detach(clientId, QUEUE_HOST_SINK);
+			this.detach(clientId, sink);
 		}
 	}
 
@@ -20794,30 +20803,18 @@ export class AgentService {
 
 	/** queue-lanes: run a "/queue ..." line in the chat with this transcript, opening it if it isn't open. */
 	private async queueRunCommand(file: string, line: string): Promise<boolean> {
-		const run = async (session: AgentSession | null): Promise<boolean> => {
-			// No /queue command (pi-queue isn't loaded there): prompt() would send the line to the model.
-			if (!session?.extensionRunner?.getCommand?.("queue")) return false;
-			await session.prompt(line);
-			return true;
-		};
-		const open = this.queueSessionFor(file);
-		if (open) return run(open);
-		if (!existsSync(file)) return false;
-		return this.queueHomeChain(() =>
-			this.withQueueClient(QUEUE_HOME_CLIENT_ID, async (cs) =>
-				run(this.queueSessionFor(file) ?? (await cs.openChatForQueue(file))),
-			),
-		);
+		return queueLanes.runQueueCommand(this as unknown as queueLanes.QueueLaneHostContext, file, line);
 	}
 
 	/**
 	 * queue-lanes: a done (or removed) task's chat leaves the running list once it is idle. settle-stale
 	 * (Ops #771) + bounded close lane (Ops #807): waits up to `QUEUE_CLOSE_DEADLINE_MS` (15m) without
-	 * disposing a still-working chat mid-turn, and releases on `queueCloseChain` so closing a chat never
-	 * blocks `queueTasksChain` from opening new task chats.
+	 * disposing a still-working chat mid-turn, and releases on its role's close lane so closing a chat never
+	 * blocks opening new task chats (queue-chat-lane.ts runQueueCloseChat).
 	 */
 	private async queueCloseChat(file: string): Promise<boolean> {
-		return runQueueCloseChat(this as unknown as QueueCloseHostContext, file, () => ClientSession.recentChangedForAll());
+		const host = this as unknown as queueLanes.QueueCloseHostContext;
+		return queueLanes.runQueueCloseChat(host, file, () => ClientSession.recentChangedForAll());
 	}
 
 	/** issue #231：同项目视口回退 —— 原绑定对话不在时，把唤醒投给该项目最近活跃
