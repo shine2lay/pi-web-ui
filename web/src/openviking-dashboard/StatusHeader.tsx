@@ -25,7 +25,8 @@ export function StatusHeader({
 		<div className="ovk-status-header" data-component="status-header">
 			<div className="ovk-status-main">
 				<div className="ovk-status-identity">
-					<h2 className="ovk-status-title">OpenViking Memory Observability</h2>
+					{/* h1: the page's own heading (axe page-has-heading-one). The size stays the design's. */}
+					<h1 className="ovk-status-title">OpenViking Memory Observability</h1>
 					<div className="ovk-status-pills">
 						<StatePill presentation={model.presentation} className="ovk-status-pill" />
 						{model.modeLabel ? (

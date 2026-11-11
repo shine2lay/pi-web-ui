@@ -124,7 +124,11 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 	}, [openRow, drawerSource]);
 
 	return (
-		<div className="ovk-dashboard" data-component="openviking-dashboard" data-screen-state={renderState}>
+		// <main>, so the page's own content sits inside a landmark instead of loose in the shell: axe
+		// reported the status header, the tab bar and the drawer's text under `region` and the document
+		// under `landmark-one-main` (#259). The pane is display:none when another tab is shown, so this
+		// is never a second main.
+		<main className="ovk-dashboard" data-component="openviking-dashboard" data-screen-state={renderState}>
 			<StatusHeader
 				model={header}
 				lastInjection={ageValue(
@@ -227,7 +231,7 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 				</div>
 			</div>
 			{drawer ? <ReaderDrawer model={drawer} onClose={closeDrawer} /> : null}
-		</div>
+		</main>
 	);
 }
 
