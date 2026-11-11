@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot } from "react-dom/client";
@@ -10,6 +12,7 @@ import {
 	DEFAULT_PRIORITY,
 	PRIORITIES,
 	PRIORITY_RANK,
+	TASK_PRIORITY_BADGE_CSS,
 	TaskPriorityBadge,
 	checkPriority,
 	formatTaskPriorityBadge,
@@ -23,6 +26,7 @@ import { receiveRoles, resetRolesState } from "../../web/src/roles-state.js";
 import { renderUnifiedTaskCard } from "../../web/src/tasks-roles-v8/card-surface.js";
 import { createInitialFilterState } from "../../web/src/tasks-roles-v8/filters.js";
 import { buildLiveTasksRolesV8Dataset } from "../../web/src/tasks-roles-v8/live-adapter.js";
+import { TASKS_ROLES_V8_CSS } from "../../web/src/tasks-roles-v8/styles.js";
 import { taskOf } from "../../server/roles-task-next.js";
 import { insertByPriority, normPriority, repositionReadyTaskByPriority } from "../../server/shared/task-priority.js";
 import { TASK_QUEUE_ENTRY_TYPE, taskQueueFromEntries } from "../../server/task-queue.js";
@@ -323,7 +327,19 @@ describe("Task priority P0–P3 in pi-web-ui (Task #805)", () => {
 		expect(list.map((x) => x.id)).toEqual([1, 3, 2]);
 	});
 
-	it("renders TaskPriorityBadge component directly", () => {
+	it("renders TaskPriorityBadge component directly and ships P0-P3 badge CSS in styles.css and TASKS_ROLES_V8_CSS", () => {
 		expect(renderToStaticMarkup(createElement(TaskPriorityBadge, { priority: "P1" }))).toContain('data-priority="P1"');
+		const stylesCss = readFileSync(join(process.cwd(), "web/src/styles.css"), "utf8");
+		for (const cls of [
+			".task-priority-badge",
+			".task-priority-p0",
+			".task-priority-p1",
+			".task-priority-p2",
+			".task-priority-p3",
+		]) {
+			expect(TASK_PRIORITY_BADGE_CSS).toContain(cls);
+			expect(TASKS_ROLES_V8_CSS).toContain(cls);
+			expect(stylesCss).toContain(cls);
+		}
 	});
 });

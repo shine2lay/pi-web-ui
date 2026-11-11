@@ -3335,6 +3335,9 @@ button.rolemsg-fold:focus-visible {
 .task-queue-title {
 	flex: 1 1 10em;
 	min-width: 0;
+	display: inline-flex;
+	align-items: baseline;
+	gap: 6px;
 	padding: 0;
 	border: none;
 	background: none;
@@ -3346,8 +3349,11 @@ button.rolemsg-fold:focus-visible {
 .task-queue-title:hover .task-queue-title-text {
 	text-decoration: underline;
 }
+.task-queue-title-text {
+	min-width: 0;
+}
 .task-queue-id {
-	margin-right: 6px;
+	flex-shrink: 0;
 	color: var(--text-faint);
 	font-variant-numeric: tabular-nums;
 }
@@ -3590,7 +3596,64 @@ button.rolemsg-fold:focus-visible {
 .task-queue-time {
 	margin-top: 1px;
 }
-/* queue-lanes: lane badge, what a task touches, links to task chats, the lanes-at-once setting. */
+/* queue-lanes: lane badge, priority badge, what a task touches, links to task chats, the lanes-at-once setting. */
+.task-priority-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	padding: 0 5px;
+	border-radius: 4px;
+	border: 1px solid var(--border);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 16px;
+}
+.task-priority-p0 {
+	background: rgba(239, 68, 68, 0.16);
+	color: #fca5a5;
+	border-color: rgba(239, 68, 68, 0.45);
+}
+.theme-light .task-priority-p0,
+html[data-theme="light"] .task-priority-p0 {
+	background: rgba(220, 38, 38, 0.12);
+	color: #b91c1c;
+	border-color: rgba(220, 38, 38, 0.35);
+}
+.task-priority-p1 {
+	background: rgba(245, 158, 11, 0.16);
+	color: #fcd34d;
+	border-color: rgba(245, 158, 11, 0.45);
+}
+.theme-light .task-priority-p1,
+html[data-theme="light"] .task-priority-p1 {
+	background: rgba(217, 119, 6, 0.12);
+	color: #b45309;
+	border-color: rgba(217, 119, 6, 0.35);
+}
+.task-priority-p2 {
+	background: rgba(59, 130, 246, 0.14);
+	color: #93c5fd;
+	border-color: rgba(59, 130, 246, 0.38);
+}
+.theme-light .task-priority-p2,
+html[data-theme="light"] .task-priority-p2 {
+	background: rgba(37, 99, 235, 0.1);
+	color: #1d4ed8;
+	border-color: rgba(37, 99, 235, 0.3);
+}
+.task-priority-p3 {
+	background: rgba(148, 163, 184, 0.12);
+	color: var(--text-dim);
+	border-color: rgba(148, 163, 184, 0.28);
+}
+.theme-light .task-priority-p3,
+html[data-theme="light"] .task-priority-p3 {
+	background: rgba(100, 116, 139, 0.1);
+	color: #475569;
+	border-color: rgba(100, 116, 139, 0.28);
+}
 .task-queue-lane {
 	flex-shrink: 0;
 	padding: 0 5px;
