@@ -54,14 +54,15 @@ function lsResult(uri: string): unknown[] {
 	return [];
 }
 
-/** A stand-in for the `:1933` daemon that records every request. */
-function daemon(mode: "up" | "down" | "hang" = "up") {
+/** A stand-in for the `:1933` daemon that records every request; `stall-once` misses the first /health deadline. */
+function daemon(mode: "up" | "down" | "hang" | "stall-once" = "up") {
 	const calls: Call[] = [];
 	const fetchImpl: typeof fetch = async (input, init) => {
 		const url = new URL(String(input));
 		calls.push({ url, method: init?.method ?? "GET", headers: { ...(init?.headers as Record<string, string>) } });
 		if (mode === "down") throw new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:1933");
-		if (mode === "hang") {
+		const firstHealth = url.pathname === "/health" && calls.filter((c) => c.url.pathname === "/health").length === 1;
+		if (mode === "hang" || (mode === "stall-once" && firstHealth)) {
 			return new Promise<Response>((_, reject) =>
 				init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)),
 			);
@@ -321,6 +322,20 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 			expect(one.status).toBe(503);
 			expect((await c.getAudit({ limit: "2" })).events).toHaveLength(2);
 		}
+	});
+
+	it("a missed deadline is retried once (pi-web-ui's event loop can stall ~2 s), a refused connection is not", async () => {
+		const stalled = daemon("stall-once");
+		const o = await client({ stateDir: stateDir(), fetchImpl: stalled.fetchImpl, timeoutMs: 50 }).getOverview();
+		expect(o.screen_state).not.toBe("error");
+		expect(o.observer.mode_label).not.toBe("Offline");
+		expect(o.observer.roles_online_count).toBe(OPENVIKING_ROLES.length);
+		expect(stalled.calls.filter((c) => c.url.pathname === "/health")).toHaveLength(2);
+
+		const down = daemon("down");
+		const offline = await client({ stateDir: stateDir(), fetchImpl: down.fetchImpl }).getOverview();
+		expect(offline.observer.mode_label).toBe("Offline");
+		expect(down.calls.filter((c) => c.url.pathname === "/health")).toHaveLength(1);
 	});
 
 	it("serves only GET over HTTP: other methods get 405 with Allow: GET, nothing reaches :1933 or the state files", async () => {

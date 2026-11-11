@@ -1,17 +1,27 @@
 /**
  * OpenViking Memory Dashboard — read-only HTTP transport to the `:1933` daemon.
  *
- * Every call is a GET with its own 2000 ms deadline. A transport failure (refused, timed out,
- * aborted) is `OpenVikingDaemonUnreachableError`; an answer that is not `{status: "ok"}` is
+ * Every call is a GET with its own 2000 ms deadline. A missed deadline is retried once with a
+ * fresh deadline: pi-web-ui's own event loop can stall for ~2 s, and the timer then fires before
+ * an answer that already arrived is read. A transport failure (refused, or timed out twice) is
+ * `OpenVikingDaemonUnreachableError`; an answer that is not `{status: "ok"}` is
  * `OpenVikingDaemonRequestError` carrying the upstream error code.
  */
 import { OpenVikingDashboardError } from "./types.js";
 
+const DEADLINE_ATTEMPTS = 2;
+
+const isDeadlineMiss = (err: unknown): boolean =>
+	err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+
 export class OpenVikingDaemonUnreachableError extends OpenVikingDashboardError {
+	readonly deadlineMiss: boolean;
+
 	constructor(daemonUrl: string, path: string, cause: unknown) {
 		const reason = cause instanceof Error ? cause.message : String(cause);
 		super(`OpenViking daemon ${daemonUrl} is unreachable (${path}): ${reason}`, 503, "DAEMON_UNREACHABLE", { path });
 		this.name = "OpenVikingDaemonUnreachableError";
+		this.deadlineMiss = isDeadlineMiss(cause);
 	}
 }
 
@@ -45,24 +55,38 @@ export class OpenVikingDaemonHttp {
 		private readonly fetchImpl: typeof fetch,
 	) {}
 
-	private async envelope(path: string, params: Record<string, string>, headers: Record<string, string>) {
-		const query = new URLSearchParams(params).toString();
-		const url = `${this.daemonUrl}${path}${query ? `?${query}` : ""}`;
+	/** One GET under its own deadline, body read included. */
+	private async attempt(path: string, url: string, headers: Record<string, string>) {
 		let res: Response;
-		let body: DaemonEnvelope;
 		try {
 			res = await this.fetchImpl(url, { method: "GET", headers, signal: AbortSignal.timeout(this.timeoutMs) });
 		} catch (err) {
 			throw new OpenVikingDaemonUnreachableError(this.daemonUrl, path, err);
 		}
 		try {
-			body = (await res.json()) as DaemonEnvelope;
+			return { res, body: (await res.json()) as DaemonEnvelope };
 		} catch (err) {
-			if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-				throw new OpenVikingDaemonUnreachableError(this.daemonUrl, path, err);
-			}
+			if (isDeadlineMiss(err)) throw new OpenVikingDaemonUnreachableError(this.daemonUrl, path, err);
 			throw new OpenVikingDaemonRequestError(path, res.status, "INVALID_JSON", "response body is not JSON");
 		}
+	}
+
+	/** `attempt`, repeated once when only the deadline was missed; a refused connection is final. */
+	private async send(path: string, url: string, headers: Record<string, string>) {
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return await this.attempt(path, url, headers);
+			} catch (err) {
+				const retry = err instanceof OpenVikingDaemonUnreachableError && err.deadlineMiss;
+				if (!retry || attempt >= DEADLINE_ATTEMPTS) throw err;
+			}
+		}
+	}
+
+	private async envelope(path: string, params: Record<string, string>, headers: Record<string, string>) {
+		const query = new URLSearchParams(params).toString();
+		const url = `${this.daemonUrl}${path}${query ? `?${query}` : ""}`;
+		const { res, body } = await this.send(path, url, headers);
 		if (!res.ok || body === null || typeof body !== "object" || body.status !== "ok") {
 			const code = typeof body?.error?.code === "string" ? body.error.code : `HTTP_${res.status}`;
 			const message = typeof body?.error?.message === "string" ? body.error.message : "request failed";
