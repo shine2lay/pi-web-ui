@@ -315,8 +315,8 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 		expect((await overview(noSlots)).slots.every((s) => s.state === "unmeasured-gap")).toBe(true);
 	});
 
-	it("metrics.jsonl: #828 a fixture session_id is never a sample, so no rate is read off it", async () => {
-		const fixtureLine = (min: number) => ({
+	it("metrics.jsonl: #828 a session_id that is not a pi session uuid is never a sample, so no rate is read off it", async () => {
+		const foreignSessionLine = (min: number) => ({
 			timestamp: minutesAgo(min),
 			event: "worker_prefetch_inject",
 			role: "ops",
@@ -337,23 +337,23 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 			})),
 		});
 
-		// Fixtures alone: every slot reads "never measured", not a 100% hit rate.
-		const onlyFixtures = await overview(stateDir({ "metrics.jsonl": [fixtureLine(20), fixtureLine(10)] }));
-		expect(onlyFixtures.slots.map((s) => [s.hit_rate_pct, s.state])).toEqual([
+		// Foreign session ids alone: every slot reads "never measured", not a 100% hit rate.
+		const onlyForeign = await overview(stateDir({ "metrics.jsonl": [foreignSessionLine(20), foreignSessionLine(10)] }));
+		expect(onlyForeign.slots.map((s) => [s.hit_rate_pct, s.state])).toEqual([
 			[null, "unmeasured-gap"],
 			[null, "unmeasured-gap"],
 			[null, "unmeasured-gap"],
 			[null, "unmeasured-gap"],
 			[null, "unmeasured-gap"],
 		]);
-		expect(onlyFixtures.metrics).toMatchObject({
+		expect(onlyForeign.metrics).toMatchObject({
 			turns_sampled_24h: 0,
 			slot_hit_rate_pct: null,
 			avg_injected_tokens: null,
 			last_recorded_at: null,
 		});
 
-		// Mixed: the real miss stands on its own, undiluted by the two fixture hits.
+		// Mixed: the real miss stands on its own, undiluted by the two foreign-session hits.
 		const realMiss = {
 			timestamp: minutesAgo(5),
 			event: "worker_prefetch_inject",
@@ -366,7 +366,9 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 			injected_tokens_est: 0,
 			slots: [{ slot: 1, name: "project_overview", state: "miss", uris: [], l0_hit_count: 0, injected_tokens_est: 0 }],
 		};
-		const mixed = await overview(stateDir({ "metrics.jsonl": [fixtureLine(20), fixtureLine(10), realMiss] }));
+		const mixed = await overview(
+			stateDir({ "metrics.jsonl": [foreignSessionLine(20), foreignSessionLine(10), realMiss] }),
+		);
 		expect(mixed.slots[0]).toMatchObject({ slot_id: 1, hit_rate_pct: 0 });
 		expect(mixed.metrics).toMatchObject({ turns_sampled_24h: 1, slot_hit_rate_pct: 0 });
 	});

@@ -69,11 +69,11 @@ export const pendingSyncCause = (rollout: OpenVikingRolloutState) => ({
 });
 
 /**
- * #828: a line left in the live store by a test run is evidence of a bad write, never a sample.
- * Every rate, count and freshness stamp on this page is read off real sessions only.
+ * #828: a line whose `session_id` is not a pi session uuid is not a live sample — it is evidence of a bad write.
+ * Every rate, count and freshness stamp on this page is read off pi sessions only.
  */
 function measured(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingMetricsRecord[] {
-	return records.filter((r) => !r.fixtureSession && nowMs - r.tsMs <= WINDOW_24H_MS);
+	return records.filter((r) => r.piSession && nowMs - r.tsMs <= WINDOW_24H_MS);
 }
 
 export function summarizeMetrics(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingMetricsSummary {
@@ -81,7 +81,7 @@ export function summarizeMetrics(records: readonly OpenVikingMetricsRecord[], no
 	const injections = recent.flatMap((r) => (r.injection ? [r.injection] : []));
 	const hits = injections.map((i) => i.l0HitCount).filter((v): v is number => v !== null);
 	const tokens = injections.map((i) => i.injectedTokensEst).filter((v): v is number => v !== null);
-	const last = latestMs(records.filter((r) => !r.fixtureSession));
+	const last = latestMs(records.filter((r) => r.piSession));
 	return {
 		slot_hit_rate_pct: hits.length ? round1((100 * hits.filter((h) => h > 0).length) / hits.length) : null,
 		avg_injected_tokens: tokens.length ? Math.round(tokens.reduce((a, b) => a + b, 0) / tokens.length) : null,
