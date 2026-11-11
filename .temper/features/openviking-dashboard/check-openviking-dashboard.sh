@@ -4,6 +4,9 @@
 # Task #269 appends A18-A23 (state honesty, summary/detail parity, drawer integrity, role isolation, focus/keyboard, unmeasured slots); exit 0 now means all 23 pass.
 # Task #275 appends A24-A28 (drawer honours and follows state, neutral unmeasured slots, error card 3 / Tab 3 parity, no role liveness claim); exit 0 now means all 28 pass.
 # A26 reads slot fields and uri_prefix values from server/openviking/types.ts; a missing or unreadable types file is exit 2.
+# Task #280 narrows A04 to :1933-sourced figures (lead ruling on TASK-7-REPORT.md item 1) and appends A29-A31 (session-commit label, phone sheet focus trap,
+# local JSONL panels survive error); exit 0 now means all 31 pass. A04 and A31 read which figure comes from :1933 or a local JSONL from spec.md's
+# source table; a missing or unparseable spec.md is exit 2.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,6 +52,11 @@ OV_TYPES_PATH="${REPO_ROOT}/server/openviking/types.ts"
 [[ ! -f "${OV_TYPES_PATH}" ]] && emit_exit2 "server types not found: ${OV_TYPES_PATH}" "${PROTO_PATH}"
 export OV_TYPES_PATH
 
+# Task #280 (A04/A31): spec.md owns which source (:1933 or a local JSONL) feeds each figure; never restated in this checker
+OV_SPEC_PATH="${SCRIPT_DIR}/spec.md"
+[[ ! -f "${OV_SPEC_PATH}" ]] && emit_exit2 "feature spec not found: ${OV_SPEC_PATH}" "${PROTO_PATH}"
+export OV_SPEC_PATH
+
 python3 - "${PROTO_PATH}" "${TOKENS_PATH}" "${JSON_OUT}" <<'PYEOF'
 import json, math, pathlib, re, sys
 from playwright.sync_api import sync_playwright
@@ -85,6 +93,40 @@ SLOT_FIELDS = re.findall(r"^\s*(\w+)\??\s*:", _slot_iface.group(1), re.M) if _sl
 SLOT_PREFIX_BY_ID = dict(re.findall(r'slot_id:\s*(\d+)\s*,.*?uri_prefix:\s*"([^"]+)"', _slot_defs.group(1), re.S)) if _slot_defs else {}
 if not SLOT_FIELDS or len(SLOT_PREFIX_BY_ID) != 5:
     exit2(f"could not read OpenVikingSlotSummary fields and 5 slot uri_prefix values from {os.environ['OV_TYPES_PATH']}")
+
+# Task #280 (A04/A31): spec.md "Canonical State and Formula Owners" table -> each field is ("server", None) for 127.0.0.1:1933 or ("local", <jsonl>)
+try:
+    spec_src = pathlib.Path(os.environ["OV_SPEC_PATH"]).read_text(encoding="utf-8")
+except Exception as exc:
+    exit2(f"failed to read feature spec: {exc}")
+_owner_tbl = re.search(r"^## Canonical State and Formula Owners\n(.*?)(?=^#{2,3} )", spec_src, re.S | re.M)
+FIELD_SOURCE, FAMILY_SOURCE = {}, {}
+for _line in (_owner_tbl.group(1).splitlines() if _owner_tbl else []):
+    if not _line.startswith("| `"):
+        continue
+    _cols = [c.strip() for c in _line.strip().strip("|").split("|")]
+    if len(_cols) < 2:
+        continue
+    _jsonl = re.findall(r"[\w.-]+\.jsonl\b", _cols[1])
+    _server = re.search(r"/health|/api/v1/|viking://", _cols[1])
+    _src = ("local", _jsonl[0]) if _jsonl and not _server else ("server", None)
+    for _tok in re.findall(r"`([^`]+)`", _cols[0]):
+        _m = re.match(r"^(.*?)\{([^}]*)\}$", _tok)
+        for _field in ([_m.group(1) + x.strip() for x in _m.group(2).split(",")] if _m else [_tok]):
+            FIELD_SOURCE[_field] = _src
+            FAMILY_SOURCE.setdefault(_field.split(".")[0], set()).add(_src)
+if any(len(v) != 1 for v in FAMILY_SOURCE.values()) or not any(s[0] == "local" for s in FIELD_SOURCE.values()) or not any(s[0] == "server" for s in FIELD_SOURCE.values()):
+    exit2(f"could not read one :1933-or-local source per field family from the spec.md source table ({os.environ['OV_SPEC_PATH']})")
+
+def source_of(field):
+    """("server", None) or ("local", jsonl) for a data-source-field; unknown fields are held to the :1933 rule."""
+    if field in FIELD_SOURCE:
+        return FIELD_SOURCE[field]
+    fam = FAMILY_SOURCE.get((field or "").split(".")[0])
+    return next(iter(fam)) if fam else ("server", None)
+
+# design.md §Screen States: the visible label a local figure carries in error
+LOCAL_SOURCE_LABEL = {"memory-changelog.jsonl": "from local audit log", "metrics.jsonl": "from local metrics log"}
 
 def oklch_to_srgb(L, C, h_deg):
     rad = math.radians(h_deg)
@@ -308,7 +350,8 @@ try:
                 const staleBadges = [...document.querySelectorAll('[data-stale-badge="true"]')].filter(el => getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0);
                 const figs = [...document.querySelectorAll('[data-component="summary-card"] [data-figure]')].map(f => ({
                     text: f.textContent.trim(),
-                    unreach: f.getAttribute('data-unreachable-value') === 'true'
+                    unreach: f.getAttribute('data-unreachable-value') === 'true',
+                    field: f.getAttribute('data-source-field') || ''
                 }));
                 const hdrBadge = document.querySelector('[data-component="status-header"] [data-slot="mode-badge"]');
                 const bodyTxt = document.body.innerText || '';
@@ -344,11 +387,13 @@ try:
                   and all(bool(x) for x in labels) and all(bool(x) for x in icons))
         record("A03-DISTINCT-UNHEALTHY-STATES", a03_ok, f"labels={labels}, icons={icons}, borders={borders}", "4 distinct labels, 4 distinct icons, 4 distinct border styles, 4 distinct colors across live/stale/empty/error")
 
+        # Task #280: A04 covers the figures spec.md sources from 127.0.0.1:1933; local-JSONL figures are A31's (spec §4 error)
         figs_err = unreachable_check.get("figs", [])
-        has_zero_counter = any(re.match(r"^0(?:\.0+)?%?$", f["text"]) or not f["unreach"] for f in figs_err)
+        server_figs = [f for f in figs_err if source_of(f["field"])[0] == "server"]
+        has_zero_counter = any(re.match(r"^0(?:\.0+)?%?$", f["text"]) or not f["unreach"] or "— (Unreachable)" not in f["text"] for f in server_figs)
         hdr_fake = "Active" in unreachable_check.get("hdrMode", "") or "Healthy" in unreachable_check.get("cardLabel", "")
-        a04_ok = len(figs_err) >= 3 and not has_zero_counter and not hdr_fake
-        record("A04-NO-FAKE-ZERO-ON-UNREACHABLE", a04_ok, f"errorHeader={unreachable_check.get('hdrMode')}, cardLabel={unreachable_check.get('cardLabel')}, figs={figs_err}", "all unreachable figures marked data-unreachable-value=true ('— (Unreachable)'), never '0' or 'Healthy'")
+        a04_ok = len(figs_err) >= 3 and len(server_figs) >= 1 and not has_zero_counter and not hdr_fake
+        record("A04-NO-FAKE-ZERO-ON-UNREACHABLE", a04_ok, f"errorHeader={unreachable_check.get('hdrMode')}, cardLabel={unreachable_check.get('cardLabel')}, summaryFigs={len(figs_err)}, serverFigs={server_figs}", ">=3 summary figures; every :1933-sourced one (spec.md source table) marked data-unreachable-value=true and '— (Unreachable)', never '0' or 'Healthy'")
 
         st_cnt, st_txts, st_lbl = stale_badge_check.get("stale", (0, [], ""))
         a06_ok = st_cnt >= 1 and stale_badge_check.get("live", 0) == 0 and any(">" in t for t in st_txts) and "Healthy" not in st_lbl
@@ -986,6 +1031,167 @@ try:
                 return [...new Set(bad)];
             }""", [st, LIVENESS_RE]))
         record("A28-NO-LIVENESS-CLAIM", len(a28_bad) == 0, f"violations={a28_bad[:12]} (total={len(a28_bad)})", "all 5 states: no text/tooltip/aria-label implies live roles; live/stale/empty header count = 'N role memory folders' from observer.role_memory_folder_count; no roles_*online/live/active key in source")
+
+        # ---- A29-A31 (task #280): session-commit label, phone sheet focus trap, local JSONL panels survive error ----
+        # A29: the commit figure counts session commits only (ruling rm-9724bae9) and says so in every state
+        a29_bad, a29_live = [], 0
+        for m in re.finditer(r"\bcommits_24h\b|roles_online_count", raw_html):
+            a29_bad.append(f"source: retired field '{m.group(0)}'")
+        for st in STATES5:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            res = page.evaluate("(st) => {" + JS_HELPERS + r"""
+                const bad = [];
+                const texts = [];
+                for (const t of tabs()) { openTab(t); texts.push([`text(${t.getAttribute('data-tab')})`, document.body.innerText || '']); }
+                if (!tabs().length) texts.push(['text', document.body.innerText || '']);
+                tabs()[0]?.click();
+                document.querySelectorAll('[role="tooltip"]').forEach(t => texts.push([`tooltip#${t.id}`, t.textContent || '']));
+                document.querySelectorAll('[aria-label]').forEach(el => texts.push(['aria-label', el.getAttribute('aria-label') || '']));
+                for (const [where, t] of texts) for (const m of norm(t).matchAll(/\b\d[\d,]*\s+commits?\b/gi)) bad.push(`${st}:${where}: bare '${m[0]}'`);
+                const figs = [...document.querySelectorAll('[data-source-field]')].filter(el => /commit/i.test(el.getAttribute('data-source-field')));
+                for (const f of figs) {
+                    const field = f.getAttribute('data-source-field');
+                    if (field !== 'changelog.session_commits_24h') bad.push(`${st}: commit figure field '${field}'`);
+                    if (!/session commits/i.test(norm(f.textContent))) bad.push(`${st}: commit figure reads '${norm(f.textContent).slice(0, 40)}'`);
+                }
+                return { n: figs.length, bad: [...new Set(bad)] };
+            }""", st)
+            a29_bad.extend(res["bad"])
+            if st == "live":
+                a29_live = res["n"]
+        if a29_live < 1:
+            a29_bad.append("live: no changelog.session_commits_24h figure")
+        record("A29-SESSION-COMMITS-LABEL", len(a29_bad) == 0, f"liveCommitFigures={a29_live}, violations={a29_bad[:12]} (total={len(a29_bad)})", "all 5 states: every commit figure is changelog.session_commits_24h and reads 'session commits'; no rendered text/tooltip/aria-label says '<N> commits' without 'session'; no commits_24h or roles_online_count in source")
+
+        # A30: at 390 and 320 the reader opens as a modal bottom sheet that keeps keyboard focus inside it
+        a30_bad = []
+        in_sheet = r"""(idx) => {
+            const d = document.querySelector('[data-component="reader-drawer"]');
+            const row = document.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]')[idx];
+            const s = d ? getComputedStyle(d) : null;
+            const open = !!s && s.display !== 'none' && s.visibility !== 'hidden' && d.getBoundingClientRect().width > 0;
+            const a = document.activeElement;
+            const where = a ? (a.getAttribute('data-slot') || a.getAttribute('data-drawer-tab') || a.getAttribute('data-item-key') || a.tagName) : 'nothing';
+            return { open, inside: !!d && !!a && a !== document.body && d.contains(a), focusOnRow: a === row, where };
+        }"""
+        for vw, vh in [(390, 844), (320, 640)]:
+            page.set_viewport_size({"width": vw, "height": vh})
+            page.goto(f"{file_url}?state=live", wait_until="load")
+            try:
+                idx = page.evaluate("() => {" + JS_HELPERS + r"""
+                    for (const t of tabs()) {
+                        const p = openTab(t);
+                        const r = p && vis(p) ? rowsIn(p)[0] : null;
+                        if (r) return [...document.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]')].indexOf(r);
+                    }
+                    return -1;
+                }""")
+                if idx < 0:
+                    a30_bad.append(f"{vw}px: no clickable row")
+                    continue
+                row = page.locator(ROWS_SEL).nth(idx)
+                row.focus()
+                page.keyboard.press("Enter")
+                s0 = page.evaluate(in_sheet, idx)
+                if not s0["open"]:
+                    a30_bad.append(f"{vw}px: Enter on row did not open the sheet")
+                    continue
+                if not s0["inside"]:
+                    a30_bad.append(f"{vw}px: opening the sheet left focus outside it on {s0['where']}")
+                stops = page.evaluate("() => document.querySelectorAll('[data-component=\"reader-drawer\"] button, [data-component=\"reader-drawer\"] [tabindex], [data-component=\"reader-drawer\"] a[href]').length")
+                for key in ["Tab", "Shift+Tab"]:
+                    for i in range(stops + 3):
+                        page.keyboard.press(key)
+                        s1 = page.evaluate(in_sheet, idx)
+                        if not s1["open"]:
+                            a30_bad.append(f"{vw}px: {key} #{i + 1} closed the sheet")
+                            break
+                        if not s1["inside"]:
+                            a30_bad.append(f"{vw}px: {key} #{i + 1} moved focus outside the sheet to {s1['where']}")
+                            break
+                page.keyboard.press("Escape")
+                s2 = page.evaluate(in_sheet, idx)
+                if s2["open"] or not s2["focusOnRow"]:
+                    a30_bad.append(f"{vw}px: Escape open={s2['open']} focus on {s2['where']}, not the row")
+                row.focus()
+                page.keyboard.press("Enter")
+                page.locator('[data-component="reader-drawer"] [data-slot="drawer-close"]').focus()
+                page.keyboard.press("Enter")
+                s3 = page.evaluate(in_sheet, idx)
+                if s3["open"] or not s3["focusOnRow"]:
+                    a30_bad.append(f"{vw}px: close button open={s3['open']} focus on {s3['where']}, not the row")
+            except Exception as exc:
+                a30_bad.append(f"{vw}px: interaction error {str(exc).splitlines()[0][:120]}")
+        page.set_viewport_size({"width": 1440, "height": 900})
+        record("A30-SHEET-FOCUS-TRAP", len(a30_bad) == 0, f"violations={a30_bad[:10]} (total={len(a30_bad)})", "at 390 and 320: opening a row puts focus in the sheet; Tab and Shift+Tab never move it outside while open; Escape and the close button close it and return focus to the row")
+
+        # A31: in error the local JSONL figures keep their count, age and source label (spec §4 error); Tab 3 rows stay listed and open
+        page.goto(f"{file_url}?state=error", wait_until="load")
+        a31 = page.evaluate("() => {" + JS_HELPERS + r"""
+            const out = { figs: [], rows: [], commits: null };
+            const fig = (f, where, ctx, summary) => ({ where, ctx, summary, field: f.getAttribute('data-source-field') || '', text: norm(f.innerText || f.textContent), unreach: f.getAttribute('data-unreachable-value') === 'true', age: f.getAttribute('data-age') || '' });
+            for (const card of document.querySelectorAll('[data-component="summary-card"]')) {
+                const ctx = norm(card.innerText);
+                for (const f of card.querySelectorAll('[data-figure]')) out.figs.push(fig(f, `card:${card.getAttribute('data-card-id')}`, ctx, true));
+            }
+            const drawer = document.querySelector('[data-component="reader-drawer"]');
+            for (const t of tabs()) {
+                const key = t.getAttribute('data-tab');
+                const panel = openTab(t);
+                if (!panel || !vis(panel)) continue;
+                const ctx = norm(panel.querySelector('[data-panel-updated-label]')?.innerText);
+                for (const f of [...panel.querySelectorAll('[data-figure]')].filter(vis)) out.figs.push(fig(f, `tab:${key}`, ctx, false));
+                if (key !== 'commit-audit') continue;
+                for (const r of rowsIn(panel)) {
+                    if (r.getAttribute('aria-expanded') === 'true') r.click();
+                    r.click();
+                    const l0 = drawer ? norm((drawer.querySelector('[data-drawer-field="l0"]') || drawer.querySelector('#drawer-l0-body'))?.textContent) : '';
+                    out.rows.push({ key: r.getAttribute('data-item-key') || rowUri(r), expanded: r.getAttribute('aria-expanded') === 'true', open: vis(drawer), l0 });
+                    const close = drawer && drawer.querySelector('[data-slot="drawer-close"]');
+                    if (close && vis(drawer)) close.click();
+                }
+            }
+            tabs()[0]?.click();
+            const cf = document.querySelector('[data-component="summary-card"][data-card-id="commit-governance"] [data-source-field^="changelog."][data-source-field*="commits"]');
+            const m = cf && cf.getAttribute('data-unreachable-value') !== 'true' ? norm(cf.innerText).replace(/,/g, '').match(/\b(\d+)\b/) : null;
+            out.commits = m ? parseInt(m[1], 10) : null;
+            return out;
+        }""")
+        a31_bad, a31_local = [], []
+        age_re = re.compile(r"\d+\s*[smhd]\s*ago\b", re.I)
+        for f in a31["figs"]:
+            kind, jsonl = source_of(f["field"])
+            if kind != "local":
+                continue
+            a31_local.append(f"{f['where']}:{f['field']}")
+            tag = f"{f['where']}:{f['field']}"
+            label = LOCAL_SOURCE_LABEL.get(jsonl)
+            if f["unreach"] or re.search(r"unreachable", f["text"], re.I):
+                a31_bad.append(f"{tag}: local figure shown unreachable '{f['text'][:40]}'")
+            if not f["age"]:
+                a31_bad.append(f"{tag}: no data-age")
+            if f["summary"] and not re.search(r"\d", f["text"]):
+                a31_bad.append(f"{tag}: no count '{f['text'][:40]}'")
+            if f["summary"] and not age_re.search(f["ctx"]):
+                a31_bad.append(f"{tag}: card shows no age")
+            if not f["summary"] and not age_re.search(f["text"]):
+                a31_bad.append(f"{tag}: row shows no age '{f['text'][:40]}'")
+            if not label:
+                a31_bad.append(f"{tag}: no design.md source label for {jsonl}")
+            elif label.lower() not in f["ctx"].lower():
+                a31_bad.append(f"{tag}: '{label}' not shown ('{f['ctx'][:60]}')")
+        if not any(x.startswith("card:commit-governance:") for x in a31_local):
+            a31_bad.append("card:commit-governance: no local-JSONL figure")
+        if a31["commits"] is None:
+            a31_bad.append("card:commit-governance: no session commit count in error")
+        elif a31["commits"] > 0 and not a31["rows"]:
+            a31_bad.append(f"tab:commit-audit: card 3 counts {a31['commits']} session commits but Tab 3 lists no events")
+        for r in a31["rows"]:
+            if not (r["expanded"] and r["open"]):
+                a31_bad.append(f"tab:commit-audit:{r['key']}: row did not open the reader (expanded={r['expanded']}, open={r['open']})")
+            elif not r["l0"] or re.search(r"unavailable while offline", r["l0"], re.I):
+                a31_bad.append(f"tab:commit-audit:{r['key']}: L0 '{r['l0'][:40]}' is not the local record")
+        record("A31-LOCAL-PANELS-SURVIVE-ERROR", len(a31_bad) == 0, f"localFigures={len(a31_local)}, tab3Rows={len(a31['rows'])}, card3Commits={a31['commits']}, violations={a31_bad[:12]} (total={len(a31_bad)})", "error: every local-JSONL figure (spec.md source table) shows its count/age and 'from local audit log' or 'from local metrics log', never unreachable; card 3 has one; Tab 3 lists its events and each opens the reader with the local L0")
 
         browser.close()
 except Exception as exc:
