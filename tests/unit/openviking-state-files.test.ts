@@ -3,12 +3,23 @@
  * telemetry names (rm-43f3ed93). Each state-file reader takes the #810 names and the older ones in the same file;
  * `session_commits_24h` counts a session committing its own work only, classified by URI + source, never one name;
  * `role_memory_folder_count` counts canonical `viking://user/<role>/memories` folders and never feeds a verdict.
+ * Backend #139 (Architecture #523 rm-0964900e, contract R-CHANGELOG-1d, spec c5c47e6 §3): a row's audit action is
+ * decided by URI namespace + `source`, never the verb; "commit" is the session-commit classifier above, so audit
+ * commits in 24h equal `session_commits_24h`, and migration / lead_direct role writes are `role_memory_write`.
+ * Lines are read by the contract key names only (`timestamp`, `source`).
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createOpenVikingClient, OPENVIKING_ROLES } from "../../server/openviking/index.js";
+import { auditActionOf } from "../../server/openviking/activity.js";
+import {
+	createOpenVikingClient,
+	ISOLATED_AGENT_MEMORY_ABSTRACT,
+	OPENVIKING_ROLES,
+	WINDOW_24H_MS,
+	type OpenVikingAuditAction,
+} from "../../server/openviking/index.js";
 import {
 	readChangelogRecords,
 	readMetricsRecords,
@@ -55,6 +66,50 @@ const change = (min: number, action: string, uri: string, source: string, role =
 	summary: "s",
 });
 
+const SHARED_PREF = "viking://user/default/memories/preferences";
+const MARKETING_CASE = "viking://user/marketing/memories/cases/m.md";
+const GUARD = "worker_preference_guard";
+
+/** #139: one row per R-CHANGELOG-1d case, old (past tense, spec G4) and new (contract) names, with its audit action. */
+const AUDIT_CASES: [ReturnType<typeof change>, OpenVikingAuditAction | null][] = [
+	// Session commit: a session's own URI from queue_done / session_commit_200k (pre-rename `session_commit`).
+	[change(60, "add", "viking://session/20261111-a", "queue_done"), "commit"],
+	[change(59, "added", "viking://session/20261111-b", "queue_done"), "commit"],
+	[change(58, "add", "viking://session/20261111-c/history/archive_001", "session_commit_200k"), "commit"],
+	[change(57, "session_commit", "viking://user/ops/memories/cases/old.md", "queue_done"), "commit"],
+	// Role memory write: any other add/update/delete on viking://user/<role>/ (alias viking://agent/).
+	[change(56, "updated", "viking://user/backend/memories/cases/c.md", "migration", "backend"), "role_memory_write"],
+	[change(55, "update", "viking://user/backend/memories/cases/c.md", "migration", "backend"), "role_memory_write"],
+	[change(54, "added", MARKETING_CASE, "lead_direct", "marketing"), "role_memory_write"],
+	[change(53, "add", MARKETING_CASE, "lead_direct", "marketing"), "role_memory_write"],
+	[change(52, "updated", MARKETING_CASE, "lead_direct", "marketing"), "role_memory_write"],
+	[change(51, "update", "viking://agent/memories/cases/m.md", "lead_direct", "marketing"), "role_memory_write"],
+	[change(50, "deleted", "viking://user/qa/memories/cases/q.md", "lead_direct", "qa"), "role_memory_write"],
+	[change(49, "add", "viking://agent/memories/cases/q.md", "queue_done", "qa"), "role_memory_write"],
+	[change(48, "update", "viking://session/20261111-d", "queue_done"), "role_memory_write"],
+	[change(47, "add", "viking://session/20261111-e", "migration"), "role_memory_write"],
+	// Shared write: viking://resources/ or viking://user/default/ (alias viking://user/memories/).
+	[change(46, "updated", `${SHARED_PREF}/backend_code.md`, "migration"), "promote_shared"],
+	[change(45, "added", `${SHARED_PREF}/x.md`, "lead_direct"), "promote_shared"],
+	[change(44, "update", "viking://user/memories/preferences/frontend_code.md", "lead_promotion"), "promote_shared"],
+	[change(43, "preference_write", `${SHARED_PREF}/y.md`, "lead_promotion"), "promote_shared"],
+	[change(42, "update", "viking://resources/architecture-conventions/contract.md", "manual"), "promote_shared"],
+	[change(41, "updated", "viking://resources/pi-web-ui/spec.md", "wt_land_sync"), "promote_shared"],
+	[change(40, "add", "viking://resources/rollcall/core/new.md", "queue_done"), "promote_shared"],
+	[change(39, "sync_resource", "viking://resources/rollcall/", "wt_land"), "promote_shared"],
+	[change(38, "resource_sync", "viking://resources/rollcall/", "wt_land_sync"), "promote_shared"],
+	// Preference rows keep their own verdicts, whatever the URI.
+	[change(37, "promote_preference_candidate", `${SHARED_PREF}/z.md`, "lead_promotion"), "promote_shared"],
+	[change(36, "reject_preference_candidate", `${SHARED_PREF}/z.md`, GUARD), "reject_noise"],
+	[change(35, "reject_preference_candidate", "viking://user/ops/memories/p.md", GUARD), "reject_noise"],
+	[change(34, "reject_preference_candidate", "backend", GUARD, "backend"), "reject_noise"],
+	[change(33, "preference_write_blocked", `${SHARED_PREF}/x.md`, GUARD), "reject_noise"],
+	// A failed resource sync wrote nothing.
+	[change(32, "sync_resource_failed", "viking://resources/product-autopilot", "wt_land"), "sidecar_timeout"],
+	// An action no writer is known to emit stays out of the audit.
+	[change(31, "renamed", "viking://user/ops/memories/cases/r.md", "lead_direct"), null],
+];
+
 describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 	const dirs: string[] = [];
 	afterEach(() => {
@@ -66,8 +121,9 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 		for (const [name, value] of Object.entries(files)) write(dir, name, value);
 		return dir;
 	};
-	const overview = (dir: string, fetchImpl = daemon()) =>
-		createOpenVikingClient({ stateDir: dir, fetchImpl, now: () => NOW }).getOverview();
+	const client = (dir: string, fetchImpl = daemon()) =>
+		createOpenVikingClient({ stateDir: dir, fetchImpl, now: () => NOW });
+	const overview = (dir: string, fetchImpl = daemon()) => client(dir, fetchImpl).getOverview();
 
 	it("session commits (#521): queue_done / session_commit_200k adds to a session URI, old and new names; nothing else", async () => {
 		const lines: [object, boolean][] = [
@@ -97,6 +153,74 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 		expect(o.changelog.session_commits_24h).toBe(5);
 		expect(o.changelog).not.toHaveProperty("commits_24h");
 		expect(o.observer.last_commit_at).toBe(minutesAgo(36));
+	});
+
+	it("#139 audit actions by URI namespace + source, old and new names; migration and lead_direct are never commit", async () => {
+		const dir = stateDir({ "memory-changelog.jsonl": AUDIT_CASES.map(([row]) => row) });
+		const records = await readChangelogRecords(resolveOpenVikingStatePaths(dir));
+		expect(records.map(auditActionOf)).toEqual(AUDIT_CASES.map(([, action]) => action));
+
+		const audit = await client(dir).getAudit({ limit: "500" });
+		const byId = new Map(audit.events.map((e) => [e.id, e]));
+		AUDIT_CASES.forEach(([row, action], i) => {
+			expect(byId.get(`changelog:${i + 1}`)?.action, `${row.action} ${row.source} ${row.uri}`).toBe(
+				action ?? undefined,
+			);
+		});
+		const roleWrites = audit.events.filter(
+			(e) => ["migration", "lead_direct"].includes(e.source) && /^viking:\/\/(user\/(?!default\/)|agent\/)/.test(e.uri),
+		);
+		expect(roleWrites.map((e) => e.action)).toEqual(Array(7).fill("role_memory_write"));
+		for (const e of audit.events.filter((x) => x.action === "role_memory_write")) {
+			expect(e).toMatchObject({
+				guard_verdict: "allowed",
+				summary_1line: ISOLATED_AGENT_MEMORY_ABSTRACT,
+				l0_abstract: ISOLATED_AGENT_MEMORY_ABSTRACT,
+			});
+		}
+
+		const filtered = await client(dir).getAudit({ action: "role_memory_write" });
+		expect(filtered.events.map((e) => e.id).sort()).toEqual(
+			AUDIT_CASES.flatMap(([, action], i) => (action === "role_memory_write" ? [`changelog:${i + 1}`] : [])).sort(),
+		);
+	});
+
+	it('#139 audit "commit" rows in 24h equal changelog.session_commits_24h', async () => {
+		const dir = stateDir({
+			"memory-changelog.jsonl": [
+				change(25 * 60, "add", "viking://session/yesterday", "queue_done"),
+				change(25 * 60, "updated", "viking://user/backend/memories/cases/old.md", "migration", "backend"),
+				...AUDIT_CASES.map(([row]) => row),
+			],
+		});
+		const o = await overview(dir);
+		const commits = (await client(dir).getAudit({ action: "commit", limit: "500" })).events;
+		const commitsIn24h = commits.filter((e) => NOW - Date.parse(e.ts) <= WINDOW_24H_MS).length;
+
+		expect(commits).toHaveLength(5);
+		expect(o.changelog.session_commits_24h).toBe(4);
+		expect(commitsIn24h).toBe(o.changelog.session_commits_24h);
+		expect(o.changelog).toMatchObject({ promotions_24h: 10, rejected_24h: 4 });
+	});
+
+	it("#139 lines are read by the contract key names only: timestamp envelope, source (rm-0964900e)", async () => {
+		const dir = stateDir({
+			"memory-changelog.jsonl": [
+				{ ...change(5, "sync_resource", "viking://resources/rollcall/", "wt_land"), trigger: "wt_land" },
+				{ ts: minutesAgo(4), source: "queue_done", role: "ops", action: "add", uri: "viking://session/x" },
+				{ timestamp: minutesAgo(3), trigger: "wt_land", role: "ops", action: "update", uri: "viking://resources/a" },
+			],
+			"metrics.jsonl": [
+				{ timestamp: minutesAgo(2), event: "lead_200k_commit", role: "ops" },
+				{ ts: minutesAgo(1), event: "lead_200k_commit", role: "ops" },
+			],
+		});
+		const paths = resolveOpenVikingStatePaths(dir);
+		expect((await readChangelogRecords(paths)).map((r) => [r.line, r.source])).toEqual([
+			[1, "wt_land"],
+			[3, "unknown"],
+		]);
+		expect((await readMetricsRecords(paths)).map((m) => m.line)).toEqual([1]);
 	});
 
 	it("sync_resource_failed is not a memory write: kept out of every changelog count and the panel's freshness", async () => {

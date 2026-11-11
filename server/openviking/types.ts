@@ -94,7 +94,16 @@ export type OpenVikingMemoryLayer = "layer1_shared" | "layer2_personal";
 export type OpenVikingDisclosureTier = "L0" | "L1" | "L2";
 export type OpenVikingSlotState = OpenVikingHealthState | "unmeasured-gap";
 
-export type OpenVikingAuditAction = "commit" | "promote_shared" | "reject_noise" | "sidecar_timeout";
+/** Spec c5c47e6 §3 `events[].action`, decided by URI namespace + `source`, never the verb (R-CHANGELOG-1d). */
+export const OPENVIKING_AUDIT_ACTIONS = [
+	"commit",
+	"role_memory_write",
+	"promote_shared",
+	"reject_noise",
+	"sidecar_timeout",
+] as const;
+
+export type OpenVikingAuditAction = (typeof OPENVIKING_AUDIT_ACTIONS)[number];
 
 export type OpenVikingGuardVerdict = "allowed" | "rejected" | "degraded_skip";
 

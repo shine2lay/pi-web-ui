@@ -8,6 +8,7 @@ import { panelHealth } from "./overview.js";
 import { readChangelogRecords, readMetricsRecords, type OpenVikingStatePaths } from "./state-files.js";
 import {
 	AUDIT_CADENCE_MS,
+	OPENVIKING_AUDIT_ACTIONS,
 	OPENVIKING_ROLES,
 	OpenVikingDashboardError,
 	WINDOW_24H_MS,
@@ -16,7 +17,6 @@ import {
 	type OpenVikingAuditResponse,
 } from "./types.js";
 
-const AUDIT_ACTIONS: readonly OpenVikingAuditAction[] = ["commit", "promote_shared", "reject_noise", "sidecar_timeout"];
 export const DEFAULT_AUDIT_LIMIT = 50;
 export const MAX_AUDIT_LIMIT = 500;
 
@@ -46,8 +46,8 @@ export function parseAuditQuery(query: OpenVikingAuditQuery): AuditRequest {
 		}
 		n = Number(limit);
 	}
-	if (action !== undefined && action !== "" && !AUDIT_ACTIONS.includes(action as OpenVikingAuditAction)) {
-		throw invalid("action", action, AUDIT_ACTIONS.join("|"));
+	if (action !== undefined && action !== "" && !OPENVIKING_AUDIT_ACTIONS.includes(action as OpenVikingAuditAction)) {
+		throw invalid("action", action, OPENVIKING_AUDIT_ACTIONS.join("|"));
 	}
 	if (role !== undefined && role !== "" && !(OPENVIKING_ROLES as readonly unknown[]).includes(role)) {
 		throw invalid("role", role, "one of the 15 role ids");

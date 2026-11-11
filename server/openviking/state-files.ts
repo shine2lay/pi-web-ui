@@ -2,7 +2,9 @@
  * OpenViking Memory Dashboard — the one canonical reader per state file in `/home/shinelay/.pi/openviking/`.
  *
  * History lines are never rewritten, so each reader accepts the contract names (Ops #808-#810)
- * first and the older live names second (G2, G4, G5, G6, G7). Read-only: nothing here writes.
+ * first and the older live names second (G2, G4, G5, G6, G7). JSONL envelopes are read by the contract's key names
+ * only (Architecture #523, rm-0964900e): `timestamp`, and on changelog lines `action`/`role`/`uri`/`source`.
+ * Read-only: nothing here writes.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -66,7 +68,7 @@ interface JsonlLine {
 	obj: JsonObject;
 }
 
-/** Parsed lines with a valid `timestamp` (or contract `ts`); a torn or foreign line is skipped. */
+/** Parsed lines with a valid `timestamp`; a torn or foreign line is skipped. */
 async function readJsonl(path: string): Promise<JsonlLine[]> {
 	const text = await readOptional(path);
 	if (text === null) return [];
@@ -80,7 +82,7 @@ async function readJsonl(path: string): Promise<JsonlLine[]> {
 			return;
 		}
 		if (!isObject(obj)) return;
-		const ts = firstStr(obj.timestamp, obj.ts);
+		const ts = str(obj.timestamp);
 		const tsMs = ts === null ? Number.NaN : Date.parse(ts);
 		if (ts !== null && Number.isFinite(tsMs)) out.push({ line: idx + 1, ts, tsMs, obj });
 	});
@@ -178,9 +180,18 @@ export async function readMetricsRecords(paths: OpenVikingStatePaths): Promise<O
 
 // ---- memory-changelog.jsonl (G4) ----
 
-/** Contract write actions (#809), plus `sync_failed`, which is not a memory write. */
+/**
+ * Contract write actions (#809), plus agent-tools' per-`wt land` summary rows (R-CHANGELOG-1a): `sync_resource`, and
+ * `sync_failed` (live `sync_resource_failed`), which is not a memory write.
+ */
 export type OpenVikingChangelogAction =
-	"add" | "update" | "delete" | "reject_preference_candidate" | "promote_preference_candidate" | "sync_failed";
+	| "add"
+	| "update"
+	| "delete"
+	| "reject_preference_candidate"
+	| "promote_preference_candidate"
+	| "sync_resource"
+	| "sync_failed";
 
 const CHANGELOG_ACTIONS: Record<string, OpenVikingChangelogAction> = {
 	add: "add",
@@ -191,11 +202,11 @@ const CHANGELOG_ACTIONS: Record<string, OpenVikingChangelogAction> = {
 	added: "add",
 	updated: "update",
 	deleted: "delete",
-	sync_resource: "update",
+	sync_resource: "sync_resource",
 	sync_resource_failed: "sync_failed",
 	session_commit: "add",
-	preference_write: "update",
-	resource_sync: "update",
+	preference_write: "promote_preference_candidate",
+	resource_sync: "sync_resource",
 	preference_write_blocked: "reject_preference_candidate",
 };
 
@@ -241,7 +252,7 @@ export async function readChangelogRecords(paths: OpenVikingStatePaths): Promise
 			tsMs,
 			rawAction,
 			action: CHANGELOG_ACTIONS[rawAction] ?? null,
-			source: firstStr(obj.source, obj.trigger) ?? "unknown",
+			source: str(obj.source) ?? "unknown",
 			role: str(obj.role),
 			taskId: taskIdOf(obj),
 			uri: str(obj.uri) ?? "",

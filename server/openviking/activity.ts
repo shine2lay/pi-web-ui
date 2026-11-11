@@ -12,29 +12,30 @@ import {
 } from "./types.js";
 import { isSharedUri } from "./uri.js";
 
-/** Spec G4's live names map straight to an audit action, whatever the URI. */
-const LEGACY_AUDIT_ACTIONS: Record<string, OpenVikingAuditAction> = {
-	session_commit: "commit",
-	preference_write: "promote_shared",
-	resource_sync: "promote_shared",
-	preference_write_blocked: "reject_noise",
-};
-
-/** add/update/delete: a write to a shared URI is a promotion; anything personal is a commit. */
+/**
+ * Contract R-CHANGELOG-1d (#523): what kind of write a row is, by URI namespace + `source`, never the verb.
+ * "commit" is exactly the one session-commit classifier (`sessionCommit`, state-files.ts), so the audit's commits
+ * in 24h are `changelog.session_commits_24h`. Any other add/update/delete is a shared promotion (`viking://resources/`,
+ * `viking://user/default/`) or else a role memory write (`viking://user/<role>/`, alias `viking://agent/`: live
+ * `migration`, `lead_direct`); a URI that cannot be classified fails closed as personal. Preference rows keep their
+ * verdicts; the agent-tools sync rows fold as the contract states.
+ */
 export function auditActionOf(r: OpenVikingChangelogRecord): OpenVikingAuditAction | null {
-	const legacy = LEGACY_AUDIT_ACTIONS[r.rawAction];
-	if (legacy) return legacy;
+	if (r.sessionCommit) return "commit";
 	switch (r.action) {
 		case null:
 			return null;
 		case "reject_preference_candidate":
 			return "reject_noise";
 		case "promote_preference_candidate":
+		case "sync_resource":
 			return "promote_shared";
 		case "sync_failed":
 			return "sidecar_timeout";
-		default:
-			return isSharedUri(r.uri, r.role) ? "promote_shared" : "commit";
+		case "add":
+		case "update":
+		case "delete":
+			return isSharedUri(r.uri, r.role) ? "promote_shared" : "role_memory_write";
 	}
 }
 

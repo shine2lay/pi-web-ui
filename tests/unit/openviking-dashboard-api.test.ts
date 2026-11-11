@@ -92,7 +92,7 @@ const MIXED_METRICS = [
 		rm_dedup_skipped_count: 1,
 	},
 	{
-		ts: minutesAgo(3),
+		timestamp: minutesAgo(3),
 		event: "worker_prefetch_inject",
 		role: "qa",
 		l0_hit_count: 0,
@@ -124,7 +124,7 @@ const change = (min: number, action: string, role: string, uri: string, summary:
 });
 const MIXED_CHANGELOG = [
 	change(9, "session_commit", "ops", "viking://user/ops/memories/cases/old.md", "ops private old-name commit"),
-	change(8, "add", "qa", "viking://agent/memories/cases/new.md", "qa private new-name commit", "queue_done"),
+	change(8, "add", "qa", "viking://agent/memories/cases/new.md", "qa private new-name write", "queue_done"),
 	change(7, "preference_write", "ops", "viking://user/default/memories/preferences/backend_code.md", "old promote"),
 	change(6, "update", "architecture", "viking://user/memories/preferences/frontend_code.md", "new promote"),
 	change(5, "preference_write_blocked", "backend", "viking://user/default/memories/preferences/x.md", "old reject"),
@@ -195,9 +195,13 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 		expect(calls.length).toBe(before);
 
 		const audit = await c.getAudit({});
-		for (const uri of ["viking://user/ops/memories/cases/old.md", "viking://agent/memories/cases/new.md"]) {
+		// #139 (R-CHANGELOG-1d): a queue_done add to a role's memory, not to a session URI, is a role memory write.
+		for (const [uri, action] of [
+			["viking://user/ops/memories/cases/old.md", "commit"],
+			["viking://agent/memories/cases/new.md", "role_memory_write"],
+		]) {
 			const ev = audit.events.find((e) => e.uri === uri);
-			expect(ev).toMatchObject({ action: "commit", summary_1line: ISOLATED_AGENT_MEMORY_ABSTRACT });
+			expect(ev).toMatchObject({ action, summary_1line: ISOLATED_AGENT_MEMORY_ABSTRACT });
 			expect(ev?.l0_abstract).toBe(ISOLATED_AGENT_MEMORY_ABSTRACT);
 		}
 		expect(audit.events.find((e) => e.raw_action === "update")?.summary_1line).toBe("new promote");
