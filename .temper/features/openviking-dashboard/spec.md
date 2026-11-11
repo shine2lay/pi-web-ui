@@ -5,6 +5,8 @@ max_tokens: 2300 # contract outgrew the 2000 default (architecture #521)
 
 Pinned to `.temper/features/openviking-dashboard/design.md` (`design #274`, `28c2c672`), `.temper/features/openviking-dashboard/brief.md` (`product #65`, `a69a2470`), and `/home/shinelay/architecture-dept/conventions/openviking-contract.md`.
 
+Parts (split by architecture #531; text moved byte-identically, section numbers unchanged): [spec-states.md](spec-states.md) holds §4 Operational States; [spec-commits-and-gaps.md](spec-commits-and-gaps.md) holds Session Commits and Contract-vs-Live Gaps for Ops.
+
 ## API and State Contract
 
 ### 1. Read-Only & Sources
@@ -22,15 +24,7 @@ Pinned to `.temper/features/openviking-dashboard/design.md` (`design #274`, `28c
 - **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|null, events }` (`action`: `"commit"|"role_memory_write"|"promote_shared"|"reject_noise"|"sidecar_timeout"`, `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
 
 ### 4. Operational States (Never Conflated)
-Behaviour contract only. Each state's visuals (token, label, glyph + `data-icon`, border) are owned by `.temper/features/openviking-dashboard/design.md` §Screen States; values by `.temper/design/tokens.json`.
-- **`live`:** `/health` `"ok"`, age `<= cadence`, `> 0` events/24h (`data-health-state="healthy"`).
-- **`stale`:** `/health` `"ok"`, age `> cadence` (`> 30s`, `> 5m`, `> 15m`) or `pending_wt_land_syncs` non-empty (`data-health-state="stale"`, `[data-stale-badge="true"]`).
-- **`empty`:** `/health` `"ok"`, `0` events/24h (`data-health-state="zero-activity"`).
-- **`error` (`R-FAIL-1..3`):** `/health` fails (`data-health-state="server-unreachable"`). `:1933` fields return `null` -> `— (Unreachable)` (`data-unreachable-value="true"`), never `0`/`Healthy`; JSONL panels still show counts + staleness.
-- **`loading`:** `[data-screen-state="loading"]` skeletons; never fake `0` counters.
-- **No role liveness (v1):** nothing measures it: no panel, label or header may state or imply a role is live, online or healthy; folder count never feeds `screen_state`, `mode_label` or a degraded verdict.
-- **`last_reachable_at` `null`:** no `/health` `"ok"` since this server started; never a duration, `0` or dash that could read as recent.
-- **`last_reachable_at` gates nothing:** best-effort; feeds no `screen_state`, `mode_label`, degraded verdict or alarm.
+In [spec-states.md](spec-states.md).
 
 ## Canonical State and Formula Owners
 
@@ -48,22 +42,7 @@ Browser code formats values only and **never** computes sums, averages, percenta
 | `entries[].{uri,scope,role,layers,l0_abstract,l1_overview,l2_content}` | `/api/v1/fs/ls` + `/api/v1/content/*` | Lists `resources`, `user/default/memories` (G8), `user/<role>/memories` | `15m` |
 | `events[].{id,action,role,uri,l0_abstract,guard_verdict,ts}` | `memory-changelog.jsonl` + `metrics.jsonl` | §3 `action` by URI namespace + `source`, never the verb (contract `R-CHANGELOG-1d`): `commit` = session commits only; other personal-URI writes (`migration`, `lead_direct`) = `role_memory_write` | `15m` |
 
-### Session Commits (`changelog.session_commits_24h`, was `commits_24h`; ruling rm-9724bae9)
-- **Counts only a session committing its own work:** `queue_done` session commits + lead-200k session commits (live: `add` to `viking://session/<id>`, `source` `queue_done` / `session_commit_200k`; pre-rename name `session_commit`).
-- **Excludes:** one-time `migration` role-memory writes; `lead_direct` role-memory writes; any other write (`add`/`update`, any name) that is not a session committing its own work.
-- **Classify by meaning, never one event name:** the Ops rename collapsed `session_commit` into `add`; one Backend classifier covers old and new names, and no future rename may silently re-include excluded writes.
-- **Label:** panel `"N session commits"`, never bare `"commits"`; JSON field `session_commits_24h`.
-- **Worked example** (backend #133 blind verify, 2026-11-11): old count `381` = `72` `queue_done` + `17` lead-200k + `266` `migration` + `26` `lead_direct`; correct `89` (`72` + `17`). Any excluded write in the count is a regression.
-
-### Contract-vs-Live Gaps for Ops
-- **G1 — SETTLED:** `result.status` is an ASCII table; render unavailable, never `0`, never scraped (`R-QUEUE-DEPTH-1`, §8b).
-- **G2 (`metrics.jsonl`):** §8 `{l0_hit,l1_expanded,extracted,dedup_skipped}_count`, `injected_tokens_est` -> live `{l0_hits,l1_reads,extracted,dedup_skipped,tokens_est}`.
-- **G3 (per-slot):** turn totals only; `null` / `"unmeasured-gap"` until Ops logs `slots[]`.
-- **G4 — PASS live (Ops #810):** writers emit contract `action`s; old rows keep `{session_commit,preference_write,resource_sync,preference_write_blocked}`.
-- **G5 (`rollout-state.json`):** Only `{"pending_wt_land_syncs":[...]}`; report `stage: null`.
-- **G6 (`migration-verification.json`):** `checked_at`/`source_files[]` vs. §9 `verified_at`/`total_checked`.
-- **G7 (`seen-role-messages.json`):** absent live; contract §4.4 Live status.
-- **G8 — SETTLED:** wording only; canonical form `viking://user/default/memories` (`R-URI-CANONICAL-1`, §8b).
+Session Commits and Contract-vs-Live Gaps for Ops: [spec-commits-and-gaps.md](spec-commits-and-gaps.md).
 
 ## Obsolete Code and Tests to Delete
 
