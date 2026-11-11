@@ -327,6 +327,14 @@ button:focus-visible,
   overflow-wrap: anywhere;
 }
 
+/* #296: where one line carries two figures, each sits in its own data-source-field span. A span that wrapped over two lines
+   would cover its neighbour's line as well (one box per text node), so each clause stays whole and the line breaks between
+   clauses instead of inside one. Widest clause is 190px inside a 256px card at 320px. */
+#c2-context > span,
+#p1-updated > span {
+  white-space: nowrap;
+}
+
 .age-footer {
   font-size: var(--size-xs);
   color: var(--text-muted);
@@ -814,7 +822,8 @@ button:focus-visible,
       <div class="status-row" data-field="status">
         <span id="ci-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check" data-health-state="healthy"><span class="glyph" aria-hidden="true">●</span> Healthy</span>
       </div>
-      <div class="meta" id="c2-context" data-field="context" data-figure="true" data-source-field="metrics.avg_injected_tokens" data-age="1m">1,420 avg tok · 48 turns sampled (24h)<span data-source-field="slots[].state"> · per-slot figures not measured yet</span></div>
+      <!-- #296 S5-1: the turn count is metrics.turns_sampled_24h, not the token average, so it carries its own field -->
+      <div class="meta" id="c2-context" data-field="context" data-figure="true" data-source-field="metrics.avg_injected_tokens" data-age="1m">1,420 avg tok<span data-source-field="metrics.turns_sampled_24h"> · 48 turns sampled (24h)</span><span data-source-field="slots[].state"> · per-slot figures not measured yet</span></div>
       <div class="age-footer" id="c2-age" data-field="age" data-age-label="true" data-panel-updated-label="true"><span data-source-field="metrics.last_recorded_at">Last turn 1m ago</span> · 5m cadence</div>
     </article>
 
@@ -832,7 +841,8 @@ button:focus-visible,
       <div class="status-row" data-field="status">
         <span id="c3-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check" data-health-state="healthy"><span class="glyph" aria-hidden="true">●</span> Healthy</span>
       </div>
-      <div class="meta" id="c3-context" data-field="context" data-figure="true" data-source-field="changelog.promotions_24h" data-age="5m">5 shared syncs · 1 guard rejection (24h)</div>
+      <!-- #296 S5-1 (same class): the rejection count is changelog.rejected_24h, not the promotion count -->
+      <div class="meta" id="c3-context" data-field="context" data-figure="true" data-source-field="changelog.promotions_24h" data-age="5m">5 shared syncs<span data-source-field="changelog.rejected_24h"> · 1 guard rejection (24h)</span></div>
       <div class="age-footer" id="c3-age" data-field="age" data-age-label="true" data-panel-updated-label="true"><span data-source-field="changelog.last_event_at">Last event 5m ago</span> · 15m cadence</div>
     </article>
   </section>
@@ -1105,9 +1115,16 @@ button:focus-visible,
     "c1-metric": "127.0.0.1:1933",
     "c1-context": "Queue depth: unavailable · Shared layer + Role layer",
     "c2-metric": "93.8% Hit Rate",
-    "c2-context": "1,420 avg tok · 48 turns sampled (24h)",
+    "c2-context": "1,420 avg tok",
     "c3-metric": "18 session commits",
-    "c3-context": "5 shared syncs · 1 guard rejection (24h)"
+    "c3-context": "5 shared syncs"
+  };
+  // #296 S5-1: the clauses each of these two lines adds, each under the field that produces it (the lead clause above is the
+  // element's own data-source-field). One element, one figure per field: a frontend wiring itself from the attributes cannot
+  // read the token average for a turn count, or the promotion count for a rejection count.
+  var FIGURE_CLAUSES = {
+    "c2-context": [[" · 48 turns sampled (24h)", "metrics.turns_sampled_24h"], [" · per-slot figures not measured yet", "slots[].state"]],
+    "c3-context": [[" · 1 guard rejection (24h)", "changelog.rejected_24h"]]
   };
 
   function byId(id) {
@@ -1181,6 +1198,10 @@ button:focus-visible,
   // inside a span naming the field it came from. The page never composes stale wording and never derives an age of its own.
   var SYNC_BADGE = "pending sync";
   var SYNC_FIELD = "auxiliary.rollout.pending_wt_land_syncs";
+  // #296 C5-1: the only value each of these two fields can hold (types.ts: metrics.stale_badge "> 5m" | null,
+  // changelog.stale_badge "> 15m" | null). Their pills print it verbatim instead of composing wording around it.
+  var METRICS_BADGE = "> 5m";
+  var CHANGELOG_BADGE = "> 15m";
   function badgeSpan(family, text, mark) {
     var s = document.createElement("span");
     s.setAttribute("data-source-field", family + ".stale_badge");
@@ -1310,7 +1331,9 @@ button:focus-visible,
       }
     });
 
-    fill(byId("c2-context"), [LIVE_FIGURES["c2-context"], [" · per-slot figures not measured yet", "slots[].state"]]);
+    Object.keys(FIGURE_CLAUSES).forEach(function (id) {
+      fill(byId(id), [LIVE_FIGURES[id]].concat(FIGURE_CLAUSES[id]));
+    });
     var hdr = byId("hdr-mode");
     var sub = byId("hdr-subtitle");
     var chk = byId("hdr-checked");
@@ -1361,17 +1384,17 @@ button:focus-visible,
         setPill(badges[0], "stale", { family: "observer", badge: fx.badge.observer });
         fill(c1Age, [["Checked " + fx.checked + " ago", "observer.checked_at"], " · 30s cadence"].concat(fx.syncs ? syncParts(fx, " · ") : []));
       }
+      // #296 C5-1: these two pills print metrics.stale_badge / changelog.stale_badge verbatim, the way the daemon pill prints
+      // observer.stale_badge -- the page never composes a badge of its own
       if (fx.metrics === "stale") {
-        setPill(badges[1], "stale", "> 5m cadence");
-        badges[1].setAttribute("data-stale-badge", "true");
+        setPill(badges[1], "stale", { family: "metrics", badge: METRICS_BADGE });
         fill(c2Age, [["Last turn 19m ago", "metrics.last_recorded_at"], " · 5m cadence"]);
-        if (p1Upd) fill(p1Upd, ["Stale · 48 turns in 24h · ", ["last turn recorded 19m ago", "metrics.last_recorded_at"], " (> 5m cadence)"]);
+        if (p1Upd) fill(p1Upd, ["Stale · 48 turns in 24h · ", ["last turn recorded 19m ago", "metrics.last_recorded_at"], " (", badgeSpan("metrics", METRICS_BADGE, false), ")"]);
       } else {
         setPill(badges[1], "healthy");
       }
       if (fx.audit === "stale") {
-        setPill(badges[2], "stale", "> 15m cadence");
-        badges[2].setAttribute("data-stale-badge", "true");
+        setPill(badges[2], "stale", { family: "changelog", badge: CHANGELOG_BADGE });
         fill(c3Age, [["Last event 42m ago", "changelog.last_event_at"], " · 15m cadence"]);
       } else {
         setPill(badges[2], "healthy");
@@ -1393,9 +1416,9 @@ button:focus-visible,
       byId("c2-metric").textContent = "0 turns in window";
       // #290 S4-1: this figure is the turn count, not the hit rate (null with no turns), so it names its own field
       byId("c2-metric").setAttribute("data-source-field", "metrics.turns_sampled_24h");
-      byId("c2-context").textContent = "— avg tok (no turns) · 0 turns sampled (server online)";
+      fill(byId("c2-context"), ["— avg tok (no turns)", [" · 0 turns sampled (server online)", "metrics.turns_sampled_24h"]]);
       byId("c3-metric").textContent = "0 session commits in window";
-      byId("c3-context").textContent = "0 shared syncs · 0 guard rejections (server online)";
+      fill(byId("c3-context"), ["0 shared syncs", [" · 0 guard rejections (server online)", "changelog.rejected_24h"]]);
       // the daemon answers (healthy); the two log panels saw 0 events in the window (zero-activity)
       setPill(badges[0], "healthy");
       setPill(badges[1], "zero-activity");
@@ -1415,10 +1438,8 @@ button:focus-visible,
       if (p1Upd) fill(p1Upd, ["Server offline · from local metrics log · 48 turns in 24h · ", ["last turn 18m ago", "metrics.last_recorded_at"], " · 5m cadence"]);
       // only the daemon is unreachable; the two panels read from local logs are 18m old, so past their cadence
       setPill(badges[0], "server-unreachable");
-      setPill(badges[1], "stale", "> 5m cadence");
-      setPill(badges[2], "stale", "> 15m cadence");
-      badges[1].setAttribute("data-stale-badge", "true");
-      badges[2].setAttribute("data-stale-badge", "true");
+      setPill(badges[1], "stale", { family: "metrics", badge: METRICS_BADGE });
+      setPill(badges[2], "stale", { family: "changelog", badge: CHANGELOG_BADGE });
       // only the daemon's own figures (observer.*) go unreachable; the local log figures keep their count, with the log's age
       document.querySelectorAll('[data-component="summary-card"] [data-figure][data-source-field^="observer."]').forEach(function (f) {
         f.setAttribute("data-unreachable-value", "true");
@@ -1437,8 +1458,10 @@ button:focus-visible,
       fill(bBody, ["No answer when ", ["checked 4s ago", "observer.checked_at"], ". The figures, namespace entries and L1/L2 text read from the daemon come back when it answers again. Injection, slot and commit figures below are read from the local logs."]);
     } else if (st === "loading") {
       setSkeleton(hdr);
+      // #296 C5-2: one verb for each kind of waiting. "Reading …" is the page saying what it is doing (this subtitle and the
+      // banner); "Loading …" is a placeholder standing in for a value, list or panel that has not arrived. No other verb.
       sub.textContent = "Reading the OpenViking overview, namespace entries, and commit audit log…";
-      fill(hdrCheck, ["Checking 127.0.0.1:1933…"]);
+      fill(hdrCheck, ["Loading the health check for 127.0.0.1:1933…"]);
       fill(chk, ["Loading last injection time…"]);
       c1Age.textContent = "Loading… · 30s cadence";
       c2Age.textContent = "Loading… · 5m cadence";
@@ -1447,15 +1470,15 @@ button:focus-visible,
       folders.textContent = "Loading role memory folders…";
       byId("c1-metric").textContent = "Loading daemon status…";
       // #290 C4-2: plain words only; the reader is not shown an internal route
-      byId("c1-context").textContent = "Waiting for the health check and queue depth…";
+      byId("c1-context").textContent = "Loading the health check and queue depth…";
       byId("c2-metric").textContent = "Loading hit rate…";
-      byId("c2-context").textContent = "Fetching 5-slot Turn-1 injection sample…";
+      byId("c2-context").textContent = "Loading the 5-slot Turn-1 injection sample…";
       byId("c3-metric").textContent = "Loading session commits…";
-      byId("c3-context").textContent = "Fetching post-turn Commit Guard audit stream…";
+      byId("c3-context").textContent = "Loading the post-turn Commit Guard audit stream…";
       badges.forEach(setSkeleton);
       setSlotMeta("Loading slot metrics…");
       banner.className = "state-banner badge-info";
-      bTitle.textContent = "Loading OpenViking telemetry snapshot…";
+      bTitle.textContent = "Reading the OpenViking telemetry snapshot…";
       bBody.textContent = "Reading the overview and namespace entries from 127.0.0.1:1933, and commit events from the local audit file.";
     } else {
       setMode("Active", "badge-healthy", "circle-check", "●");
