@@ -515,4 +515,93 @@ describe("queue-done-hidden: a finished task's chat leaves the chat list", () =>
 			vi.useRealTimers();
 		}
 	});
+
+	it("bounds queueCloseChat when a finished task chat never goes idle, logs the chat name, keeps it open, and lets openTaskChat complete", async () => {
+		vi.useFakeTimers();
+		try {
+			const stuckFile = write("stuck-task.jsonl", taskChatEntries(7));
+			conv("stuck", stuckFile, taskChatEntries(7), { streaming: true });
+			win(QUEUE_TASKS, "stuck", [stuckFile]);
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			let tasksTail: Promise<unknown> = Promise.resolve();
+			const serializedHost = {
+				...host(),
+				queueTasksChain<T>(fn: () => Promise<T>): Promise<T> {
+					const run = tasksTail.then(fn, fn);
+					tasksTail = run.then(
+						() => {},
+						() => {},
+					);
+					return run;
+				},
+			};
+
+			const openTaskChat = async (id: string, file: string) =>
+				serializedHost.queueTasksChain(async () => {
+					const created = conv(id, file, taskChatEntries(8), { streaming: false });
+					return created.id;
+				});
+
+			let closeResult: boolean | undefined;
+			let openedAfterClose: string | undefined;
+			void queueCloseChat.call(serializedHost, stuckFile).then(async (r) => {
+				closeResult = r;
+				openedAfterClose = await openTaskChat("next-after-close", write("next-task.jsonl", taskChatEntries(8)));
+			});
+
+			// Ops #771: at 10 minutes a still-working chat is still waited on and untouched.
+			await vi.advanceTimersByTimeAsync(10 * 60_000);
+			expect(closeResult).toBeUndefined();
+			expect(convs.has("stuck")).toBe(true);
+
+			// Past the bounded close deadline (15 minutes), queueCloseChat stops waiting, logs loudly naming
+			// the chat, leaves the still-streaming chat open (never disposing mid-turn), and openTaskChat completes.
+			await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000);
+			expect(closeResult).toBe(false);
+			expect(convs.has("stuck")).toBe(true);
+			expect(openedAfterClose).toBe("next-after-close");
+			expect(convs.has("next-after-close")).toBe(true);
+			expect(warn).toHaveBeenCalledTimes(1);
+			expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("stuck-task.jsonl");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("separates queueCloseChat from queueTasksChain so closing and opening task chats never block each other's lane", async () => {
+		const doneFile = write("done-task.jsonl", taskChatEntries(9));
+		conv("done", doneFile, taskChatEntries(9), { streaming: false });
+		win("desk", "elsewhere", [doneFile]);
+
+		let releaseOpenGate!: () => void;
+		const openGate = new Promise<void>((resolve) => {
+			releaseOpenGate = resolve;
+		});
+		let tasksTail: Promise<unknown> = openGate;
+		const serializedHost = {
+			...host(),
+			queueTasksChain<T>(fn: () => Promise<T>): Promise<T> {
+				const run = tasksTail.then(fn, fn);
+				tasksTail = run.then(
+					() => {},
+					() => {},
+				);
+				return run;
+			},
+		};
+
+		try {
+			// Even while queueTasksChain is occupied opening another chat, queueCloseChat finishes on its own lane.
+			let closed: boolean | undefined;
+			void queueCloseChat.call(serializedHost, doneFile).then((r) => {
+				closed = r;
+			});
+			await new Promise((r) => setTimeout(r, 20));
+			expect(closed).toBe(true);
+			expect(convs.has("done")).toBe(false);
+		} finally {
+			releaseOpenGate();
+		}
+	});
 });
