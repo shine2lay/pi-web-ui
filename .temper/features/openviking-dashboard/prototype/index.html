@@ -182,9 +182,11 @@ button:focus-visible,
 .tab-btn[aria-selected="true"],
 .filter-btn[aria-pressed="true"],
 .drawer-tab[aria-selected="true"] {
-  background: var(--status-healthy-bg);
-  color: var(--status-healthy-fg);
+  /* #284 S3-4: selection wears the app accent, never a status tone */
+  background: var(--bg-surface);
+  color: var(--text-primary);
   border-color: var(--accent-primary);
+  box-shadow: inset 0 -3px 0 var(--accent-primary);
 }
 
 .header,
@@ -312,7 +314,7 @@ button:focus-visible,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: var(--space-1);
 }
 
@@ -371,6 +373,32 @@ button:focus-visible,
   background: transparent;
   border-style: solid;
   border-color: var(--border-strong);
+}
+
+/* #284 C3-10: a guard rejection is a normal verdict, not an outage: neutral tone, its own glyph */
+.badge-neutral {
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border-style: solid;
+  border-color: var(--text-muted);
+}
+
+/* #284 S3-3: while loading, pills are skeletons: no status glyph, icon or tone */
+.badge-skeleton {
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-style: solid;
+  border-color: var(--border-strong);
+  min-width: 6rem;
+}
+
+/* #284 C3-5: status glyphs use a symbol font so the half-circle reads at pill size */
+.glyph {
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+  font-family: "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", "Noto Sans Symbols 2", sans-serif;
+  font-weight: 400;
 }
 
 .state-banner {
@@ -527,12 +555,12 @@ button:focus-visible,
   border-color: var(--accent-primary);
 }
 
-/* #275 M-1: the reader drawer's frame carries the screen state's tone, the same as the header badge */
-.shell[data-screen-state="live"] .drawer { border-color: var(--status-healthy-fg); }
-.shell[data-screen-state="stale"] .drawer { border-color: var(--status-stale-fg); }
-.shell[data-screen-state="empty"] .drawer { border-color: var(--status-zero-fg); }
-.shell[data-screen-state="error"] .drawer { border-color: var(--status-unreachable-fg); }
-.shell[data-screen-state="loading"] .drawer { border-color: var(--status-info-fg); }
+/* #275 M-1, #284 C3-2: the reader drawer's frame carries the screen state's tone and line style, the same as the header badge */
+.shell[data-screen-state="live"] .drawer { border-color: var(--status-healthy-fg); border-style: solid; }
+.shell[data-screen-state="stale"] .drawer { border-color: var(--status-stale-fg); border-style: dashed; }
+.shell[data-screen-state="empty"] .drawer { border-color: var(--status-zero-fg); border-style: dotted; }
+.shell[data-screen-state="error"] .drawer { border-color: var(--status-unreachable-fg); border-style: double; border-width: 3px; }
+.shell[data-screen-state="loading"] .drawer { border-color: var(--border-strong); border-style: solid; }
 
 .drawer-head {
   display: flex;
@@ -606,6 +634,32 @@ button:focus-visible,
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
   }
+
+  /* #284 C3-3: the tier text scrolls inside the sheet and takes keyboard focus, so provenance stays in view */
+  .drawer-box {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* #284 C3-4: a scrim behind the phone sheet */
+  .shell.drawer-open .scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    background: var(--bg-canvas);
+    opacity: 0.72;
+  }
+}
+
+.scrim {
+  display: none;
+}
+
+/* #284 M3-2: a cited age never breaks across lines */
+.state-banner [data-source-field] {
+  white-space: nowrap;
 }
 
 /* #269 M6: tab 2 groups (Shared layer by repo, Role layer by role) and per-tab state notes */
@@ -668,7 +722,7 @@ button:focus-visible,
     <div class="header-main">
       <div class="header-title-row">
         <h1 class="title-h1" data-body-copy="true">OpenViking Memory Observability</h1>
-        <span id="hdr-mode" class="badge badge-healthy" data-slot="mode-badge" data-icon="circle-check" data-figure="true" data-source-field="observer.mode_label" data-age="4s">● Active</span>
+        <span id="hdr-mode" class="badge badge-healthy" data-slot="mode-badge" data-icon="circle-check" data-figure="true" data-source-field="observer.mode_label" data-age="4s"><span class="glyph" aria-hidden="true">●</span> Active</span>
         <span class="meta" id="hdr-folders" data-figure="true" data-source-field="observer.role_memory_folder_count" data-age="4s">15 role memory folders</span>
       </div>
       <p class="subtitle" id="hdr-subtitle" data-body-copy="true">
@@ -676,7 +730,8 @@ button:focus-visible,
       </p>
     </div>
     <div class="header-meta">
-      <span class="meta" id="hdr-checked" data-age-label="true">Last injection 4s ago · Last commit 5m ago · 30s cadence</span>
+      <span class="meta" id="hdr-check" data-checked-label="true"><span data-source-field="observer.checked_at">Checked 4s ago</span> · 30s cadence</span>
+      <span class="meta" id="hdr-checked" data-age-label="true"><span data-source-field="observer.last_injection_at">Last injection 1m ago</span></span>
     </div>
   </header>
 
@@ -693,17 +748,17 @@ button:focus-visible,
       <div class="card-title-row" data-field="title">
         <span>System &amp; Daemon Health</span>
         <span class="concept-wrap" data-concept="sidecar-mode">
-          <span class="meta">Mode 1 L0</span>
+          <span class="meta">Shown at chat start (L0)</span>
           <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain Mode 1 L0 and sidecar" aria-describedby="tip-sidecar">(?)</button>
           <span id="tip-sidecar" role="tooltip" class="tooltip">Mode 1: lead chats get a folded “viking:// URIs + 1-sentence L0 .abstract.md headlines only” card from the sidecar on 127.0.0.1:1933. If it is down, workers read their on-disk notebook.md backup (R-PREF-RESIDUAL-1b) and lead chats keep pi-acp only (R-FAIL-3).</span>
         </span>
       </div>
       <div class="metric" id="c1-metric" data-field="metric" data-figure="true" data-source-field="observer.daemon_bind" data-age="4s">127.0.0.1:1933</div>
       <div class="status-row" data-field="status">
-        <span id="c1-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check">● Healthy</span>
+        <span id="c1-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check" data-health-state="healthy"><span class="glyph" aria-hidden="true">●</span> Healthy</span>
       </div>
-      <div class="meta" id="c1-context" data-field="context" data-figure="true" data-source-field="observer.queue_depth" data-age="4s">Queue depth not reported · Shared layer + Role layer</div>
-      <div class="age-footer" id="c1-age" data-field="age" data-age-label="true" data-panel-updated-label="true">Updated 4s ago · 30s cadence</div>
+      <div class="meta" id="c1-context" data-field="context" data-figure="true" data-source-field="observer.queue_depth" data-age="4s">Queue depth: unavailable · Shared layer + Role layer</div>
+      <div class="age-footer" id="c1-age" data-field="age" data-age-label="true" data-panel-updated-label="true"><span data-source-field="observer.checked_at">Checked 4s ago</span> · 30s cadence</div>
     </article>
 
     <!-- Card 2: Context & Token Injection / Live Injection & Retrieval -->
@@ -711,17 +766,17 @@ button:focus-visible,
       <div class="card-title-row" data-field="title">
         <span>Context &amp; Token Injection</span>
         <span class="concept-wrap" data-concept="slot-mount">
-          <span class="meta">Mode 2 Turn-1</span>
+          <span class="meta">Added on a worker's first turn</span>
           <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain Mode 2 Turn-1 5-Slot mount" aria-describedby="tip-slots">(?)</button>
           <span id="tip-slots" role="tooltip" class="tooltip">Mode 2 (queued workers) adds a Preferences block, then 5 slots in fixed order: Slots 1–2 are direct reads (project overview, shared entity); Slot 3 takes the touched feature spec first, else search “score &gt;= 0.35”; Slot 4 is the “Top Matching Personal Role Cases / Experiences”: it will “select at most the top 2 URIs” with score &gt;= 0.35; Slot 5 lists “&lt;= 8 sibling URIs” (L0).</span>
         </span>
       </div>
-      <div class="metric" id="c2-metric" data-field="metric" data-figure="true" data-source-field="metrics.slot_hit_rate_pct" data-age="1m">94.2% Hit Rate</div>
+      <div class="metric" id="c2-metric" data-field="metric" data-figure="true" data-source-field="metrics.slot_hit_rate_pct" data-age="1m">93.8% Hit Rate</div>
       <div class="status-row" data-field="status">
-        <span id="ci-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check">● Healthy</span>
+        <span id="ci-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check" data-health-state="healthy"><span class="glyph" aria-hidden="true">●</span> Healthy</span>
       </div>
-      <div class="meta" id="c2-context" data-field="context" data-figure="true" data-source-field="metrics.avg_injected_tokens" data-age="1m">1,420 avg tok · 48 turns sampled (24h)</div>
-      <div class="age-footer" id="c2-age" data-field="age" data-age-label="true" data-panel-updated-label="true">Updated 1m ago · 5m cadence</div>
+      <div class="meta" id="c2-context" data-field="context" data-figure="true" data-source-field="metrics.avg_injected_tokens" data-age="1m">1,420 avg tok · 48 turns sampled (24h)<span data-source-field="slots[].state"> · per-slot figures not measured yet</span></div>
+      <div class="age-footer" id="c2-age" data-field="age" data-age-label="true" data-panel-updated-label="true"><span data-source-field="metrics.last_recorded_at">Last turn 1m ago</span> · 5m cadence</div>
     </article>
 
     <!-- Card 3: Commit & Guard Governance / Guardrails & Commit Audit -->
@@ -736,10 +791,10 @@ button:focus-visible,
       </div>
       <div class="metric" id="c3-metric" data-field="metric" data-figure="true" data-source-field="changelog.session_commits_24h" data-age="5m">18 session commits</div>
       <div class="status-row" data-field="status">
-        <span id="c3-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check">● Healthy</span>
+        <span id="c3-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check" data-health-state="healthy"><span class="glyph" aria-hidden="true">●</span> Healthy</span>
       </div>
       <div class="meta" id="c3-context" data-field="context" data-figure="true" data-source-field="changelog.promotions_24h" data-age="5m">5 shared syncs · 1 guard rejection (24h)</div>
-      <div class="age-footer" id="c3-age" data-field="age" data-age-label="true" data-panel-updated-label="true">Updated 5m ago · 15m cadence</div>
+      <div class="age-footer" id="c3-age" data-field="age" data-age-label="true" data-panel-updated-label="true"><span data-source-field="changelog.last_event_at">Last event 5m ago</span> · 15m cadence</div>
     </article>
   </section>
 
@@ -757,7 +812,7 @@ button:focus-visible,
   <section class="panel" role="tabpanel" data-tabpanel="mount-map" data-panel-updated-at="2026-11-10T20:14:00Z">
     <div class="panel-head">
       <strong class="body-copy" data-body-copy="true">5-Slot Turn-1 Context Mount &amp; Live Injection Activity</strong>
-      <span class="meta" id="p1-updated" data-panel-updated-label="true" data-age-label="true">Slot metrics sampled 1m ago · 48 turns in 24h · 5m cadence</span>
+      <span class="meta" id="p1-updated" data-panel-updated-label="true" data-age-label="true"><span data-source-field="metrics.last_recorded_at">Last turn recorded 1m ago</span> · 48 turns in 24h · 5m cadence</span>
     </div>
     <p class="state-note hidden" data-state-note="mount-map"></p>
 
@@ -789,7 +844,7 @@ button:focus-visible,
           </div>
           <p class="abstract-copy" data-body-copy="true">The project's L1 overview, read directly at the start of every queued task.</p>
         </div>
-        <span class="meta" data-figure="true" data-source-field="slots[].hit_rate_pct" data-age="1m" data-age-label="true">Not measured yet · read 1m ago</span>
+        <span class="meta" data-slot-meta="true" data-source-field="slots[].state">Not measured yet</span>
       </div>
 
       <div class="row" data-slot-id="2" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-2">
@@ -801,31 +856,31 @@ button:focus-visible,
           </div>
           <p class="abstract-copy" data-body-copy="true">The project's shared entity file (branch, last install, status), read directly.</p>
         </div>
-        <span class="meta" data-figure="true" data-source-field="slots[].avg_tokens" data-age="1m" data-age-label="true">Not measured yet · read 1m ago</span>
+        <span class="meta" data-slot-meta="true" data-source-field="slots[].state">Not measured yet</span>
       </div>
 
       <div class="row" data-slot-id="3" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-3">
         <div class="row-main">
           <div class="row-top">
             <span class="badge badge-unmeasured">○ Not measured</span>
-            <strong class="body-copy" data-body-copy="true">Slot 3 · Top Matching Feature Spec</strong>
+            <strong class="body-copy" data-body-copy="true">Slot 3 · Top Matching Spec</strong>
             <span class="uri-code">viking://resources/&lt;project&gt;/features/</span>
           </div>
           <p class="abstract-copy" data-body-copy="true">The feature spec the task touches, else the best search match with score &gt;= 0.35.</p>
         </div>
-        <span class="meta" data-figure="true" data-source-field="slots[].hit_rate_pct" data-age="1m" data-age-label="true">Not measured yet · read 1m ago</span>
+        <span class="meta" data-slot-meta="true" data-source-field="slots[].state">Not measured yet</span>
       </div>
 
       <div class="row" data-slot-id="4" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-4">
         <div class="row-main">
           <div class="row-top">
             <span class="badge badge-unmeasured">○ Not measured</span>
-            <strong class="body-copy" data-body-copy="true">Slot 4 · Role Cases &amp; Experiences</strong>
+            <strong class="body-copy" data-body-copy="true">Slot 4 · Personal Role Memories</strong>
             <span class="uri-code">viking://agent/memories/</span>
           </div>
           <p class="abstract-copy" data-body-copy="true">[Isolated per-role memory — metadata only (R-ISOLATION-1)]</p>
         </div>
-        <span class="meta" data-figure="true" data-source-field="slots[].avg_tokens" data-age="1m" data-age-label="true">Not measured yet · read 1m ago</span>
+        <span class="meta" data-slot-meta="true" data-source-field="slots[].state">Not measured yet</span>
       </div>
 
       <div class="row" data-slot-id="5" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-5">
@@ -837,7 +892,7 @@ button:focus-visible,
           </div>
           <p class="abstract-copy" data-body-copy="true">Up to 8 sibling project docs, listed as one-line L0 abstracts.</p>
         </div>
-        <span class="meta" data-figure="true" data-source-field="slots[].state" data-age="1m" data-age-label="true">Not measured yet · read 1m ago</span>
+        <span class="meta" data-slot-meta="true" data-source-field="slots[].state">Not measured yet</span>
       </div>
     </div>
   </section>
@@ -846,7 +901,7 @@ button:focus-visible,
   <section class="panel hidden" role="tabpanel" data-tabpanel="namespace-explorer" data-panel-updated-at="2026-11-10T20:12:00Z">
     <div class="panel-head">
       <strong class="body-copy" data-body-copy="true">Memory Namespace Explorer · Shared layer by repo, Role layer by role</strong>
-      <span class="meta" data-panel-updated-label="true" data-age-label="true">Namespace indexed 3m ago · 15m cadence</span>
+      <span class="meta" data-panel-updated-label="true" data-age-label="true"><span data-source-field="entries[].updated_at">Newest entry updated 3m ago</span> · 15m cadence</span>
     </div>
     <p class="meta" data-namespace-summary="true">Shared layer: 6 repos, 8 preference domains, shared entities and events · Role layer: 15 roles (preferences, cases, experiences)</p>
     <p class="state-note hidden" data-state-note="namespace-explorer"></p>
@@ -935,7 +990,7 @@ button:focus-visible,
   <section class="panel hidden" role="tabpanel" data-tabpanel="commit-audit" data-panel-updated-at="2026-11-10T20:10:00Z">
     <div class="panel-head">
       <strong class="body-copy" data-body-copy="true">Post-Turn Commit &amp; Guard Verdict Stream</strong>
-      <span class="meta" data-panel-updated-label="true" data-age-label="true">Audit log read 5m ago · 18 session commits in 24h · latest 3 shown</span>
+      <span class="meta" data-panel-updated-label="true" data-age-label="true"><span data-source-field="events[].ts">Latest event 5m ago</span> · 18 session commits in 24h · latest 3 events shown</span>
     </div>
     <p class="state-note hidden" data-state-note="commit-audit"></p>
 
@@ -948,7 +1003,7 @@ button:focus-visible,
           </div>
           <p class="abstract-copy" data-body-copy="true">[Isolated per-role memory — metadata only (R-ISOLATION-1)]</p>
         </div>
-        <span class="meta" data-figure="true" data-source-field="events[].guard_verdict" data-age="5m" data-age-label="true">allowed · role=ops · 5m ago</span>
+        <span class="meta" data-figure="true" data-source-field="events[].guard_verdict" data-age="5m" data-age-label="true">allowed · role=ops · <span data-source-field="events[].ts">5m ago</span></span>
       </div>
 
       <div class="row" data-component="audit-row" role="button" tabindex="0" aria-expanded="false" data-item-key="aud-2">
@@ -959,23 +1014,24 @@ button:focus-visible,
           </div>
           <p class="abstract-copy" data-body-copy="true">Synced the roll-ladder feature spec from .temper/ into the Shared layer after wt land 5db1eb93.</p>
         </div>
-        <span class="meta" data-figure="true" data-source-field="events[].guard_verdict" data-age="12m" data-age-label="true">allowed · role=backend · 12m ago</span>
+        <span class="meta" data-figure="true" data-source-field="events[].guard_verdict" data-age="12m" data-age-label="true">allowed · role=backend · <span data-source-field="events[].ts">12m ago</span></span>
       </div>
 
       <div class="row" data-component="audit-row" role="button" tabindex="0" aria-expanded="false" data-item-key="aud-3">
         <div class="row-main">
           <div class="row-top">
-            <span class="badge badge-unreachable">✕ reject_noise</span>
+            <span class="badge badge-neutral"><span class="glyph" aria-hidden="true">⊘</span> reject_noise</span>
             <span class="uri-code">viking://agent/memories/instructions/preferences.md</span>
           </div>
           <p class="abstract-copy" data-body-copy="true">[Isolated per-role memory — metadata only (R-ISOLATION-1)]</p>
         </div>
-        <span class="meta" data-figure="true" data-source-field="events[].guard_verdict" data-age="28m" data-age-label="true">rejected · role=backend · 28m ago</span>
+        <span class="meta" data-figure="true" data-source-field="events[].guard_verdict" data-age="28m" data-age-label="true">rejected · role=backend · <span data-source-field="events[].ts">28m ago</span></span>
       </div>
     </div>
   </section>
 
-  <!-- Tier 3: Reader Drawer -->
+  <!-- Tier 3: Reader Drawer (#284 C3-4: scrim behind the phone sheet) -->
+  <div class="scrim" id="drawer-scrim" aria-hidden="true"></div>
   <aside class="drawer hidden" id="reader-drawer" data-component="reader-drawer" role="dialog" aria-label="Memory Reader Drawer">
     <div class="drawer-head">
       <div>
@@ -989,15 +1045,15 @@ button:focus-visible,
       <button type="button" class="tab-btn drawer-tab" role="tab" data-drawer-tab="l1" aria-selected="false">L1 Overview</button>
       <button type="button" class="tab-btn drawer-tab" role="tab" data-drawer-tab="l2" aria-selected="false">L2 Full Content</button>
     </div>
-    <div class="drawer-box" id="drawer-tier-l0" data-drawer-panel="l0">
+    <div class="drawer-box" id="drawer-tier-l0" data-drawer-panel="l0" role="region" tabindex="0" aria-label="L0 abstract text">
       <strong class="meta">L0 Abstract (1-sentence routing summary)</strong>
       <p class="body-copy" id="drawer-l0-body" data-body-copy="true"></p>
     </div>
-    <div class="drawer-box hidden" id="drawer-tier-l1" data-drawer-panel="l1">
+    <div class="drawer-box hidden" id="drawer-tier-l1" data-drawer-panel="l1" role="region" tabindex="0" aria-label="L1 overview text">
       <strong class="meta">L1 Overview (.overview.md, ~4 KB structural summary)</strong>
       <p class="body-copy" id="drawer-l1-body" data-body-copy="true"></p>
     </div>
-    <div class="drawer-box hidden" id="drawer-tier-l2" data-drawer-panel="l2">
+    <div class="drawer-box hidden" id="drawer-tier-l2" data-drawer-panel="l2" role="region" tabindex="0" aria-label="L2 full text">
       <strong class="meta">L2 Full Content (canonical document text, read-only)</strong>
       <p class="body-copy" id="drawer-l2-body" data-body-copy="true"></p>
     </div>
@@ -1008,8 +1064,8 @@ button:focus-visible,
   var LIVE_FIGURES = {
     "hdr-folders": "15 role memory folders",
     "c1-metric": "127.0.0.1:1933",
-    "c1-context": "Queue depth not reported · Shared layer + Role layer",
-    "c2-metric": "94.2% Hit Rate",
+    "c1-context": "Queue depth: unavailable · Shared layer + Role layer",
+    "c2-metric": "93.8% Hit Rate",
     "c2-context": "1,420 avg tok · 48 turns sampled (24h)",
     "c3-metric": "18 session commits",
     "c3-context": "5 shared syncs · 1 guard rejection (24h)"
@@ -1024,6 +1080,63 @@ button:focus-visible,
   var FIGURE_AGES = Array.prototype.map.call(document.querySelectorAll("[data-figure][data-age]"), function (el) {
     return [el, el.getAttribute("data-age")];
   });
+
+  // #284 M3-1: each card pill shows its own panel's health_state (overview.ts panelHealth), never the screen's
+  var PILL = {
+    healthy: ["badge-healthy", "circle-check", "●", "Healthy"],
+    stale: ["badge-stale", "clock-stale", "◐", "Stale"],
+    "zero-activity": ["badge-zero", "circle-empty", "◌", "Zero Activity"],
+    "server-unreachable": ["badge-unreachable", "octagon-x", "✕", "Server Unreachable"]
+  };
+  function setGlyphText(el, glyph, text) {
+    el.textContent = "";
+    var g = document.createElement("span");
+    g.className = "glyph";
+    g.setAttribute("aria-hidden", "true");
+    g.textContent = glyph;
+    el.appendChild(g);
+    el.appendChild(document.createTextNode(" " + text));
+  }
+  function setPill(el, health, detail) {
+    var p = PILL[health];
+    el.className = "badge " + p[0];
+    el.setAttribute("data-icon", p[1]);
+    el.setAttribute("data-health-state", health);
+    el.removeAttribute("data-skeleton");
+    el.removeAttribute("data-stale-badge");
+    setGlyphText(el, p[2], p[3] + (detail ? " (" + detail + ")" : ""));
+  }
+  // #284 S3-1: the header badge text is only observer.mode_label; its tone follows the screen state
+  function setMode(label, cls, icon, glyph) {
+    var hdr = byId("hdr-mode");
+    hdr.className = "badge " + cls;
+    hdr.setAttribute("data-icon", icon);
+    hdr.removeAttribute("data-skeleton");
+    setGlyphText(hdr, glyph, label);
+  }
+  // #284 S3-3: while loading, every pill is a skeleton with no status glyph, icon or tone
+  function setSkeleton(el) {
+    el.className = "badge badge-skeleton";
+    el.removeAttribute("data-icon");
+    el.removeAttribute("data-health-state");
+    el.removeAttribute("data-stale-badge");
+    el.setAttribute("data-skeleton", "true");
+    el.textContent = "Loading…";
+  }
+  // #284 M3-2: an age is only printed inside a span naming the timestamp field it comes from ([text, field] parts)
+  function fill(el, parts) {
+    el.textContent = "";
+    [].concat(parts).forEach(function (part) {
+      if (typeof part === "string") {
+        el.appendChild(document.createTextNode(part));
+        return;
+      }
+      var s = document.createElement("span");
+      s.setAttribute("data-source-field", part[1]);
+      s.textContent = part[0];
+      el.appendChild(s);
+    });
+  }
 
   var currentState = "live";
   function applyState(st) {
@@ -1042,14 +1155,15 @@ button:focus-visible,
       }
     });
 
+    fill(byId("c2-context"), [LIVE_FIGURES["c2-context"], [" · per-slot figures not measured yet", "slots[].state"]]);
     var hdr = byId("hdr-mode");
     var sub = byId("hdr-subtitle");
     var chk = byId("hdr-checked");
+    var hdrCheck = byId("hdr-check");
     var banner = byId("state-banner");
     var bTitle = byId("state-banner-title");
     var bBody = byId("state-banner-body");
     var badges = [byId("c1-badge"), byId("ci-badge"), byId("c3-badge")];
-    var badgeCadence = ["30s", "5m", "15m"];
     var folders = byId("hdr-folders");
     var c1Age = byId("c1-age");
     var c2Age = byId("c2-age");
@@ -1058,16 +1172,18 @@ button:focus-visible,
     // #275 M-3: slot badges stay a neutral "Not measured" in every state; only the read time changes
     function setSlotMeta(text) {
       slotRows.forEach(function (r) {
-        var m = r.querySelector("[data-figure]");
+        var m = r.querySelector("[data-slot-meta]");
         if (m) m.textContent = text;
       });
     }
     var p1Upd = byId("p1-updated");
 
-    c1Age.textContent = "Updated 4s ago · 30s cadence";
-    c2Age.textContent = "Updated 1m ago · 5m cadence";
-    c3Age.textContent = "Updated 5m ago · 15m cadence";
-    if (p1Upd) p1Upd.textContent = "Slot metrics sampled 1m ago · 48 turns in 24h · 5m cadence";
+    fill(hdrCheck, [["Checked 4s ago", "observer.checked_at"], " · 30s cadence"]);
+    fill(chk, [["Last injection 1m ago", "observer.last_injection_at"]]);
+    fill(c1Age, [["Checked 4s ago", "observer.checked_at"], " · 30s cadence"]);
+    fill(c2Age, [["Last turn 1m ago", "metrics.last_recorded_at"], " · 5m cadence"]);
+    fill(c3Age, [["Last event 5m ago", "changelog.last_event_at"], " · 15m cadence"]);
+    if (p1Upd) fill(p1Upd, [["Last turn recorded 1m ago", "metrics.last_recorded_at"], " · 48 turns in 24h · 5m cadence"]);
 
     // #275 C-7: one badge per card; in stale it names its cadence and carries the stale marker
     badges.forEach(function (b) {
@@ -1075,83 +1191,77 @@ button:focus-visible,
     });
 
     if (st === "stale") {
-      hdr.className = "badge badge-stale";
-      hdr.setAttribute("data-icon", "clock-stale");
-      hdr.textContent = "◐ Stale (last injection 19m ago)";
-      sub.textContent = "Daemon is reachable, but recent slot sampling and commits exceeded expected active cadence.";
-      chk.textContent = "Last injection 19m ago · Last commit 42m ago · 30s cadence";
-      c1Age.textContent = "Updated 19m ago · 30s cadence";
-      c2Age.textContent = "Updated 19m ago · 5m cadence";
-      c3Age.textContent = "Updated 42m ago · 15m cadence";
-      if (p1Upd) p1Upd.textContent = "Stale · 48 turns in 24h · slots sampled 19m ago (> 5m cadence)";
-      badges.forEach(function (b, i) {
-        b.className = "badge badge-stale";
-        b.setAttribute("data-icon", "clock-stale");
-        b.setAttribute("data-stale-badge", "true");
-        b.textContent = "◐ Stale (> " + badgeCadence[i] + " cadence)";
-      });
-      setSlotMeta("Not measured yet · read 19m ago");
+      setMode("Degraded Local Fallback", "badge-stale", "clock-stale", "◐");
+      sub.textContent = "The daemon answers, but 2 worktree syncs are waiting to land, and slot sampling and audit events are past their cadence.";
+      fill(chk, [["Last injection 19m ago", "observer.last_injection_at"]]);
+      fill(c1Age, ["Daemon answers · ", ["2 worktree syncs", "auxiliary.rollout.pending_wt_land_syncs"], " waiting to land · 30s cadence"]);
+      fill(c2Age, [["Last turn 19m ago", "metrics.last_recorded_at"], " · 5m cadence"]);
+      fill(c3Age, [["Last event 42m ago", "changelog.last_event_at"], " · 15m cadence"]);
+      if (p1Upd) fill(p1Upd, ["Stale · 48 turns in 24h · ", ["last turn recorded 19m ago", "metrics.last_recorded_at"], " (> 5m cadence)"]);
+      // observer.health_state is stale while the rollout is degraded (overview.ts); the two log panels are past their cadence
+      setPill(badges[0], "stale", "syncs waiting to land");
+      setPill(badges[1], "stale", "> 5m cadence");
+      setPill(badges[2], "stale", "> 15m cadence");
+      badges[1].setAttribute("data-stale-badge", "true");
+      badges[2].setAttribute("data-stale-badge", "true");
+      setSlotMeta("Not measured yet");
       banner.className = "state-banner badge-stale";
-      bTitle.textContent = "◐ Stale — Exceeded Expected Active Cadence (> 30s / > 5m / > 15m)";
-      bBody.textContent = "The daemon answers, but the last slot sample is 19m old and the last commit 42m old. Figures below are those last reads.";
+      setGlyphText(bTitle, "◐", "Stale — Exceeded Expected Active Cadence (> 5m / > 15m)");
+      fill(bBody, ["The daemon answers, but 2 worktree syncs are waiting to land, the last turn was recorded ", ["19m ago", "metrics.last_recorded_at"], " and the last audit event ", ["42m ago", "changelog.last_event_at"], ". Figures below are those last reads."]);
     } else if (st === "empty") {
-      hdr.className = "badge badge-zero";
-      hdr.setAttribute("data-icon", "circle-empty");
-      hdr.textContent = "◌ Zero Activity (0 events in window)";
+      setMode("Active", "badge-zero", "circle-empty", "◌");
       sub.textContent = "OpenViking daemon is online and responsive, with 0 events in window (server online).";
-      chk.textContent = "Checked 4s ago · 0 events in window · 30s cadence";
-      c1Age.textContent = "Checked 4s ago · 30s cadence";
-      c2Age.textContent = "Checked 4s ago · 5m cadence";
-      c3Age.textContent = "Checked 4s ago · 15m cadence";
-      if (p1Upd) p1Upd.textContent = "Checked 4s ago · 0 turns in window · 5m cadence";
+      fill(chk, ["No injection in the last 24h"]);
+      fill(c2Age, [["Checked 4s ago", "observer.checked_at"], " · 5m cadence"]);
+      fill(c3Age, [["Checked 4s ago", "observer.checked_at"], " · 15m cadence"]);
+      if (p1Upd) fill(p1Upd, [["Checked 4s ago", "observer.checked_at"], " · 0 turns in window · 5m cadence"]);
       byId("c2-metric").textContent = "0 turns in window";
       byId("c2-context").textContent = "— avg tok (no turns) · 0 turns sampled (server online)";
       byId("c3-metric").textContent = "0 session commits in window";
       byId("c3-context").textContent = "0 shared syncs · 0 guard rejections (server online)";
-      badges.forEach(function (b) {
-        b.className = "badge badge-zero";
-        b.setAttribute("data-icon", "circle-empty");
-        b.textContent = "◌ Zero Activity";
-      });
-      setSlotMeta("0 turns · checked 4s ago");
+      // the daemon answers (healthy); the two log panels saw 0 events in the window (zero-activity)
+      setPill(badges[0], "healthy");
+      setPill(badges[1], "zero-activity");
+      setPill(badges[2], "zero-activity");
+      setSlotMeta("No turns in 24h");
       banner.className = "state-banner badge-zero";
-      bTitle.textContent = "◌ Zero Activity — 0 events in window (server online)";
-      bBody.textContent = "The daemon answered its health check 4s ago. No role ran a turn or made a commit in the last 24 hours.";
+      setGlyphText(bTitle, "◌", "Zero Activity — 0 events in window (server online)");
+      fill(bBody, ["The daemon answered its health check ", ["4s ago", "observer.checked_at"], ". No role ran a turn or made a commit in the last 24 hours."]);
     } else if (st === "error") {
-      hdr.className = "badge badge-unreachable";
-      hdr.setAttribute("data-icon", "octagon-x");
-      hdr.textContent = "✕ Offline";
-      sub.textContent = "Cannot reach 127.0.0.1:1933. Workers read their on-disk notebook.md backup; lead chats keep pi-acp only.";
-      chk.textContent = "Last seen 18m ago · 30s cadence";
-      c1Age.textContent = "Last seen 18m ago · 30s cadence";
-      c2Age.textContent = "From local metrics log · last turn 18m ago · 5m cadence";
-      c3Age.textContent = "From local audit log · last event 18m ago · 15m cadence";
-      if (p1Upd) p1Upd.textContent = "Server offline · from local metrics log · 48 turns in 24h · last turn 18m ago · 5m cadence";
-      badges.forEach(function (b) {
-        b.className = "badge badge-unreachable";
-        b.setAttribute("data-icon", "octagon-x");
-        b.textContent = "✕ Server Unreachable";
-      });
+      setMode("Offline", "badge-unreachable", "octagon-x", "✕");
+      sub.textContent = "No answer from 127.0.0.1:1933. By design, workers then fall back to their on-disk notebook and lead chats keep pi-acp only.";
+      fill(hdrCheck, ["No answer from 127.0.0.1:1933 · ", ["checked 4s ago", "observer.checked_at"]]);
+      fill(chk, ["From local logs · ", ["last injection 18m ago", "observer.last_injection_at"]]);
+      fill(c1Age, ["No answer · 30s cadence"]);
+      fill(c2Age, ["From local metrics log · ", ["last turn 18m ago", "metrics.last_recorded_at"], " · 5m cadence"]);
+      fill(c3Age, ["From local audit log · ", ["last event 18m ago", "changelog.last_event_at"], " · 15m cadence"]);
+      if (p1Upd) fill(p1Upd, ["Server offline · from local metrics log · 48 turns in 24h · ", ["last turn 18m ago", "metrics.last_recorded_at"], " · 5m cadence"]);
+      // only the daemon is unreachable; the two panels read from local logs are 18m old, so past their cadence
+      setPill(badges[0], "server-unreachable");
+      setPill(badges[1], "stale", "> 5m cadence");
+      setPill(badges[2], "stale", "> 15m cadence");
+      badges[1].setAttribute("data-stale-badge", "true");
+      badges[2].setAttribute("data-stale-badge", "true");
       // only the daemon's own figures (observer.*) go unreachable; the local log figures keep their count, with the log's age
-      document.querySelectorAll('[data-component="summary-card"] [data-source-field^="observer."]').forEach(function (f) {
+      document.querySelectorAll('[data-component="summary-card"] [data-figure][data-source-field^="observer."]').forEach(function (f) {
         f.setAttribute("data-unreachable-value", "true");
         f.textContent = "— (Unreachable)";
       });
+      byId("c1-context").textContent = "Queue depth: unavailable — (Unreachable)";
       FIGURE_AGES.forEach(function (p) {
         if (LOCAL_FIELD_RE.test(p[0].getAttribute("data-source-field") || "")) p[0].setAttribute("data-age", "18m");
       });
       folders.setAttribute("data-unreachable-value", "true");
       folders.textContent = "Role memory folders — (Unreachable)";
-      setSlotMeta("Not measured yet · last turn 18m ago");
+      setSlotMeta("Not measured yet");
       banner.className = "state-banner badge-unreachable";
-      bTitle.textContent = "✕ Server Unreachable — Cannot reach 127.0.0.1:1933 (Offline)";
-      bBody.textContent = "Last contact 18m ago. Daemon figures, namespace entries and L1/L2 text come back when it answers again. Injection, slot and commit figures below are read from the local logs.";
+      setGlyphText(bTitle, "✕", "Server Unreachable — No answer from 127.0.0.1:1933 (Offline)");
+      fill(bBody, ["No answer when ", ["checked 4s ago", "observer.checked_at"], ". Daemon figures, namespace entries and L1/L2 text come back when it answers again. Injection, slot and commit figures below are read from the local logs."]);
     } else if (st === "loading") {
-      hdr.className = "badge badge-info";
-      hdr.setAttribute("data-icon", "circle-check");
-      hdr.textContent = "● Loading Telemetry Snapshot…";
+      setSkeleton(hdr);
       sub.textContent = "Reading the OpenViking overview, namespace entries, and commit audit log…";
-      chk.textContent = "Loading last check time…";
+      fill(hdrCheck, ["Checking 127.0.0.1:1933…"]);
+      fill(chk, ["Loading last injection time…"]);
       c1Age.textContent = "Loading… · 30s cadence";
       c2Age.textContent = "Loading… · 5m cadence";
       c3Age.textContent = "Loading… · 15m cadence";
@@ -1163,27 +1273,18 @@ button:focus-visible,
       byId("c2-context").textContent = "Fetching 5-slot Turn-1 injection sample…";
       byId("c3-metric").textContent = "Loading session commits…";
       byId("c3-context").textContent = "Fetching post-turn Commit Guard audit stream…";
-      badges.forEach(function (b) {
-        b.className = "badge badge-info";
-        b.setAttribute("data-icon", "circle-check");
-        b.textContent = "● Loading…";
-      });
+      badges.forEach(setSkeleton);
       setSlotMeta("Loading slot metrics…");
       banner.className = "state-banner badge-info";
       bTitle.textContent = "Loading OpenViking telemetry snapshot…";
       bBody.textContent = "Reading the overview and namespace entries from 127.0.0.1:1933, and commit events from the local audit file.";
     } else {
-      hdr.className = "badge badge-healthy";
-      hdr.setAttribute("data-icon", "circle-check");
-      hdr.textContent = "● Active";
+      setMode("Active", "badge-healthy", "circle-check", "●");
       sub.textContent = "The OpenViking sidecar on 127.0.0.1:1933 answers its health check. Each panel below shows when it was last read.";
-      chk.textContent = "Last injection 4s ago · Last commit 5m ago · 30s cadence";
       badges.forEach(function (b) {
-        b.className = "badge badge-healthy";
-        b.setAttribute("data-icon", "circle-check");
-        b.textContent = "● Healthy";
+        setPill(b, "healthy");
       });
-      setSlotMeta("Not measured yet · read 1m ago");
+      setSlotMeta("Not measured yet");
       banner.className = "state-banner hidden";
     }
     applyPanelState(st);
@@ -1200,16 +1301,16 @@ button:focus-visible,
       hideRows: ["loading"],
       note: {
         loading: "Loading the latest Turn-1 mount…",
-        error: "No slot is mounted while 127.0.0.1:1933 is down; workers fall back to their on-disk notebook.md. The turn count and ages below come from the local metrics log."
+        error: "By design, no slot is mounted while 127.0.0.1:1933 is down; workers then fall back to their on-disk notebook. The turn count and ages below come from the local metrics log."
       }
     },
     "namespace-explorer": {
       hideRows: ["loading", "error"],
       label: {
-        live: "Namespace indexed 3m ago · 15m cadence",
-        stale: "Stale · namespace indexed 21m ago (> 15m cadence)",
-        empty: "Namespace indexed 3m ago · no entry changed in 24h",
-        error: "Server unreachable · namespace not loaded · last contact 18m ago",
+        live: [["Newest entry updated 3m ago", "entries[].updated_at"], " · 15m cadence"],
+        stale: ["Stale · ", ["newest entry updated 21m ago", "entries[].updated_at"], " (> 15m cadence)"],
+        empty: [["Newest entry updated 2d ago", "entries[].updated_at"], " · no entry changed in 24h"],
+        error: "Server unreachable · namespace not loaded · no answer from 127.0.0.1:1933",
         loading: "Loading namespace entries…"
       },
       note: { loading: "Loading namespace entries…", error: "Entries stay hidden until 127.0.0.1:1933 answers again." }
@@ -1218,13 +1319,13 @@ button:focus-visible,
     "commit-audit": {
       hideRows: ["loading", "empty"],
       label: {
-        live: "Audit log read 5m ago · 18 session commits in 24h · latest 3 shown",
-        stale: "Stale · audit log read 42m ago · 18 session commits in 24h · latest 3 shown",
-        empty: "Audit log checked 4s ago · 0 session commits in 24h",
-        error: "Server offline · from local audit log · last event 18m ago · 18 session commits in 24h · latest 3 shown",
+        live: [["Latest event 5m ago", "events[].ts"], " · 18 session commits in 24h · latest 3 events shown"],
+        stale: ["Stale · ", ["latest event 42m ago", "events[].ts"], " · 18 session commits in 24h · latest 3 events shown"],
+        empty: [["Checked 4s ago", "observer.checked_at"], " · 0 session commits in 24h"],
+        error: ["Server offline · from local audit log · ", ["latest event 18m ago", "events[].ts"], " · 18 session commits in 24h · latest 3 events shown"],
         loading: "Loading audit log…"
       },
-      note: { loading: "Loading audit events…", error: "127.0.0.1:1933 is not answering. These events come from the local audit log, the same as the Commit & Guard card; their L1 and L2 text opens again when the daemon answers.", empty: "No session commits in the last 24 hours. The daemon answered its health check 4s ago." }
+      note: { loading: "Loading audit events…", error: "127.0.0.1:1933 is not answering. These events come from the local audit log, the same as the Commit & Guard card; their L1 and L2 text opens again when the daemon answers.", empty: ["No session commits in the last 24 hours. The daemon answered its health check ", ["4s ago", "observer.checked_at"], "."] }
     }
   };
   var ROW_META = {
@@ -1247,14 +1348,19 @@ button:focus-visible,
       panel.querySelectorAll('.row-list, [aria-label="Layer Scope Filter"], [data-namespace-summary]').forEach(function (el) {
         el.classList.toggle("hidden", hideRows);
       });
-      if (cfg.label) panel.querySelector("[data-panel-updated-label]").textContent = cfg.label[st] || cfg.label.live;
+      if (cfg.label) fill(panel.querySelector("[data-panel-updated-label]"), cfg.label[st] || cfg.label.live);
       var note = panel.querySelector("[data-state-note]");
-      note.textContent = cfg.note[st] || "";
+      fill(note, cfg.note[st] || "");
       note.classList.toggle("hidden", !cfg.note[st]);
       panel.querySelectorAll("[data-item-key]").forEach(function (row) {
         var meta = ROW_META[row.getAttribute("data-item-key")];
         var fig = row.querySelector("[data-figure]");
-        if (meta && fig) fig.textContent = meta[st] || meta.live;
+        if (!meta || !fig) return;
+        // #284 M3-2: an audit row's age stays in its events[].ts span
+        var ageSpan = fig.querySelector("[data-source-field]");
+        var parts = ageSpan && (meta[st] || meta.live).match(/^(.*?)(\d+[smhd] ago)$/);
+        if (parts) fill(fig, [parts[1], [parts[2], ageSpan.getAttribute("data-source-field")]]);
+        else fig.textContent = meta[st] || meta.live;
       });
     });
   }
@@ -1440,9 +1546,16 @@ button:focus-visible,
   var AGE_RE = /(?:\b[a-z]+\s+)?\d+\s*[smhd]\s*ago\b/gi;
   function rowAges(row) {
     var ages = [];
+    var seen = [];
     row.querySelectorAll("[data-figure], [data-age-label]").forEach(function (el) {
       (el.textContent.match(AGE_RE) || []).forEach(function (a) {
-        if (ages.indexOf(a) === -1) ages.push(a);
+        if (seen.indexOf(a) !== -1) return;
+        seen.push(a);
+        // #284 M3-2: the drawer cites the same timestamp field as the row it copies the age from
+        var src = Array.prototype.filter.call(el.querySelectorAll("[data-source-field]"), function (s) {
+          return s.textContent.indexOf(a) !== -1;
+        }).pop() || el;
+        ages.push([a, src.getAttribute("data-source-field") || ""]);
       });
     });
     return ages;
@@ -1456,7 +1569,11 @@ button:focus-visible,
       byId(DRAWER_FIELDS[field]).textContent = offline ? OFFLINE : d[field];
     });
     var ages = rowAges(row);
-    if (ages.length) byId("drawer-prov").textContent = d.prov + " · " + ages.join(" · ");
+    var prov = [d.prov];
+    ages.forEach(function (a) {
+      prov.push(" · ", a);
+    });
+    fill(byId("drawer-prov"), prov);
   }
 
   var drawerTabs = Array.prototype.slice.call(document.querySelectorAll("[data-drawer-tab]"));
@@ -1514,7 +1631,10 @@ button:focus-visible,
 
   drawer.addEventListener("keydown", function (e) {
     if (e.key !== "Tab" || !isSheet()) return;
-    var stops = Array.prototype.slice.call(drawer.querySelectorAll('button:not([tabindex="-1"])'));
+    // #284 C3-3: the open tier's scrollable text is a stop too, so keyboard users can scroll it
+    var stops = Array.prototype.filter.call(drawer.querySelectorAll('button:not([tabindex="-1"]), [tabindex="0"]'), function (el) {
+      return el.offsetParent !== null;
+    });
     var first = stops[0];
     var last = stops[stops.length - 1];
     if (e.shiftKey && document.activeElement === first) {
@@ -1527,6 +1647,9 @@ button:focus-visible,
   });
   document.addEventListener("focusin", function (e) {
     if (isSheet() && !drawer.contains(e.target) && closeBtn) closeBtn.focus();
+  });
+  byId("drawer-scrim").addEventListener("click", function () {
+    closeDrawer();
   });
 
   document.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]').forEach(function (row) {

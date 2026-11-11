@@ -1277,7 +1277,7 @@ try:
                 a32_bad.append(f"{st}: {len(pills)} summary cards, expected 3")
         record("A32-CARD-PILL-OWN-HEALTH", len(a32_bad) == 0, f"violations={a32_bad[:12]} (total={len(a32_bad)})", "live/stale/empty/error: every card pill's data-health-state = its panel's health_state; local-log panels never server-unreachable; pill text = design.md label for that health")
 
-        # A33: every visible age sits under a data-source-field naming a types.ts timestamp field; no 'Last seen' / 'Last contact' anywhere
+        # A33: every visible age sits under a data-source-field naming a types.ts timestamp field; no last-seen / last-contact wording anywhere
         a33_bad = [f"source: '{m.group(0)}'" for m in re.finditer(r"last\s+(?:seen|contact)", raw_html, re.I)]
         a33_seen = 0
         for st in ["live", "stale", "empty", "error", "loading"]:
@@ -1315,7 +1315,7 @@ try:
                 if not r["ok"]:
                     a33_bad.append(f"{st}:{r['where']}: '{r['age']}' in '{r['text']}' cites '{r['field'] or '(no data-source-field)'}'")
         a33_bad = list(dict.fromkeys(a33_bad))
-        record("A33-NO-UNBACKED-AGE", len(a33_bad) == 0 and a33_seen > 0, f"agesSeen={a33_seen}, violations={a33_bad[:12]} (total={len(a33_bad)})", f"every visible 'N(s|m|h|d) ago|old' sits under a data-source-field in {sorted(TS_FIELDS)}; 'Last seen' / 'Last contact' never in the page")
+        record("A33-NO-UNBACKED-AGE", len(a33_bad) == 0 and a33_seen > 0, f"agesSeen={a33_seen}, violations={a33_bad[:12]} (total={len(a33_bad)})", f"every visible 'N(s|m|h|d) ago|old' sits under a data-source-field in {sorted(TS_FIELDS)}; no last-seen / last-contact wording in the page")
 
         # A34: the header mode badge reads exactly one observer.mode_label value (types.ts), the one the server sends for that screen
         a34_bad = []
