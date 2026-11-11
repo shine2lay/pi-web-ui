@@ -255,6 +255,13 @@ button:focus-visible,
   min-width: 0;
 }
 
+/* #290 C4-6: the stack's first line is the current contact state, the line under it is the older fact. In Warm Paper
+   --text-muted is a shade darker than --text-secondary, so position alone carried the order; the pair is now one full
+   token step apart (--text-primary over --text-muted) and reads as subordinate by colour in both themes. */
+.check-stack .meta {
+  color: var(--text-primary);
+}
+
 .meta-secondary {
   font-size: var(--size-xs);
   color: var(--text-muted);
@@ -1142,6 +1149,11 @@ button:focus-visible,
   var FIGURE_AGES = Array.prototype.map.call(document.querySelectorAll("[data-figure][data-age]"), function (el) {
     return [el, el.getAttribute("data-age")];
   });
+  // #290 S4-1: every figure's data-source-field is restored from the markup on each render, so a state that shows a
+  // different number has to name that number's own field instead of inheriting the field of the one it replaced
+  var FIGURE_FIELDS = Array.prototype.map.call(document.querySelectorAll("[data-figure][data-source-field]"), function (el) {
+    return [el, el.getAttribute("data-source-field")];
+  });
 
   // #284 M3-1: each card pill shows its own panel's health_state (overview.ts panelHealth), never the screen's
   var PILL = {
@@ -1286,6 +1298,9 @@ button:focus-visible,
     FIGURE_AGES.forEach(function (p) {
       p[0].setAttribute("data-age", p[1]);
     });
+    FIGURE_FIELDS.forEach(function (p) {
+      p[0].setAttribute("data-source-field", p[1]);
+    });
 
     Object.keys(LIVE_FIGURES).forEach(function (id) {
       var el = byId(id);
@@ -1366,6 +1381,9 @@ button:focus-visible,
       setGlyphText(bTitle, "◐", fx.bannerTitle);
       fill(bBody, fx.bannerBody);
     } else if (st === "empty") {
+      // #290 C4-5 (not taken, see TASK-12-REPORT.md): the daemon is healthy here, so the badge would read '● Active' like card 1,
+      // but A24 pins the drawer frame to this badge's tone and A25 reads that tone as the proof the drawer re-rendered for the
+      // new state -- the 5 slot rows say the same thing in live and empty -- so a healthy tone here would need A25 rewritten.
       setMode("Active", "badge-zero", "circle-empty", "◌");
       sub.textContent = "OpenViking daemon is online and responsive, with 0 events in window (server online).";
       fill(chk, ["No injection in the last 24h"]);
@@ -1373,6 +1391,8 @@ button:focus-visible,
       fill(c3Age, [["Checked 4s ago", "observer.checked_at"], " · 15m cadence"]);
       if (p1Upd) fill(p1Upd, [["Checked 4s ago", "observer.checked_at"], " · 0 turns in window · 5m cadence"]);
       byId("c2-metric").textContent = "0 turns in window";
+      // #290 S4-1: this figure is the turn count, not the hit rate (null with no turns), so it names its own field
+      byId("c2-metric").setAttribute("data-source-field", "metrics.turns_sampled_24h");
       byId("c2-context").textContent = "— avg tok (no turns) · 0 turns sampled (server online)";
       byId("c3-metric").textContent = "0 session commits in window";
       byId("c3-context").textContent = "0 shared syncs · 0 guard rejections (server online)";
@@ -1413,7 +1433,8 @@ button:focus-visible,
       setSlotMeta("Not measured yet");
       banner.className = "state-banner badge-unreachable";
       setGlyphText(bTitle, "✕", "Server Unreachable — No answer from 127.0.0.1:1933 (Offline)");
-      fill(bBody, ["No answer when ", ["checked 4s ago", "observer.checked_at"], ". Daemon figures, namespace entries and L1/L2 text come back when it answers again. Injection, slot and commit figures below are read from the local logs."]);
+      // #290 M4-1: the promise is limited to what the daemon serves; isolated and structurally empty layers stay unavailable when it answers
+      fill(bBody, ["No answer when ", ["checked 4s ago", "observer.checked_at"], ". The figures, namespace entries and L1/L2 text read from the daemon come back when it answers again. Injection, slot and commit figures below are read from the local logs."]);
     } else if (st === "loading") {
       setSkeleton(hdr);
       sub.textContent = "Reading the OpenViking overview, namespace entries, and commit audit log…";
@@ -1425,7 +1446,8 @@ button:focus-visible,
       if (p1Upd) p1Upd.textContent = "Loading slot telemetry… · 5m cadence";
       folders.textContent = "Loading role memory folders…";
       byId("c1-metric").textContent = "Loading daemon status…";
-      byId("c1-context").textContent = "Fetching daemon status from /api/openviking/overview…";
+      // #290 C4-2: plain words only; the reader is not shown an internal route
+      byId("c1-context").textContent = "Waiting for the health check and queue depth…";
       byId("c2-metric").textContent = "Loading hit rate…";
       byId("c2-context").textContent = "Fetching 5-slot Turn-1 injection sample…";
       byId("c3-metric").textContent = "Loading session commits…";
@@ -1492,7 +1514,8 @@ button:focus-visible,
         error: ["Server offline · from local audit log · ", ["latest event 18m ago", "events[].ts"], " · 18 session commits in 24h · latest 3 events shown"],
         loading: "Loading audit log…"
       },
-      note: { loading: "Loading audit events…", error: "127.0.0.1:1933 is not answering. These events come from the local audit log, the same as the Commit & Guard card; their L1 and L2 text opens again when the daemon answers.", empty: ["No session commits in the last 24 hours. The daemon answered its health check ", ["4s ago", "observer.checked_at"], "."] }
+      // #290 M4-1: 2 of the 3 events listed here are role-isolated, so the promise names only the entries the daemon serves
+      note: { loading: "Loading audit events…", error: "127.0.0.1:1933 is not answering. These events come from the local audit log, the same as the Commit & Guard card; the L1 and L2 text of the entries read from the daemon opens again when it answers.", empty: ["No session commits in the last 24 hours. The daemon answered its health check ", ["4s ago", "observer.checked_at"], "."] }
     }
   };
   var ROW_META = {
@@ -1733,6 +1756,16 @@ button:focus-visible,
   var DRAWER_FIELDS = { scope: "drawer-scope", uri: "drawer-uri", l0: "drawer-l0-body", l1: "drawer-l1-body", l2: "drawer-l2-body", prov: "drawer-prov" };
   // #275 M-1/M-2: the drawer is rendered for the current state: the row's own age, and no :1933 layer text while offline
   var OFFLINE = "Unavailable while offline: this layer is read from 127.0.0.1:1933, which is not answering.";
+  // #290 M4-1: why a layer has no text. A role-scoped layer (R-ISOLATION-1) and a mount that keeps no copy of the text are
+  // withheld by a permanent boundary, so their reason is the same whether 127.0.0.1:1933 answers or not; only a layer the
+  // daemon serves can be withheld by the outage. The reason is published on the layer, so the gate can read it (A42).
+  var ROLE_URI_PREFIX = "viking://agent/memories/";
+  var ABSENT_PREFIX = "Unavailable here: ";
+  function layerReason(d, field) {
+    if (d.uri.indexOf(ROLE_URI_PREFIX) === 0) return "role-isolation";
+    if ((d[field] || "").indexOf(ABSENT_PREFIX) === 0) return "structural";
+    return "daemon";
+  }
   var AGE_RE = /(?:\b[a-z]+\s+)?\d+\s*[smhd]\s*ago\b/gi;
   function rowAges(row) {
     var ages = [];
@@ -1755,8 +1788,14 @@ button:focus-visible,
     var d = DRAWER_DATA[key];
     if (!d) throw new Error("reader drawer: no DRAWER_DATA entry for row " + (key || "(missing data-item-key)"));
     Object.keys(DRAWER_FIELDS).forEach(function (field) {
-      var offline = st === "error" && (field === "l1" || field === "l2");
-      byId(DRAWER_FIELDS[field]).textContent = offline ? OFFLINE : d[field];
+      var el = byId(DRAWER_FIELDS[field]);
+      if (field !== "l1" && field !== "l2") {
+        el.textContent = d[field];
+        return;
+      }
+      var reason = layerReason(d, field);
+      el.setAttribute("data-layer-reason", reason);
+      el.textContent = st === "error" && reason === "daemon" ? OFFLINE : d[field];
     });
     var ages = rowAges(row);
     var prov = [d.prov];

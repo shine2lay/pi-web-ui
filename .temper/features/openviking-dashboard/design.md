@@ -25,7 +25,7 @@ Only copy of the state visuals (behaviour: `.temper/features/openviking-dashboar
 - **`loading`:** `[data-screen-state="loading"]` skeletons; never fake `0` counters; pills read `Loading…`, no status glyph or `data-icon`.
 - **`stale` (past cadence or a sync pending):** Token `status-stale-fg`/`status-stale-bg`, label `Stale` (header `Degraded Local Fallback`), glyph `◐` (`data-icon="clock-stale"`), `dashed` border (`data-health-state="stale"`), plus visible `[data-stale-badge="true"]` printing that source's `stale_badge` verbatim (§4): never wording the page composes, an age it derives, or a duration beside `pending sync`; `null` = no pill.
 - **`empty` (online, 0 events):** Token `status-zero-fg`/`status-zero-bg`, label `Zero Activity`, glyph `◌` (`data-icon="circle-empty"`), `dotted` border (`data-health-state="zero-activity"`). Panels with no events state `0 events in window (server online)`—never `Healthy`, `Stale`, or `Server Unreachable`.
-- **`error` (cannot reach `127.0.0.1:1933`):** Token `status-unreachable-fg`/`status-unreachable-bg`, label `Server Unreachable` (header `Offline`), glyph `✕` (`data-icon="octagon-x"`), `double` border (`data-health-state="server-unreachable"`). `:1933`-sourced figures render `— (Unreachable)` (`data-unreachable-value="true"`), **never** `0` or `Healthy`. Local-JSONL figures keep count and age and say `from local audit log` (card 3, Tab 3 rows; reader `L1`/`L2` `Unavailable while offline`) or `from local metrics log` (card 2, Tab 1).
+- **`error` (cannot reach `127.0.0.1:1933`):** Token `status-unreachable-fg`/`status-unreachable-bg`, label `Server Unreachable` (header `Offline`), glyph `✕` (`data-icon="octagon-x"`), `double` border (`data-health-state="server-unreachable"`). `:1933`-sourced figures render `— (Unreachable)` (`data-unreachable-value="true"`), **never** `0` or `Healthy`. Local-JSONL figures keep count and age: `from local audit log` (card 3/Tab 3) or `from local metrics log` (card 2/Tab 1). A reader layer reads `Unavailable while offline` only where `:1933` serves it; isolated and structurally empty layers, and the Tab 3 note, keep their own reason.
 - **Per-card pills:** each pill shows its own panel's `health_state`, not the screen's; local-log cards 2-3 are never `Server Unreachable`. `error`: card 1 `Server Unreachable`, cards 2-3 `Stale (> 5m cadence)`/`(> 15m cadence)`. Degraded `stale`: card 1 `Stale (pending sync)`, footer `Answers, but 2 worktree syncs are still waiting to land` (`auxiliary.rollout.pending_wt_land_syncs`). `empty`: card 1 `Healthy`.
 - **Ages:** the daemon's check age is `observer.checked_at` (request time): `Checked 4s ago`; offline `No answer from 127.0.0.1:1933 · checked 4s ago`. Each visible age names its timestamp in `data-source-field`.
 - **Last answered (`error` only):** muted line under that, `Last answered 18m ago` (now minus `observer.last_reachable_at`; under 60s `3s`, never `0m`/`just now`); `null`: `No successful contact since the dashboard server started`. Not shown elsewhere; gates nothing.
@@ -33,14 +33,14 @@ Only copy of the state visuals (behaviour: `.temper/features/openviking-dashboar
 
 ## Endpoint Shapes & Figure-to-Server-Field Contract (Zero Client Roll-Up Math)
 
-| UI Figure (`overview` unless noted) | `data-source-field` | `data-age` | Cadence |
-|---|---|---|---|
-| Header mode, folders, daemon bind, queue depth | `observer.{mode_label,role_memory_folder_count,daemon_bind,queue_depth}` | `observer.checked_at` | `30s` |
-| 5-slot hit rate & avg tokens | `metrics.{slot_hit_rate_pct,avg_injected_tokens,turns_sampled_24h}` | `metrics.last_recorded_at` | `5m` |
-| 24h session commits, promotions, rejects | `changelog.{session_commits_24h,promotions_24h,rejected_24h}` | `changelog.last_event_at` | `15m` |
-| Per-slot mount row metrics | `slots[].{slot_id,uri_prefix,hit_rate_pct,avg_tokens,state}` | `slots[].last_sampled_at` | `5m` |
-| Namespace explorer rows (`entries`) | `entries[].{uri,scope,role,layers,l0_abstract,l1_overview,l2_content}` | `entries[].updated_at` | `15m` |
-| Commit & guard audit rows (`audit`) | `events[].{id,action,role,uri,l0_abstract,guard_verdict}` | `events[].ts` | `15m` |
+| UI Figure (`overview` unless noted) | `data-source-field` | `data-age` |
+|---|---|---|
+| Header mode, folders, daemon bind, queue depth | `observer.{mode_label,role_memory_folder_count,daemon_bind,queue_depth}` | `observer.checked_at` |
+| 5-slot hit rate & avg tokens | `metrics.{slot_hit_rate_pct,avg_injected_tokens,turns_sampled_24h}` | `metrics.last_recorded_at` |
+| 24h session commits, promotions, rejects | `changelog.{session_commits_24h,promotions_24h,rejected_24h}` | `changelog.last_event_at` |
+| Per-slot mount row metrics | `slots[].{slot_id,uri_prefix,hit_rate_pct,avg_tokens,state}` | `slots[].last_sampled_at` |
+| Namespace explorer rows (`entries`) | `entries[].{uri,scope,role,layers,l0_abstract,l1_overview,l2_content}` | `entries[].updated_at` |
+| Commit & guard audit rows (`audit`) | `events[].{id,action,role,uri,l0_abstract,guard_verdict}` | `events[].ts` |
 
 ## Show&Tell
 
@@ -49,8 +49,8 @@ Prototype link: `/showtell/#/d/d_openviking_dashboard`.
 ### Prototype-Only Chrome Excluded from Production
 
 Banned from production (quote verbatim into Architecture's `spec.md`):
-- **`#stateStrip` (`<div id="stateStrip">`):** Never render, mount, or CSS-hide `#stateStrip`; `document.getElementById("stateStrip")` must be `null`.
-- **`data-st-state` (`[data-st-state]`):** Never emit `data-st-state` on any element.
+- **`#stateStrip`:** Never render, mount, or CSS-hide it; `document.getElementById("stateStrip")` must be `null`.
+- **`data-st-state`:** Never emit it on any element.
 - **`window.__hidePrototypeChrome` and `?proto=0`:** Never define `window.__hidePrototypeChrome` or branch on `?proto=`.
 - **`?state=` and `?scenario=` URL overrides:** Derive states exclusively from `/api/openviking/*` responses, never query parameters.
 - **`<script id="openviking-fixture-data" type="application/json">` and `window.__OPENVIKING_FIXTURE__`:** Fetch live `/api/openviking/*` endpoints; never embed static fixture payloads.

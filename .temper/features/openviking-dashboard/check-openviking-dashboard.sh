@@ -695,9 +695,8 @@ try:
             }""", st))
         record("A19-SUMMARY-MATCHES-DETAIL", len(a19_bad) == 0, f"violations={a19_bad[:12]} (total={len(a19_bad)})", "card3 commit count cited by commit-audit (0 -> no events), card2 turn count cited by mount-map, empty state lists no event inside the 24h window")
 
-        # A20 + A21 share one walk over every clickable row of every tab
-        page.goto(f"{file_url}?state=live", wait_until="load")
-        walk = page.evaluate("() => {" + JS_HELPERS + r"""
+        # A20 + A21 share one walk over every clickable row of every tab (task #290: A21 runs it on all five screens)
+        WALK_JS = "() => {" + JS_HELPERS + r"""
             const drawer = document.querySelector('[data-component="reader-drawer"]');
             if (!drawer) return { rows: [], initial: null, error: 'missing reader drawer' };
             const field = (name, legacy) => drawer.querySelector(`[data-drawer-field="${name}"]`) || drawer.querySelector(legacy);
@@ -729,7 +728,9 @@ try:
             drawer.querySelector('[data-slot="drawer-close"]')?.click();
             tabs()[0]?.click();
             return { rows, initial, error: null };
-        }""")
+        }"""
+        page.goto(f"{file_url}?state=live", wait_until="load")
+        walk = page.evaluate(WALK_JS)
         a20_bad = [walk["error"]] if walk["error"] else []
         prev_uri, prev_d = "initial-markup", walk["initial"] or {}
         is_gap = lambda s: bool(re.search(r"unavailable|isolat", s or "", re.I))
@@ -756,20 +757,32 @@ try:
         record("A20-DRAWER-MATCHES-ROW", len(walk["rows"]) >= 1 and len(a20_bad) == 0, f"rows={len(walk['rows'])}, violations={a20_bad[:10]} (total={len(a20_bad)})", "every clickable row opens a visible drawer whose uri/scope/L0/L1/L2/provenance belong to that row; nothing left over from the previous row")
 
         # A21: per-role memory rows show only the isolation placeholder; drawer L1/L2 null or unavailable
-        a21_bad, role_rows = [], 0
-        for r in walk["rows"]:
-            if not r["uri"].startswith("viking://agent/memories/"):
-                continue
-            role_rows += 1
-            d = r["d"]
-            if not re.search(r"isolated per-role memory", r["abstract"], re.I) or len(r["abstract"]) > 120:
-                a21_bad.append(f"{r['key']}: row L0 {r['abstract'][:50]!r}")
-            if not re.search(r"isolated per-role memory", d["l0"], re.I) or len(d["l0"]) > 120:
-                a21_bad.append(f"{r['key']}: drawer L0 {d['l0'][:50]!r}")
-            for k in ["l1", "l2"]:
-                if d[k] and (not (re.search(r"unavailable", d[k], re.I) and re.search(r"isolat", d[k], re.I)) or len(d[k]) > 200):
-                    a21_bad.append(f"{r['key']}: drawer {k.upper()} {d[k][:50]!r}")
-        record("A21-ROLE-ISOLATION", role_rows >= 1 and len(a21_bad) == 0, f"roleRows={role_rows}, violations={a21_bad[:10]} (total={len(a21_bad)})", "every viking://agent/memories/ row: row + drawer L0 = isolated placeholder only; drawer L1/L2 null or 'unavailable (isolation)'")
+        # Task #290 amendment (lead decision, same standing as A03/A04): role isolation is a permanent boundary, so it is
+        # proven on all five screens -- an outage cannot be the reason a role-scoped layer is withheld.
+        a21_bad, a21_role_rows, walks = [], {}, {"live": walk}
+        for st in ["stale", "empty", "error", "loading"]:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            walks[st] = page.evaluate(WALK_JS)
+        for st, w in walks.items():
+            if w["error"]:
+                a21_bad.append(f"{st}: {w['error']}")
+            a21_role_rows[st] = 0
+            for r in w["rows"]:
+                if not r["uri"].startswith("viking://agent/memories/"):
+                    continue
+                a21_role_rows[st] += 1
+                d = r["d"]
+                if not re.search(r"isolated per-role memory", r["abstract"], re.I) or len(r["abstract"]) > 120:
+                    a21_bad.append(f"{st}:{r['key']}: row L0 {r['abstract'][:50]!r}")
+                if not re.search(r"isolated per-role memory", d["l0"], re.I) or len(d["l0"]) > 120:
+                    a21_bad.append(f"{st}:{r['key']}: drawer L0 {d['l0'][:50]!r}")
+                for k in ["l1", "l2"]:
+                    if d[k] and (not (re.search(r"unavailable", d[k], re.I) and re.search(r"isolat", d[k], re.I)) or len(d[k]) > 200):
+                        a21_bad.append(f"{st}:{r['key']}: drawer {k.upper()} {d[k][:50]!r}")
+            if w["rows"] and a21_role_rows[st] == 0:
+                a21_bad.append(f"{st}: {len(w['rows'])} rows, none of them viking://agent/memories/, so isolation proves nothing on this screen")
+        page.goto(f"{file_url}?state=live", wait_until="load")
+        record("A21-ROLE-ISOLATION", sum(a21_role_rows.values()) >= 1 and len(a21_bad) == 0, f"roleRowsPerState={a21_role_rows}, violations={a21_bad[:10]} (total={len(a21_bad)})", "all 5 states: every viking://agent/memories/ row: row + drawer L0 = isolated placeholder only; drawer L1/L2 null or 'unavailable (isolation)'")
 
         # A22: drawer focus return, Escape on tooltips, tooltip as overlay, drawer in viewport (S1), tablist keys (S4)
         a22_bad = []
@@ -920,7 +933,8 @@ try:
                 l2: norm(dfield('l2', '#drawer-l2-body')?.textContent),
                 prov: norm(drawer?.querySelector('[data-slot="drawer-provenance"]')?.textContent),
                 skeleton: !!drawer && [...drawer.querySelectorAll('[data-skeleton]')].some(vis),
-                tone: drawer ? getComputedStyle(drawer).borderTopColor : ''
+                tone: drawer ? getComputedStyle(drawer).borderTopColor : '',
+                reason: { l1: dfield('l1', '#drawer-l1-body')?.getAttribute('data-layer-reason') || '', l2: dfield('l2', '#drawer-l2-body')?.getAttribute('data-layer-reason') || '' }
             });
             const stateTone = () => { const b = document.querySelector('[data-component="status-header"] [data-slot="mode-badge"]'); return b ? getComputedStyle(b).borderTopColor : 'no mode badge'; };
             const ageSet = (txt) => [...new Set(agesOf(txt).map(a => a.secs))].sort((a, b) => a - b).join(',');
@@ -932,7 +946,13 @@ try:
                 if (d.tone !== stateTone()) out.push(`frame ${d.tone} is not the ${st} tone ${stateTone()}`);
                 const ra = ageSet(rowAgeText(row)), da = ageSet(d.prov);
                 if (ra !== da) out.push(`drawer age [${da}]s != row age [${ra}]s ('${d.prov.slice(-36)}')`);
-                if (st === 'error') for (const k of ['l1', 'l2']) if (!OFFLINE_RE.test(d[k])) out.push(`${k.toUpperCase()} '${d[k].slice(0, 36)}' is not 'unavailable while offline'`);
+                // Task #290 amendment (lead decision, same standing as A03/A04): an outage can only withhold what
+                // 127.0.0.1:1933 serves, so this branch skips role-isolated rows and layers already marked structurally
+                // unavailable; A42 proves each row's marking against what the same row says while the daemon answers.
+                if (st === 'error') for (const k of ['l1', 'l2']) {
+                    if (rowUri(row).startsWith('viking://agent/memories/') || d.reason[k] === 'role-isolation' || d.reason[k] === 'structural') continue;
+                    if (!OFFLINE_RE.test(d[k])) out.push(`${k.toUpperCase()} '${d[k].slice(0, 36)}' is not 'unavailable while offline'`);
+                }
                 if (st === 'loading' && !d.skeleton) out.push('no skeleton while loading');
                 return out;
             };
