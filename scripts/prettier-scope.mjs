@@ -44,6 +44,7 @@ export const ROOTS = [
 	"desktop/",
 	"tests/*.mjs",
 	"tests/unit/",
+	"tests/openviking-dashboard/",
 	"*.mjs",
 ];
 

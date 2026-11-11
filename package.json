@@ -66,6 +66,7 @@
 		"typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit && tsc -p desktop/tsconfig.json --noEmit && tsc -p plugins/page-picker/extension/tsconfig.json --noEmit",
 		"test": "vitest run",
 		"test:unit": "vitest run",
+		"test:openviking-dashboard": "vitest run --config tests/openviking-dashboard/vitest.config.ts",
 		"test:smoke": "node tests/run-smoke.mjs",
 		"test:smoke:core": "node tests/run-smoke.mjs --core",
 		"check:protocol": "node scripts/check-protocol-sync.mjs",
@@ -77,8 +78,8 @@
 		"build:desktop": "tsc -p desktop/tsconfig.json",
 		"desktop:dev": "npm run build:desktop && electron dist/desktop/main.js",
 		"desktop:dist": "npm run build && npm run build:desktop && electron-builder -c desktop/electron-builder.yml",
-		"format": "prettier --write server/ web/src/ extensions/ scripts/ bin/ desktop/ tests/*.mjs tests/unit/ *.mjs",
-		"format:check": "prettier --check server/ web/src/ extensions/ scripts/ bin/ desktop/ tests/*.mjs tests/unit/ *.mjs",
+		"format": "prettier --write server/ web/src/ extensions/ scripts/ bin/ desktop/ tests/*.mjs tests/unit/ tests/openviking-dashboard/ *.mjs",
+		"format:check": "prettier --check server/ web/src/ extensions/ scripts/ bin/ desktop/ tests/*.mjs tests/unit/ tests/openviking-dashboard/ *.mjs",
 		"lint": "oxlint server/ web/src/ extensions/ scripts/ desktop/",
 		"lint:fix": "oxlint --fix server/ web/src/ extensions/ scripts/ desktop/"
 	},

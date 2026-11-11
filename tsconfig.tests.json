@@ -15,6 +15,9 @@
 	},
 	"include": [
 		"tests/unit/**/*.ts",
+		"tests/openviking-dashboard/**/*.ts",
+		"web/src/openviking-dashboard/**/*.ts",
+		"web/src/openviking-dashboard/**/*.tsx",
 		"server/**/*.ts",
 		"web/src/skill-block.ts",
 		"web/src/components/scroll-classify.ts",
