@@ -39,7 +39,7 @@ Measured off `pi-web-ui`'s default theme (`web/src/styles.css`) and Warm Paper (
 - **Scroll Discipline:** Only the document viewport and open reader drawer scroll vertically; nested clipped card scrollbars are forbidden.
 
 ## 5. Component Inventory & Rules
-1. **Status Header Bar:** Subsystem title, mode badge (`Active`, `Degraded Local Fallback`, or `Offline`; it describes the daemon, never a role count), non-colour icon, last-checked age, and cadence note.
+1. **Status Header Bar:** Subsystem title, mode badge (`Active`, `Degraded Local Fallback`, or `Offline`), non-colour icon, last-checked age, and cadence note.
 2. **Summary Bento Card:** `bg-surface`, `1px solid border-subtle`, `8px` radius, `16px` padding. At most **5 text fields**: (1) title + `(?)` trigger, (2) primary metric (`22px` tabular-nums), (3) status pill + icon, (4) secondary context line, (5) age/cadence footer.
 3. **Workspace Tab Strip:** `role="tablist"` with 3 `role="tab"` buttons (`>= 24x24px`, `36px` height), `accent-primary` active indicator, `ArrowLeft`/`ArrowRight` navigation.
 4. **Concept Tooltip (`(?)`):** Button (`>= 24x24px`) bound via `aria-describedby` to a `role="tooltip"` popover explaining contract terms (`L0`/`L1`/`L2`, `Slot 1-5`, `Commit Guard`, `Sidecar`). Opens on hover and `:focus-visible`, closes on `Escape`.

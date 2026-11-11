@@ -396,7 +396,11 @@ try:
             page.goto(f"{file_url}?state={st}", wait_until="load")
             info = page.evaluate("""(st) => {
                 const badge = document.querySelector('[data-component="summary-card"][data-card-id="context-injection"] [data-slot="state-badge"]') || document.querySelector('[data-slot="state-badge"]');
-                const s = badge ? getComputedStyle(badge) : null;
+                // #284 lead decision: A03 probes the summary pill carrying the screen's own health (cards show their own panel health, M3-1)
+                const screenHealth = { live: 'healthy', stale: 'stale', empty: 'zero-activity', error: 'server-unreachable' }[st];
+                const pill = [...document.querySelectorAll('[data-component="summary-card"] [data-slot="state-badge"]')]
+                    .find(p => p.getAttribute('data-health-state') === screenHealth && getComputedStyle(p).display !== 'none' && p.getBoundingClientRect().width > 0) || null;
+                const s = pill ? getComputedStyle(pill) : null;
                 const staleBadges = [...document.querySelectorAll('[data-stale-badge="true"]')].filter(el => getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0);
                 const figs = [...document.querySelectorAll('[data-component="summary-card"] [data-figure]')].map(f => ({
                     text: f.textContent.trim(),
@@ -407,7 +411,8 @@ try:
                 const bodyTxt = document.body.innerText || '';
                 return {
                     label: badge ? badge.textContent.trim() : '',
-                    icon: badge ? (badge.getAttribute('data-icon') || '') : '',
+                    pillLabel: pill ? pill.textContent.trim() : '',
+                    icon: pill ? (pill.getAttribute('data-icon') || '') : '',
                     borderStyle: s ? s.borderTopStyle : '',
                     color: s ? s.color : '',
                     staleBadgeCount: staleBadges.length,
@@ -417,7 +422,7 @@ try:
                     bodyTxt
                 };
             }""", st)
-            state_sigs[st] = (info["label"], info["icon"], info["borderStyle"], info["color"])
+            state_sigs[st] = (info["pillLabel"], info["icon"], info["borderStyle"], info["color"])
             if st == "stale":
                 stale_badge_check["stale"] = (info["staleBadgeCount"], info["staleBadgeText"], info["label"])
             if st == "live":
@@ -434,8 +439,8 @@ try:
         borders = [state_sigs[k][2] for k in ["live", "stale", "empty", "error"]]
         colors = [state_sigs[k][3] for k in ["live", "stale", "empty", "error"]]
         a03_ok = (len(set(labels)) == 4 and len(set(icons)) == 4 and len(set(borders)) == 4 and len(set(colors)) == 4
-                  and all(bool(x) for x in labels) and all(bool(x) for x in icons))
-        record("A03-DISTINCT-UNHEALTHY-STATES", a03_ok, f"labels={labels}, icons={icons}, borders={borders}", "4 distinct labels, 4 distinct icons, 4 distinct border styles, 4 distinct colors across live/stale/empty/error")
+                  and all(bool(x) for x in labels) and all(bool(x) for x in icons) and all(bool(x) for x in borders) and all(bool(x) for x in colors))
+        record("A03-DISTINCT-UNHEALTHY-STATES", a03_ok, f"labels={labels}, icons={icons}, borders={borders}", "on each screen a summary pill carries the screen's health (live healthy, stale stale, empty zero-activity, error server-unreachable); those 4 pills have 4 distinct labels, icons, border styles and colors")
 
         # Task #280: A04 covers the figures spec.md sources from 127.0.0.1:1933; local-JSONL figures are A31's (spec §4 error)
         figs_err = unreachable_check.get("figs", [])

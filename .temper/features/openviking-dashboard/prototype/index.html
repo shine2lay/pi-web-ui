@@ -1194,7 +1194,7 @@ button:focus-visible,
       setMode("Degraded Local Fallback", "badge-stale", "clock-stale", "◐");
       sub.textContent = "The daemon answers, but 2 worktree syncs are waiting to land, and slot sampling and audit events are past their cadence.";
       fill(chk, [["Last injection 19m ago", "observer.last_injection_at"]]);
-      fill(c1Age, ["Daemon answers · ", ["2 worktree syncs", "auxiliary.rollout.pending_wt_land_syncs"], " waiting to land · 30s cadence"]);
+      fill(c1Age, ["Answers, but ", ["2 worktree syncs", "auxiliary.rollout.pending_wt_land_syncs"], " are still waiting to land · 30s cadence"]);
       fill(c2Age, [["Last turn 19m ago", "metrics.last_recorded_at"], " · 5m cadence"]);
       fill(c3Age, [["Last event 42m ago", "changelog.last_event_at"], " · 15m cadence"]);
       if (p1Upd) fill(p1Upd, ["Stale · 48 turns in 24h · ", ["last turn recorded 19m ago", "metrics.last_recorded_at"], " (> 5m cadence)"]);
