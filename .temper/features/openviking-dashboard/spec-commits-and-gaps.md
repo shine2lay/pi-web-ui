@@ -14,7 +14,7 @@ Part of [spec.md](spec.md) (`.temper/features/openviking-dashboard/spec.md`) §C
 - **G2 (`metrics.jsonl`):** §8 `{l0_hit,l1_expanded,extracted,dedup_skipped}_count`, `injected_tokens_est` -> live `{l0_hits,l1_reads,extracted,dedup_skipped,tokens_est}`.
 - **G3 (per-slot):** turn totals only; `null` / `"unmeasured-gap"` until Ops logs `slots[]`.
 - **G4 — PASS live (Ops #810):** writers emit contract `action`s; old rows keep `{session_commit,preference_write,resource_sync,preference_write_blocked}`.
-- **G5 (`rollout-state.json`):** Only `{"pending_wt_land_syncs":[...]}`; report `stage: null`.
+- **G5 (`rollout-state.json`) — the only sync state there is:** `wt land` writes `pending_wt_land_syncs` + `updated_at` (`/home/shinelay/projects/agent-tools/lib/wt-openviking-sync.mjs`); the rollout keys are live too (`stage: "full"`, `phase`, `notebook_retired`, `cutover_ts`, 2026-11-11), so report `stage: null` only while absent. `auxiliary.resource_sync` derives from `pending_wt_land_syncs` (spec.md §Canonical): count `null` when the file cannot be read, and `synced_at`/`repos_synced` stay `null` because nothing writes them.
 - **G6 (`migration-verification.json`):** `checked_at`/`source_files[]` vs. §9 `verified_at`/`total_checked`.
 - **G7 (`seen-role-messages.json`):** absent live; contract §4.4 Live status.
 - **G8 — SETTLED:** wording only; canonical form `viking://user/default/memories` (`R-URI-CANONICAL-1`, §8b).
