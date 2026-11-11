@@ -247,6 +247,21 @@ button:focus-visible,
   gap: var(--space-2);
 }
 
+/* #286: the daemon check line and its secondary "last answered" reading sit together, tighter than the next group */
+.check-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.meta-secondary {
+  font-size: var(--size-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
 .cards {
   display: grid;
   grid-template-columns: 1fr;
@@ -712,6 +727,12 @@ button:focus-visible,
       <button type="button" class="proto-btn" data-set-state="error" aria-pressed="false">Error (Offline)</button>
     </div>
     <div class="proto-group">
+      <span class="proto-label">Offline, last answered:</span>
+      <button type="button" class="proto-btn" data-set-reach="18m" aria-pressed="false">18m ago</button>
+      <button type="button" class="proto-btn" data-set-reach="3s" aria-pressed="false">3s ago</button>
+      <button type="button" class="proto-btn" data-set-reach="null" aria-pressed="false">Never since server start</button>
+    </div>
+    <div class="proto-group">
       <span class="proto-label">Theme:</span>
       <button type="button" class="proto-btn" id="themeToggleBtn" aria-pressed="false">Light / Dark</button>
     </div>
@@ -730,7 +751,10 @@ button:focus-visible,
       </p>
     </div>
     <div class="header-meta">
-      <span class="meta" id="hdr-check" data-checked-label="true"><span data-source-field="observer.checked_at">Checked 4s ago</span> · 30s cadence</span>
+      <div class="check-stack">
+        <span class="meta" id="hdr-check" data-checked-label="true"><span data-source-field="observer.checked_at">Checked 4s ago</span> · 30s cadence</span>
+        <span class="meta-secondary hidden" id="hdr-reach" data-source-field="observer.last_reachable_at"></span>
+      </div>
       <span class="meta" id="hdr-checked" data-age-label="true"><span data-source-field="observer.last_injection_at">Last injection 1m ago</span></span>
     </div>
   </header>
@@ -1075,6 +1099,36 @@ button:focus-visible,
     return document.getElementById(id);
   }
 
+  // #286 fixture: observer.last_reachable_at per screen (spec §4; ruling rm-5bbe0bcc). The page is pinned at 2026-11-10T20:15:04Z and
+  // checked_at is 2026-11-10T20:15:00Z ("checked 4s ago"). Each age is now - last_reachable_at, never checked_at, formatted as
+  // under 60s -> Ns, under 60m -> Nm, under 24h -> Nh, else Nd; never 0m or "just now". The field gates nothing: no state reads it.
+  var LAST_REACHABLE = {
+    answered: { last_reachable_at: "2026-11-10T20:15:00Z", age: "4s" },
+    "3s": { last_reachable_at: "2026-11-10T20:15:01Z", age: "3s" },
+    "1m": { last_reachable_at: "2026-11-10T20:14:04Z", age: "1m" },
+    "18m": { last_reachable_at: "2026-11-10T19:57:04Z", age: "18m" },
+    "3d": { last_reachable_at: "2026-11-07T20:15:04Z", age: "3d" },
+    null: { last_reachable_at: null, age: null }
+  };
+  // loading has no response yet; live, stale and empty answered on this request; error last answered 18m ago
+  var SCREEN_LAST_REACHABLE = { loading: null, live: "answered", stale: "answered", empty: "answered", error: "18m" };
+  var NEVER_REACHED = "No successful contact since the dashboard server started";
+  // Offline only: on the other screens the daemon answered this request, so the reading would repeat checked_at
+  function showLastReachable(st, variant) {
+    var el = byId("hdr-reach");
+    var key = variant || SCREEN_LAST_REACHABLE[st];
+    var v = key ? LAST_REACHABLE[key] : null;
+    el.textContent = "";
+    el.removeAttribute("data-last-reachable-at");
+    if (st !== "error" || !v) {
+      el.classList.add("hidden");
+      return;
+    }
+    el.classList.remove("hidden");
+    el.setAttribute("data-last-reachable-at", v.last_reachable_at === null ? "null" : v.last_reachable_at);
+    el.textContent = v.last_reachable_at === null ? NEVER_REACHED : "Last answered " + v.age + " ago";
+  }
+
   // #280 S-1 (spec §4 error): figures read from the local metrics and audit logs keep their count and age while 127.0.0.1:1933 is down
   var LOCAL_FIELD_RE = /^(?:metrics\.|slots\[\]\.|changelog\.)/;
   var FIGURE_AGES = Array.prototype.map.call(document.querySelectorAll("[data-figure][data-age]"), function (el) {
@@ -1139,8 +1193,10 @@ button:focus-visible,
   }
 
   var currentState = "live";
-  function applyState(st) {
+  var currentReach = null;
+  function applyState(st, reach) {
     currentState = st;
+    currentReach = reach || null;
     var app = byId("app");
     app.setAttribute("data-screen-state", st);
     FIGURE_AGES.forEach(function (p) {
@@ -1287,11 +1343,15 @@ button:focus-visible,
       setSlotMeta("Not measured yet");
       banner.className = "state-banner hidden";
     }
+    showLastReachable(st, currentReach);
     applyPanelState(st);
     followState(st);
 
     document.querySelectorAll("[data-set-state]").forEach(function (btn) {
       btn.setAttribute("aria-pressed", btn.getAttribute("data-set-state") === st ? "true" : "false");
+    });
+    document.querySelectorAll("[data-set-reach]").forEach(function (btn) {
+      btn.setAttribute("aria-pressed", st === "error" && btn.getAttribute("data-set-reach") === (currentReach || SCREEN_LAST_REACHABLE.error) ? "true" : "false");
     });
   }
 
@@ -1714,6 +1774,12 @@ button:focus-visible,
       applyState(btn.getAttribute("data-set-state") || "live");
     });
   });
+  // #286 prototype-only: preview the Offline header with each last_reachable_at value
+  document.querySelectorAll("[data-set-reach]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      applyState("error", btn.getAttribute("data-set-reach"));
+    });
+  });
 
   var themeBtn = byId("themeToggleBtn");
   if (themeBtn) {
@@ -1730,7 +1796,9 @@ button:focus-visible,
     var protoChrome = byId("protoChrome");
     if (protoChrome) protoChrome.classList.add("hidden");
   }
-  applyState(params.get("state") || "live");
+  // prototype-only: ?state=<screen> or ?state=<screen>_reach-<variant> (a last_reachable_at fixture value)
+  var stateParam = /^(\w+?)(?:_reach-(\w+))?$/.exec(params.get("state") || "live") || [null, "live", null];
+  applyState(stateParam[1], LAST_REACHABLE.hasOwnProperty(stateParam[2]) ? stateParam[2] : null);
 })();
 </script>
 </div>
