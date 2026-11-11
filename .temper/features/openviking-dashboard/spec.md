@@ -5,8 +5,8 @@ Pinned to `.temper/features/openviking-dashboard/design.md` (`design #263`, `5db
 ## API and State Contract
 
 ### 1. Read-Only & Sources
-- **Read-Only:** Zero write actions (`design.md` has no re-sync, backfill, eviction, promotion, or edit). `server/index.ts` exposes only `GET /api/openviking/{overview,entries,audit}` (`2000ms` timeout; non-`GET` -> `405`). No writes to `:1933` or `/home/shinelay/.pi/openviking/`.
-- **Sources:** `http://127.0.0.1:1933` (`/health`, `/api/v1/system/status`, `/api/v1/observer/{system,queue}`, `/api/v1/fs/ls`, `/api/v1/content/{abstract,overview,read}`) and `/home/shinelay/.pi/openviking/{memory-changelog.jsonl,metrics.jsonl,rollout-state.json,resource-sync-state.json,migration-verification.json,seen-role-messages.json}`.
+- **Read-Only:** Zero write actions. `server/index.ts` exposes only `GET /api/openviking/{overview,entries,audit}` (`2000ms` timeout; non-`GET` -> `405`). No writes to `:1933` or `/home/shinelay/.pi/openviking/`.
+- **Sources:** `http://127.0.0.1:1933` (`/health`, `/api/v1/system/status`, `/api/v1/observer/system`, `/api/v1/fs/ls`, `/api/v1/content/{abstract,overview,read}`) and `/home/shinelay/.pi/openviking/{memory-changelog.jsonl,metrics.jsonl,rollout-state.json,resource-sync-state.json,migration-verification.json,seen-role-messages.json}`.
 
 ### 2. Cross-Role Isolation (`R-NAMESPACE-1`, `R-ISOLATION-1`)
 - Role memories (`viking://agent/memories/...`) are isolated per role (`X-OpenViking-Agent: <role>`).
@@ -24,6 +24,7 @@ Pinned to `.temper/features/openviking-dashboard/design.md` (`design #263`, `5db
 - **`empty` (`Zero Activity`):** `/health` `"ok"`, `0` events/24h (`status-zero-fg`, `◌` `circle-empty`, `dotted`, `data-health-state="zero-activity"`, `"0 events in window (server online)"`).
 - **`error` (`Server Unreachable` / `Offline`, `R-FAIL-1..3`):** `/health` fails (`status-unreachable-fg`, `✕` `octagon-x`, `double`, `data-health-state="server-unreachable"`). `:1933` fields return `null` -> `— (Unreachable)` (`data-unreachable-value="true"`), never `0`/`Healthy`; JSONL panels still show counts + staleness.
 - **`loading`:** `[data-screen-state="loading"]` skeletons; never fake `0` counters.
+- **No role liveness (v1):** nothing measures it: no panel, label or header may state or imply a role is live, online or healthy; folder count never feeds `screen_state`, `mode_label` or a degraded verdict.
 
 ## Canonical State and Formula Owners
 
@@ -31,14 +32,14 @@ Browser code formats values only and **never** computes sums, averages, percenta
 
 | Figure (`data-source-field`) | Source (`:1933` / `/home/shinelay/.pi/openviking/`) | Formula / Field | Cadence |
 |---|---|---|---|
-| `observer.mode_label` | `/health` + `/api/v1/observer/system` + `rollout-state.json` | `"Offline"` if down; `"Degraded Local Fallback"` if stale; else `"Active (15/15 Roles Live)"` | `30s` |
-| `observer.roles_online_count`, `observer.roles_total_count` | `/api/v1/fs/ls?uri=viking://agent/memories` | Reachable roles (`0..15`, `null` if down); total `15` | `30s` |
-| `observer.daemon_bind`, `observer.queue_depth` | `/health` (bind only) | `"127.0.0.1:1933"`; queue depth **unavailable in v1** (`R-QUEUE-DEPTH-1`, G1) | `30s` |
-| `metrics.slot_hit_rate_pct`, `metrics.avg_injected_tokens`, `metrics.turns_sampled_24h` | `metrics.jsonl` (`turn_start`, 24h) | Injected count; `%` with `l0_hits > 0`; mean `tokens_est` (G2) | `5m` |
-| `changelog.commits_24h`, `changelog.promotions_24h`, `changelog.rejected_24h` | `memory-changelog.jsonl` (24h) | `session_commit`; `preference_write`+`resource_sync`; `preference_write_blocked` (G4) | `15m` |
-| `slots[].slot_id`, `slots[].uri_prefix`, `slots[].hit_rate_pct`, `slots[].avg_tokens`, `slots[].state` | `metrics.jsonl` (`turn_start`, 24h) | Slots 1–5; per-slot telemetry if present, else `null` / `"unmeasured-gap"` (G3) | `5m` |
-| `entries[].uri`, `entries[].scope`, `entries[].role`, `entries[].layers`, `entries[].l0_abstract`, `entries[].l1_overview`, `entries[].l2_content` | `/api/v1/fs/ls` + `/api/v1/content/*` | Lists `resources`, `user/default/memories` (G8), `agent/memories`; redacts `agent` content | `15m` |
-| `events[].id`, `events[].action`, `events[].role`, `events[].uri`, `events[].l0_abstract`, `events[].guard_verdict`, `events[].ts` | `memory-changelog.jsonl` + `metrics.jsonl` | Maps live actions to `commit`, `promote_shared`, `reject_noise`, `sidecar_timeout`; redacts `agent` `summary_1line` | `15m` |
+| `observer.mode_label` | `/health` + `/api/v1/observer/system` + `rollout-state.json` | `"Offline"` if down; `"Degraded Local Fallback"` if stale; else `"Active"` | `30s` |
+| `observer.role_memory_folder_count`, `observer.roles_total_count` | Wrapper partition enumeration of canonical `viking://user/<role>/memories` (not alias `viking://agent/memories`) | Partitions found (`0..15`, `null` if down) as `"N role memory folders"`; total `15` (role list) | `30s` |
+| `observer.daemon_bind`, `observer.queue_depth` | `/health` (bind only) | `"127.0.0.1:1933"`; `queue_depth` always `null` (G1) | `30s` |
+| `metrics.{slot_hit_rate_pct,avg_injected_tokens,turns_sampled_24h}` | `metrics.jsonl` (`turn_start`, 24h) | Injected count; `%` with `l0_hits > 0`; mean `tokens_est` (G2) | `5m` |
+| `changelog.{commits_24h,promotions_24h,rejected_24h}` | `memory-changelog.jsonl` (24h) | `session_commit`; `preference_write`+`resource_sync`; `preference_write_blocked` (G4) | `15m` |
+| `slots[].{slot_id,uri_prefix,hit_rate_pct,avg_tokens,state}` | `metrics.jsonl` (`turn_start`, 24h) | Slots 1–5; per-slot telemetry if present, else `null` / `"unmeasured-gap"` (G3) | `5m` |
+| `entries[].{uri,scope,role,layers,l0_abstract,l1_overview,l2_content}` | `/api/v1/fs/ls` + `/api/v1/content/*` | Lists `resources`, `user/default/memories` (G8), `user/<role>/memories`; redacts `agent` content | `15m` |
+| `events[].{id,action,role,uri,l0_abstract,guard_verdict,ts}` | `memory-changelog.jsonl` + `metrics.jsonl` | Maps live actions to §3 `action` values; redacts `agent` `summary_1line` | `15m` |
 
 ### Contract-vs-Live Gaps for Ops
 - **G1 — SETTLED:** `result.status` is an ASCII table; render unavailable, never `0`, never scraped (`R-QUEUE-DEPTH-1`, §8b).
@@ -52,7 +53,7 @@ Browser code formats values only and **never** computes sums, averages, percenta
 
 ## Obsolete Code and Tests to Delete
 
-- **Greenfield (`0` files):** No obsolete OpenViking dashboard files/tests in `server/` or `web/`. No shims for `window.__OPENVIKING_FIXTURE__` (Rule 23).
+- **Delete:** `parseQueueDepth` + drift test + `/api/v1/observer/queue` fetch (`server/openviking/observer.ts`, G1); folder-count `isDegraded` condition (`server/openviking/overview.ts`). Else greenfield; no shims (Rule 23).
 
 ## Prototype-Only Chrome Excluded from Production
 
