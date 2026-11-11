@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Acceptance assertion runner for OpenViking Memory Dashboard (openviking-dashboard).
-# Exit codes: 0 = every assertion below passes (A01-A43), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
+# Exit codes: 0 = every assertion below passes (A01-A44), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
 # Task #269 appends A18-A23 (state honesty, summary/detail parity, drawer integrity, role isolation, focus/keyboard, unmeasured slots); exit 0 now means all 23 pass.
 # Task #275 appends A24-A28 (drawer honours and follows state, neutral unmeasured slots, error card 3 / Tab 3 parity, no role liveness claim); exit 0 now means all 28 pass.
 # A26 reads slot fields and uri_prefix values from server/openviking/types.ts; a missing or unreadable types file is exit 2.
@@ -20,6 +20,9 @@
 # page's own live rendering, so no copy list lives in this checker.
 # Task #290 lead amendments (same standing as A03/A04): A24's offline-wording branch applies only to daemon-served layers
 # (A42 proves the marking), and A21 runs over all five states instead of ?state=live only.
+# Task #296 appends A44 (every element carrying data-source-field, in all five states, holds at most one reading outside its
+# nested field spans, and that reading is the kind its field's type in types.ts yields -- the generalisation of S4-1 and S5-1);
+# exit 0 now means all 44 pass. The figure-kind -> field pairing table is built from server/openviking/types.ts, never restated here.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -196,6 +199,82 @@ for _resp in ("OpenVikingOverviewResponse", "OpenVikingEntriesResponse", "OpenVi
         TS_FIELDS.update(f"{_fam}{_arr}.{f}" for f in _ts_names(_ifaces.get(_typ, "")))
 if len(MODE_LABELS) != 3 or not TS_FIELDS:
     exit2(f"could not read OpenVikingModeLabel values and timestamp fields from {os.environ['OV_TYPES_PATH']}: {MODE_LABELS}, {sorted(TS_FIELDS)}")
+
+# Task #296 (A44): the figure-kind -> field pairing table, read from types.ts and never restated here. Every path the page
+# may cite in data-source-field maps to its TypeScript type; the type and the field's own name say what that field can
+# render. The three API responses are walked the way the page addresses them: an Overview member is a family
+# (`observer.checked_at`), an array member takes `[]` (`entries[].updated_at`, `slots[].state`), and the scalars of the
+# entries / audit responses take that response's nickname (`entries.stale_badge`, `audit.stale_badge`).
+TYPE_ALIASES = dict(re.findall(r"export type (\w+)\s*=\s*([^;]+);", types_src))
+
+def expand_alias(t):
+    out = t
+    for _ in range(3):
+        nxt = re.sub(r"\b([A-Z]\w+)\b", lambda m: f"({TYPE_ALIASES[m.group(1)].strip()})" if m.group(1) in TYPE_ALIASES else m.group(1), out)
+        if nxt == out:
+            break
+        out = nxt
+    return re.sub(r"\s+", " ", out).strip()
+
+FIELD_TYPE = {}
+
+def walk_iface(body, path, nick=None, depth=0):
+    """Record every leaf field of a response interface under the path the page cites it by."""
+    if depth > 4:
+        return
+    indents, cur = [], list(path)
+    for line in body.split("\n"):
+        closing = re.match(r"^(\t+)\};?\s*$", line)
+        if closing:
+            d = len(closing.group(1))
+            while indents and indents[-1] >= d:
+                indents.pop()
+                cur.pop()
+            continue
+        m = re.match(r"^(\t+)(\w+)\??:\s*(.*)$", line)
+        if not m:
+            continue
+        d, name, val = len(m.group(1)), m.group(2), m.group(3).strip()
+        while indents and indents[-1] >= d:
+            indents.pop()
+            cur.pop()
+        if val.startswith("{"):
+            indents.append(d)
+            cur.append(name)
+            continue
+        t = val.rstrip(";").strip()
+        arr = t.endswith("[]")
+        base = t[:-2].strip() if arr else t
+        if base in _ifaces:
+            if arr:  # the list itself is a figure too: the page renders it as how many there are
+                FIELD_TYPE[".".join(cur + [name])] = t
+            walk_iface(_ifaces[base], cur + [name + ("[]" if arr else "")], None, depth + 1)
+        else:
+            FIELD_TYPE[".".join(([nick] if (nick and not cur) else cur) + [name])] = expand_alias(t)
+
+for _resp, _nick in (("OpenVikingOverviewResponse", None), ("OpenVikingEntriesResponse", "entries"), ("OpenVikingAuditResponse", "audit")):
+    if _resp not in _ifaces:
+        exit2(f"could not read {_resp} from {os.environ['OV_TYPES_PATH']}")
+    walk_iface(_ifaces[_resp], [], _nick)
+FIELD_LITERALS = {f: re.findall(r'"([^"]*)"', t) for f, t in FIELD_TYPE.items()}
+
+def field_kind(path, t):
+    """What one reading of this field looks like on screen: a percentage, a count, an age, or only its own words."""
+    name = path.split(".")[-1]
+    if t.strip().endswith("[]"):
+        return "count"
+    if name.endswith("_pct"):
+        return "percent"
+    if re.search(r"\bnumber\b", t):
+        return "count"
+    if re.fullmatch(r"\w*_at|ts", name) and re.search(r"\bstring\b", t):
+        return "age"
+    return "text"
+
+if not {"metrics.turns_sampled_24h", "metrics.slot_hit_rate_pct", "metrics.avg_injected_tokens", "observer.checked_at",
+        "entries[].updated_at", "entries.stale_badge", "audit.stale_badge", "events[].ts", "slots[].state",
+        "auxiliary.rollout.pending_wt_land_syncs"} <= set(FIELD_TYPE):
+    exit2(f"could not read the dashboard field types from {os.environ['OV_TYPES_PATH']}: {len(FIELD_TYPE)} fields, missing the figure fields the page cites")
 
 # Task #284 (A32/A34): what the server reports for each prototype screen. Panel health follows overview.ts panelHealth
 # (0 events -> zero-activity; age > cadence -> stale; else healthy; never server-unreachable for the local-log panels) and the
@@ -1710,6 +1789,94 @@ try:
         if not a43_promises:
             a43_bad.append("the Offline screen never says what comes back when the daemon answers")
         record("A43-OFFLINE-PROMISE-IS-SCOPED", len(a43_bad) == 0, f"promises={[p[:70] for p in a43_promises]}, violations={a43_bad[:10]} (total={len(a43_bad)})", "?state=error: every sentence promising text comes back names the daemon-served layers it is limited to, never promises it for every listed row, and at least one such sentence exists")
+
+        # ---- A44 (task #296, VERIFICATION-4 S4-1 + VERIFICATION-5 S5-1): every figure sits under the field that produces it ----
+        # S4-1 and S5-1 are one defect twice: an element names a data-source-field that cannot yield the figure inside it, so a
+        # frontend wired from the attribute reads the wrong field for a label that happens to be true. The pairing table is
+        # FIELD_TYPE, built from types.ts above: a field's name and type say what it can render -- a `_pct` field a percentage,
+        # a number or a list one count, a timestamp field one age, a string or literal union only its own words. One attribute
+        # names one field, so outside its nested [data-source-field] spans an element may hold at most one reading.
+        FIGURE_SCAN_JS = "() => {" + JS_HELPERS + r"""
+            const out = [], seen = new Set();
+            const scan = (where) => {
+                for (const el of document.querySelectorAll('[data-source-field]')) {
+                    if (!vis(el) || el.closest('[role="tooltip"]')) continue;
+                    let own = el.textContent || '';
+                    for (const n of el.querySelectorAll('[data-source-field]')) own = own.replace(n.textContent, ' ');
+                    const field = el.getAttribute('data-source-field') || '';
+                    const key = field + '|' + norm(own);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    out.push({ where, field, own: norm(own), full: norm(el.textContent) });
+                }
+            };
+            scan('summary');
+            const drawer = document.querySelector('[data-component="reader-drawer"]');
+            for (const t of tabs()) {
+                const panel = openTab(t);
+                scan(t.getAttribute('data-tab'));
+                const row = panel ? rowsIn(panel)[0] : null;
+                if (row) {
+                    row.click();
+                    scan(`${t.getAttribute('data-tab')}:drawer`);
+                    const close = drawer && drawer.querySelector('[data-slot="drawer-close"]');
+                    if (close && vis(drawer)) close.click();
+                }
+            }
+            tabs()[0]?.click();
+            return out;
+        }"""
+        AGE_READING_RE = re.compile(r"\b\d+\s*(?:s|m|h|d)\s+(?:ago|old)\b", re.I)
+        PCT_READING_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s*%")
+        NUM_READING_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+        # not readings: the daemon's own address, a disclosure tier, a contract rule id, a numeral glued into a name by a hyphen
+        # (`5-slot`, `Turn-1`), and the window or cadence a figure is measured over
+        NOT_A_READING_RE = [
+            re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b"),
+            re.compile(r"\bL[0-9]\b"),
+            re.compile(r"\bR-[A-Z0-9-]+\b"),
+            re.compile(r"\b\d+-\w|\w-\d+\b"),
+            re.compile(r"\(\s*\d+\s*[smhd]\s*\)|\b(?:in|per|every|over|last|within)\s+\d+\s*[smhd]\b|\b\d+\s*[smhd]\s+(?:cadence|window)\b|/\s*\d+\s*[smhd]\b", re.I),
+        ]
+
+        def figure_readings(text, literals):
+            """Every measured value an element shows in its own words, each as (kind, text)."""
+            s = text
+            for lit in sorted([l for l in literals if l], key=len, reverse=True):
+                s = s.replace(lit, " ")
+            for rx in NOT_A_READING_RE:
+                s = rx.sub(" ", s)
+            found = [("age", m.group(0)) for m in AGE_READING_RE.finditer(s)]
+            s = AGE_READING_RE.sub(" ", s)
+            found += [("percent", m.group(0)) for m in PCT_READING_RE.finditer(s)]
+            s = PCT_READING_RE.sub(" ", s)
+            return found + [("count", m.group(0)) for m in NUM_READING_RE.finditer(s)]
+
+        a44_bad, a44_figures, a44_proved = [], 0, {"count": 0, "percent": 0, "age": 0}
+        for st in STATES5:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            for r in page.evaluate(FIGURE_SCAN_JS):
+                a44_figures += 1
+                field, ts_type = r["field"], FIELD_TYPE.get(r["field"])
+                if ts_type is None:
+                    a44_bad.append(f"{st}:{r['where']}: '{r['full'][:40]}' cites '{field}', which no dashboard response sends")
+                    continue
+                kind = field_kind(field, ts_type)
+                reads = figure_readings(r["own"], FIELD_LITERALS[field])
+                if len(reads) > 1:
+                    a44_bad.append(f"{st}:{r['where']}: '{r['full'][:60]}' names one field ({field}) but shows {len(reads)} figures {[v for _, v in reads]}; at least one comes from another field")
+                    continue
+                if not reads:
+                    continue
+                got, val = reads[0]
+                if got != kind:
+                    a44_bad.append(f"{st}:{r['where']}: '{val}' in '{r['full'][:60]}' is a {got}, but {field}: {ts_type} yields a {kind}")
+                else:
+                    a44_proved[kind] += 1
+        for kind, n in a44_proved.items():
+            if n == 0:
+                a44_bad.append(f"no {kind} figure among the {a44_figures} walked, so the rule proves nothing for that kind")
+        record("A44-FIGURE-CITES-ITS-FIELD", len(a44_bad) == 0, f"figures={a44_figures}, proved={a44_proved}, violations={a44_bad[:10]} (total={len(a44_bad)})", "live/stale/empty/error/loading: every [data-source-field] element holds at most one reading outside its nested field spans, and that reading is what its type in types.ts yields (a percentage for a _pct field, a count for a number or list, an age for a timestamp, only its own words for a string)")
 
         browser.close()
 except Exception as exc:
