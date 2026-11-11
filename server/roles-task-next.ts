@@ -248,6 +248,7 @@ export function taskOf(
 
 	return {
 		id: t.id,
+		...(t.priority ? { priority: t.priority } : {}),
 		...(department ? { role: department } : {}),
 		status: t.status,
 		lifecycleStatus,

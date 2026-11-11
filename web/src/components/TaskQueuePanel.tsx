@@ -1,572 +1,70 @@
 /**
  * 右栏的「队列」tab（queue-panel）。
- *
- * pi-queue 扩展给每条对话一个任务队列：用户和 agent 先把一个任务计划透，用户在对话框里批准了
- * 才进队列；按「开始」后 agent 一个接一个自己做完。这里显示当前对话的队列（UiState.taskQueue，
- * server/task-queue.ts 从会话条目重放出来的）：
- *
- * - 顶上一行状态，和「开始」/「停下」；
- * - 正在做的任务；卡住等用户时琥珀色，带 agent 的问题；
- * - 搁着等外面的事的任务（pi-queue 的 queue_wait）：等什么、检查命令、几点放弃；等到了说一声，
- *   没等到（放弃或检查一直出错）变琥珀色，带原因；
- * - 排着的任务，按要做的顺序，带 ↑ ↓ ✕（✕ 先在行内确认）；
- * - 做完的任务变灰，带 agent 的总结，最近做完的在上。
- *
- * 点任务标题展开整份计划（六部分，叫法和 pi-queue 批准对话框里的一样）。按钮一律变成 `/queue …`
- * 命令交给 pi-queue（task_queue_command），面板自己不改队列：点下去先把按钮禁用，等服务端发来
- * 新的队列（或 5 秒后）再放开，防连点。
+ * Displays the current conversation's pi-queue tasks, controls, lanes, and P0–P3 task priority badges.
  */
 
-import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type {
-	UiOwnerCardBriefLine,
-	UiTaskQueue,
-	UiTaskQueueBlock,
-	UiTaskQueueHold,
-	UiTaskQueuePlan,
-	UiTaskQueueRef,
-	UiTaskQueueTask,
-	UiModelInfo,
-	UiProfilePatch,
-} from "../types";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import type { UiModelInfo, UiProfilePatch, UiTaskQueue, UiTaskQueueTask } from "../types";
 import { effectiveProfile, ProfileEditor, ProfileSummary } from "./QueueProfile";
-import { OwnerCardBrief } from "./OwnerCardBrief";
-import { OwnerQuestionRoute } from "./OwnerQuestionRoute";
-import { briefLines } from "../roles-useful-model";
-import { useT, type Translate } from "../i18n";
-import { Markdown } from "./Markdown";
-import { lineTime } from "./TldrPanel";
+import { useT } from "../i18n";
 import { FOCUS_FLASH_MS } from "../chat-focus";
+import {
+	DEFAULT_PRIORITY,
+	PRIORITIES,
+	PRIORITY_RANK,
+	TaskPriorityBadge,
+	formatTaskPriorityBadge,
+	renderTaskPriorityBadgeHtml,
+	taskPriority,
+	type TaskPriority,
+} from "./TaskPriorityBadge";
+import {
+	BUSY_MS,
+	DEFAULT_LANES,
+	MAX_LANES,
+	PausedLine,
+	TASK_QUEUE_DONE_SHOWN,
+	TASK_QUEUE_PLAN_PARTS,
+	afterParts,
+	refLabel,
+	taskNumbers,
+	taskQueueHeldOf,
+	taskQueueSections,
+	taskQueueStatusKey,
+	type TKey,
+	type TaskQueueAction,
+	type TaskQueueSections,
+} from "./TaskQueueLines";
+import {
+	renderTaskQueueRow,
+	type TaskQueueAnswerBinding,
+	type TaskQueueAnswerRequest,
+	type TaskQueueAnswerResult,
+} from "./TaskQueueRow";
 
-type TKey = Parameters<Translate>[0];
-
-/** 面板按钮能发的命令（服务端 taskQueueCommandLine 转成 `/queue …`）。 */
-export type TaskQueueAction =
-	| "start"
-	| "stop"
-	// queue-paused: the owner's pause on a task (id) or the whole queue (no id), and its lifting.
-	| "pause"
-	| "resume"
-	| "up"
-	| "down"
-	| "remove"
-	| "clear"
-	| "lanes"
-	| "autoApprove"
-	| "autoStart"
-	| "defaults"
-	| "taskProfile";
-
-/** queue-lanes: the most lanes that may run at once (pi-queue MAX_LANES); 2 when not set. */
-const MAX_LANES = 8;
-const DEFAULT_LANES = 2;
-
-/** 点了按钮后最多等服务端这么久；命令没改队列时（比如没东西可开始）按钮也会放开。 */
-const BUSY_MS = 5000;
-
-/** 做完的任务默认显示几个（最近做完的）。 */
-export const TASK_QUEUE_DONE_SHOWN = 5;
-
-/** 计划的六部分，顺序和叫法跟 pi-queue 批准对话框里的一样（pi-queue queue.ts PARTS）。 */
-export const TASK_QUEUE_PLAN_PARTS: readonly (readonly [Exclude<keyof UiTaskQueuePlan, "title">, TKey])[] = [
-	["goal", "taskQueueGoal"],
-	["doneWhen", "taskQueueDoneWhen"],
-	["decided", "taskQueueDecided"],
-	["steps", "taskQueueSteps"],
-	["verify", "taskQueueVerify"],
-	["mustNot", "taskQueueMustNot"],
-];
-
-export interface TaskQueueSections {
-	/** queue-lanes: tasks working in chats of their own (working, asking their main chat, stuck, blocked, or
-	 *  back from a wait there), in queue order. queue-wait-frees-lane: one on hold whose wait isn't over is in
-	 *  no lane: it's listed under On hold (`waiting`), unless the owner paused it. */
-	inChats: UiTaskQueueTask[];
-	/** queue-wait-frees-lane: the tasks of `inChats` that use one of the lanes at once, as pi-queue counts them
-	 *  (isActive): working, asking their main chat or stuck, and not paused. The status line counts these. */
-	atWork: UiTaskQueueTask[];
-	/** 正在做或卡住等用户的那个（最多一个）。 */
-	current?: UiTaskQueueTask;
-	/** 搁着等外面的事的，按队列顺序（等到了、没等到的也在这，直到它们接着做）。queue-wait-frees-lane: tasks on hold
-	 *  in chats of their own too, while their wait isn't over (they hold no lane meanwhile). */
-	waiting: UiTaskQueueTask[];
-	/** 排着的，按要做的顺序。 */
-	ready: UiTaskQueueTask[];
-	/** 做完的，最近做完的在前。 */
-	done: UiTaskQueueTask[];
-	/** queue-drop: the ones its lead dropped (not done), newest first. */
-	dropped: UiTaskQueueTask[];
-}
-
-export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections {
-	const tasks = q?.tasks ?? [];
-	const open = (t: UiTaskQueueTask) =>
-		t.status === "working" ||
-		t.status === "asking" ||
-		t.status === "stuck" ||
-		t.status === "waiting" ||
-		t.status === "blocked";
-	const atWork = (t: UiTaskQueueTask) => t.status === "working" || t.status === "asking" || t.status === "stuck";
-	// queue-wait-frees-lane: pi-queue's waitFrees (the server's taskQueueWaitFrees): on hold, its wait not over,
-	// not paused by the owner. Such a task is in no lane.
-	const freed = (t: UiTaskQueueTask) => t.status === "waiting" && !t.wait?.overAt && !t.hold;
-	const inChats = tasks.filter((t) => t.lane && open(t) && !freed(t));
-	return {
-		inChats,
-		atWork: inChats.filter((t) => atWork(t) && !t.hold),
-		current: tasks.find((t) => !t.lane && atWork(t)),
-		waiting: tasks.filter((t) => t.status === "waiting" && (!t.lane || freed(t))),
-		ready: tasks.filter((t) => t.status === "ready"),
-		done: tasks.filter((t) => t.status === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)),
-		dropped: tasks.filter((t) => t.status === "dropped").sort((a, b) => (b.dropped?.at ?? 0) - (a.dropped?.at ?? 0)),
-	};
-}
-
-/** 顶上那行状态说哪句话。 */
-export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
-	// queue-paused: the owner paused the whole queue; a task he paused doesn't wait on him.
-	if (q.hold) return "taskQueueStatusPausedByYou";
-	const needsYou = (t: UiTaskQueueTask | undefined) => t?.status === "stuck" && !t.hold;
-	if (needsYou(s.current) || s.inChats.some(needsYou)) return "taskQueueStatusStuck";
-	if (q.running) {
-		if (s.current) return "taskQueueStatusWorking";
-		// queue-wait-frees-lane: only tasks at work count, as pi-queue counts its lanes at once.
-		if (s.atWork.length === 1) return "taskQueueStatusLane";
-		if (s.atWork.length > 1) return "taskQueueStatusLanes";
-		return s.waiting.length > 0 ? "taskQueueStatusOnHold" : "taskQueueStatusRunning";
-	}
-	if (!s.current && s.ready.length === 0 && s.waiting.length === 0 && s.inChats.length === 0) {
-		return q.autoStart ? "taskQueueStatusArmed" : "taskQueueStatusFinished";
-	}
-	switch (q.pausedReason) {
-		case "user":
-			return "taskQueueStatusStopped";
-		case "stopped":
-			return "taskQueueStatusRunStopped";
-		case "error":
-			return "taskQueueStatusError";
-		case "restart":
-			return "taskQueueStatusRestart";
-		default:
-			return "taskQueueStatusIdle";
-	}
-}
-
-/** queue-paused: the owner's pause an open task is under: its own, else its whole queue's. */
-export function taskQueueHeldOf(q: Pick<UiTaskQueue, "hold">, task: UiTaskQueueTask): UiTaskQueueHold | undefined {
-	return task.status === "done" || task.status === "dropped" ? undefined : (task.hold ?? q.hold);
-}
-
-/** queue-paused: "Paused by you \u00b7 since 12:10 \u00b7 why" ("with the whole queue" when it's the queue's pause). */
-function PausedLine({
-	hold,
-	whole,
-	banner,
-	children,
-}: {
-	hold: UiTaskQueueHold;
-	/** A task paused with its whole queue (not on its own). */
-	whole?: boolean;
-	/** The queue's own banner. */
-	banner?: boolean;
-	children?: ReactNode;
-}) {
-	const t = useT();
-	return (
-		<div className="task-queue-paused" data-paused={banner ? "banner" : whole ? "queue" : "task"}>
-			<span className="task-queue-paused-badge">{t("taskQueuePausedByYou")}</span>
-			<span className="task-queue-paused-text" title={hold.why}>
-				{whole ? `${t("taskQueuePausedWithQueue")} \u00b7 ` : ""}
-				{t("taskQueuePausedSince", { time: lineTime(hold.at), why: hold.why })}
-			</span>
-			{children}
-		</div>
-	);
-}
-
-/** queue-side-by-side: "#31", "#31, #32", "#1, #2, #3": plain numbers, so every language reads them. */
-export function taskNumbers(ids: number[]): string {
-	return ids.map((n) => `#${n}`).join(", ");
-}
-
-/** queue-blocked: "#12" in its own queue, "temper #38" in another. */
-export function refLabel(r: Pick<UiTaskQueueRef, "name" | "id">): string {
-	return r.name ? `${r.name} #${r.id}` : `#${r.id}`;
-}
-
-/** queue-blocked: an outside `after` its queue hasn't recorded over, and that isn't over there either. */
-function outsideOpen(r: UiTaskQueueRef): boolean {
-	return !r.over && r.status !== "done" && r.status !== "dropped" && r.status !== "removed" && r.status !== "gone";
-}
-
-/**
- * queue-blocked: the after line's parts: every task it comes after (this queue's numbers, then other queues'
- * tasks, "temper #38"), and the ones still open. queue-why: the open ones with how each stands (this queue's
- * from the server's waitingForRefs; an older server sends only their numbers), and the ones only the owner can
- * move on: paused by him (`resume`). Those count only while it hasn't started (after only holds back a start),
- * and not for a task in this queue paused only with the whole queue (the queue's banner says that).
- */
-export function afterParts(
-	task: Pick<UiTaskQueueTask, "status" | "after" | "waitingFor" | "waitingForRefs" | "outside">,
-	queue: Pick<UiTaskQueue, "hold" | "tasks">,
-): { list: string; open: UiTaskQueueRef[]; resume: UiTaskQueueRef[] } {
-	const list = [...(task.after ?? []).map((n) => `#${n}`), ...(task.outside ?? []).map(refLabel)].join(", ");
-	const here: UiTaskQueueRef[] =
-		task.waitingForRefs ?? (task.waitingFor ?? []).map((id): UiTaskQueueRef => ({ file: "", name: "", id }));
-	const open = [...here, ...(task.outside ?? []).filter(outsideOpen)];
-	const ownPause = (id: number) => !!queue.tasks.find((x) => x.id === id)?.hold;
-	const resume =
-		task.status === "ready" ? open.filter((r) => r.held && (r.file !== "" || !queue.hold || ownPause(r.id))) : [];
-	return { list, open, resume };
-}
-
-/** queue-blocked: how a task a blocked task waits on stands, in a word or two (queue-why: the after line's too). */
-function refStateKey(status: UiTaskQueueRef["status"]): TKey | undefined {
-	switch (status) {
-		case "working":
-			return "taskQueueRefWorking";
-		case "asking":
-			return "taskQueueRefAsking";
-		case "stuck":
-			return "taskQueueRefNeedsYou";
-		case "waiting":
-			return "taskQueueRefOnHold";
-		case "blocked":
-			return "taskQueueRefBlocked";
-		case "ready":
-			return "taskQueueRefNotStarted";
-		case "done":
-			return "taskQueueRefDone";
-		case "dropped":
-			return "taskQueueRefDropped";
-		case "removed":
-		case "gone":
-			return "taskQueueRefRemoved";
-		default:
-			return undefined;
-	}
-}
-
-/**
- * queue-blocked: a task another one waits on, "temper #38 (working)": a link when it has somewhere to go (its
- * chat, or queue-why: the task in this panel) and how it stands. One its owner paused shows as "paused by you"
- * and doesn't need him while paused.
- */
-function RefItem({ r, first, onOpen }: { r: UiTaskQueueRef; first: boolean; onOpen?: () => void }) {
-	const t = useT();
-	const key = r.held ? "taskQueueRefPaused" : refStateKey(r.status);
-	const needsYou = r.status === "stuck" && !r.held;
-	return (
-		<span className={`task-queue-ref${needsYou ? " needs-you" : ""}`} data-ref={refLabel(r)}>
-			{!first && ", "}
-			{onOpen ? (
-				<button type="button" className="task-queue-ref-link" title={r.title ?? r.chat?.title} onClick={onOpen}>
-					{refLabel(r)}
-				</button>
-			) : (
-				<span title={r.title}>{refLabel(r)}</span>
-			)}
-			{key && (
-				// queue-drop: why its lead dropped it, on hover.
-				<span className="task-queue-ref-state" title={r.dropped}>{` (${t(key)})`}</span>
-			)}
-		</span>
-	);
-}
-
-const SLOT = "\u0000";
-/** queue-why: a text with SLOT in it, the slot filled with nodes (so each language keeps its own word order). */
-function withSlot(text: string, node: ReactNode): ReactNode {
-	const at = text.indexOf(SLOT);
-	if (at < 0) return text;
-	return (
-		<>
-			{text.slice(0, at)}
-			{node}
-			{text.slice(at + SLOT.length)}
-		</>
-	);
-}
-
-/**
- * queue-why: "After #12, #45 \u00b7 still waiting for #45 (paused by you)": every open one with how it stands; one
- * in this queue shows it in the panel, one in another queue opens its chat. Below it, muted: "Can't start until
- * you resume #45" when the owner's pause holds it back (his own choice, so not a needs-you).
- */
-function AfterLine({
-	task,
-	queue,
-	onOpenChat,
-	onShowTask,
-}: {
-	task: UiTaskQueueTask;
-	queue: UiTaskQueue;
-	onOpenChat?: (file: string) => void;
-	onShowTask: (id: number) => void;
-}) {
-	const t = useT();
-	const { list, open, resume } = afterParts(task, queue);
-	// Another queue's task: its own chat once it has one, else that queue's chat (where it can be resumed).
-	const openOf = (r: UiTaskQueueRef) => {
-		if (r.file === "") return () => onShowTask(r.id);
-		const file = r.chat?.file ?? r.file;
-		return onOpenChat ? () => onOpenChat(file) : undefined;
-	};
-	return (
-		<>
-			<div
-				className={`task-queue-after${open.length ? " waiting" : ""}`}
-				data-after={[...(task.after ?? []).map(String), ...(task.outside ?? []).map(refLabel)].join(",")}
-			>
-				{t("taskQueueAfter", { list })}
-				{open.length > 0 && (
-					<>
-						{" \u00b7 "}
-						{withSlot(
-							t("taskQueueAfterStill", { refs: SLOT }),
-							open.map((r, i) => <RefItem key={`${r.file}#${r.id}`} r={r} first={i === 0} onOpen={openOf(r)} />),
-						)}
-					</>
-				)}
-			</div>
-			{resume.length > 0 && (
-				<div className="task-queue-resume-first" data-resume={resume.map(refLabel).join(",")}>
-					{t("taskQueueResumeFirst", { refs: resume.map(refLabel).join(", ") })}
-				</div>
-			)}
-		</>
-	);
-}
-
-/** queue-blocked: the Blocked line: "on temper #38 (working)", or the need, plus when it's poked next. One line. */
-function BlockedLine({ block, onOpenChat }: { block: UiTaskQueueBlock; onOpenChat?: (file: string) => void }) {
-	const t = useT();
-	const refs = block.on ?? [];
-	const next = block.poke
-		? t("taskQueueBlockedPoked", { time: lineTime(block.poke.at) })
-		: block.nextRemindAt !== undefined && block.lead
-			? t("taskQueueBlockedRemind", { lead: block.nextRemindLead || block.lead, time: lineTime(block.nextRemindAt) })
-			: block.nextPokeAt !== undefined
-				? t(
-						block.nextIsOwner
-							? "taskQueueBlockedOwner"
-							: block.nextIsAsk
-								? "taskQueueBlockedAsk"
-								: "taskQueueBlockedNext",
-						{ time: lineTime(block.nextPokeAt) },
-					)
-				: "";
-	return (
-		<div className="task-queue-blocked">
-			<span className="task-queue-blocked-badge">{t("taskQueueBlocked")}</span>
-			<span className="task-queue-blocked-text">
-				{refs.length > 0 && (
-					<>
-						{t("taskQueueBlockedOn")}{" "}
-						{refs.map((r, i) => {
-							const chat = r.chat;
-							return (
-								<RefItem
-									key={`${r.file}#${r.id}`}
-									r={r}
-									first={i === 0}
-									onOpen={chat && onOpenChat ? () => onOpenChat(chat.file) : undefined}
-								/>
-							);
-						})}
-					</>
-				)}
-				{block.need && (
-					<span className="task-queue-blocked-need">
-						{refs.length > 0 && "; "}
-						{t("taskQueueBlockedNeed", { need: block.need })}
-					</span>
-				)}
-				{block.lead && (
-					<span className="task-queue-blocked-lead" data-lead={block.lead}>
-						{(refs.length > 0 || block.need) && "; "}
-						{t("taskQueueBlockedLead", { lead: block.lead })}
-						{block.owes ? `: ${block.owes}` : ""}
-					</span>
-				)}
-				{next && <span className="task-queue-blocked-next">{` \u00b7 ${next}`}</span>}
-			</span>
-		</div>
-	);
-}
-
-/** Host-issued occurrence identity, never derived from question text, choices or a timestamp.
- * Presentation fields only reject an incoherent display; they do not establish authority. */
-export interface TaskQueueAnswerBinding {
-	readonly conversationId: string;
-	readonly queueId: string;
-	readonly taskId: number;
-	readonly questionId: string;
-	readonly question: string;
-	readonly choices: readonly string[];
-	readonly detail?: string;
-	/** owner-card-brief (Ops #682): the card's plain brief, shown first (briefLines takes it only whole). */
-	readonly brief?: readonly UiOwnerCardBriefLine[];
-	/** owner-question routing (Ops #685): which way it came, shown before the brief (absent while the switch is off). */
-	readonly route?: unknown;
-}
-
-export interface TaskQueueAnswerRequest {
-	readonly binding: TaskQueueAnswerBinding;
-	readonly text: string;
-}
-
-/** Strict true means this exact answer was actually applied, not sent, saved or admitted.
- * Consent answers must never use the generic admission journal/replay path. */
-export type TaskQueueAnswerResult = (request: TaskQueueAnswerRequest) => Promise<boolean>;
-
-function answerBinding(
-	bindings: readonly TaskQueueAnswerBinding[] | undefined,
-	conversationId: string | undefined,
-	queueId: string | undefined,
-	task: UiTaskQueueTask,
-): TaskQueueAnswerBinding | undefined {
-	if (!conversationId?.trim() || !queueId?.trim()) return undefined;
-	const matches = (bindings ?? []).filter(
-		(b) => b.conversationId === conversationId && b.queueId === queueId && b.taskId === task.id,
-	);
-	if (matches.length !== 1) return undefined;
-	const b = matches[0];
-	return typeof b.questionId === "string" &&
-		b.questionId.trim() !== "" &&
-		b.question === (task.question ?? "") &&
-		JSON.stringify(b.choices) === JSON.stringify(task.choices ?? []) &&
-		(b.detail ?? "") === (task.detail ?? "")
-		? b
-		: undefined;
-}
-
-/** Keep words until a genuine result, with separate question and local editor ownership. */
-function StuckAnswer({
-	task,
-	conversationId,
-	queueId,
-	binding,
-	onAnswerResult,
-}: {
-	task: UiTaskQueueTask;
-	conversationId?: string;
-	queueId?: string;
-	binding?: TaskQueueAnswerBinding;
-	onAnswerResult?: TaskQueueAnswerResult;
-}) {
-	const t = useT();
-	const [text, setText] = useState("");
-	const revision = useRef(0);
-	const [phase, setPhase] = useState<"idle" | "pending" | "applied" | "unconfirmed">("idle");
-	// This key is only a local invalidation guard, not a substitute for host questionId.
-	const key = JSON.stringify([
-		conversationId,
-		queueId,
-		task.id,
-		binding?.questionId,
-		task.question,
-		task.choices ?? [],
-		task.detail,
-		!!onAnswerResult,
-	]);
-	const owner = useRef<{ live: boolean; pending?: object; applied: boolean }>({ live: false, applied: false });
-	useLayoutEffect(() => {
-		const lifetime = { live: true, applied: false };
-		owner.current = lifetime;
-		setPhase("idle");
-		return () => {
-			lifetime.live = false;
-		};
-	}, [key]);
-	const send = async (value: string, typed: boolean) => {
-		const lifetime = owner.current;
-		if (!value.trim() || !binding || !onAnswerResult || !lifetime.live || lifetime.pending || lifetime.applied) return;
-		// Copy everything before dispatch/await; host mutation cannot retarget this action.
-		const request: TaskQueueAnswerRequest = Object.freeze({
-			binding: Object.freeze({ ...binding, choices: Object.freeze([...binding.choices]) }),
-			text: value,
-		});
-		const submittedRevision = revision.current;
-		const attempt = {};
-		lifetime.pending = attempt; // synchronous: even same-tick duplicate events are blocked.
-		setPhase("pending");
-		let applied = false;
-		try {
-			const result = onAnswerResult(request);
-			// A legacy/synchronous transport boolean is not the applied-result contract.
-			if (result && typeof result.then === "function") applied = (await result) === true;
-		} catch {
-			// Refused, failed or unknown: keep the original words; never resend automatically.
-		}
-		if (!lifetime.live || owner.current !== lifetime || lifetime.pending !== attempt) return;
-		lifetime.pending = undefined;
-		lifetime.applied = applied;
-		setPhase(applied ? "applied" : "unconfirmed");
-		// A choice never owns the typed draft, even when its text happens to be identical.
-		if (applied && typed && revision.current === submittedRevision) setText("");
-	};
-	const disabled = !binding || !onAnswerResult || phase === "pending" || phase === "applied";
-	return (
-		<div className="task-queue-answer" data-answer-state={phase} aria-busy={phase === "pending"}>
-			{task.choices && task.choices.length > 0 && (
-				<div className="task-queue-choices">
-					{task.choices.map((c) => (
-						<button
-							key={c}
-							type="button"
-							className="task-queue-choice"
-							disabled={disabled}
-							onClick={() => void send(c, false)}
-						>
-							{c}
-						</button>
-					))}
-				</div>
-			)}
-			<form
-				className="task-queue-answer-form"
-				onSubmit={(e) => {
-					e.preventDefault();
-					void send(text, true);
-				}}
-			>
-				<input
-					className="task-queue-answer-input"
-					value={text}
-					placeholder={t("taskQueueAnswerPlaceholder")}
-					aria-label={t("taskQueueAnswerPlaceholder")}
-					onChange={(e) => {
-						revision.current++;
-						setText(e.target.value);
-					}}
-				/>
-				<button type="submit" className="task-queue-answer-send" disabled={disabled || !text.trim()}>
-					{t(phase === "pending" ? "sendingTag" : phase === "applied" ? "done" : "taskQueueAnswerSend")}
-				</button>
-			</form>
-			<span
-				className="task-queue-hint"
-				role="status"
-				title={t(task.lane ? "taskQueueAnswerGoesToTaskChat" : "taskQueueAnswerGoesHere")}
-			>
-				{t(
-					phase === "pending"
-						? "sendingTag"
-						: phase === "applied"
-							? "done"
-							: !binding || !onAnswerResult || phase === "unconfirmed"
-								? task.lane
-									? "taskQueueAnswerInChat"
-									: "taskQueueAnswerHint"
-								: task.lane
-									? "taskQueueAnswerGoesToTaskChat"
-									: "taskQueueAnswerGoesHere",
-				)}
-			</span>
-		</div>
-	);
-}
+export {
+	DEFAULT_PRIORITY,
+	PRIORITIES,
+	PRIORITY_RANK,
+	TASK_QUEUE_DONE_SHOWN,
+	TASK_QUEUE_PLAN_PARTS,
+	TaskPriorityBadge,
+	afterParts,
+	formatTaskPriorityBadge,
+	refLabel,
+	renderTaskPriorityBadgeHtml,
+	taskNumbers,
+	taskPriority,
+	taskQueueHeldOf,
+	taskQueueSections,
+	taskQueueStatusKey,
+	type TaskPriority,
+	type TaskQueueAction,
+	type TaskQueueAnswerBinding,
+	type TaskQueueAnswerRequest,
+	type TaskQueueAnswerResult,
+	type TaskQueueSections,
+};
 
 export const TaskQueuePanel = memo(function TaskQueuePanel({
 	queue,
@@ -602,7 +100,6 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	const [removing, setRemoving] = useState<number | null>(null);
 	const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set(defaultOpen));
 	const [allDone, setAllDone] = useState(false);
-	// roles-overview: the task asked for from the Roles page (a done one beyond the first few shows them all).
 	const rootRef = useRef<HTMLDivElement>(null);
 	const [flash, setFlash] = useState<number | null>(null);
 	useEffect(() => {
@@ -613,7 +110,6 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		setFlash(task.id);
 		const timer = setTimeout(() => setFlash(null), FOCUS_FLASH_MS);
 		return () => clearTimeout(timer);
-		// Only a new request (seq) moves the view; later queue updates don't.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [focus?.seq, queue === undefined]);
 	useEffect(() => {
@@ -621,7 +117,6 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		const el = rootRef.current?.querySelector(`[data-task-id="${flash}"]`);
 		if (el instanceof HTMLElement) el.scrollIntoView?.({ block: "nearest" });
 	}, [flash, allDone]);
-	// queue-why: a task named on an after line, shown the same way (and its title focused, for the keyboard).
 	const showTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	useEffect(() => () => clearTimeout(showTimer.current), []);
 	const showTask = useCallback((id: number) => {
@@ -648,7 +143,6 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 		const timer = setTimeout(() => setPendingSetting(null), BUSY_MS);
 		return () => clearTimeout(timer);
 	}, [pendingSetting, queue]);
-	// 服务端发来新的队列 = 刚才的命令有结果了（或者别的窗口改了它）。
 	useEffect(() => {
 		setBusy(false);
 		setRemoving((id) => (id !== null && queue?.tasks.some((x) => x.id === id && x.status === "ready") ? id : null));
@@ -668,7 +162,6 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	}
 
 	const s = taskQueueSections(queue);
-	// queue-lanes: a task's own chat only shows its task; the queue is steered from the queue's chat.
 	const controls = queue.available && onCommand && !queue.from ? onCommand : undefined;
 	const run = (action: TaskQueueAction, id?: number) => {
 		if (!controls || busy || pendingSetting) return;
@@ -712,7 +205,6 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	const defaultsEffective = effectiveProfile(queue.profile, undefined, queue.inherited, models);
 	const statusKey = taskQueueStatusKey(queue, s);
 	const canStart = !!s.current || s.ready.length > 0 || s.waiting.length > 0 || s.inChats.length > 0;
-	// queue-lanes: which lane each open task is in, and whether the lanes setting is worth showing.
 	const laneNo = new Map<number, number>();
 	for (const lane of queue.lanes ?? []) for (const id of lane.taskIds) laneNo.set(id, lane.n);
 	const lanesAtOnce = queue.lanesAtOnce ?? DEFAULT_LANES;
@@ -724,280 +216,32 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 	const stuckInChat = s.inChats.find((x) => x.status === "stuck" && !taskQueueHeldOf(queue, x));
 	const currentNeedsYou = s.current?.status === "stuck" && !taskQueueHeldOf(queue, s.current);
 
-	const row = (
-		task: UiTaskQueueTask,
-		kind: "current" | "lane" | "waiting" | "ready" | "done" | "dropped",
-		index = 0,
-	) => {
-		const expanded = open.has(task.id);
-		// queue-drop: a dropped task is over, like a done one: no lane, controls, pause or after lines.
-		const over = kind === "done" || kind === "dropped";
-		const wait = kind === "waiting" ? task.wait : undefined;
-		// queue-paused: the owner's pause on it (its own, or its whole queue's).
-		const held = taskQueueHeldOf(queue, task);
-		// owner-card-brief (Ops #682): a stuck card's live ask: its answer target and its plain brief.
-		const binding =
-			task.status === "stuck" ? answerBinding(answerBindings, conversationId, queue.queueId, task) : undefined;
-		// queue-main-chat: a task asking its main chat doesn't need the user (yet): plain, no needs-you.
-		const cls = [
-			"task-queue-task",
+	const row = (task: UiTaskQueueTask, kind: "current" | "lane" | "waiting" | "ready" | "done" | "dropped", index = 0) =>
+		renderTaskQueueRow({
+			task,
 			kind,
-			task.status === "stuck" && !held ? "needs-you" : "",
-			held ? "paused" : "",
-			task.status === "asking" ? "asking" : "",
-			task.status === "blocked" ? "blocked" : "",
-			wait?.failed ? "wait-failed" : "",
-		]
-			.filter(Boolean)
-			.join(" ");
-		const when =
-			kind === "done" && task.doneAt
-				? t("taskQueueFinishedAt", { time: lineTime(task.doneAt) })
-				: kind === "dropped" && task.dropped
-					? t("taskQueueDroppedAt", { time: lineTime(task.dropped.at) })
-					: (kind === "current" || kind === "lane" || kind === "waiting") && task.startedAt
-						? t("taskQueueStarted", { time: lineTime(task.startedAt) })
-						: "";
-		return (
-			<li key={task.id} className={flash === task.id ? `${cls} task-queue-focus` : cls} data-task-id={task.id}>
-				<div className="task-queue-task-head">
-					<button
-						type="button"
-						className="task-queue-title"
-						aria-expanded={expanded}
-						title={t("taskQueuePlanToggle")}
-						onClick={() => toggle(task.id)}
-					>
-						<span className="task-queue-id">#{task.id}</span>
-						<span className="task-queue-title-text">{task.plan.title}</span>
-					</button>
-					{!over && laneNo.has(task.id) && (
-						<span className="task-queue-lane" data-lane={laneNo.get(task.id)}>
-							{t("taskQueueLane", { n: laneNo.get(task.id) ?? "" })}
-						</span>
-					)}
-					{task.chat && onOpenChat && (
-						<button
-							type="button"
-							className="task-queue-open-chat"
-							title={task.chat.title ?? t("taskQueueOpenChat")}
-							onClick={() => task.chat && onOpenChat(task.chat.file)}
-						>
-							{t("taskQueueOpenChat")}
-						</button>
-					)}
-					{!over && controls && (
-						// queue-paused: the owner's Pause / Resume on this task (Resume lifts only its own pause).
-						<button
-							type="button"
-							className={`task-queue-pause ${task.hold ? "resume" : "pause"}`}
-							data-pause-task={task.id}
-							title={t(task.hold ? "taskQueueResumeHint" : "taskQueuePauseHint")}
-							disabled={busy}
-							onClick={() => run(task.hold ? "resume" : "pause", task.id)}
-						>
-							{t(task.hold ? "taskQueueResume" : "taskQueuePause")}
-						</button>
-					)}
-					{kind === "ready" &&
-						controls &&
-						(removing === task.id ? (
-							<span className="task-queue-confirm">
-								<span className="task-queue-confirm-text">{t("taskQueueRemoveAsk", { id: task.id })}</span>
-								<button
-									type="button"
-									className="task-queue-remove-yes"
-									disabled={busy}
-									onClick={() => run("remove", task.id)}
-								>
-									{t("taskQueueRemoveYes")}
-								</button>
-								<button type="button" className="task-queue-remove-no" onClick={() => setRemoving(null)}>
-									{t("cancel")}
-								</button>
-							</span>
-						) : (
-							<span className="task-queue-controls">
-								<button
-									type="button"
-									className="task-queue-up"
-									title={t("taskQueueUp")}
-									aria-label={t("taskQueueUp")}
-									disabled={busy || index === 0}
-									onClick={() => run("up", task.id)}
-								>
-									↑
-								</button>
-								<button
-									type="button"
-									className="task-queue-down"
-									title={t("taskQueueDown")}
-									aria-label={t("taskQueueDown")}
-									disabled={busy || index === s.ready.length - 1}
-									onClick={() => run("down", task.id)}
-								>
-									↓
-								</button>
-								<button
-									type="button"
-									className="task-queue-remove"
-									title={t("taskQueueRemove")}
-									aria-label={t("taskQueueRemove")}
-									disabled={busy}
-									onClick={() => setRemoving(task.id)}
-								>
-									✕
-								</button>
-							</span>
-						))}
-				</div>
-				{held && !over && <PausedLine hold={held} whole={!task.hold} />}
-				{kind === "dropped" && (
-					<div className="task-queue-dropped">{t("taskQueueDroppedBy", { why: task.dropped?.why ?? "" })}</div>
-				)}
-				{task.status === "asking" && (
-					<div className="task-queue-asking" title={task.question}>
-						{/* task-question decisions (rule 21): the question is with Ops or its department's lead, not the main chat. */}
-						<span className="task-queue-hint">
-							{!task.askOps
-								? t("taskQueueAskingMain")
-								: task.askLead
-									? t("taskQueueAskingLead", { lead: task.askLead })
-									: t("taskQueueAskingOps")}
-						</span>
-					</div>
-				)}
-				{task.status === "blocked" && task.block && <BlockedLine block={task.block} onOpenChat={onOpenChat} />}
-				{task.status === "stuck" && (
-					<div className="task-queue-question">
-						{/* queue-paused: a paused task doesn't need you while paused: resume it to answer. */}
-						{!held && <span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>}
-						{!held && <OwnerQuestionRoute route={binding?.route} />}
-						{!held && <OwnerCardBrief lines={briefLines(binding?.brief)} />}
-						{task.question && <span className="task-queue-question-text">{task.question}</span>}
-						{task.detail && (
-							// task-question decisions (rule 21): the whole package, shown with the question (Markdown, no raw HTML).
-							<details className="task-queue-question-detail" open>
-								<summary>{t("taskQueueOwnerContext")}</summary>
-								<div
-									className="task-queue-question-detail-body"
-									// A region that scrolls on its own is reachable from the keyboard.
-									tabIndex={0}
-									role="region"
-									aria-label={t("taskQueueOwnerContext")}
-								>
-									<Markdown text={task.detail} />
-								</div>
-							</details>
-						)}
-						{held ? (
-							<span className="task-queue-hint">{t("taskQueuePausedAnswerLater")}</span>
-						) : (onAnswer || onAnswerResult || answerBindings !== undefined) && queue.available ? (
-							<StuckAnswer
-								task={task}
-								conversationId={conversationId}
-								queueId={queue.queueId}
-								binding={binding}
-								onAnswerResult={onAnswerResult}
-							/>
-						) : (
-							<span className="task-queue-hint">{t(task.lane ? "taskQueueAnswerInChat" : "taskQueueAnswerHint")}</span>
-						)}
-					</div>
-				)}
-				{!over && task.touches !== undefined && (
-					<div className="task-queue-touches">
-						{task.touches.length > 0 ? `${t("taskQueueTouches")}: ${task.touches.join(", ")}` : t("taskQueueRunsAlone")}
-					</div>
-				)}
-				{!over && (!!task.after?.length || !!task.outside?.length) && (
-					// queue-blocked: tasks in other queues ("temper #38") after this queue's numbers.
-					<AfterLine task={task} queue={queue} onOpenChat={onOpenChat} onShowTask={showTask} />
-				)}
-				{wait &&
-					(wait.failed ? (
-						<div className="task-queue-wait failed">
-							<span className="task-queue-wait-text">{t("taskQueueWaitFailed")}</span>
-							<span className="task-queue-wait-reason">{wait.failed}</span>
-						</div>
-					) : wait.overAt ? (
-						<div className="task-queue-wait over">
-							<span className="task-queue-wait-text">{t("taskQueueWaitOver", { time: lineTime(wait.overAt) })}</span>
-						</div>
-					) : (
-						<div className="task-queue-wait">
-							<span className="task-queue-wait-text">
-								{t("taskQueueWaitingOn", { what: wait.what, time: lineTime(wait.since) })}
-								{" \u00b7 "}
-								{/* queue-paused: its give-up clock stops while paused (it moves later on resume). */}
-								{held ? t("taskQueueWaitClockStopped") : t("taskQueueWaitGivesUp", { time: lineTime(wait.until) })}
-							</span>
-							{wait.check && (
-								<span className="task-queue-wait-check">
-									{t("taskQueueWaitCheck")}: <code className="task-queue-check">{wait.check}</code>
-								</span>
-							)}
-						</div>
-					))}
-				{task.problem && (
-					<p className="queue-profile-problem" role="alert">
-						{task.problem}
-					</p>
-				)}
-				{kind === "done" && task.summary && <div className="task-queue-summary">{task.summary}</div>}
-				{when && <div className="task-queue-time">{when}</div>}
-				{expanded && (
-					<div className="task-queue-profile" data-profile-task={task.id}>
-						<ProfileSummary
-							models={models}
-							launch={task.launch ?? effectiveProfile(queue.profile, task.profile, queue.inherited, models)}
-							title={t(task.launch ? "queueProfileLaunch" : "queueProfileEffective")}
-						/>
-						{queue.from && queue.currentProfile && (
-							<ProfileSummary
-								models={models}
-								launch={{ ...queue.currentProfile, from: { model: "app", thinking: "app", speed: "app" } }}
-								title={t("queueProfileCurrent")}
-							/>
-						)}
-						{kind === "ready" && task.startedAt === undefined && controls && (
-							<ProfileEditor
-								label={t("queueProfileOverride")}
-								profile={task.profile}
-								models={models}
-								disabled={busy || !!pendingSetting}
-								effective={effectiveProfile(queue.profile, task.profile, queue.inherited, models)}
-								onChange={(patch) => changeProfile(patch, task.id)}
-							/>
-						)}
-						{task.startedAt !== undefined && task.chat && onOpenChat && (
-							<button
-								type="button"
-								className="task-queue-open-chat"
-								onClick={() => task.chat && onOpenChat(task.chat.file)}
-							>
-								{t("queueProfileChatSettings")}
-							</button>
-						)}
-					</div>
-				)}
-				{expanded && (
-					<dl className="task-queue-plan">
-						{TASK_QUEUE_PLAN_PARTS.map(([part, label]) =>
-							task.plan[part] ? (
-								<div key={part} className="task-queue-part">
-									<dt>{t(label)}</dt>
-									<dd>
-										<Markdown text={task.plan[part]} />
-									</dd>
-								</div>
-							) : null,
-						)}
-					</dl>
-				)}
-			</li>
-		);
-	};
+			index,
+			readyCount: s.ready.length,
+			queue,
+			expanded: open.has(task.id),
+			flash,
+			laneNo,
+			controls,
+			busy,
+			pendingSetting: !!pendingSetting,
+			removing,
+			setRemoving,
+			run,
+			toggle,
+			changeProfile,
+			models,
+			onOpenChat,
+			showTask,
+			onAnswer,
+			onAnswerResult,
+			answerBindings,
+			conversationId,
+		});
 
 	const doneShown = allDone ? s.done : s.done.slice(0, TASK_QUEUE_DONE_SHOWN);
 	return (
@@ -1036,7 +280,6 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 						</button>
 					))}
 				{controls && (
-					// queue-paused: the owner's pause on the whole queue (separate from Stop, and stronger).
 					<button
 						type="button"
 						className={`task-queue-pause-queue ${queue.hold ? "resume" : "pause"}`}
@@ -1168,7 +411,6 @@ export const TaskQueuePanel = memo(function TaskQueuePanel({
 				</section>
 			)}
 			{s.dropped.length > 0 && (
-				// queue-drop: tasks its lead dropped, with why (Clear takes them off with the done ones).
 				<section className="task-queue-section">
 					<div className="task-queue-heading-row">
 						<h4 className="task-queue-heading">{t("taskQueueDropped")}</h4>
