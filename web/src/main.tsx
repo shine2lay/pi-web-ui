@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { LanguageProvider } from "./i18n";
 import "./styles.css";
+import "./selected-items.css";
 import "highlight.js/styles/github-dark.css";
 import { applyTheme, loadTheme } from "./theme";
 import { initAuthToken } from "./auth-token";

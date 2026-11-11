@@ -1,0 +1,17 @@
+/* Selected-item foreground contrast fixes (#260, m14902)
+ * - Right panel slot tabs (.slot-tabs-bar [role="tab"][aria-selected="true"]):
+ *   use --accent-text on --bg with an --accent-soft inset ring (>= 4.5:1 AA across
+ *   dark 7.09:1, white 5.19:1, and all 29 palettes) and font-weight: 600.
+ * - Model picker provider row (.dd-provider-item.active .dd-provider-txt .dd-provider-key):
+ *   use --accent-text instead of --accent-soft (which is a 14% alpha background tint).
+ */
+.slot-tabs-bar [role="tab"][aria-selected="true"] {
+	background: var(--bg);
+	box-shadow: inset 0 0 0 1px var(--accent-soft);
+	color: var(--accent-text);
+	font-weight: 600;
+}
+
+.dd-provider-item.active .dd-provider-txt .dd-provider-key {
+	color: var(--accent-text);
+}
