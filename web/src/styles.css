@@ -5840,7 +5840,12 @@ body.panel-resizing .scm-divider::after {
 .tb-tab.roles-tab {
 	position: relative;
 }
-.tb-tab.roles-tab.active {
+/* One rule for the host tabs whose active label would otherwise sit on --accent-soft in --accent-text:
+   in the warm light palettes that pair (e.g. paper's #b45309 on its own 12% tint) measures 3.8-4.2:1,
+   under WCAG 2.2 AA 1.4.3. --link is the same violet in the default dark theme and a darker ink in those
+   palettes (paper: #9a3412, 5.5:1), so this reads everywhere without touching any other tab's look. */
+.tb-tab.roles-tab.active,
+.tb-tab.openviking-tab.active {
 	color: var(--link);
 }
 .tb-tab .roles-badge {

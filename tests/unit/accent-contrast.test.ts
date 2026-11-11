@@ -247,3 +247,43 @@ describe("accent-contrast: the rules use the tokens", () => {
 		expect(gen).toMatch(/"--amber-fg": "#92400e"/);
 	});
 });
+
+/**
+ * The host tabs in the top bar (frontend #259). An active tab paints its label --accent-text on an
+ * --accent-soft tint of its own accent. In the warm light palettes those two are the same hue, so the
+ * label measures under 4.5:1 — axe on the live page in "paper" reported 4.2:1 for `.openviking-tab >
+ * span`. The Roles tab already answered that with --link; the Memory tab now shares that one rule.
+ */
+describe("accent-contrast: an active host tab's label on its own tint", () => {
+	/** `--accent-soft: rgba(r, g, b, a)` as the flat colour it composites to over `bg`. */
+	function softTint(v: Map<string, string>, bg: string): string {
+		const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/.exec(value(v, "--accent-soft"));
+		if (!m) throw new Error(`--accent-soft is not rgba(): ${value(v, "--accent-soft")}`);
+		const fg = toHex([Number(m[1]), Number(m[2]), Number(m[3])]);
+		return mix(fg, bg, Number(m[4] ?? 1));
+	}
+
+	const paper = theme("paper.css");
+
+	it("paper: --accent-text on the tint is why the override exists, and --link clears AA", () => {
+		const tint = softTint(paper, value(paper, "--bg"));
+		expect(contrast(value(paper, "--accent-text"), tint)).toBeLessThan(AA);
+		expect(contrast(value(paper, "--link"), tint)).toBeGreaterThanOrEqual(AA);
+	});
+
+	it("default dark: --link is the same violet, so the dark look does not change", () => {
+		expect(value(DEFAULT, "--link")).toBe(value(DEFAULT, "--accent-text"));
+		expect(contrast(value(DEFAULT, "--link"), softTint(DEFAULT, value(DEFAULT, "--bg")))).toBeGreaterThanOrEqual(AA);
+	});
+
+	it("one rule gives both host tabs that colour — the Memory tab is not left on --accent-text", () => {
+		const css = read("web/src/styles.css").replace(/\/\*[\s\S]*?\*\//g, "");
+		const owning = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+			.map((m) => ({ sel: m[1].trim(), body: m[2] }))
+			.filter((r) => /\.tb-tab\.[\w-]+\.active/.test(r.sel) && /color\s*:/.test(r.body));
+		expect(owning).toHaveLength(1);
+		expect(owning[0]!.sel).toContain(".tb-tab.roles-tab.active");
+		expect(owning[0]!.sel).toContain(".tb-tab.openviking-tab.active");
+		expect(owning[0]!.body).toMatch(/color:\s*var\(--link\)/);
+	});
+});
