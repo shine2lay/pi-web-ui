@@ -733,6 +733,14 @@ button:focus-visible,
       <button type="button" class="proto-btn" data-set-reach="null" aria-pressed="false">Never since server start</button>
     </div>
     <div class="proto-group">
+      <span class="proto-label">Stale, badge from:</span>
+      <button type="button" class="proto-btn" data-set-badge="default" aria-pressed="false">Sync + two cadences</button>
+      <button type="button" class="proto-btn" data-set-badge="age" aria-pressed="false">Cadence only</button>
+      <button type="button" class="proto-btn" data-set-badge="sync" aria-pressed="false">Pending sync only</button>
+      <button type="button" class="proto-btn" data-set-badge="both" aria-pressed="false">Both causes</button>
+      <button type="button" class="proto-btn" data-set-badge="mixed" aria-pressed="false">Audit log only</button>
+    </div>
+    <div class="proto-group">
       <span class="proto-label">Theme:</span>
       <button type="button" class="proto-btn" id="themeToggleBtn" aria-pressed="false">Light / Dark</button>
     </div>
@@ -768,7 +776,7 @@ button:focus-visible,
   <!-- Tier 1: 3 Grouped Summary Cards (strictly 5 data-field elements each) -->
   <section class="cards" aria-label="Summary Cards">
     <!-- Card 1: System & Daemon Health / Two-Layer Memory Store -->
-    <article class="card" data-component="summary-card" data-card-id="system-health" data-panel-updated-at="2026-11-10T20:15:00Z">
+    <article class="card" data-component="summary-card" data-card-id="system-health" data-stale-row="observer" data-panel-updated-at="2026-11-10T20:15:00Z">
       <div class="card-title-row" data-field="title">
         <span>System &amp; Daemon Health</span>
         <span class="concept-wrap" data-concept="sidecar-mode">
@@ -1142,15 +1150,33 @@ button:focus-visible,
     "zero-activity": ["badge-zero", "circle-empty", "◌", "Zero Activity"],
     "server-unreachable": ["badge-unreachable", "octagon-x", "✕", "Server Unreachable"]
   };
-  function setGlyphText(el, glyph, text) {
+  function setGlyphParts(el, glyph, parts) {
     el.textContent = "";
     var g = document.createElement("span");
     g.className = "glyph";
     g.setAttribute("aria-hidden", "true");
     g.textContent = glyph;
     el.appendChild(g);
-    el.appendChild(document.createTextNode(" " + text));
+    // one wrapper, so a pill's flex gap never opens a hole inside its own words
+    var body = document.createElement("span");
+    fill(body, parts);
+    el.appendChild(body);
   }
+  function setGlyphText(el, glyph, text) {
+    setGlyphParts(el, glyph, [" " + text]);
+  }
+  // #289 (spec-states.md §4, ruling rm-b5272a3e): a stale reading prints the stale_badge string the server sends, verbatim,
+  // inside a span naming the field it came from. The page never composes stale wording and never derives an age of its own.
+  var SYNC_BADGE = "pending sync";
+  var SYNC_FIELD = "auxiliary.rollout.pending_wt_land_syncs";
+  function badgeSpan(family, text, mark) {
+    var s = document.createElement("span");
+    s.setAttribute("data-source-field", family + ".stale_badge");
+    if (mark) s.setAttribute("data-stale-badge", "true");
+    s.textContent = text;
+    return s;
+  }
+  // detail is either a plain string (a cadence note the page owns) or { family, badge }: a stale_badge printed verbatim
   function setPill(el, health, detail) {
     var p = PILL[health];
     el.className = "badge " + p[0];
@@ -1158,6 +1184,11 @@ button:focus-visible,
     el.setAttribute("data-health-state", health);
     el.removeAttribute("data-skeleton");
     el.removeAttribute("data-stale-badge");
+    if (detail && detail.family) {
+      setGlyphParts(el, p[2], [" " + p[3] + " (", badgeSpan(detail.family, detail.badge, false), ")"]);
+      el.setAttribute("data-stale-badge", "true");
+      return;
+    }
     setGlyphText(el, p[2], p[3] + (detail ? " (" + detail + ")" : ""));
   }
   // #284 S3-1: the header badge text is only observer.mode_label; its tone follows the screen state
@@ -1185,6 +1216,10 @@ button:focus-visible,
         el.appendChild(document.createTextNode(part));
         return;
       }
+      if (part instanceof Element) {
+        el.appendChild(part);
+        return;
+      }
       var s = document.createElement("span");
       s.setAttribute("data-source-field", part[1]);
       s.textContent = part[0];
@@ -1192,11 +1227,60 @@ button:focus-visible,
     });
   }
 
+  // #289 fixture: what the server sends on the stale screen. stale_badge is the server's own string per source — the age
+  // ("> 30s" for the daemon, "> 15m" for the two log-backed sources) when that source is past its cadence, "pending sync"
+  // when it is inside its cadence while a wt land sync waits, null when that source is not stale. Age wins when both hold.
+  // A pending sync is a property of the rollout, not of one source, so while one waits no source reads null.
+  var STALE_FIXTURES = {
+    "default": {
+      badge: { observer: SYNC_BADGE, entries: "> 15m", audit: "> 15m" },
+      syncs: 2, checked: "4s", injection: "19m", metrics: "stale", audit: "stale",
+      subtitle: "The daemon answers, but 2 worktree syncs are waiting to land, and slot sampling and audit events are past their cadence.",
+      bannerTitle: "Stale — Exceeded Expected Active Cadence (> 5m / > 15m)",
+      bannerBody: ["The daemon answers, but 2 worktree syncs are waiting to land, the last turn was recorded ", ["19m ago", "metrics.last_recorded_at"], " and the last audit event ", ["42m ago", "changelog.last_event_at"], ". Figures below are those last reads."]
+    },
+    age: {
+      badge: { observer: "> 30s", entries: "> 15m", audit: "> 15m" },
+      syncs: 0, checked: "48s", injection: "19m", metrics: "stale", audit: "stale",
+      subtitle: "The daemon's own check is past its 30s cadence, and slot sampling and audit events are past theirs.",
+      bannerTitle: "Stale — Exceeded Expected Active Cadence (> 30s / > 5m / > 15m)",
+      bannerBody: ["The daemon was ", ["checked 48s ago", "observer.checked_at"], ", the last turn was recorded ", ["19m ago", "metrics.last_recorded_at"], " and the last audit event ", ["42m ago", "changelog.last_event_at"], ". Figures below are those last reads."]
+    },
+    sync: {
+      badge: { observer: SYNC_BADGE, entries: SYNC_BADGE, audit: SYNC_BADGE },
+      syncs: 2, checked: "4s", injection: "1m", metrics: "fresh", audit: "fresh",
+      subtitle: "Every source answered inside its cadence, but 2 worktree syncs are still waiting to land, so what you see may not be what landed.",
+      bannerTitle: "Stale — 2 worktree syncs are still waiting to land",
+      bannerBody: ["Every source answered inside its cadence. The namespace and audit views can still miss what those syncs carry, so each is marked pending until they land."]
+    },
+    both: {
+      badge: { observer: "> 30s", entries: "> 15m", audit: "> 15m" },
+      syncs: 2, checked: "48s", injection: "19m", metrics: "stale", audit: "stale",
+      subtitle: "The daemon's check is past its 30s cadence and 2 worktree syncs are still waiting to land; slot sampling and audit events are past their cadence too.",
+      bannerTitle: "Stale — Exceeded Expected Active Cadence (> 30s / > 5m / > 15m)",
+      bannerBody: ["The daemon was ", ["checked 48s ago", "observer.checked_at"], " and 2 worktree syncs are still waiting to land; each source below names the cadence it has exceeded. Figures below are those last reads."]
+    },
+    mixed: {
+      badge: { observer: null, entries: null, audit: "> 15m" },
+      syncs: 0, checked: "4s", injection: "1m", metrics: "fresh", audit: "stale",
+      subtitle: "The daemon answers and the namespace is current; only the audit log is past its 15m cadence.",
+      bannerTitle: "Stale — Exceeded Expected Active Cadence (> 15m)",
+      bannerBody: ["The daemon answered its health check ", ["4s ago", "observer.checked_at"], " and the namespace is current; the last audit event was ", ["42m ago", "changelog.last_event_at"], ". The audit figures below are that last read."]
+    }
+  };
+  // the pending-sync line next to a "pending sync" badge: what is stale, in plain words, with no duration anywhere in the row
+  function syncParts(fx, lead) {
+    return [lead, [fx.syncs + " worktree syncs", SYNC_FIELD], " are still waiting to land"];
+  }
+
   var currentState = "live";
   var currentReach = null;
-  function applyState(st, reach) {
+  var currentBadge = null;
+  function applyState(st, reach, badge) {
     currentState = st;
     currentReach = reach || null;
+    currentBadge = STALE_FIXTURES[badge] ? badge : null;
+    var fx = STALE_FIXTURES[currentBadge || "default"];
     var app = byId("app");
     app.setAttribute("data-screen-state", st);
     FIGURE_AGES.forEach(function (p) {
@@ -1248,22 +1332,39 @@ button:focus-visible,
 
     if (st === "stale") {
       setMode("Degraded Local Fallback", "badge-stale", "clock-stale", "◐");
-      sub.textContent = "The daemon answers, but 2 worktree syncs are waiting to land, and slot sampling and audit events are past their cadence.";
-      fill(chk, [["Last injection 19m ago", "observer.last_injection_at"]]);
-      fill(c1Age, ["Answers, but ", ["2 worktree syncs", "auxiliary.rollout.pending_wt_land_syncs"], " are still waiting to land · 30s cadence"]);
-      fill(c2Age, [["Last turn 19m ago", "metrics.last_recorded_at"], " · 5m cadence"]);
-      fill(c3Age, [["Last event 42m ago", "changelog.last_event_at"], " · 15m cadence"]);
-      if (p1Upd) fill(p1Upd, ["Stale · 48 turns in 24h · ", ["last turn recorded 19m ago", "metrics.last_recorded_at"], " (> 5m cadence)"]);
-      // observer.health_state is stale while the rollout is degraded (overview.ts); the two log panels are past their cadence
-      setPill(badges[0], "stale", "syncs waiting to land");
-      setPill(badges[1], "stale", "> 5m cadence");
-      setPill(badges[2], "stale", "> 15m cadence");
-      badges[1].setAttribute("data-stale-badge", "true");
-      badges[2].setAttribute("data-stale-badge", "true");
+      sub.textContent = fx.subtitle;
+      fill(hdrCheck, [["Checked " + fx.checked + " ago", "observer.checked_at"], " · 30s cadence"]);
+      fill(chk, [["Last injection " + fx.injection + " ago", "observer.last_injection_at"]]);
+      // the daemon card: its pill prints observer.stale_badge verbatim, and a "pending sync" row carries no age or cadence
+      if (fx.badge.observer === null) {
+        setPill(badges[0], "healthy");
+        fill(c1Age, [["Checked " + fx.checked + " ago", "observer.checked_at"], " · 30s cadence"]);
+      } else if (fx.badge.observer === SYNC_BADGE) {
+        setPill(badges[0], "stale", { family: "observer", badge: fx.badge.observer });
+        fill(c1Age, syncParts(fx, "Answers, but "));
+      } else {
+        setPill(badges[0], "stale", { family: "observer", badge: fx.badge.observer });
+        fill(c1Age, [["Checked " + fx.checked + " ago", "observer.checked_at"], " · 30s cadence"].concat(fx.syncs ? syncParts(fx, " · ") : []));
+      }
+      if (fx.metrics === "stale") {
+        setPill(badges[1], "stale", "> 5m cadence");
+        badges[1].setAttribute("data-stale-badge", "true");
+        fill(c2Age, [["Last turn 19m ago", "metrics.last_recorded_at"], " · 5m cadence"]);
+        if (p1Upd) fill(p1Upd, ["Stale · 48 turns in 24h · ", ["last turn recorded 19m ago", "metrics.last_recorded_at"], " (> 5m cadence)"]);
+      } else {
+        setPill(badges[1], "healthy");
+      }
+      if (fx.audit === "stale") {
+        setPill(badges[2], "stale", "> 15m cadence");
+        badges[2].setAttribute("data-stale-badge", "true");
+        fill(c3Age, [["Last event 42m ago", "changelog.last_event_at"], " · 15m cadence"]);
+      } else {
+        setPill(badges[2], "healthy");
+      }
       setSlotMeta("Not measured yet");
       banner.className = "state-banner badge-stale";
-      setGlyphText(bTitle, "◐", "Stale — Exceeded Expected Active Cadence (> 5m / > 15m)");
-      fill(bBody, ["The daemon answers, but 2 worktree syncs are waiting to land, the last turn was recorded ", ["19m ago", "metrics.last_recorded_at"], " and the last audit event ", ["42m ago", "changelog.last_event_at"], ". Figures below are those last reads."]);
+      setGlyphText(bTitle, "◐", fx.bannerTitle);
+      fill(bBody, fx.bannerBody);
     } else if (st === "empty") {
       setMode("Active", "badge-zero", "circle-empty", "◌");
       sub.textContent = "OpenViking daemon is online and responsive, with 0 events in window (server online).";
@@ -1344,11 +1445,14 @@ button:focus-visible,
       banner.className = "state-banner hidden";
     }
     showLastReachable(st, currentReach);
-    applyPanelState(st);
+    applyPanelState(st, fx);
     followState(st);
 
     document.querySelectorAll("[data-set-state]").forEach(function (btn) {
       btn.setAttribute("aria-pressed", btn.getAttribute("data-set-state") === st ? "true" : "false");
+    });
+    document.querySelectorAll("[data-set-badge]").forEach(function (btn) {
+      btn.setAttribute("aria-pressed", st === "stale" && btn.getAttribute("data-set-badge") === (currentBadge || "default") ? "true" : "false");
     });
     document.querySelectorAll("[data-set-reach]").forEach(function (btn) {
       btn.setAttribute("aria-pressed", st === "error" && btn.getAttribute("data-set-reach") === (currentReach || SCREEN_LAST_REACHABLE.error) ? "true" : "false");
@@ -1366,9 +1470,10 @@ button:focus-visible,
     },
     "namespace-explorer": {
       hideRows: ["loading", "error"],
+      staleFamily: "entries",
+      staleAge: ["newest entry updated 21m ago", "entries[].updated_at"],
       label: {
         live: [["Newest entry updated 3m ago", "entries[].updated_at"], " · 15m cadence"],
-        stale: ["Stale · ", ["newest entry updated 21m ago", "entries[].updated_at"], " (> 15m cadence)"],
         empty: [["Newest entry updated 2d ago", "entries[].updated_at"], " · no entry changed in 24h"],
         error: "Server unreachable · namespace not loaded · no answer from 127.0.0.1:1933",
         loading: "Loading namespace entries…"
@@ -1378,9 +1483,11 @@ button:focus-visible,
     // #280 S-1 (spec §4 error): card 3 and this tab both read the local audit log while 127.0.0.1:1933 is down (A27, A31)
     "commit-audit": {
       hideRows: ["loading", "empty"],
+      staleFamily: "audit",
+      staleAge: ["latest event 42m ago", "events[].ts"],
+      staleTail: " · 18 session commits in 24h · latest 3 events shown",
       label: {
         live: [["Latest event 5m ago", "events[].ts"], " · 18 session commits in 24h · latest 3 events shown"],
-        stale: ["Stale · ", ["latest event 42m ago", "events[].ts"], " · 18 session commits in 24h · latest 3 events shown"],
         empty: [["Checked 4s ago", "observer.checked_at"], " · 0 session commits in 24h"],
         error: ["Server offline · from local audit log · ", ["latest event 18m ago", "events[].ts"], " · 18 session commits in 24h · latest 3 events shown"],
         loading: "Loading audit log…"
@@ -1400,7 +1507,20 @@ button:focus-visible,
     "aud-3": { live: "rejected · role=backend · 28m ago", stale: "rejected · role=backend · 1h ago", error: "rejected · role=backend · 41m ago" }
   };
 
-  function applyPanelState(st) {
+  // #289: on the stale screen each log-backed panel prints its own stale_badge verbatim in a row of its own; null means not stale
+  function staleLabelRow(cfg, fx) {
+    var badge = fx.badge[cfg.staleFamily];
+    if (badge === null) return null;
+    var row = document.createElement("span");
+    row.setAttribute("data-stale-row", cfg.staleFamily);
+    fill(row, badge === SYNC_BADGE ? syncParts(fx, "Stale · ") : ["Stale · ", cfg.staleAge]);
+    row.appendChild(document.createTextNode(" ("));
+    row.appendChild(badgeSpan(cfg.staleFamily, badge, true));
+    row.appendChild(document.createTextNode(")"));
+    return row;
+  }
+
+  function applyPanelState(st, fx) {
     Object.keys(PANEL_STATE).forEach(function (key) {
       var cfg = PANEL_STATE[key];
       var panel = document.querySelector('[data-tabpanel="' + key + '"]');
@@ -1408,7 +1528,17 @@ button:focus-visible,
       panel.querySelectorAll('.row-list, [aria-label="Layer Scope Filter"], [data-namespace-summary]').forEach(function (el) {
         el.classList.toggle("hidden", hideRows);
       });
-      if (cfg.label) fill(panel.querySelector("[data-panel-updated-label]"), cfg.label[st] || cfg.label.live);
+      // rows follow the source the panel reads, so a panel that is only pending a sync keeps its live ages
+      var rowSt = st;
+      if (st === "stale" && cfg.staleFamily) rowSt = fx.badge[cfg.staleFamily] === SYNC_BADGE || fx.badge[cfg.staleFamily] === null ? "live" : "stale";
+      if (cfg.label) {
+        var parts = cfg.label[st] || cfg.label.live;
+        if (st === "stale" && cfg.staleFamily) {
+          var row = staleLabelRow(cfg, fx);
+          parts = row ? [row].concat(cfg.staleTail || []) : cfg.label.live;
+        }
+        fill(panel.querySelector("[data-panel-updated-label]"), parts);
+      }
       var note = panel.querySelector("[data-state-note]");
       fill(note, cfg.note[st] || "");
       note.classList.toggle("hidden", !cfg.note[st]);
@@ -1418,9 +1548,9 @@ button:focus-visible,
         if (!meta || !fig) return;
         // #284 M3-2: an audit row's age stays in its events[].ts span
         var ageSpan = fig.querySelector("[data-source-field]");
-        var parts = ageSpan && (meta[st] || meta.live).match(/^(.*?)(\d+[smhd] ago)$/);
-        if (parts) fill(fig, [parts[1], [parts[2], ageSpan.getAttribute("data-source-field")]]);
-        else fig.textContent = meta[st] || meta.live;
+        var rowParts = ageSpan && (meta[rowSt] || meta.live).match(/^(.*?)(\d+[smhd] ago)$/);
+        if (rowParts) fill(fig, [rowParts[1], [rowParts[2], ageSpan.getAttribute("data-source-field")]]);
+        else fig.textContent = meta[rowSt] || meta.live;
       });
     });
   }
@@ -1780,6 +1910,12 @@ button:focus-visible,
       applyState("error", btn.getAttribute("data-set-reach"));
     });
   });
+  // #289 prototype-only: preview the Stale screen with each stale_badge the server may send
+  document.querySelectorAll("[data-set-badge]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      applyState("stale", null, btn.getAttribute("data-set-badge"));
+    });
+  });
 
   var themeBtn = byId("themeToggleBtn");
   if (themeBtn) {
@@ -1796,9 +1932,9 @@ button:focus-visible,
     var protoChrome = byId("protoChrome");
     if (protoChrome) protoChrome.classList.add("hidden");
   }
-  // prototype-only: ?state=<screen> or ?state=<screen>_reach-<variant> (a last_reachable_at fixture value)
-  var stateParam = /^(\w+?)(?:_reach-(\w+))?$/.exec(params.get("state") || "live") || [null, "live", null];
-  applyState(stateParam[1], LAST_REACHABLE.hasOwnProperty(stateParam[2]) ? stateParam[2] : null);
+  // prototype-only: ?state=<screen>, ?state=<screen>_reach-<variant> (a last_reachable_at value) or ?state=stale_badge-<variant> (a stale_badge set)
+  var stateParam = /^(\w+?)(?:_reach-(\w+)|_badge-(\w+))?$/.exec(params.get("state") || "live") || [null, "live", null, null];
+  applyState(stateParam[1], LAST_REACHABLE.hasOwnProperty(stateParam[2]) ? stateParam[2] : null, stateParam[3]);
 })();
 </script>
 </div>
