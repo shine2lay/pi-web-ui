@@ -1,3 +1,6 @@
+---
+max_tokens: 2300 # contract outgrew the 2000 default (architecture #521)
+---
 # Architecture Spec: OpenViking Memory Dashboard (`openviking-dashboard`)
 
 Pinned to `.temper/features/openviking-dashboard/design.md` (`design #263`, `5db1eb93`), `.temper/features/openviking-dashboard/brief.md` (`product #65`, `a69a2470`), and `/home/shinelay/architecture-dept/conventions/openviking-contract.md`.
@@ -36,10 +39,17 @@ Browser code formats values only and **never** computes sums, averages, percenta
 | `observer.role_memory_folder_count`, `observer.roles_total_count` | Wrapper partition enumeration of canonical `viking://user/<role>/memories` (not alias `viking://agent/memories`) | Partitions found (`0..15`, `null` if down) as `"N role memory folders"`; total `15` (role list) | `30s` |
 | `observer.daemon_bind`, `observer.queue_depth` | `/health` (bind only) | `"127.0.0.1:1933"`; `queue_depth` always `null` (G1) | `30s` |
 | `metrics.{slot_hit_rate_pct,avg_injected_tokens,turns_sampled_24h}` | `metrics.jsonl` (`turn_start`, 24h) | Injected count; `%` with `l0_hits > 0`; mean `tokens_est` (G2) | `5m` |
-| `changelog.{commits_24h,promotions_24h,rejected_24h}` | `memory-changelog.jsonl` (24h) | `session_commit`; `preference_write`+`resource_sync`; `preference_write_blocked` (G4) | `15m` |
+| `changelog.{session_commits_24h,promotions_24h,rejected_24h}` | `memory-changelog.jsonl` (24h) | Session commits only (see below); `preference_write`+`resource_sync`; `preference_write_blocked` (G4) | `15m` |
 | `slots[].{slot_id,uri_prefix,hit_rate_pct,avg_tokens,state}` | `metrics.jsonl` (`turn_start`, 24h) | Slots 1–5; per-slot telemetry if present, else `null` / `"unmeasured-gap"` (G3) | `5m` |
 | `entries[].{uri,scope,role,layers,l0_abstract,l1_overview,l2_content}` | `/api/v1/fs/ls` + `/api/v1/content/*` | Lists `resources`, `user/default/memories` (G8), `user/<role>/memories`; redacts `agent` content | `15m` |
 | `events[].{id,action,role,uri,l0_abstract,guard_verdict,ts}` | `memory-changelog.jsonl` + `metrics.jsonl` | Maps live actions to §3 `action` values; redacts `agent` `summary_1line` | `15m` |
+
+### Session Commits (`changelog.session_commits_24h`, was `commits_24h`; ruling rm-9724bae9)
+- **Counts only a session committing its own work:** `queue_done` session commits + lead-200k session commits (live: `add` to `viking://session/<id>`, `source` `queue_done` / `session_commit_200k`; pre-rename name `session_commit`).
+- **Excludes:** one-time `migration` role-memory writes; `lead_direct` role-memory writes; any other write (`add`/`update`, any name) that is not a session committing its own work.
+- **Classify by meaning, never one event name:** the Ops rename collapsed `session_commit` into `add`; one Backend classifier covers old and new names, and no future rename may silently re-include excluded writes.
+- **Label:** panel `"N session commits"`, never bare `"commits"`; JSON field `session_commits_24h`.
+- **Worked example** (backend #133 blind verify, 2026-11-11): old count `381` = `72` `queue_done` + `17` lead-200k + `266` `migration` + `26` `lead_direct`; correct `89` (`72` + `17`). Any excluded write in the count is a regression.
 
 ### Contract-vs-Live Gaps for Ops
 - **G1 — SETTLED:** `result.status` is an ASCII table; render unavailable, never `0`, never scraped (`R-QUEUE-DEPTH-1`, §8b).
