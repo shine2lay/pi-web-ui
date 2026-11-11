@@ -129,6 +129,7 @@ interface Header {
 interface FileStamp {
 	dev: number;
 	ino: number;
+	birth: number;
 	size: number;
 	mtime: number;
 	ctime: number;
@@ -343,10 +344,12 @@ function prefix(raw: PiSourcePrefix): boolean {
 		raw.verified === true
 	);
 }
-function stamp(stat: Stats): FileStamp {
-	return { dev: stat.dev, ino: stat.ino, size: stat.size, mtime: stat.mtimeMs, ctime: stat.ctimeMs };
+function stamp({ dev, ino, birthtimeMs, size, mtimeMs, ctimeMs }: Stats): FileStamp {
+	return { dev, ino, birth: birthtimeMs, size, mtime: mtimeMs, ctime: ctimeMs };
 }
-const sameIdentity = (a: FileStamp, b: FileStamp) => a.dev === b.dev && a.ino === b.ino;
+const noStamp = (): FileStamp => ({ dev: 0, ino: 0, birth: 0, size: 0, mtime: 0, ctime: 0 });
+/** ext4 hands a deleted file's inode number to the next new file: only birth time tells them apart. */
+const sameIdentity = (a: FileStamp, b: FileStamp) => a.dev === b.dev && a.ino === b.ino && a.birth === b.birth;
 const sameStamp = (a: FileStamp, b: FileStamp) =>
 	sameIdentity(a, b) && a.size === b.size && a.mtime === b.mtime && a.ctime === b.ctime;
 class NativeFault extends Error {
@@ -371,7 +374,7 @@ function native(file: string, roots: readonly string[]): { fd: number; stamp: Fi
 	const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	try {
 		const st = fstatSync(fd);
-		if (!st.isFile() || st.nlink !== 1 || st.dev !== before.dev || st.ino !== before.ino || !uint(st.size))
+		if (!st.isFile() || st.nlink !== 1 || !sameIdentity(stamp(st), stamp(before)) || !uint(st.size))
 			throw new NativeFault("unsafe-path");
 		return { fd, stamp: stamp(st) };
 	} catch (e) {
@@ -427,7 +430,7 @@ function sourceValid(s: Source, id: string): boolean {
 		["pi", "temper"].includes(s.owner) &&
 		uint(s.seen) &&
 		[s.stamp.dev, s.stamp.ino, s.stamp.size].every(uint) &&
-		[s.stamp.mtime, s.stamp.ctime].every(Number.isFinite) &&
+		[s.stamp.birth, s.stamp.mtime, s.stamp.ctime].every(Number.isFinite) &&
 		Array.isArray(s.gaps) &&
 		s.gaps.length <= 32 &&
 		s.gaps.every((g) => GAP_CODES.has(g)) &&
@@ -685,13 +688,7 @@ export class PiSourceAdapter {
 						const id = known ?? digest(file);
 						const failed = known
 							? await this.source(id)
-							: freshSource(id, file, kind, producer, owner, inv.epoch, {
-									dev: 0,
-									ino: 0,
-									size: 0,
-									mtime: 0,
-									ctime: 0,
-								});
+							: freshSource(id, file, kind, producer, owner, inv.epoch, noStamp());
 						if (!known || failed.seen !== inv.epoch) {
 							if (inv.count >= PI_SOURCE_LIMITS.sources) {
 								addGap(inv, "inventory-limit");
@@ -705,7 +702,7 @@ export class PiSourceAdapter {
 						continue;
 					}
 					const pathKey = `path:${digest(file)}`;
-					const inodeKey = `inode:${st.dev}:${st.ino}`;
+					const inodeKey = `inode:${st.dev}:${st.ino}:${st.birth}`;
 					const localPath = puts.findLast((p) => p.key === pathKey)?.value;
 					const localInode = puts.findLast((p) => p.key === inodeKey)?.value;
 					const known =

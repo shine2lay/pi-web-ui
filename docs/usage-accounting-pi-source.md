@@ -256,7 +256,13 @@ complete history. No canonical parent rows commit from a gap-bearing closure.
 Only regular catalog-approved files under supplied canonical absolute roots are
 opened. Every path component is checked; symlinks, hard-linked files and path
 escapes are rejected. File identity, size and stamps
-are checked around reads. A rename may reuse an index only with proved inode
+are checked around reads. File identity is device, inode number and birth time:
+ext4 gives a deleted file's inode number to the next new file, so the number
+alone proves nothing (#824; the gate's in-memory tmpfs never reuses one, so a
+test plants that index state). Birth time comes from statx; a filesystem that
+records none reports 0 (device and inode only), and a host where statx is
+blocked reports ctime, which moves on every append and gaps each changed source
+as `source-replaced`. A rename may reuse an index only with proved inode
 and header identity; it retains the original reference. Truncation, replacement,
 changing prefix anchors and moving targets are explicit gaps. Prefix
 reverification is one bounded historical window at a time, never a whole-file

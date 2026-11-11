@@ -6,6 +6,7 @@ import {
 	mkdtempSync,
 	renameSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	truncateSync,
 	writeFileSync,
@@ -1212,6 +1213,41 @@ describe("usage-accounting-pi-source: synthetic committed-prefix intake only", (
 			"after-rename",
 			"new-call",
 		]);
+	});
+
+	it("never adopts a deleted source when a new file is handed the same inode number", async () => {
+		// ext4 hands a freed inode number to the next new file; the gate's in-memory tmpfs never does.
+		// Plant exactly that index state, so this fails on any filesystem when dev:ino alone is identity.
+		const f = fixture();
+		const gone = f.file("session", "gone.jsonl", [header("gone")]);
+		await discover(await f.open());
+		rmSync(gone);
+		f.catalog.entries = [];
+		const added = f.file("session", "added.jsonl", [header("added"), call("added-call")]);
+		const reused = statSync(added);
+		const values = new Map(f.image.committed.values);
+		const [key] = [...values].find(([k, v]) => k.startsWith("inode:") && JSON.parse(v) === idFor(gone))!;
+		const source = JSON.parse(values.get(`source:${idFor(gone)}`)!) as { stamp: { dev: number; ino: number } };
+		const old = `inode:${source.stamp.dev}:${source.stamp.ino}`;
+		expect(key.startsWith(old)).toBe(true);
+		values.delete(key);
+		values.set(`inode:${reused.dev}:${reused.ino}${key.slice(old.length)}`, JSON.stringify(idFor(gone)));
+		source.stamp = { ...source.stamp, dev: reused.dev, ino: reused.ino };
+		values.set(`source:${idFor(gone)}`, JSON.stringify(source));
+		f.image.committed = { ...f.image.committed, values };
+		f.catalog.generation = "synthetic-generation-2";
+		const adapter = await f.open(new PrefixIndex(f.image));
+		await adapter.notify({ kind: "overflow" });
+		await discover(adapter);
+		const entries = await required(adapter);
+		expect(entries.find((entry) => entry.id === idFor(gone))).toMatchObject({
+			state: "terminal-gap",
+			gaps: ["source-missing"],
+		});
+		expect(entries.find((entry) => entry.id === idFor(added))).toMatchObject({ state: "pending", gaps: [] });
+		await finish(adapter, idFor(added));
+		expect(storedSource(f, idFor(added))).toMatchObject({ file: added, original: added });
+		expect(durableRows(f).facts.map((fact) => fact.source.event)).toEqual(["added-call"]);
 	});
 
 	it("keeps an intermediate renamed-stream replay identity-only after a second rename and reopen", async () => {
