@@ -319,6 +319,8 @@ describe("tool_manage 出入口", () => {
 			"temper_run_status",
 			"mcp",
 			"mcpScript",
+			"viking_find",
+			"viking_read",
 			...CODING_ROLE_TOOL_NAMES,
 		];
 
@@ -355,6 +357,12 @@ describe("tool_manage 出入口", () => {
 		for (const role of allRoles) {
 			const s = fakeSet(fullCatalog);
 			applyAgentToolsGating(s, [], undefined, "linux", false, role);
+			expect(s.peek()).toContain("viking_find");
+			expect(s.peek()).toContain("viking_read");
+			const w = fakeSet(fullCatalog);
+			applyAgentToolsGating(w, [], undefined, "linux", true, role);
+			expect(w.peek()).toContain("viking_find");
+			expect(w.peek()).toContain("viking_read");
 			const shouldHaveTemper = (TEMPER_ALLOWED_ROLES as readonly string[]).includes(role);
 			for (const t of TEMPER_TOOL_NAMES) {
 				if (shouldHaveTemper) expect(s.peek()).toContain(t);
