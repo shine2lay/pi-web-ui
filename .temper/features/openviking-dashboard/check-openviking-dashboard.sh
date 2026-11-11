@@ -2,6 +2,8 @@
 # Acceptance assertion runner for OpenViking Memory Dashboard (openviking-dashboard).
 # Exit codes: 0 = all 17 assertions pass, 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
 # Task #269 appends A18-A23 (state honesty, summary/detail parity, drawer integrity, role isolation, focus/keyboard, unmeasured slots); exit 0 now means all 23 pass.
+# Task #275 appends A24-A28 (drawer honours and follows state, neutral unmeasured slots, error card 3 / Tab 3 parity, no role liveness claim); exit 0 now means all 28 pass.
+# A26 reads slot fields and uri_prefix values from server/openviking/types.ts; a missing or unreadable types file is exit 2.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,6 +44,11 @@ emit_exit2() {
 PW_LIBS="/home/shinelay/.cache/ms-playwright-libs/root/usr/lib/aarch64-linux-gnu"
 [[ -d "${PW_LIBS}" ]] && export LD_LIBRARY_PATH="${PW_LIBS}:${LD_LIBRARY_PATH:-}"
 
+# Task #275 (A26): the slot contract comes from the server's own types, never restated in this checker
+OV_TYPES_PATH="${REPO_ROOT}/server/openviking/types.ts"
+[[ ! -f "${OV_TYPES_PATH}" ]] && emit_exit2 "server types not found: ${OV_TYPES_PATH}" "${PROTO_PATH}"
+export OV_TYPES_PATH
+
 python3 - "${PROTO_PATH}" "${TOKENS_PATH}" "${JSON_OUT}" <<'PYEOF'
 import json, math, pathlib, re, sys
 from playwright.sync_api import sync_playwright
@@ -65,6 +72,19 @@ except Exception as exc:
 
 if not raw_html.strip():
     exit2(f"prototype is empty: {proto_path}")
+
+# Task #275 (A26): OpenVikingSlotSummary fields and OPENVIKING_CONTEXT_SLOTS uri_prefix values, read from types.ts
+import os
+try:
+    types_src = pathlib.Path(os.environ["OV_TYPES_PATH"]).read_text(encoding="utf-8")
+except Exception as exc:
+    exit2(f"failed to read server types: {exc}")
+_slot_iface = re.search(r"export interface OpenVikingSlotSummary\s*\{(.*?)\n\}", types_src, re.S)
+_slot_defs = re.search(r"export const OPENVIKING_CONTEXT_SLOTS\b(.*?)\n\]", types_src, re.S)
+SLOT_FIELDS = re.findall(r"^\s*(\w+)\??\s*:", _slot_iface.group(1), re.M) if _slot_iface else []
+SLOT_PREFIX_BY_ID = dict(re.findall(r'slot_id:\s*(\d+)\s*,.*?uri_prefix:\s*"([^"]+)"', _slot_defs.group(1), re.S)) if _slot_defs else {}
+if not SLOT_FIELDS or len(SLOT_PREFIX_BY_ID) != 5:
+    exit2(f"could not read OpenVikingSlotSummary fields and 5 slot uri_prefix values from {os.environ['OV_TYPES_PATH']}")
 
 def oklch_to_srgb(L, C, h_deg):
     rad = math.radians(h_deg)
@@ -104,7 +124,7 @@ def contrast_ratio(c1, c2):
     return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
 
 VALID_SOURCES = {
-    "observer.mode_label", "observer.roles_online_count", "observer.roles_total_count",
+    "observer.mode_label", "observer.role_memory_folder_count", "observer.roles_total_count",
     "observer.daemon_bind", "observer.queue_depth", "observer.checked_at",
     "metrics.slot_hit_rate_pct", "metrics.avg_injected_tokens", "metrics.turns_sampled_24h", "metrics.last_recorded_at",
     "changelog.commits_24h", "changelog.promotions_24h", "changelog.rejected_24h", "changelog.last_event_at",
@@ -755,6 +775,217 @@ try:
             if st == "live":
                 slots_seen = res["n"]
         record("A23-UNMEASURED-PER-SLOT", slots_seen >= 1 and len(a23_bad) == 0, f"liveSlots={slots_seen}, violations={a23_bad[:12]} (total={len(a23_bad)})", "every slot row says 'not measured yet' (live/stale) and never shows a per-slot % or token number in any state")
+
+        # ---- A24-A28 (task #275): the drawer honours and follows state, unmeasured slots stay neutral, no role liveness ----
+        STATES5 = ["live", "stale", "empty", "error", "loading"]
+        DRAWER_JS = JS_HELPERS + r"""
+            const drawer = document.querySelector('[data-component="reader-drawer"]');
+            const dfield = (name, legacy) => drawer ? (drawer.querySelector(`[data-drawer-field="${name}"]`) || drawer.querySelector(legacy)) : null;
+            const readDrawer = () => ({
+                open: vis(drawer),
+                l1: norm(dfield('l1', '#drawer-l1-body')?.textContent),
+                l2: norm(dfield('l2', '#drawer-l2-body')?.textContent),
+                prov: norm(drawer?.querySelector('[data-slot="drawer-provenance"]')?.textContent),
+                skeleton: !!drawer && [...drawer.querySelectorAll('[data-skeleton]')].some(vis),
+                tone: drawer ? getComputedStyle(drawer).borderTopColor : ''
+            });
+            const stateTone = () => { const b = document.querySelector('[data-component="status-header"] [data-slot="mode-badge"]'); return b ? getComputedStyle(b).borderTopColor : 'no mode badge'; };
+            const ageSet = (txt) => [...new Set(agesOf(txt).map(a => a.secs))].sort((a, b) => a - b).join(',');
+            const rowAgeText = (r) => { const els = [...r.querySelectorAll('[data-figure], [data-age-label]')].filter(e => agesOf(e.innerText).length); return els.length ? els.map(e => e.innerText).join(' · ') : r.innerText; };
+            const OFFLINE_RE = /unavailable while offline/i;
+            const drawerIssues = (st, d, row) => {
+                if (!d.open) return ['drawer not visible'];
+                const out = [];
+                if (d.tone !== stateTone()) out.push(`frame ${d.tone} is not the ${st} tone ${stateTone()}`);
+                const ra = ageSet(rowAgeText(row)), da = ageSet(d.prov);
+                if (ra !== da) out.push(`drawer age [${da}]s != row age [${ra}]s ('${d.prov.slice(-36)}')`);
+                if (st === 'error') for (const k of ['l1', 'l2']) if (!OFFLINE_RE.test(d[k])) out.push(`${k.toUpperCase()} '${d[k].slice(0, 36)}' is not 'unavailable while offline'`);
+                if (st === 'loading' && !d.skeleton) out.push('no skeleton while loading');
+                return out;
+            };
+        """
+
+        # A24: every clickable row in every state opens a drawer that tells that state's story
+        a24_bad, a24_rows = [], {}
+        for st in STATES5:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            res = page.evaluate("(st) => {" + DRAWER_JS + r"""
+                const bad = []; let n = 0;
+                if (!drawer) return { n, bad: ['missing reader drawer'] };
+                for (const t of tabs()) {
+                    const panel = openTab(t);
+                    if (!panel || !vis(panel)) continue;
+                    for (const row of rowsIn(panel)) {
+                        n++;
+                        if (row.getAttribute('aria-expanded') === 'true') row.click();
+                        row.click();
+                        const key = row.getAttribute('data-item-key') || rowUri(row);
+                        for (const issue of drawerIssues(st, readDrawer(), row)) bad.push(`${st}:${key}: ${issue}`);
+                        const close = drawer.querySelector('[data-slot="drawer-close"]');
+                        if (close && vis(drawer)) close.click();
+                    }
+                }
+                tabs()[0]?.click();
+                return { n, bad };
+            }""", st)
+            a24_rows[st] = res["n"]
+            a24_bad.extend(res["bad"])
+        a24_seen = {st: [b for b in a24_bad if b.startswith(st + ":")][:3] for st in STATES5}
+        record("A24-DRAWER-HONORS-STATE", sum(a24_rows.values()) >= 1 and len(a24_bad) == 0, f"rows={a24_rows}, firstViolationsPerState={a24_seen} (total={len(a24_bad)})", "every clickable row in all 5 states: drawer age = row age, drawer frame = the state's mode-badge tone, error: L1/L2 'unavailable while offline', loading: skeletons")
+
+        # A25: a drawer opened in live re-renders for the new state or closes and hands focus back; it never keeps live content
+        page.goto(f"{file_url}?state=live", wait_until="load")
+        probe_idx = page.evaluate("() => {" + JS_HELPERS + r"""
+            const all = [...document.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]')];
+            const out = [];
+            for (const t of tabs()) { const p = openTab(t); if (p && vis(p)) for (const r of rowsIn(p)) out.push(all.indexOf(r)); }
+            tabs()[0]?.click();
+            return out;
+        }""")
+        a25_bad, a25_cases = [], 0
+        for to_st in ["stale", "empty", "error", "loading"]:
+            for idx in probe_idx:
+                page.goto(f"{file_url}?state=live", wait_until="load")
+                a25_cases += 1
+                a25_bad.extend(page.evaluate("([idx, toSt]) => {" + DRAWER_JS + r"""
+                    const row = [...document.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]')][idx];
+                    const key = row.getAttribute('data-item-key') || rowUri(row);
+                    const panel = row.closest('[role="tabpanel"]');
+                    const tab = panel && tabs().find(t => t.getAttribute('data-tab') === panel.getAttribute('data-tabpanel'));
+                    if (tab) openTab(tab);
+                    row.click();
+                    const live = readDrawer();
+                    const sw = document.querySelector(`[data-set-state="${toSt}"]`);
+                    if (!sw) return [`${key}: no [data-set-state="${toSt}"] control to switch state`];
+                    sw.click();
+                    const d = readDrawer();
+                    const a = document.activeElement;
+                    if (!d.open) {
+                        if (!a || a === document.body || !vis(a)) return [`live->${toSt}:${key}: drawer closed but focus went to ${a ? a.tagName : 'nothing'}`];
+                        if (row.getAttribute('aria-expanded') === 'true') return [`live->${toSt}:${key}: drawer closed but the row is still aria-expanded`];
+                        return [];
+                    }
+                    if (!vis(row)) return [`live->${toSt}:${key}: drawer still open for a row the ${toSt} state hides ('${d.prov.slice(-36)}')`];
+                    const out = drawerIssues(toSt, d, row).map(i => `live->${toSt}:${key}: ${i}`);
+                    if (d.prov === live.prov && d.tone === live.tone) out.push(`live->${toSt}:${key}: drawer kept the live provenance and frame`);
+                    return out;
+                }""", [idx, to_st]))
+        a25_seen = {st: [b for b in a25_bad if b.startswith(f"live->{st}:") or b.endswith(f'"{st}"] control to switch state')][:3] for st in STATES5[1:]}
+        record("A25-DRAWER-FOLLOWS-STATE-CHANGE", a25_cases >= 1 and len(a25_bad) == 0, f"cases={a25_cases}, firstViolationsPerState={a25_seen} (total={len(a25_bad)})", "drawer opened in live, state switched to stale/empty/error/loading: it closes with focus on a visible element, or re-renders and passes A24 for the new state; never keeps the live content")
+
+        # A26: unmeasured slots never look measured; slot rows show only OpenVikingSlotSummary fields and the types.ts uri_prefix
+        a26_bad, a26_live = [], 0
+        for st in STATES5:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            res = page.evaluate("([st, fields, prefixes]) => {" + JS_HELPERS + r"""
+                const bad = []; let n = 0;
+                const probe = document.createElement('span');
+                probe.className = 'badge badge-healthy';
+                probe.textContent = 'probe';
+                document.body.appendChild(probe);
+                const okStyle = getComputedStyle(probe);
+                const okTone = [okStyle.color, okStyle.borderTopColor];
+                probe.remove();
+                const tab = tabs().find(t => t.getAttribute('data-tab') === 'mount-map');
+                const panel = tab ? openTab(tab) : null;
+                const head = panel ? norm(panel.querySelector('[data-panel-updated-label]')?.innerText) : '';
+                if (/latest mount|\bworker\b/i.test(head)) bad.push(`${st}:mount-map label '${head.slice(0, 60)}' names a mount or worker that no slots[] field carries`);
+                for (const r of [...document.querySelectorAll('[data-slot-id]')].filter(vis)) {
+                    n++;
+                    const id = r.getAttribute('data-slot-id');
+                    const txt = norm(r.innerText);
+                    for (const el of [r, ...r.querySelectorAll('[data-source-field]')]) {
+                        const f = el.getAttribute('data-source-field');
+                        if (f === null) continue;
+                        const m = f.match(/^slots\[\]\.(\w+)$/);
+                        if (!m || !fields.includes(m[1])) bad.push(`${st}:slot${id}: field '${f}' is not in OpenVikingSlotSummary`);
+                    }
+                    const uris = txt.match(/viking:\/\/[^\s\u00b7,;)]+/g) || [];
+                    if (!uris.length) bad.push(`${st}:slot${id}: no uri_prefix shown`);
+                    for (const u of uris) if (u !== prefixes[id]) bad.push(`${st}:slot${id}: uri '${u}' is not the types.ts uri_prefix '${prefixes[id]}'`);
+                    if ((r.getAttribute('data-slot-state') || 'unmeasured-gap') !== 'unmeasured-gap') continue;
+                    const w = txt.match(/\b(hit|live|ok)\b/i);
+                    if (w) bad.push(`${st}:slot${id}: '${w[0]}' on an unmeasured slot`);
+                    const badges = [...r.querySelectorAll('.badge, [data-slot="state-badge"], [data-health-state]')].filter(vis);
+                    for (const b of badges) {
+                        const s = getComputedStyle(b);
+                        if (b.classList.contains('badge-healthy') || b.getAttribute('data-health-state') === 'healthy' || s.color === okTone[0] || s.borderTopColor === okTone[1])
+                            bad.push(`${st}:slot${id}: success tone on '${norm(b.innerText).slice(0, 30)}'`);
+                    }
+                    if (['live', 'stale', 'empty'].includes(st) && !badges.some(b => /^\W*not measured\b/i.test(norm(b.innerText))))
+                        bad.push(`${st}:slot${id}: badge is not the neutral 'Not measured'`);
+                }
+                tabs()[0]?.click();
+                return { n, bad };
+            }""", [st, SLOT_FIELDS, SLOT_PREFIX_BY_ID])
+            a26_bad.extend(res["bad"])
+            if st == "live":
+                a26_live = res["n"]
+        record("A26-UNMEASURED-SLOT-NEUTRAL", a26_live >= 1 and len(a26_bad) == 0, f"liveSlots={a26_live}, slotFields={SLOT_FIELDS}, violations={a26_bad[:12]} (total={len(a26_bad)})", "unmeasured-gap slots: no success tone, no Hit/Live/OK, badge 'Not measured' (live/stale/empty); slot fields only from types.ts OpenVikingSlotSummary; slot URI = types.ts uri_prefix; no mount/worker claim")
+
+        # A27: in error, card 3 and Tab 3 tell one story: both from the local audit log (same age, same count) or both unreachable
+        page.goto(f"{file_url}?state=error", wait_until="load")
+        a27 = page.evaluate("() => {" + JS_HELPERS + r"""
+            const card = document.querySelector('[data-component="summary-card"][data-card-id="commit-governance"]');
+            if (!card) return { bad: ['no commit-governance summary card'], summary: '' };
+            const figs = [...card.querySelectorAll('[data-source-field^="changelog."]')].filter(vis);
+            const cardTxt = norm(card.innerText);
+            const unreach = (f) => f.getAttribute('data-unreachable-value') === 'true';
+            const tab = tabs().find(t => t.getAttribute('data-tab') === 'commit-audit');
+            const panel = tab ? openTab(tab) : null;
+            const rows = panel && vis(panel) ? rowsIn(panel) : [];
+            const label = panel ? norm(panel.querySelector('[data-panel-updated-label]')?.innerText) : '';
+            const panelTxt = panel && vis(panel) ? norm(panel.innerText).replace(/,/g, '') : '';
+            tabs()[0]?.click();
+            const summary = `card3='${cardTxt.slice(0, 90)}', tab3Rows=${rows.length}, tab3Label='${label.slice(0, 80)}'`;
+            if (figs.length && figs.every(unreach)) {
+                if (rows.length || /local audit/i.test(panelTxt)) return { bad: [`card 3 says unreachable but Tab 3 reads the local audit log (${rows.length} events listed)`], summary };
+                if (!/unreachable|offline/i.test(label)) return { bad: ['card 3 says unreachable but the Tab 3 label does not'], summary };
+                return { bad: [], summary };
+            }
+            const bad = [];
+            if (!figs.length || figs.some(unreach)) bad.push('card 3 mixes unreachable and local figures, or shows none');
+            if (!/local audit/i.test(cardTxt)) bad.push("card 3 does not say it reads the local audit log");
+            if (!/local audit/i.test(label)) bad.push("Tab 3 label does not say it reads the local audit log");
+            const ca = agesOf(cardTxt).map(a => a.secs), la = agesOf(label).map(a => a.secs);
+            if (!ca.length || !ca.some(s => la.includes(s))) bad.push(`card 3 age [${ca}]s is not the Tab 3 age [${la}]s`);
+            const cf = card.querySelector('[data-source-field="changelog.commits_24h"]');
+            const m = cf ? norm(cf.innerText).replace(/,/g, '').match(/\b(\d+)\b/) : null;
+            if (!m) bad.push('card 3 shows no commit count');
+            else if (!new RegExp(`\\b${m[1]}\\b`).test(panelTxt)) bad.push(`card 3 count ${m[1]} is not cited in Tab 3`);
+            else if (parseInt(m[1], 10) > 0 && !rows.length) bad.push(`card 3 count ${m[1]} but Tab 3 lists no events`);
+            return { bad, summary };
+        }""")
+        record("A27-SUMMARY-MATCHES-DETAIL-ERROR", len(a27["bad"]) == 0, f"{a27['summary']}, violations={a27['bad']}", "error: card 3 and Tab 3 both read the local audit log (same age, count cited, events listed) or both say unreachable with no events")
+
+        # A28: no panel implies roles are live (no liveness signal in v1); the header count is 'N role memory folders'
+        LIVENESS_RE = r"roles?\s+(?:live|online|active)\b|\d+\s*/\s*\d+\s*roles\b|injecting\b[^.]{0,80}\bacross\s+all\b[^.]{0,12}\broles\b"
+        a28_bad = []
+        key_leak = re.search(r"roles?_(?:online|live|active)\w*", raw_html, re.I)
+        if key_leak:
+            a28_bad.append(f"source: liveness fixture key '{key_leak.group(0)}'")
+        if "role_memory_folder_count" not in raw_html:
+            a28_bad.append("source: no role_memory_folder_count fixture key")
+        for st in STATES5:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            a28_bad.extend(page.evaluate("([st, reSrc]) => {" + JS_HELPERS + r"""
+                const re = new RegExp(reSrc, 'i');
+                const bad = [];
+                const texts = [];
+                for (const t of tabs()) { openTab(t); texts.push([`text(${t.getAttribute('data-tab')})`, document.body.innerText || '']); }
+                if (!tabs().length) texts.push(['text', document.body.innerText || '']);
+                tabs()[0]?.click();
+                document.querySelectorAll('[role="tooltip"]').forEach(t => texts.push([`tooltip#${t.id}`, t.textContent || '']));
+                document.querySelectorAll('[aria-label]').forEach(el => texts.push(['aria-label', el.getAttribute('aria-label') || '']));
+                for (const [where, t] of texts) { const m = norm(t).match(re); if (m) bad.push(`${st}:${where}: '${m[0]}'`); }
+                const fig = document.querySelector('[data-source-field="observer.role_memory_folder_count"]');
+                if (['live', 'stale', 'empty'].includes(st)) {
+                    if (!fig) bad.push(`${st}: no observer.role_memory_folder_count figure`);
+                    else if (!/^\d+ role memory folders$/.test(norm(fig.innerText))) bad.push(`${st}: folder count reads '${norm(fig.innerText)}'`);
+                }
+                return [...new Set(bad)];
+            }""", [st, LIVENESS_RE]))
+        record("A28-NO-LIVENESS-CLAIM", len(a28_bad) == 0, f"violations={a28_bad[:12]} (total={len(a28_bad)})", "all 5 states: no text/tooltip/aria-label implies live roles; live/stale/empty header count = 'N role memory folders' from observer.role_memory_folder_count; no roles_*online/live/active key in source")
 
         browser.close()
 except Exception as exc:
