@@ -3,7 +3,7 @@ max_tokens: 2300 # contract outgrew the 2000 default (architecture #521)
 ---
 # Architecture Spec: OpenViking Memory Dashboard (`openviking-dashboard`)
 
-Pinned to `.temper/features/openviking-dashboard/design.md` (`design #263`, `5db1eb93`), `.temper/features/openviking-dashboard/brief.md` (`product #65`, `a69a2470`), and `/home/shinelay/architecture-dept/conventions/openviking-contract.md`.
+Pinned to `.temper/features/openviking-dashboard/design.md` (`design #274`, `28c2c672`), `.temper/features/openviking-dashboard/brief.md` (`product #65`, `a69a2470`), and `/home/shinelay/architecture-dept/conventions/openviking-contract.md`.
 
 ## API and State Contract
 
