@@ -48,7 +48,7 @@ export class OpenVikingDaemonClient {
 		}
 		this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
 		this.now = options.now ?? (() => Date.now());
-		this.http = new OpenVikingDaemonHttp(this.daemonUrl, this.timeoutMs, this.fetchImpl);
+		this.http = new OpenVikingDaemonHttp(this.daemonUrl, this.timeoutMs, this.fetchImpl, this.now);
 	}
 
 	/**

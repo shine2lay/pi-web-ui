@@ -172,6 +172,8 @@ export async function buildOverview(
 		daemon_bind: daemonBind,
 		queue_depth: null,
 		checked_at: new Date(nowMs).toISOString(),
+		// Read after the snapshot's /health; display only, nothing above or below derives from it (spec 895b0cb1).
+		last_reachable_at: http.lastReachableAt,
 		health_state: !snapshot.reachable ? "server-unreachable" : degraded ? "stale" : "healthy",
 		stale_badge: null,
 		last_injection_at: isoOrNull(lastInjection),

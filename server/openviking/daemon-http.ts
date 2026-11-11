@@ -6,6 +6,10 @@
  * an answer that already arrived is read. A transport failure (refused, or timed out twice) is
  * `OpenVikingDaemonUnreachableError`; an answer that is not `{status: "ok"}` is
  * `OpenVikingDaemonRequestError` carrying the upstream error code.
+ *
+ * The transport also holds the time of the last `/health` that answered ok (spec 895b0cb1
+ * `observer.last_reachable_at`): in memory only, written only by `isHealthy`, held while the daemon is down.
+ * There is one transport per server process (one client per `registerOpenVikingRoutes`).
  */
 import { OpenVikingDashboardError } from "./types.js";
 
@@ -49,11 +53,20 @@ interface DaemonEnvelope {
 }
 
 export class OpenVikingDaemonHttp {
+	/** Epoch ms of the last ok `/health`; null until the first one since this transport was made. */
+	private lastHealthyMs: number | null = null;
+
 	constructor(
 		readonly daemonUrl: string,
 		readonly timeoutMs: number,
 		private readonly fetchImpl: typeof fetch,
+		private readonly now: () => number,
 	) {}
+
+	/** ISO time of the last ok `/health`, held while the daemon is down; null before the first ok. Gates nothing. */
+	get lastReachableAt(): string | null {
+		return this.lastHealthyMs === null ? null : new Date(this.lastHealthyMs).toISOString();
+	}
 
 	/** One GET under its own deadline, body read included. */
 	private async attempt(path: string, url: string, headers: Record<string, string>) {
@@ -108,7 +121,9 @@ export class OpenVikingDaemonHttp {
 	async isHealthy(headers: Record<string, string>): Promise<boolean> {
 		try {
 			const body = await this.envelope("/health", {}, headers);
-			return body.healthy !== false;
+			const healthy = body.healthy !== false;
+			if (healthy) this.lastHealthyMs = this.now();
+			return healthy;
 		} catch (err) {
 			if (err instanceof OpenVikingDashboardError) return false;
 			throw err;

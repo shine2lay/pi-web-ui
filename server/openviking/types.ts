@@ -178,7 +178,14 @@ export interface OpenVikingObserverSummary {
 	daemon_bind: string;
 	/** R-QUEUE-DEPTH-1 (spec G1): unavailable in v1, never scraped, never 0. */
 	queue_depth: null;
+	/** Request time. Never the age of the daemon's last contact: that is `last_reachable_at`. */
 	checked_at: string;
+	/**
+	 * Spec 895b0cb1 (rm-5bbe0bcc): ISO time of the last `/health` that answered ok, seen by this server process
+	 * (in memory). Held while `:1933` is down; null only before the first ok since start, never a duration or 0.
+	 * Best-effort: it never feeds `screen_state`, `mode_label`, `health_state`, a degraded verdict or an alarm.
+	 */
+	last_reachable_at: string | null;
 	health_state: OpenVikingHealthState;
 	stale_badge: "> 30s" | null;
 	last_injection_at: string | null;

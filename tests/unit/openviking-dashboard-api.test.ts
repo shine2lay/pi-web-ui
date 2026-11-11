@@ -22,61 +22,7 @@ import {
 	type OpenVikingEntriesResponse,
 } from "../../server/openviking/index.js";
 import { registerRouteModules } from "../../server/route-modules.js";
-
-const NOW = Date.parse("2026-11-11T08:30:00.000Z");
-const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
-const QUEUE = ["| Queue | Pending | In Progress | Processed |", "| TOTAL | 4 | 1 | 99 |"].join("\n");
-
-interface Call {
-	url: URL;
-	method: string;
-	headers: Record<string, string>;
-}
-
-const ok = (result: unknown) =>
-	new Response(JSON.stringify({ status: "ok", healthy: true, result }), {
-		headers: { "Content-Type": "application/json" },
-	});
-const item = (uri: string, isDir: boolean, abstract = "") => ({
-	uri,
-	isDir,
-	size: 1,
-	modTime: minutesAgo(3),
-	abstract,
-});
-
-function lsResult(uri: string): unknown[] {
-	if (uri === "viking://resources") return [item("viking://resources/pi-web-ui", true, "pi-web-ui L0 abstract")];
-	if (uri === "viking://user/default/memories") return [item(`${uri}/preferences`, true)];
-	if (uri === "viking://user/default/memories/preferences") return [item(`${uri}/backend_code.md`, false)];
-	const role = /^viking:\/\/user\/([a-z]+)\/memories(\/cases)?$/.exec(uri);
-	if (role && !role[2]) return [item(`${uri}/cases`, true)];
-	if (role) return [item(`${uri}/c1.md`, false)];
-	return [];
-}
-
-/** A stand-in for the `:1933` daemon that records every request; `stall-once` misses the first /health deadline. */
-function daemon(mode: "up" | "down" | "hang" | "stall-once" = "up") {
-	const calls: Call[] = [];
-	const fetchImpl: typeof fetch = async (input, init) => {
-		const url = new URL(String(input));
-		calls.push({ url, method: init?.method ?? "GET", headers: { ...(init?.headers as Record<string, string>) } });
-		if (mode === "down") throw new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:1933");
-		const firstHealth = url.pathname === "/health" && calls.filter((c) => c.url.pathname === "/health").length === 1;
-		if (mode === "hang" || (mode === "stall-once" && firstHealth)) {
-			return new Promise<Response>((_, reject) =>
-				init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)),
-			);
-		}
-		if (url.pathname === "/health") return ok(undefined);
-		if (url.pathname === "/api/v1/observer/queue") return ok({ status: QUEUE });
-		if (url.pathname === "/api/v1/observer/system") return ok({ components: {} });
-		if (url.pathname === "/api/v1/fs/ls") return ok(lsResult(url.searchParams.get("uri") ?? ""));
-		if (url.pathname.startsWith("/api/v1/content/")) return ok(`${url.pathname} of ${url.searchParams.get("uri")}`);
-		return new Response(JSON.stringify({ status: "error", error: { code: "NOT_FOUND" } }), { status: 404 });
-	};
-	return { fetchImpl, calls };
-}
+import { daemon, minutesAgo, NOW } from "./openviking-daemon-fake.js";
 
 const jsonl = (rows: object[]) => rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
 
