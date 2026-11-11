@@ -114,6 +114,9 @@ export interface OpenVikingMetricsRecord {
 	tsMs: number;
 	event: string;
 	role: string | null;
+	sessionId: string | null;
+	/** A line whose `session_id` is not a real pi session id: a test fixture, never a measurement (#828). */
+	fixtureSession: boolean;
 	taskId: string | number | null;
 	injection: OpenVikingInjection | null;
 	extractedCount: number | null;
@@ -124,6 +127,18 @@ export interface OpenVikingMetricsRecord {
 
 /** `worker_prefetch_inject` is the contract event (#809); `turn_start` is the spec's older name. */
 const INJECTION_EVENTS = new Set(["worker_prefetch_inject", "turn_start"]);
+const PI_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * #828: old `npm test` runs left fixture lines in the live store (`session_id: "worker-sess-803"`,
+ * 2026-11-11T09:54Z and 09:56Z). Writing them stopped in pi-openviking 1a842ac, but they stay on
+ * disk as evidence for the restore plan, and until 2026-11-11T17:43Z they were the only lines with
+ * a project, so every slot 1-3 rate came from those two. A rate must never be read off them.
+ * A line with no `session_id` at all is left alone: it is old, not fake.
+ */
+export function isFixtureSessionId(sessionId: string | null): boolean {
+	return sessionId !== null && !PI_SESSION_ID.test(sessionId);
+}
 const MODE_ALIASES: Record<string, OpenVikingInjectionMode> = {
 	lead: "lead",
 	lead_l0: "lead",
@@ -168,6 +183,8 @@ export async function readMetricsRecords(paths: OpenVikingStatePaths): Promise<O
 			tsMs,
 			event,
 			role: str(obj.role),
+			sessionId: str(obj.session_id),
+			fixtureSession: isFixtureSessionId(str(obj.session_id)),
 			taskId: taskIdOf(obj),
 			injection: injectionOf(event, obj),
 			extractedCount: firstNum(obj.extracted_count, obj.extracted),

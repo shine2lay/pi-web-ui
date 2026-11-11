@@ -68,12 +68,20 @@ export const pendingSyncCause = (rollout: OpenVikingRolloutState) => ({
 	badge: OPENVIKING_PENDING_SYNC_BADGE,
 });
 
+/**
+ * #828: a line left in the live store by a test run is evidence of a bad write, never a sample.
+ * Every rate, count and freshness stamp on this page is read off real sessions only.
+ */
+function measured(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingMetricsRecord[] {
+	return records.filter((r) => !r.fixtureSession && nowMs - r.tsMs <= WINDOW_24H_MS);
+}
+
 export function summarizeMetrics(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingMetricsSummary {
-	const recent = records.filter((r) => nowMs - r.tsMs <= WINDOW_24H_MS);
+	const recent = measured(records, nowMs);
 	const injections = recent.flatMap((r) => (r.injection ? [r.injection] : []));
 	const hits = injections.map((i) => i.l0HitCount).filter((v): v is number => v !== null);
 	const tokens = injections.map((i) => i.injectedTokensEst).filter((v): v is number => v !== null);
-	const last = latestMs(records);
+	const last = latestMs(records.filter((r) => !r.fixtureSession));
 	return {
 		slot_hit_rate_pct: hits.length ? round1((100 * hits.filter((h) => h > 0).length) / hits.length) : null,
 		avg_injected_tokens: tokens.length ? Math.round(tokens.reduce((a, b) => a + b, 0) / tokens.length) : null,
@@ -92,7 +100,7 @@ const NOT_LOOKED_UP = new Set(["skipped", "unavailable"]);
 
 /** G3: per-slot figures exist only once injection lines carry `slots[]`; until then `unmeasured-gap`. */
 export function summarizeSlots(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingSlotSummary[] {
-	const recent = records.filter((r) => nowMs - r.tsMs <= WINDOW_24H_MS && r.injection?.slots);
+	const recent = measured(records, nowMs).filter((r) => r.injection?.slots);
 	return OPENVIKING_CONTEXT_SLOTS.map((def) => {
 		const samples = recent.flatMap((r) =>
 			(r.injection?.slots ?? []).filter((s) => s.slot === def.slot_id).map((s) => ({ ...s, tsMs: r.tsMs })),

@@ -281,7 +281,7 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 					timestamp: minutesAgo(2),
 					event: "worker_prefetch_inject",
 					role: "architecture",
-					session_id: "s1",
+					session_id: "01a1cb7f-f95a-7723-8686-91872459ccc2",
 					chat_mode: "worker",
 					project: null,
 					l0_hit_count: 2,
@@ -313,6 +313,62 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 			"metrics.jsonl": [{ timestamp: minutesAgo(1), event: "turn_start", role: "ops", l0_hits: 0, tokens_est: 5 }],
 		});
 		expect((await overview(noSlots)).slots.every((s) => s.state === "unmeasured-gap")).toBe(true);
+	});
+
+	it("metrics.jsonl: #828 a fixture session_id is never a sample, so no rate is read off it", async () => {
+		const fixtureLine = (min: number) => ({
+			timestamp: minutesAgo(min),
+			event: "worker_prefetch_inject",
+			role: "ops",
+			session_id: "worker-sess-803",
+			chat_mode: "worker",
+			project: "pi-web-ui",
+			l0_hit_count: 5,
+			l1_expanded_count: 5,
+			injected_tokens_est: 1200,
+			slots: [1, 2, 3, 4, 5].map((n) => ({
+				slot: n,
+				name: `s${n}`,
+				state: "hit",
+				uris: [`viking://resources/pi-web-ui/f${n}.md`],
+				l0_hit_count: 1,
+				l1_expanded_count: 1,
+				injected_tokens_est: 240,
+			})),
+		});
+
+		// Fixtures alone: every slot reads "never measured", not a 100% hit rate.
+		const onlyFixtures = await overview(stateDir({ "metrics.jsonl": [fixtureLine(20), fixtureLine(10)] }));
+		expect(onlyFixtures.slots.map((s) => [s.hit_rate_pct, s.state])).toEqual([
+			[null, "unmeasured-gap"],
+			[null, "unmeasured-gap"],
+			[null, "unmeasured-gap"],
+			[null, "unmeasured-gap"],
+			[null, "unmeasured-gap"],
+		]);
+		expect(onlyFixtures.metrics).toMatchObject({
+			turns_sampled_24h: 0,
+			slot_hit_rate_pct: null,
+			avg_injected_tokens: null,
+			last_recorded_at: null,
+		});
+
+		// Mixed: the real miss stands on its own, undiluted by the two fixture hits.
+		const realMiss = {
+			timestamp: minutesAgo(5),
+			event: "worker_prefetch_inject",
+			role: "ops",
+			session_id: "01a1cb9c-0568-746a-9b58-ac58c00fc9c3",
+			chat_mode: "worker",
+			project: "pi-openviking",
+			l0_hit_count: 0,
+			l1_expanded_count: 0,
+			injected_tokens_est: 0,
+			slots: [{ slot: 1, name: "project_overview", state: "miss", uris: [], l0_hit_count: 0, injected_tokens_est: 0 }],
+		};
+		const mixed = await overview(stateDir({ "metrics.jsonl": [fixtureLine(20), fixtureLine(10), realMiss] }));
+		expect(mixed.slots[0]).toMatchObject({ slot_id: 1, hit_rate_pct: 0 });
+		expect(mixed.metrics).toMatchObject({ turns_sampled_24h: 1, slot_hit_rate_pct: 0 });
 	});
 
 	it("metrics.jsonl: post_task_digest extracted_count null stays null (not measured), never 0; old names still read", async () => {
