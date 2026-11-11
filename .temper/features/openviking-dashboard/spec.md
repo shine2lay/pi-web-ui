@@ -19,9 +19,9 @@ Parts (split by architecture #531; text moved byte-identically, section numbers 
 - **Forbidden across roles:** Never expose another role's `viking://agent/memories/...` content. `/api/openviking/entries` reads `/api/v1/content/*` **only** for shared URIs (`viking://resources/...`, `viking://user/default/memories/...`); cross-role `agent` rows set `l0_abstract: "[Isolated per-role memory — metadata only (R-ISOLATION-1)]"` and `l1_overview`/`l2_content: null` (`403`). `/api/openviking/audit` redacts `summary_1line` on `agent` rows.
 
 ### 3. Endpoints
-- **`GET /api/openviking/overview` (`200`):** `{ screen_state: "live"|"stale"|"empty"|"error", observer, metrics, changelog, slots, auxiliary: { rollout, resource_sync, migration, dedup } }`.
-- **`GET /api/openviking/entries?scope=all|resources|user|agent&role=<role>` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|null, entries }` (`updated_at`, `provenance`).
-- **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|null, events }` (`action`: `"commit"|"role_memory_write"|"promote_shared"|"reject_noise"|"sidecar_timeout"`, `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
+- **`GET /api/openviking/overview` (`200`):** `{ screen_state: "live"|"stale"|"empty"|"error", observer, metrics, changelog, slots, auxiliary: { rollout, resource_sync, migration, dedup } }`; `observer.stale_badge: "> 30s"|"pending sync"|null` (§4).
+- **`GET /api/openviking/entries?scope=all|resources|user|agent&role=<role>` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|"pending sync"|null, entries }` (`updated_at`, `provenance`).
+- **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|"pending sync"|null, events }` (`action`: `"commit"|"role_memory_write"|"promote_shared"|"reject_noise"|"sidecar_timeout"`, `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
 
 ### 4. Operational States (Never Conflated)
 In [spec-states.md](spec-states.md).
@@ -33,6 +33,7 @@ Browser code formats values only and **never** computes sums, averages, percenta
 | Figure (`data-source-field`) | Source (§1) | Formula / Field | Cadence |
 |---|---|---|---|
 | `observer.mode_label` | `/health` + `/api/v1/observer/system` + `rollout-state.json` | `"Offline"` if down; `"Degraded Local Fallback"` if stale; else `"Active"` | `30s` |
+| `observer.stale_badge` | `/health` + `rollout-state.json` | `"> 30s"` if age `> 30s`; else `"pending sync"` if `pending_wt_land_syncs` non-empty; else `null` (§4) | `30s` |
 | `observer.role_memory_folder_count`, `observer.roles_total_count` | Wrapper partition enumeration of canonical `viking://user/<role>/memories` (not alias `viking://agent/memories`) | Partitions found (`0..15`, `null` if down) as `"N role memory folders"`; total `15` (role list) | `30s` |
 | `observer.daemon_bind`, `observer.queue_depth` | `/health` (bind only) | `"127.0.0.1:1933"`; `queue_depth` always `null` (G1) | `30s` |
 | `observer.last_reachable_at` | Last `/health` `"ok"` (in-memory) | ISO, held while down, else `null` (§4); not `checked_at` (request time) | `30s` |
