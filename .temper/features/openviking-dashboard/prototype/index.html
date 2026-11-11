@@ -734,7 +734,7 @@ button:focus-visible,
           <span id="tip-guard" role="tooltip" class="tooltip">Commit Guard keeps preference files “strictly read-only to queued task workers” (R-PREF-WRITE-GUARD-1): post-task commits may reach only viking://resources/&lt;project&gt;/, the project's shared entity file, and role cases. The 140K worker limit belongs to pi-acp, not the guard.</span>
         </span>
       </div>
-      <div class="metric" id="c3-metric" data-field="metric" data-figure="true" data-source-field="changelog.commits_24h" data-age="5m">18 Commits</div>
+      <div class="metric" id="c3-metric" data-field="metric" data-figure="true" data-source-field="changelog.session_commits_24h" data-age="5m">18 session commits</div>
       <div class="status-row" data-field="status">
         <span id="c3-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check">● Healthy</span>
       </div>
@@ -935,7 +935,7 @@ button:focus-visible,
   <section class="panel hidden" role="tabpanel" data-tabpanel="commit-audit" data-panel-updated-at="2026-11-10T20:10:00Z">
     <div class="panel-head">
       <strong class="body-copy" data-body-copy="true">Post-Turn Commit &amp; Guard Verdict Stream</strong>
-      <span class="meta" data-panel-updated-label="true" data-age-label="true">Audit log read 5m ago · 18 commits in 24h · latest 3 shown</span>
+      <span class="meta" data-panel-updated-label="true" data-age-label="true">Audit log read 5m ago · 18 session commits in 24h · latest 3 shown</span>
     </div>
     <p class="state-note hidden" data-state-note="commit-audit"></p>
 
@@ -954,7 +954,7 @@ button:focus-visible,
       <div class="row" data-component="audit-row" role="button" tabindex="0" aria-expanded="false" data-item-key="aud-2">
         <div class="row-main">
           <div class="row-top">
-            <span class="badge badge-info">● commit</span>
+            <span class="badge badge-info">● promote_shared</span>
             <span class="uri-code">viking://resources/rollcall/features/roll-ladder/spec.md</span>
           </div>
           <p class="abstract-copy" data-body-copy="true">Synced the roll-ladder feature spec from .temper/ into the Shared layer after wt land 5db1eb93.</p>
@@ -1011,7 +1011,7 @@ button:focus-visible,
     "c1-context": "Queue depth not reported · Shared layer + Role layer",
     "c2-metric": "94.2% Hit Rate",
     "c2-context": "1,420 avg tok · 48 turns sampled (24h)",
-    "c3-metric": "18 Commits",
+    "c3-metric": "18 session commits",
     "c3-context": "5 shared syncs · 1 guard rejection (24h)"
   };
 
@@ -1019,11 +1019,20 @@ button:focus-visible,
     return document.getElementById(id);
   }
 
+  // #280 S-1 (spec §4 error): figures read from the local metrics and audit logs keep their count and age while 127.0.0.1:1933 is down
+  var LOCAL_FIELD_RE = /^(?:metrics\.|slots\[\]\.|changelog\.)/;
+  var FIGURE_AGES = Array.prototype.map.call(document.querySelectorAll("[data-figure][data-age]"), function (el) {
+    return [el, el.getAttribute("data-age")];
+  });
+
   var currentState = "live";
   function applyState(st) {
     currentState = st;
     var app = byId("app");
     app.setAttribute("data-screen-state", st);
+    FIGURE_AGES.forEach(function (p) {
+      p[0].setAttribute("data-age", p[1]);
+    });
 
     Object.keys(LIVE_FIGURES).forEach(function (id) {
       var el = byId(id);
@@ -1097,7 +1106,7 @@ button:focus-visible,
       if (p1Upd) p1Upd.textContent = "Checked 4s ago · 0 turns in window · 5m cadence";
       byId("c2-metric").textContent = "0 turns in window";
       byId("c2-context").textContent = "— avg tok (no turns) · 0 turns sampled (server online)";
-      byId("c3-metric").textContent = "0 commits in window";
+      byId("c3-metric").textContent = "0 session commits in window";
       byId("c3-context").textContent = "0 shared syncs · 0 guard rejections (server online)";
       badges.forEach(function (b) {
         b.className = "badge badge-zero";
@@ -1115,24 +1124,28 @@ button:focus-visible,
       sub.textContent = "Cannot reach 127.0.0.1:1933. Workers read their on-disk notebook.md backup; lead chats keep pi-acp only.";
       chk.textContent = "Last seen 18m ago · 30s cadence";
       c1Age.textContent = "Last seen 18m ago · 30s cadence";
-      c2Age.textContent = "Last seen 18m ago · 5m cadence";
-      c3Age.textContent = "Last seen 18m ago · 15m cadence";
-      if (p1Upd) p1Upd.textContent = "Server Unreachable · last seen 18m ago · 5m cadence";
+      c2Age.textContent = "From local metrics log · last turn 18m ago · 5m cadence";
+      c3Age.textContent = "From local audit log · last event 18m ago · 15m cadence";
+      if (p1Upd) p1Upd.textContent = "Server offline · from local metrics log · 48 turns in 24h · last turn 18m ago · 5m cadence";
       badges.forEach(function (b) {
         b.className = "badge badge-unreachable";
         b.setAttribute("data-icon", "octagon-x");
         b.textContent = "✕ Server Unreachable";
       });
-      document.querySelectorAll('[data-component="summary-card"] [data-figure]').forEach(function (f) {
+      // only the daemon's own figures (observer.*) go unreachable; the local log figures keep their count, with the log's age
+      document.querySelectorAll('[data-component="summary-card"] [data-source-field^="observer."]').forEach(function (f) {
         f.setAttribute("data-unreachable-value", "true");
         f.textContent = "— (Unreachable)";
       });
+      FIGURE_AGES.forEach(function (p) {
+        if (LOCAL_FIELD_RE.test(p[0].getAttribute("data-source-field") || "")) p[0].setAttribute("data-age", "18m");
+      });
       folders.setAttribute("data-unreachable-value", "true");
       folders.textContent = "Role memory folders — (Unreachable)";
-      setSlotMeta("— (Unreachable) · last seen 18m ago");
+      setSlotMeta("Not measured yet · last turn 18m ago");
       banner.className = "state-banner badge-unreachable";
       bTitle.textContent = "✕ Server Unreachable — Cannot reach 127.0.0.1:1933 (Offline)";
-      bBody.textContent = "Last contact 18m ago. Figures, entries and audit events come back when the daemon answers again.";
+      bBody.textContent = "Last contact 18m ago. Daemon figures, namespace entries and L1/L2 text come back when it answers again. Injection, slot and commit figures below are read from the local logs.";
     } else if (st === "loading") {
       hdr.className = "badge badge-info";
       hdr.setAttribute("data-icon", "circle-check");
@@ -1148,7 +1161,7 @@ button:focus-visible,
       byId("c1-context").textContent = "Fetching daemon status from /api/openviking/overview…";
       byId("c2-metric").textContent = "Loading hit rate…";
       byId("c2-context").textContent = "Fetching 5-slot Turn-1 injection sample…";
-      byId("c3-metric").textContent = "Loading commits…";
+      byId("c3-metric").textContent = "Loading session commits…";
       byId("c3-context").textContent = "Fetching post-turn Commit Guard audit stream…";
       badges.forEach(function (b) {
         b.className = "badge badge-info";
@@ -1184,10 +1197,10 @@ button:focus-visible,
   // #269 M1/M2: tabs 2-3, their row ages and per-tab notes follow the same state as the summary cards
   var PANEL_STATE = {
     "mount-map": {
-      hideRows: ["loading", "error"],
+      hideRows: ["loading"],
       note: {
         loading: "Loading the latest Turn-1 mount…",
-        error: "Slots are not read while 127.0.0.1:1933 is down. Workers fall back to their on-disk notebook.md."
+        error: "No slot is mounted while 127.0.0.1:1933 is down; workers fall back to their on-disk notebook.md. The turn count and ages below come from the local metrics log."
       }
     },
     "namespace-explorer": {
@@ -1201,17 +1214,17 @@ button:focus-visible,
       },
       note: { loading: "Loading namespace entries…", error: "Entries stay hidden until 127.0.0.1:1933 answers again." }
     },
-    // #275 S-1: in error card 3 and this tab tell one story (A27): both unreachable, no events listed
+    // #280 S-1 (spec §4 error): card 3 and this tab both read the local audit log while 127.0.0.1:1933 is down (A27, A31)
     "commit-audit": {
-      hideRows: ["loading", "empty", "error"],
+      hideRows: ["loading", "empty"],
       label: {
-        live: "Audit log read 5m ago · 18 commits in 24h · latest 3 shown",
-        stale: "Stale · audit log read 42m ago · 18 commits in 24h · latest 3 shown",
-        empty: "Audit log checked 4s ago · 0 commits in 24h",
-        error: "Server unreachable · audit events not loaded · last contact 18m ago",
+        live: "Audit log read 5m ago · 18 session commits in 24h · latest 3 shown",
+        stale: "Stale · audit log read 42m ago · 18 session commits in 24h · latest 3 shown",
+        empty: "Audit log checked 4s ago · 0 session commits in 24h",
+        error: "Server offline · from local audit log · last event 18m ago · 18 session commits in 24h · latest 3 shown",
         loading: "Loading audit log…"
       },
-      note: { loading: "Loading audit events…", error: "Audit events stay hidden until 127.0.0.1:1933 answers again, the same as the Commit & Guard card.", empty: "No commits in the last 24 hours. The daemon answered its health check 4s ago." }
+      note: { loading: "Loading audit events…", error: "127.0.0.1:1933 is not answering. These events come from the local audit log, the same as the Commit & Guard card; their L1 and L2 text opens again when the daemon answers.", empty: "No session commits in the last 24 hours. The daemon answered its health check 4s ago." }
     }
   };
   var ROW_META = {
@@ -1221,9 +1234,9 @@ button:focus-visible,
     "mem-2": { live: "ops tooling · updated 8m ago", stale: "ops tooling · updated 26m ago", empty: "ops tooling · updated 5d ago" },
     "mem-3": { live: "ops · updated 3m ago", stale: "ops · updated 21m ago", empty: "ops · updated 3d ago" },
     "mem-4": { live: "design · updated 5m ago", stale: "design · updated 23m ago", empty: "design · updated 2d ago" },
-    "aud-1": { live: "allowed · role=ops · 5m ago", stale: "allowed · role=ops · 42m ago" },
-    "aud-2": { live: "allowed · role=backend · 12m ago", stale: "allowed · role=backend · 49m ago" },
-    "aud-3": { live: "rejected · role=backend · 28m ago", stale: "rejected · role=backend · 1h ago" }
+    "aud-1": { live: "allowed · role=ops · 5m ago", stale: "allowed · role=ops · 42m ago", error: "allowed · role=ops · 18m ago" },
+    "aud-2": { live: "allowed · role=backend · 12m ago", stale: "allowed · role=backend · 49m ago", error: "allowed · role=backend · 25m ago" },
+    "aud-3": { live: "rejected · role=backend · 28m ago", stale: "rejected · role=backend · 1h ago", error: "rejected · role=backend · 41m ago" }
   };
 
   function applyPanelState(st) {
@@ -1353,7 +1366,7 @@ button:focus-visible,
       l0: "Synced the roll-ladder feature spec from .temper/ into the Shared layer after wt land 5db1eb93.",
       l1: "Overview: the roll ladder lists the next three roll strikes for each covered call, with the net credit of each.",
       l2: "Full text: for every open covered call, RollCall shows three later expiries, each with its strike, net credit and cushion, sorted by credit.",
-      prov: "Provenance: action=commit · role=backend · .temper/ sync on wt land · guard_verdict=allowed"
+      prov: "Provenance: action=promote_shared · role=backend · .temper/ sync on wt land · guard_verdict=allowed"
     },
     "aud-3": {
       scope: "Role layer · backend · preference (isolated)",

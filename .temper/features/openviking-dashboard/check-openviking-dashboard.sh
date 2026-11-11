@@ -169,7 +169,7 @@ VALID_SOURCES = {
     "observer.mode_label", "observer.role_memory_folder_count", "observer.roles_total_count",
     "observer.daemon_bind", "observer.queue_depth", "observer.checked_at",
     "metrics.slot_hit_rate_pct", "metrics.avg_injected_tokens", "metrics.turns_sampled_24h", "metrics.last_recorded_at",
-    "changelog.commits_24h", "changelog.promotions_24h", "changelog.rejected_24h", "changelog.last_event_at",
+    "changelog.session_commits_24h", "changelog.promotions_24h", "changelog.rejected_24h", "changelog.last_event_at",
     "slots[].slot_id", "slots[].uri_prefix", "slots[].hit_rate_pct", "slots[].avg_tokens", "slots[].state", "slots[].last_sampled_at",
     "entries[].uri", "entries[].scope", "entries[].role", "entries[].layers", "entries[].l0_abstract", "entries[].updated_at",
     "events[].id", "events[].action", "events[].role", "events[].uri", "events[].l0_abstract", "events[].guard_verdict", "events[].ts"
@@ -575,7 +575,7 @@ try:
                 const firstInt = (txt) => { const m = (txt || '').replace(/,/g, '').match(/\b(\d+)\b/); return m ? parseInt(m[1], 10) : null; };
                 const card = (id) => document.querySelector(`[data-component="summary-card"][data-card-id="${id}"]`);
                 const panelOf = (key) => { const t = document.querySelector(`[role="tab"][data-tab="${key}"]`); const p = t ? openTab(t) : null; return { p, txt: p && vis(p) ? norm(p.innerText).replace(/,/g, '') : '' }; };
-                const c3fig = card('commit-governance')?.querySelector('[data-source-field="changelog.commits_24h"]');
+                const c3fig = card('commit-governance')?.querySelector('[data-source-field="changelog.session_commits_24h"]');
                 const commits = c3fig && c3fig.getAttribute('data-unreachable-value') !== 'true' ? firstInt(c3fig.innerText) : null;
                 const t3 = panelOf('commit-audit');
                 const auditRows = t3.p ? rowsIn(t3.p) : [];
@@ -994,7 +994,7 @@ try:
             if (!/local audit/i.test(label)) bad.push("Tab 3 label does not say it reads the local audit log");
             const ca = agesOf(cardTxt).map(a => a.secs), la = agesOf(label).map(a => a.secs);
             if (!ca.length || !ca.some(s => la.includes(s))) bad.push(`card 3 age [${ca}]s is not the Tab 3 age [${la}]s`);
-            const cf = card.querySelector('[data-source-field="changelog.commits_24h"]');
+            const cf = card.querySelector('[data-source-field="changelog.session_commits_24h"]');
             const m = cf ? norm(cf.innerText).replace(/,/g, '').match(/\b(\d+)\b/) : null;
             if (!m) bad.push('card 3 shows no commit count');
             else if (!new RegExp(`\\b${m[1]}\\b`).test(panelTxt)) bad.push(`card 3 count ${m[1]} is not cited in Tab 3`);
@@ -1035,7 +1035,7 @@ try:
         # ---- A29-A31 (task #280): session-commit label, phone sheet focus trap, local JSONL panels survive error ----
         # A29: the commit figure counts session commits only (ruling rm-9724bae9) and says so in every state
         a29_bad, a29_live = [], 0
-        for m in re.finditer(r"\bcommits_24h\b|roles_online_count", raw_html):
+        for m in re.finditer(r"(?<![\w.])(?:changelog\.)?commits_(?:24h)\b|\broles_online_(?:count)\b", raw_html):
             a29_bad.append(f"source: retired field '{m.group(0)}'")
         for st in STATES5:
             page.goto(f"{file_url}?state={st}", wait_until="load")
@@ -1061,7 +1061,7 @@ try:
                 a29_live = res["n"]
         if a29_live < 1:
             a29_bad.append("live: no changelog.session_commits_24h figure")
-        record("A29-SESSION-COMMITS-LABEL", len(a29_bad) == 0, f"liveCommitFigures={a29_live}, violations={a29_bad[:12]} (total={len(a29_bad)})", "all 5 states: every commit figure is changelog.session_commits_24h and reads 'session commits'; no rendered text/tooltip/aria-label says '<N> commits' without 'session'; no commits_24h or roles_online_count in source")
+        record("A29-SESSION-COMMITS-LABEL", len(a29_bad) == 0, f"liveCommitFigures={a29_live}, violations={a29_bad[:12]} (total={len(a29_bad)})", "all 5 states: every commit figure is changelog.session_commits_24h and reads 'session commits'; no rendered text/tooltip/aria-label says '<N> commits' without 'session'; neither retired field (bare commit count, roles-online count) in source")
 
         # A30: at 390 and 320 the reader opens as a modal bottom sheet that keeps keyboard focus inside it
         a30_bad = []
