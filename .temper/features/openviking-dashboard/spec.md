@@ -19,7 +19,7 @@ Pinned to `.temper/features/openviking-dashboard/design.md` (`design #274`, `28c
 ### 3. Endpoints (`server/index.ts`)
 - **`GET /api/openviking/overview` (`200`):** `{ screen_state: "live"|"stale"|"empty"|"error", observer, metrics, changelog, slots, auxiliary: { rollout, resource_sync, migration, dedup } }`.
 - **`GET /api/openviking/entries?scope=all|resources|user|agent&role=<role>` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|null, entries }` (`updated_at`, `provenance`).
-- **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|null, events }` (`action`: `"commit"|"promote_shared"|"reject_noise"|"sidecar_timeout"`, `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
+- **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|null, events }` (`action`: `"commit"|"role_memory_write"|"promote_shared"|"reject_noise"|"sidecar_timeout"`, `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
 
 ### 4. Operational States (Never Conflated)
 Behaviour contract only. Each state's visuals (token, label, glyph + `data-icon`, border) are owned by `.temper/features/openviking-dashboard/design.md` §Screen States; values by `.temper/design/tokens.json`.
@@ -43,7 +43,7 @@ Browser code formats values only and **never** computes sums, averages, percenta
 | `changelog.{session_commits_24h,promotions_24h,rejected_24h}` | `memory-changelog.jsonl` (24h) | Session commits only (see below); `preference_write`+`resource_sync`; `preference_write_blocked` (G4) | `15m` |
 | `slots[].{slot_id,uri_prefix,hit_rate_pct,avg_tokens,state}` | `metrics.jsonl` (`turn_start`, 24h) | Slots 1–5; per-slot telemetry if present, else `null` / `"unmeasured-gap"` (G3) | `5m` |
 | `entries[].{uri,scope,role,layers,l0_abstract,l1_overview,l2_content}` | `/api/v1/fs/ls` + `/api/v1/content/*` | Lists `resources`, `user/default/memories` (G8), `user/<role>/memories`; redacts `agent` content | `15m` |
-| `events[].{id,action,role,uri,l0_abstract,guard_verdict,ts}` | `memory-changelog.jsonl` + `metrics.jsonl` | Maps live actions to §3 `action` values; redacts `agent` `summary_1line` | `15m` |
+| `events[].{id,action,role,uri,l0_abstract,guard_verdict,ts}` | `memory-changelog.jsonl` + `metrics.jsonl` | §3 `action` by URI namespace + `source`, never the verb (contract `R-CHANGELOG-1d`): `commit` = session commits only; other personal-URI writes (`migration`, `lead_direct`) = `role_memory_write`; redacts `agent` `summary_1line` | `15m` |
 
 ### Session Commits (`changelog.session_commits_24h`, was `commits_24h`; ruling rm-9724bae9)
 - **Counts only a session committing its own work:** `queue_done` session commits + lead-200k session commits (live: `add` to `viking://session/<id>`, `source` `queue_done` / `session_commit_200k`; pre-rename name `session_commit`).
@@ -56,10 +56,10 @@ Browser code formats values only and **never** computes sums, averages, percenta
 - **G1 — SETTLED:** `result.status` is an ASCII table; render unavailable, never `0`, never scraped (`R-QUEUE-DEPTH-1`, §8b).
 - **G2 (`metrics.jsonl` vs. §8):** §8 `l0_hit_count`, `l1_expanded_count`, `injected_tokens_est`, `extracted_count`, `dedup_skipped_count` -> live `l0_hits`, `l1_reads`, `tokens_est`, `extracted`, `dedup_skipped`.
 - **G3 (Per-slot metrics):** Logs turn totals (`l0_hits`, `tokens_est`), not per-slot (`Slot 1..5`). Return `null` (`"unmeasured-gap"`) until Ops logs `slots[]`.
-- **G4 (`memory-changelog.jsonl` vs. §9):** §9 `add|update|delete|reject_preference_candidate` -> live `session_commit`, `preference_write`, `resource_sync`, `preference_write_blocked`.
+- **G4 — PASS live (Ops #810):** writers emit contract `action`s; old rows keep `session_commit`, `preference_write`, `resource_sync`, `preference_write_blocked`.
 - **G5 (`rollout-state.json`):** Only `{"pending_wt_land_syncs":[...]}` (no `stage`/`updated_at`); report `stage: null`.
 - **G6 (`migration-verification.json`):** `checked_at`/`source_files[]` vs. §9 `verified_at`/`total_checked`.
-- **G7 (`seen-role-messages.json`):** `{"seen":{...},"updatedAt":"..."}` vs. §6 flat map.
+- **G7 (`seen-role-messages.json`):** absent live; contract §4.4 Live status.
 - **G8 — SETTLED:** wording only; canonical form `viking://user/default/memories` (`R-URI-CANONICAL-1`, §8b).
 
 ## Obsolete Code and Tests to Delete
