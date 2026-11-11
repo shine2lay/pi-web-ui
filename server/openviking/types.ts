@@ -28,6 +28,13 @@ export const ENTRIES_CADENCE_MS = 15 * 60_000;
 export const AUDIT_CADENCE_MS = 15 * 60_000;
 export const WINDOW_24H_MS = 24 * 60 * 60 * 1_000;
 
+/**
+ * The stale reason of a panel that is inside its cadence while a `wt land` sync waits (ruling rm-b5272a3e,
+ * spec-states.md §4). Only `observer`, `entries` and `audit` can read it; metrics and changelog stay age-only.
+ */
+export const OPENVIKING_PENDING_SYNC_BADGE = "pending sync" as const;
+export type OpenVikingPendingSyncBadge = typeof OPENVIKING_PENDING_SYNC_BADGE;
+
 export const OPENVIKING_ROLES = [
 	"architecture",
 	"backend",
@@ -187,7 +194,8 @@ export interface OpenVikingObserverSummary {
 	 */
 	last_reachable_at: string | null;
 	health_state: OpenVikingHealthState;
-	stale_badge: "> 30s" | null;
+	/** The true reason (ruling rm-b5272a3e): the age when past the `30s` cadence, else a waiting sync, else null. */
+	stale_badge: "> 30s" | OpenVikingPendingSyncBadge | null;
 	last_injection_at: string | null;
 	last_commit_at: string | null;
 	retrieval_latency_avg_ms: number | null;
@@ -327,7 +335,8 @@ export interface OpenVikingEntriesQuery {
 export interface OpenVikingEntriesResponse {
 	panel_updated_at: string;
 	health_state: OpenVikingHealthState;
-	stale_badge: "> 15m" | null;
+	/** The true reason (ruling rm-b5272a3e): a sync-caused stale reads `"pending sync"`, never an age. */
+	stale_badge: "> 15m" | OpenVikingPendingSyncBadge | null;
 	entries: OpenVikingExplorerEntry[];
 }
 
@@ -354,7 +363,8 @@ export interface OpenVikingAuditEvent {
 export interface OpenVikingAuditResponse {
 	panel_updated_at: string;
 	health_state: OpenVikingHealthState;
-	stale_badge: "> 15m" | null;
+	/** The true reason (ruling rm-b5272a3e): the age when past the `15m` cadence, else a waiting sync, else null. */
+	stale_badge: "> 15m" | OpenVikingPendingSyncBadge | null;
 	events: OpenVikingAuditEvent[];
 }
 

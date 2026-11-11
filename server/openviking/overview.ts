@@ -20,9 +20,11 @@ import {
 } from "./state-files.js";
 import {
 	OPENVIKING_CONTEXT_SLOTS,
+	OPENVIKING_PENDING_SYNC_BADGE,
 	OPENVIKING_ROLES,
 	OVERVIEW_CHANGELOG_CADENCE_MS,
 	OVERVIEW_METRICS_CADENCE_MS,
+	OVERVIEW_OBSERVER_CADENCE_MS,
 	WINDOW_24H_MS,
 	type OpenVikingAuxiliaryState,
 	type OpenVikingChangelogSummary,
@@ -38,18 +40,33 @@ const round1 = (v: number) => Math.round(v * 10) / 10;
 const isoOrNull = (ms: number) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const latestMs = (rows: readonly { tsMs: number }[]) => rows.reduce((m, r) => Math.max(m, r.tsMs), -Infinity);
 
-/** Zero events in the window -> zero-activity; newest older than the cadence -> stale. */
-export function panelHealth<B extends string>(
-	eventsInWindow: number,
+/**
+ * The one rule every panel's `(health_state, stale_badge)` comes from (spec-states.md §4, ruling rm-b5272a3e).
+ *
+ * No data in the window -> zero-activity. Newest data past the cadence -> stale, badged with the age; **the age
+ * wins** over a waiting sync. Inside the cadence while a `wt land` sync waits -> stale, badged `sync.badge`
+ * (`"pending sync"`) and **never an age**, so a badge never names a cause the reading does not have (#138 row 32).
+ * Panels with no sync input (metrics, changelog, slots) pass no `sync` and can only read an age.
+ */
+export function panelHealth<B extends string, S extends string = never>(
+	dataCount: number,
 	lastMs: number,
 	nowMs: number,
 	cadenceMs: number,
-	badge: B,
-): { health_state: OpenVikingHealthState; stale_badge: B | null } {
-	if (eventsInWindow === 0) return { health_state: "zero-activity", stale_badge: null };
-	if (!Number.isFinite(lastMs) || nowMs - lastMs > cadenceMs) return { health_state: "stale", stale_badge: badge };
+	ageBadge: B,
+	sync?: { pending: number; badge: S },
+): { health_state: OpenVikingHealthState; stale_badge: B | S | null } {
+	if (dataCount === 0) return { health_state: "zero-activity", stale_badge: null };
+	if (!Number.isFinite(lastMs) || nowMs - lastMs > cadenceMs) return { health_state: "stale", stale_badge: ageBadge };
+	if (sync && sync.pending > 0) return { health_state: "stale", stale_badge: sync.badge };
 	return { health_state: "healthy", stale_badge: null };
 }
+
+/** The sync half of that rule, read from `rollout-state.json` in one place for the three panels that use it. */
+export const pendingSyncCause = (rollout: OpenVikingRolloutState) => ({
+	pending: rollout.pending_wt_land_syncs.length,
+	badge: OPENVIKING_PENDING_SYNC_BADGE,
+});
 
 export function summarizeMetrics(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingMetricsSummary {
 	const recent = records.filter((r) => nowMs - r.tsMs <= WINDOW_24H_MS);
@@ -164,6 +181,16 @@ export async function buildOverview(
 	const screen_state = screenStateOf(snapshot, degraded, metrics, changelog);
 	const lastInjection = latestMs(metricsRecords.filter((r) => r.injection));
 	const lastCommit = latestMs(changelogRecords.filter((r) => r.sessionCommit));
+	// `/health` answers inside this request, so the daemon reading has no age of its own: it is inside its `30s`
+	// cadence by construction and can only be stale on a waiting sync, never badged `"> 30s"` (ruling rm-b5272a3e).
+	const observerHealth = panelHealth(
+		1,
+		nowMs,
+		nowMs,
+		OVERVIEW_OBSERVER_CADENCE_MS,
+		"> 30s" as const,
+		pendingSyncCause(rollout),
+	);
 
 	const observer: OpenVikingObserverSummary = {
 		mode_label: !snapshot.reachable ? "Offline" : degraded ? "Degraded Local Fallback" : "Active",
@@ -174,8 +201,10 @@ export async function buildOverview(
 		checked_at: new Date(nowMs).toISOString(),
 		// Read after the snapshot's /health; display only, nothing above or below derives from it (spec 895b0cb1).
 		last_reachable_at: http.lastReachableAt,
-		health_state: !snapshot.reachable ? "server-unreachable" : degraded ? "stale" : "healthy",
-		stale_badge: null,
+		// A fallback role is a degraded verdict with no age and no sync: stale, with no badge to name (§4).
+		health_state: !snapshot.reachable ? "server-unreachable" : degraded ? "stale" : observerHealth.health_state,
+		// Unreachable is `error`, not `stale`: no badge (§4).
+		stale_badge: snapshot.reachable ? observerHealth.stale_badge : null,
 		last_injection_at: isoOrNull(lastInjection),
 		last_commit_at: isoOrNull(lastCommit),
 		retrieval_latency_avg_ms: snapshot.retrieval_latency_avg_ms,

@@ -4,8 +4,13 @@
  * summaries redacted (R-ISOLATION-1). Reads state files only; never calls `:1933`.
  */
 import { buildAuditEvents } from "./activity.js";
-import { panelHealth } from "./overview.js";
-import { readChangelogRecords, readMetricsRecords, type OpenVikingStatePaths } from "./state-files.js";
+import { panelHealth, pendingSyncCause } from "./overview.js";
+import {
+	readChangelogRecords,
+	readMetricsRecords,
+	readRolloutState,
+	type OpenVikingStatePaths,
+} from "./state-files.js";
 import {
 	AUDIT_CADENCE_MS,
 	OPENVIKING_AUDIT_ACTIONS,
@@ -65,7 +70,11 @@ export async function buildAudit(
 	nowMs: number,
 ): Promise<OpenVikingAuditResponse> {
 	const req = parseAuditQuery(query);
-	const [changelog, metrics] = await Promise.all([readChangelogRecords(paths), readMetricsRecords(paths)]);
+	const [changelog, metrics, rollout] = await Promise.all([
+		readChangelogRecords(paths),
+		readMetricsRecords(paths),
+		readRolloutState(paths),
+	]);
 	const all = buildAuditEvents(changelog, metrics);
 	const lastMs = all.length ? Date.parse(all[0].ts) : Number.NaN;
 	const in24h = all.filter((e) => nowMs - Date.parse(e.ts) <= WINDOW_24H_MS).length;
@@ -74,7 +83,8 @@ export async function buildAudit(
 		.slice(0, req.limit);
 	return {
 		panel_updated_at: new Date(nowMs).toISOString(),
-		...panelHealth(in24h, lastMs, nowMs, AUDIT_CADENCE_MS, "> 15m" as const),
+		// Past the cadence the badge is the age; inside it, a waiting `wt land` sync (ruling rm-b5272a3e).
+		...panelHealth(in24h, lastMs, nowMs, AUDIT_CADENCE_MS, "> 15m" as const, pendingSyncCause(rollout)),
 		events,
 	};
 }

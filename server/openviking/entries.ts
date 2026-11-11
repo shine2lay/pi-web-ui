@@ -19,8 +19,10 @@ import {
 	type OpenVikingLsItem,
 	type OpenVikingMemoryFile,
 } from "./memory-tree.js";
+import { panelHealth, pendingSyncCause } from "./overview.js";
 import { readChangelogRecords, readRolloutState, type OpenVikingStatePaths } from "./state-files.js";
 import {
+	ENTRIES_CADENCE_MS,
 	ISOLATED_AGENT_MEMORY_ABSTRACT,
 	OPENVIKING_ROLES,
 	OpenVikingDashboardError,
@@ -250,11 +252,11 @@ export async function buildEntries(
 		if (err instanceof OpenVikingDaemonUnreachableError && req.uri === undefined) return unreachable;
 		throw err;
 	}
-	const stale = rollout.pending_wt_land_syncs.length > 0;
 	return {
 		panel_updated_at,
-		health_state: entries.length === 0 ? "zero-activity" : stale ? "stale" : "healthy",
-		stale_badge: entries.length > 0 && stale ? "> 15m" : null,
+		// The listing comes from `:1933` inside this request, so it has no age of its own: inside its `15m` cadence by
+		// construction, stale only while a `wt land` sync waits, and never a false `"> 15m"` (ruling rm-b5272a3e).
+		...panelHealth(entries.length, nowMs, nowMs, ENTRIES_CADENCE_MS, "> 15m" as const, pendingSyncCause(rollout)),
 		entries,
 	};
 }
