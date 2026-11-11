@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## gate-no-build-cli: the systemd-install test runs the CLI from source, so `check.sh --fast` needs no build
+
+- `local` (Ops #811, for Architecture rm-a86b4982). In a worktree never built, `scripts/check.sh --fast` (which skips the build) and the full check (which runs the unit tests before it builds) failed `tests/unit/systemd-install.test.ts` with `ERR_MODULE_NOT_FOUND ... dist/server/plugin-updater.js`: its one end-to-end case imports `bin/pi-web-ui.mjs`, whose static imports name tsc's output `../dist/server/*.js`.
+- `tests/lib/cli-from-source.mjs` (a `node --import` file) registers tsx and `tests/lib/cli-from-source-hooks.mjs`, whose resolve hook sends each `../dist/server/<path>.js` import made by a `bin/pi-web-ui.mjs` to this repo's `server/<path>.ts` (a missing source fails, naming it). It does so whether or not `dist/` exists, so the case checks the current source, never a stale build. The shipped CLI is unchanged; no case or assertion is skipped or loosened.
+- Checks: `tests/unit/systemd-install.test.ts` "needs no build" copies the CLI into a folder with no `dist/` and expects the unit (failing first: committed before the hooks); then `scripts/check.sh --fast` and the full check in a fresh unbuilt worktree. `docs/gate-selected-tests.md` "Build output" updated (4 tests use `dist/`, not 5).
+- Undo: revert this commit; the test needs `npm run build` first again.
+
 ## prompt-composer-trim: omit default soul, tools list, and pi_docs boilerplate in prompt-composer
 
 - `local` (Ops #790; owner order via COO rm-a11b139c, m13901/m13903/m13905; H-PROMPT-COMPOSER-TRIM-790). `server/prompt-composer.ts` sets `BUILTIN_SOUL = ""`, returns `""` from `buildToolsText` and `buildPiDocsText`, and gates `terminal` in `resolveSectionTexts` on `selectedTools` containing a `terminal_*` tool. Explicit `SYSTEM.md` (`systemPromptFile`) and `promptOverrides` (`soul`, `tools`, `pi_docs`, `context`, etc.) continue to work as before.

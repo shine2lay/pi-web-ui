@@ -117,6 +117,9 @@ function environment(unit: string): Record<string, string> {
 	return result;
 }
 
+/** Serves the CLI's `../dist/server/*.js` imports from `server/*.ts`, so no build is needed (Ops #811). */
+const CLI_FROM_SOURCE = new URL("../lib/cli-from-source.mjs", import.meta.url).href;
+
 /** Run `pi-web-ui server install --print` (Linux, port 80) through the CLI at `cliUrl` in a child node; its stdout. */
 function printLinuxUnit(cliUrl: string): string {
 	const script = `
@@ -128,7 +131,7 @@ function printLinuxUnit(cliUrl: string): string {
 		process.argv = [process.execPath, 'pi-web-ui', 'server', 'install', '--print', '--cwd', ${JSON.stringify(tmpdir())}];
 		await import(${JSON.stringify(cliUrl)});
 	`;
-	return execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+	return execFileSync(process.execPath, ["--import", CLI_FROM_SOURCE, "--input-type=module", "-e", script], {
 		encoding: "utf8",
 		env: {
 			PATH: process.env.PATH,
