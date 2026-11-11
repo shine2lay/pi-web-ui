@@ -52,7 +52,8 @@ function SummaryCard({ card }: { readonly card: OpenVikingSummaryCardModel }): R
 			aria-label={card.title}
 		>
 			<div className="ovk-card-top">
-				<h3 className="ovk-card-title">{card.title}</h3>
+				{/* h2 under the page's h1 (axe heading-order, #259); the size stays .ovk-card-title's. */}
+				<h2 className="ovk-card-title">{card.title}</h2>
 				<span className="ovk-card-caption">
 					<span className="ovk-card-caption-text">{text.caption}</span>
 					<InfoTooltip label={tip.label} body={tip.body} />

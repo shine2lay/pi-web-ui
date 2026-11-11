@@ -132,7 +132,8 @@ export function PanelHeader({
 	return (
 		<header className="ovk-panel-header">
 			<div className="ovk-panel-header-row">
-				<h3 className="ovk-panel-title">{title}</h3>
+				{/* h2: a panel is a top-level section under the page's h1 (axe heading-order, #259). */}
+				<h2 className="ovk-panel-title">{title}</h2>
 				<div className="ovk-panel-meta">{meta}</div>
 			</div>
 			{children ? <div className="ovk-badge-strip">{children}</div> : null}

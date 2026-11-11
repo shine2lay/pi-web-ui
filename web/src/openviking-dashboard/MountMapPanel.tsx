@@ -54,7 +54,7 @@ export function MountMapPanel({
 					/>
 				))}
 			</ul>
-			<h4 className="ovk-subhead">Recent activity</h4>
+			<h3 className="ovk-subhead">Recent activity</h3>
 			{activity.length === 0 ? (
 				<p className="ovk-empty-note">No activity recorded in the window.</p>
 			) : (

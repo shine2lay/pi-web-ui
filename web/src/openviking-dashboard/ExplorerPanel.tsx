@@ -80,9 +80,9 @@ export function ExplorerPanel({
 			{groups.map((group) => (
 				<section key={group.key} className="ovk-group" data-component="memory-group">
 					<header className="ovk-group-head">
-						<h4 className="ovk-group-title" data-group-title={group.title}>
+						<h3 className="ovk-group-title" data-group-title={group.title}>
 							{group.title}
-						</h4>
+						</h3>
 						{group.subtitle ? <span className="ovk-group-subtitle">{group.subtitle}</span> : null}
 					</header>
 					<ul className="ovk-row-list">

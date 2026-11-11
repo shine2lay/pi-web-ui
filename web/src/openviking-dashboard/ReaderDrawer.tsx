@@ -57,9 +57,10 @@ export function ReaderDrawer({
 		>
 			<header className="ovk-drawer-head">
 				<div className="ovk-drawer-ident">
-					<h3 className="ovk-drawer-title" id={titleId}>
+					{/* h2: the drawer's own title, one level under the page's h1 (axe heading-order, #259). */}
+					<h2 className="ovk-drawer-title" id={titleId}>
 						{model.title}
-					</h3>
+					</h2>
 					<p className="ovk-drawer-uri ovk-mono">{model.displayUri}</p>
 					<p className="ovk-drawer-scope">
 						<span className="ovk-chip">{model.layerLabel}</span>
@@ -118,7 +119,7 @@ export function ReaderDrawer({
 			))}
 			{model.provenance ? (
 				<footer className="ovk-drawer-provenance" data-component="provenance">
-					<h4 className="ovk-subhead">Changelog provenance</h4>
+					<h3 className="ovk-subhead">Changelog provenance</h3>
 					<dl className="ovk-prov-list">
 						<ProvenanceItem label="Action" value={model.provenance.action} />
 						<ProvenanceItem label="Source" value={model.provenance.source} />
