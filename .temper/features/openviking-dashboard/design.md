@@ -5,7 +5,7 @@ Grounded in `.temper/features/openviking-dashboard/brief.md`, `.temper/design/DE
 ## First View, Disclosure Tiers & Breakpoints (`320px`, `390px`, `1440px`)
 
 - **Tier 1 — Glanceable First View:**
-  1. **Status Header (`[data-component="status-header"]`, `30s`):** Title, mode badge (`Active (15/15 Roles Live)`, `Degraded Local Fallback`, or `Offline`), icon (`data-icon`), age (`[data-age]`), and cadence.
+  1. **Status Header (`[data-component="status-header"]`, `30s`):** Title, mode badge (`Active`, `Degraded Local Fallback`, or `Offline`; it describes the daemon, never roles), the count `N role memory folders` (no liveness claim), icon (`data-icon`), age (`[data-age]`), and cadence.
   2. **3 Summary Cards (`[data-component="summary-card"]`, max 5 `[data-field]` text fields each):**
      - **System & Daemon Health (`data-card-id="system-health"`, `30s`, `data-panel-updated-at`):** Online roles, mode pill + icon, daemon bind + queue depth, panel age/cadence.
      - **Context & Token Injection (`data-card-id="context-injection"`, `5m`, `data-panel-updated-at`):** 5-slot hit rate, health pill + icon, avg tokens + turns sampled, panel age/cadence.
@@ -21,7 +21,7 @@ Grounded in `.temper/features/openviking-dashboard/brief.md`, `.temper/design/DE
 ## Screen States
 
 Every state pairs its token from `.temper/design/tokens.json` with a distinct label, icon (`data-icon`), and border style so colour is never the sole cue:
-- **`live` (`Healthy`):** Token `status-healthy-fg`/`status-healthy-bg`, label `Active (15/15 Roles Live)` or `Healthy`, glyph `●` (`data-icon="circle-check"`), `solid` border (`data-health-state="healthy"`).
+- **`live` (`Healthy`):** Token `status-healthy-fg`/`status-healthy-bg`, label `Active` or `Healthy`, glyph `●` (`data-icon="circle-check"`), `solid` border (`data-health-state="healthy"`).
 - **`loading`:** `[data-screen-state="loading"]` skeletons; never renders fake `0` counters.
 - **`stale` (`Stale` — Past Cadence):** Token `status-stale-fg`/`status-stale-bg`, label `Stale` (header `Degraded Local Fallback`), glyph `◐` (`data-icon="clock-stale"`), `dashed` border (`data-health-state="stale"`), plus visible `[data-stale-badge="true"]` naming exceeded cadence (`> 30s`, `> 5m`, or `> 15m`).
 - **`empty` (`Zero Activity` — Online, 0 Events):** Token `status-zero-fg`/`status-zero-bg`, label `Zero Activity`, glyph `◌` (`data-icon="circle-empty"`), `dotted` border (`data-health-state="zero-activity"`). States `0 events in window (server online)`—never `Healthy`, `Stale`, or `Server Unreachable`.
@@ -34,7 +34,7 @@ Browser code formats values only and **never computes sums, averages, percentage
 
 | UI Figure | Endpoint | Exact Server Field (`data-source-field`) | Age (`data-age`) | Cadence |
 |---|---|---|---|---|
-| Header mode & online roles | `GET /api/openviking/overview` | `observer.mode_label`, `observer.roles_online_count`, `observer.roles_total_count` | `observer.checked_at` | `30s` |
+| Header mode & role memory folders | `GET /api/openviking/overview` | `observer.mode_label`, `observer.role_memory_folder_count` | `observer.checked_at` | `30s` |
 | Daemon bind & queue depth | `GET /api/openviking/overview` | `observer.daemon_bind`, `observer.queue_depth` | `observer.checked_at` | `30s` |
 | 5-slot hit rate & avg tokens | `GET /api/openviking/overview` | `metrics.slot_hit_rate_pct`, `metrics.avg_injected_tokens`, `metrics.turns_sampled_24h` | `metrics.last_recorded_at` | `5m` |
 | 24h commits, promotions, rejects | `GET /api/openviking/overview` | `changelog.commits_24h`, `changelog.promotions_24h`, `changelog.rejected_24h` | `changelog.last_event_at` | `15m` |

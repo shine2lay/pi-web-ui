@@ -6,7 +6,7 @@
 
 ## Metrics vs Noise
 - **Tier 1 — 5-Second First View (shown immediately at the top):**
-  - **Live Active Status Header:** Shows whether OpenViking (`http://127.0.0.1:1933/health` + `/home/shinelay/.pi/openviking/rollout-state.json`) is `Active (15/15 Roles Live)`, `Degraded Local Fallback`, or `Offline`, plus last activity timestamp ("Last injection: 2m ago · Last commit: 8m ago").
+  - **Live Active Status Header:** Shows whether OpenViking (`http://127.0.0.1:1933/health` + `/home/shinelay/.pi/openviking/rollout-state.json`) is `Active`, `Degraded Local Fallback`, or `Offline` (with `N role memory folders`; no role liveness exists in v1), plus last activity timestamp ("Last injection: 2m ago · Last commit: 8m ago").
   - **3 Grouped Summary Cards (max 5 text fields per card, never a flat list):**
     1. **Live Injection & Retrieval Card:** Today's Mode 1 Lead folded `L0` injections, Mode 2 Worker Turn-1 pre-fetches (`Preferences` + `Project Facts`), retrieval latency/hit rate (`/api/v1/observer/system`), and 200K lead session commits (`metrics.jsonl`).
     2. **Two-Layer Memory Store Card:** Item counts across **Layer 1 Shared** (`6` repo resource trees, `8` craft preference domains, shared entities and events) and **Layer 2 Personal** (`15` roles' `viking://agent/memories/instructions/preferences.md`, `viking://agent/memories/cases`, and `viking://agent/memories/experiences`), plus last `wt land` sync status (`resource-sync-state.json`).

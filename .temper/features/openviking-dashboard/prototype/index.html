@@ -365,6 +365,14 @@ button:focus-visible,
   border-color: var(--status-info-fg);
 }
 
+/* #275 M-3: per-slot state is unmeasured-gap until per-slot telemetry exists; neutral, never a success tone */
+.badge-unmeasured {
+  color: var(--text-secondary);
+  background: transparent;
+  border-style: solid;
+  border-color: var(--border-strong);
+}
+
 .state-banner {
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
@@ -519,6 +527,13 @@ button:focus-visible,
   border-color: var(--accent-primary);
 }
 
+/* #275 M-1: the reader drawer's frame carries the screen state's tone, the same as the header badge */
+.shell[data-screen-state="live"] .drawer { border-color: var(--status-healthy-fg); }
+.shell[data-screen-state="stale"] .drawer { border-color: var(--status-stale-fg); }
+.shell[data-screen-state="empty"] .drawer { border-color: var(--status-zero-fg); }
+.shell[data-screen-state="error"] .drawer { border-color: var(--status-unreachable-fg); }
+.shell[data-screen-state="loading"] .drawer { border-color: var(--status-info-fg); }
+
 .drawer-head {
   display: flex;
   flex-wrap: wrap;
@@ -653,10 +668,11 @@ button:focus-visible,
     <div class="header-main">
       <div class="header-title-row">
         <h1 class="title-h1" data-body-copy="true">OpenViking Memory Observability</h1>
-        <span id="hdr-mode" class="badge badge-healthy" data-slot="mode-badge" data-icon="circle-check" data-figure="true" data-source-field="observer.mode_label" data-age="4s">● Active (15/15 Roles Live)</span>
+        <span id="hdr-mode" class="badge badge-healthy" data-slot="mode-badge" data-icon="circle-check" data-figure="true" data-source-field="observer.mode_label" data-age="4s">● Active</span>
+        <span class="meta" id="hdr-folders" data-figure="true" data-source-field="observer.role_memory_folder_count" data-age="4s">15 role memory folders</span>
       </div>
       <p class="subtitle" id="hdr-subtitle" data-body-copy="true">
-        OpenViking sidecar is actively injecting L0 &amp; Turn-1 memories across all 15 roles and recording verified post-turn lessons.
+        The OpenViking sidecar on 127.0.0.1:1933 answers its health check. Each panel below shows when it was last read.
       </p>
     </div>
     <div class="header-meta">
@@ -682,12 +698,11 @@ button:focus-visible,
           <span id="tip-sidecar" role="tooltip" class="tooltip">Mode 1: lead chats get a folded “viking:// URIs + 1-sentence L0 .abstract.md headlines only” card from the sidecar on 127.0.0.1:1933. If it is down, workers read their on-disk notebook.md backup (R-PREF-RESIDUAL-1b) and lead chats keep pi-acp only (R-FAIL-3).</span>
         </span>
       </div>
-      <div class="metric" id="c1-metric" data-field="metric" data-figure="true" data-source-field="observer.roles_online_count" data-age="4s">15 / 15 Roles</div>
+      <div class="metric" id="c1-metric" data-field="metric" data-figure="true" data-source-field="observer.daemon_bind" data-age="4s">127.0.0.1:1933</div>
       <div class="status-row" data-field="status">
         <span id="c1-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check">● Healthy</span>
-        <span id="c1-stale-pill" class="badge badge-stale hidden" data-stale-badge="true">◐ Stale (&gt; 30s cadence)</span>
       </div>
-      <div class="meta" id="c1-context" data-field="context" data-figure="true" data-source-field="observer.daemon_bind" data-age="4s">127.0.0.1:1933 · queue depth not reported · Shared layer + Role layer</div>
+      <div class="meta" id="c1-context" data-field="context" data-figure="true" data-source-field="observer.queue_depth" data-age="4s">Queue depth not reported · Shared layer + Role layer</div>
       <div class="age-footer" id="c1-age" data-field="age" data-age-label="true" data-panel-updated-label="true">Updated 4s ago · 30s cadence</div>
     </article>
 
@@ -698,13 +713,12 @@ button:focus-visible,
         <span class="concept-wrap" data-concept="slot-mount">
           <span class="meta">Mode 2 Turn-1</span>
           <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain Mode 2 Turn-1 5-Slot mount" aria-describedby="tip-slots">(?)</button>
-          <span id="tip-slots" role="tooltip" class="tooltip">Mode 2 (queued workers) adds a Preferences block, then 5 slots in fixed order: Slots 1–2 are direct reads (project overview, shared entity); Slot 3 takes the touched feature spec first, else search “score &gt;= 0.35”; Slot 4 takes up to 2 role cases with score &gt;= 0.35; Slot 5 lists “&lt;= 8 sibling URIs” (L0).</span>
+          <span id="tip-slots" role="tooltip" class="tooltip">Mode 2 (queued workers) adds a Preferences block, then 5 slots in fixed order: Slots 1–2 are direct reads (project overview, shared entity); Slot 3 takes the touched feature spec first, else search “score &gt;= 0.35”; Slot 4 is the “Top Matching Personal Role Cases / Experiences”: it will “select at most the top 2 URIs” with score &gt;= 0.35; Slot 5 lists “&lt;= 8 sibling URIs” (L0).</span>
         </span>
       </div>
       <div class="metric" id="c2-metric" data-field="metric" data-figure="true" data-source-field="metrics.slot_hit_rate_pct" data-age="1m">94.2% Hit Rate</div>
       <div class="status-row" data-field="status">
         <span id="ci-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check">● Healthy</span>
-        <span id="stale-pill" class="badge badge-stale hidden" data-stale-badge="true">◐ Stale (&gt; 5m cadence)</span>
       </div>
       <div class="meta" id="c2-context" data-field="context" data-figure="true" data-source-field="metrics.avg_injected_tokens" data-age="1m">1,420 avg tok · 48 turns sampled (24h)</div>
       <div class="age-footer" id="c2-age" data-field="age" data-age-label="true" data-panel-updated-label="true">Updated 1m ago · 5m cadence</div>
@@ -723,7 +737,6 @@ button:focus-visible,
       <div class="metric" id="c3-metric" data-field="metric" data-figure="true" data-source-field="changelog.commits_24h" data-age="5m">18 Commits</div>
       <div class="status-row" data-field="status">
         <span id="c3-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check">● Healthy</span>
-        <span id="c3-stale-pill" class="badge badge-stale hidden" data-stale-badge="true">◐ Stale (&gt; 15m cadence)</span>
       </div>
       <div class="meta" id="c3-context" data-field="context" data-figure="true" data-source-field="changelog.promotions_24h" data-age="5m">5 shared syncs · 1 guard rejection (24h)</div>
       <div class="age-footer" id="c3-age" data-field="age" data-age-label="true" data-panel-updated-label="true">Updated 5m ago · 15m cadence</div>
@@ -744,7 +757,7 @@ button:focus-visible,
   <section class="panel" role="tabpanel" data-tabpanel="mount-map" data-panel-updated-at="2026-11-10T20:14:00Z">
     <div class="panel-head">
       <strong class="body-copy" data-body-copy="true">5-Slot Turn-1 Context Mount &amp; Live Injection Activity</strong>
-      <span class="meta" id="p1-updated" data-panel-updated-label="true" data-age-label="true">Latest mount: ops worker on pi-web-ui · 48 turns in 24h · sampled 1m ago</span>
+      <span class="meta" id="p1-updated" data-panel-updated-label="true" data-age-label="true">Slot metrics sampled 1m ago · 48 turns in 24h · 5m cadence</span>
     </div>
     <p class="state-note hidden" data-state-note="mount-map"></p>
 
@@ -752,7 +765,7 @@ button:focus-visible,
       <span class="concept-wrap" data-concept="layer-l1">
         <span class="meta">L0 / L1 / L2 Granularity</span>
         <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain L0 L1 L2 tiers" aria-describedby="tip-l1">(?)</button>
-        <span id="tip-l1" role="tooltip" class="tooltip">L0 is a 1-sentence abstract, L1 is an overview under 2,000 tokens, and L2 is full canonical document text.</span>
+        <span id="tip-l1" role="tooltip" class="tooltip">L0 is a 1-sentence abstract; L1 is the “.overview.md (~4 KB structural/section summary)”; L2 is the full canonical document text.</span>
       </span>
       <span class="concept-wrap" data-concept="token-thresholds">
         <span class="meta">Worker 140K / Lead 200K Gate</span>
@@ -762,7 +775,7 @@ button:focus-visible,
       <span class="concept-wrap" data-concept="land-sync">
         <span class="meta">wt land Sync</span>
         <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain wt land resource sync" aria-describedby="tip-landsync">(?)</button>
-        <span id="tip-landsync" role="tooltip" class="tooltip">Landing on mine automatically indexes .temper/ specs and docs into the Shared layer at viking://resources/.</span>
+        <span id="tip-landsync" role="tooltip" class="tooltip">“Whenever wt land lands a commit onto the canonical target branch” of any repo, it runs “an immediate post-merge L0/L1/L2 resource sync” of .temper/ into the Shared layer at viking://resources/.</span>
       </span>
     </div>
 
@@ -770,11 +783,11 @@ button:focus-visible,
       <div class="row" data-slot-id="1" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-1">
         <div class="row-main">
           <div class="row-top">
-            <span class="badge badge-healthy">● Slot 1 Hit</span>
-            <strong class="body-copy" data-body-copy="true">Project L1 Overview</strong>
-            <span class="uri-code">viking://resources/pi-web-ui/.overview.md</span>
+            <span class="badge badge-unmeasured">○ Not measured</span>
+            <strong class="body-copy" data-body-copy="true">Slot 1 · Project L1 Overview</strong>
+            <span class="uri-code">viking://resources/&lt;project&gt;/.overview.md</span>
           </div>
-          <p class="abstract-copy" data-body-copy="true">pi-web-ui is the owner's chat web app: chat sessions, role queues, and the pi-web-deploy release path.</p>
+          <p class="abstract-copy" data-body-copy="true">The project's L1 overview, read directly at the start of every queued task.</p>
         </div>
         <span class="meta" data-figure="true" data-source-field="slots[].hit_rate_pct" data-age="1m" data-age-label="true">Not measured yet · read 1m ago</span>
       </div>
@@ -782,11 +795,11 @@ button:focus-visible,
       <div class="row" data-slot-id="2" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-2">
         <div class="row-main">
           <div class="row-top">
-            <span class="badge badge-healthy">● Slot 2 Hit</span>
-            <strong class="body-copy" data-body-copy="true">Shared Entity Status</strong>
-            <span class="uri-code">viking://user/default/memories/entities/pi-web-ui.md</span>
+            <span class="badge badge-unmeasured">○ Not measured</span>
+            <strong class="body-copy" data-body-copy="true">Slot 2 · Shared Entity Status</strong>
+            <span class="uri-code">viking://user/default/memories/entities/</span>
           </div>
-          <p class="abstract-copy" data-body-copy="true">pi-web-ui runs from the mine branch; installs go through pi-web-deploy with automatic rollback.</p>
+          <p class="abstract-copy" data-body-copy="true">The project's shared entity file (branch, last install, status), read directly.</p>
         </div>
         <span class="meta" data-figure="true" data-source-field="slots[].avg_tokens" data-age="1m" data-age-label="true">Not measured yet · read 1m ago</span>
       </div>
@@ -794,11 +807,11 @@ button:focus-visible,
       <div class="row" data-slot-id="3" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-3">
         <div class="row-main">
           <div class="row-top">
-            <span class="badge badge-healthy">● Slot 3 Hit</span>
-            <strong class="body-copy" data-body-copy="true">Top Matching Feature Spec</strong>
-            <span class="uri-code">viking://resources/pi-web-ui/features/queue-priority/spec.md</span>
+            <span class="badge badge-unmeasured">○ Not measured</span>
+            <strong class="body-copy" data-body-copy="true">Slot 3 · Top Matching Feature Spec</strong>
+            <span class="uri-code">viking://resources/&lt;project&gt;/features/</span>
           </div>
-          <p class="abstract-copy" data-body-copy="true">Queue tasks carry a P0 to P3 priority badge, and P0 tasks sort first in every queue view.</p>
+          <p class="abstract-copy" data-body-copy="true">The feature spec the task touches, else the best search match with score &gt;= 0.35.</p>
         </div>
         <span class="meta" data-figure="true" data-source-field="slots[].hit_rate_pct" data-age="1m" data-age-label="true">Not measured yet · read 1m ago</span>
       </div>
@@ -806,9 +819,9 @@ button:focus-visible,
       <div class="row" data-slot-id="4" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-4">
         <div class="row-main">
           <div class="row-top">
-            <span class="badge badge-healthy">● Slot 4 Hit</span>
-            <strong class="body-copy" data-body-copy="true">Role Cases (ops)</strong>
-            <span class="uri-code">viking://agent/memories/cases/n544-openviking-service-and-0-5-4-api-traps.md</span>
+            <span class="badge badge-unmeasured">○ Not measured</span>
+            <strong class="body-copy" data-body-copy="true">Slot 4 · Role Cases &amp; Experiences</strong>
+            <span class="uri-code">viking://agent/memories/</span>
           </div>
           <p class="abstract-copy" data-body-copy="true">[Isolated per-role memory — metadata only (R-ISOLATION-1)]</p>
         </div>
@@ -818,13 +831,13 @@ button:focus-visible,
       <div class="row" data-slot-id="5" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-5">
         <div class="row-main">
           <div class="row-top">
-            <span class="badge badge-healthy">● Slot 5 L0 Menu</span>
-            <strong class="body-copy" data-body-copy="true">Sibling Project Docs</strong>
-            <span class="uri-code">viking://resources/pi-web-ui/core/map.md</span>
+            <span class="badge badge-unmeasured">○ Not measured</span>
+            <strong class="body-copy" data-body-copy="true">Slot 5 · Sibling Project Docs</strong>
+            <span class="uri-code">viking://resources/&lt;project&gt;/</span>
           </div>
-          <p class="abstract-copy" data-body-copy="true">Module map of pi-web-ui: server routes, chat state, the queue view, and deploy scripts.</p>
+          <p class="abstract-copy" data-body-copy="true">Up to 8 sibling project docs, listed as one-line L0 abstracts.</p>
         </div>
-        <span class="meta" data-figure="true" data-source-field="slots[].state" data-age="1m" data-age-label="true">3 sibling docs · not measured yet · read 1m ago</span>
+        <span class="meta" data-figure="true" data-source-field="slots[].state" data-age="1m" data-age-label="true">Not measured yet · read 1m ago</span>
       </div>
     </div>
   </section>
@@ -835,7 +848,7 @@ button:focus-visible,
       <strong class="body-copy" data-body-copy="true">Memory Namespace Explorer · Shared layer by repo, Role layer by role</strong>
       <span class="meta" data-panel-updated-label="true" data-age-label="true">Namespace indexed 3m ago · 15m cadence</span>
     </div>
-    <p class="meta">Shared layer: 6 repos, 8 preference domains, shared entities and events · Role layer: 15 roles (preferences, cases, experiences)</p>
+    <p class="meta" data-namespace-summary="true">Shared layer: 6 repos, 8 preference domains, shared entities and events · Role layer: 15 roles (preferences, cases, experiences)</p>
     <p class="state-note hidden" data-state-note="namespace-explorer"></p>
 
     <div class="proto-group" role="group" aria-label="Layer Scope Filter">
@@ -981,7 +994,7 @@ button:focus-visible,
       <p class="body-copy" id="drawer-l0-body" data-body-copy="true"></p>
     </div>
     <div class="drawer-box hidden" id="drawer-tier-l1" data-drawer-panel="l1">
-      <strong class="meta">L1 Overview (.overview.md structured summary, &lt; 2,000 tokens)</strong>
+      <strong class="meta">L1 Overview (.overview.md, ~4 KB structural summary)</strong>
       <p class="body-copy" id="drawer-l1-body" data-body-copy="true"></p>
     </div>
     <div class="drawer-box hidden" id="drawer-tier-l2" data-drawer-panel="l2">
@@ -993,8 +1006,9 @@ button:focus-visible,
 <script>
 (function () {
   var LIVE_FIGURES = {
-    "c1-metric": "15 / 15 Roles",
-    "c1-context": "127.0.0.1:1933 · queue depth not reported · Shared layer + Role layer",
+    "hdr-folders": "15 role memory folders",
+    "c1-metric": "127.0.0.1:1933",
+    "c1-context": "Queue depth not reported · Shared layer + Role layer",
     "c2-metric": "94.2% Hit Rate",
     "c2-context": "1,420 avg tok · 48 turns sampled (24h)",
     "c3-metric": "18 Commits",
@@ -1005,7 +1019,9 @@ button:focus-visible,
     return document.getElementById(id);
   }
 
+  var currentState = "live";
   function applyState(st) {
+    currentState = st;
     var app = byId("app");
     app.setAttribute("data-screen-state", st);
 
@@ -1024,35 +1040,29 @@ button:focus-visible,
     var bTitle = byId("state-banner-title");
     var bBody = byId("state-banner-body");
     var badges = [byId("c1-badge"), byId("ci-badge"), byId("c3-badge")];
-    var stalePills = [byId("c1-stale-pill"), byId("stale-pill"), byId("c3-stale-pill")];
+    var badgeCadence = ["30s", "5m", "15m"];
+    var folders = byId("hdr-folders");
     var c1Age = byId("c1-age");
     var c2Age = byId("c2-age");
     var c3Age = byId("c3-age");
     var slotRows = document.querySelectorAll("[data-slot-id]");
-    var slotNums = ["1", "2", "3", "4", "5"];
-    var slotLiveMeta = [
-      "Not measured yet · read 1m ago",
-      "Not measured yet · read 1m ago",
-      "Not measured yet · read 1m ago",
-      "Not measured yet · read 1m ago",
-      "3 sibling docs · not measured yet · read 1m ago"
-    ];
-    var slotStaleMeta = [
-      "Not measured yet · read 19m ago",
-      "Not measured yet · read 19m ago",
-      "Not measured yet · read 19m ago",
-      "Not measured yet · read 19m ago",
-      "3 sibling docs · not measured yet · read 19m ago"
-    ];
+    // #275 M-3: slot badges stay a neutral "Not measured" in every state; only the read time changes
+    function setSlotMeta(text) {
+      slotRows.forEach(function (r) {
+        var m = r.querySelector("[data-figure]");
+        if (m) m.textContent = text;
+      });
+    }
     var p1Upd = byId("p1-updated");
 
     c1Age.textContent = "Updated 4s ago · 30s cadence";
     c2Age.textContent = "Updated 1m ago · 5m cadence";
     c3Age.textContent = "Updated 5m ago · 15m cadence";
-    if (p1Upd) p1Upd.textContent = "Latest mount: ops worker on pi-web-ui · 48 turns in 24h · sampled 1m ago";
+    if (p1Upd) p1Upd.textContent = "Slot metrics sampled 1m ago · 48 turns in 24h · 5m cadence";
 
-    stalePills.forEach(function (p) {
-      if (p) p.classList.add("hidden");
+    // #275 C-7: one badge per card; in stale it names its cadence and carries the stale marker
+    badges.forEach(function (b) {
+      b.removeAttribute("data-stale-badge");
     });
 
     if (st === "stale") {
@@ -1065,23 +1075,13 @@ button:focus-visible,
       c2Age.textContent = "Updated 19m ago · 5m cadence";
       c3Age.textContent = "Updated 42m ago · 15m cadence";
       if (p1Upd) p1Upd.textContent = "Stale · 48 turns in 24h · slots sampled 19m ago (> 5m cadence)";
-      badges.forEach(function (b) {
+      badges.forEach(function (b, i) {
         b.className = "badge badge-stale";
         b.setAttribute("data-icon", "clock-stale");
-        b.textContent = "◐ Stale";
+        b.setAttribute("data-stale-badge", "true");
+        b.textContent = "◐ Stale (> " + badgeCadence[i] + " cadence)";
       });
-      stalePills.forEach(function (p) {
-        if (p) p.classList.remove("hidden");
-      });
-      slotRows.forEach(function (r, idx) {
-        var b = r.querySelector(".badge");
-        var m = r.querySelector("[data-figure]");
-        if (b) {
-          b.className = "badge badge-stale";
-          b.textContent = `◐ Slot ${slotNums[idx]} Stale (19m ago)`;
-        }
-        if (m) m.textContent = slotStaleMeta[idx];
-      });
+      setSlotMeta("Not measured yet · read 19m ago");
       banner.className = "state-banner badge-stale";
       bTitle.textContent = "◐ Stale — Exceeded Expected Active Cadence (> 30s / > 5m / > 15m)";
       bBody.textContent = "The daemon answers, but the last slot sample is 19m old and the last commit 42m old. Figures below are those last reads.";
@@ -1096,7 +1096,7 @@ button:focus-visible,
       c3Age.textContent = "Checked 4s ago · 15m cadence";
       if (p1Upd) p1Upd.textContent = "Checked 4s ago · 0 turns in window · 5m cadence";
       byId("c2-metric").textContent = "0 turns in window";
-      byId("c2-context").textContent = "0 avg tok · 0 turns sampled (server online)";
+      byId("c2-context").textContent = "— avg tok (no turns) · 0 turns sampled (server online)";
       byId("c3-metric").textContent = "0 commits in window";
       byId("c3-context").textContent = "0 shared syncs · 0 guard rejections (server online)";
       badges.forEach(function (b) {
@@ -1104,15 +1104,7 @@ button:focus-visible,
         b.setAttribute("data-icon", "circle-empty");
         b.textContent = "◌ Zero Activity";
       });
-      slotRows.forEach(function (r, idx) {
-        var b = r.querySelector(".badge");
-        var m = r.querySelector("[data-figure]");
-        if (b) {
-          b.className = "badge badge-zero";
-          b.textContent = `◌ Slot ${slotNums[idx]} Idle (0 turns)`;
-        }
-        if (m) m.textContent = "0 turns · checked 4s ago";
-      });
+      setSlotMeta("0 turns · checked 4s ago");
       banner.className = "state-banner badge-zero";
       bTitle.textContent = "◌ Zero Activity — 0 events in window (server online)";
       bBody.textContent = "The daemon answered its health check 4s ago. No role ran a turn or made a commit in the last 24 hours.";
@@ -1135,18 +1127,12 @@ button:focus-visible,
         f.setAttribute("data-unreachable-value", "true");
         f.textContent = "— (Unreachable)";
       });
-      slotRows.forEach(function (r, idx) {
-        var b = r.querySelector(".badge");
-        var m = r.querySelector("[data-figure]");
-        if (b) {
-          b.className = "badge badge-unreachable";
-          b.textContent = `✕ Slot ${slotNums[idx]} Unreachable`;
-        }
-        if (m) m.textContent = "— (Unreachable) · last seen 18m ago";
-      });
+      folders.setAttribute("data-unreachable-value", "true");
+      folders.textContent = "Role memory folders — (Unreachable)";
+      setSlotMeta("— (Unreachable) · last seen 18m ago");
       banner.className = "state-banner badge-unreachable";
       bTitle.textContent = "✕ Server Unreachable — Cannot reach 127.0.0.1:1933 (Offline)";
-      bBody.textContent = "Last contact 18m ago. Figures and entries come back when the daemon answers again; the audit tab still reads the local audit file.";
+      bBody.textContent = "Last contact 18m ago. Figures, entries and audit events come back when the daemon answers again.";
     } else if (st === "loading") {
       hdr.className = "badge badge-info";
       hdr.setAttribute("data-icon", "circle-check");
@@ -1157,7 +1143,8 @@ button:focus-visible,
       c2Age.textContent = "Loading… · 5m cadence";
       c3Age.textContent = "Loading… · 15m cadence";
       if (p1Upd) p1Upd.textContent = "Loading slot telemetry… · 5m cadence";
-      byId("c1-metric").textContent = "Loading roles…";
+      folders.textContent = "Loading role memory folders…";
+      byId("c1-metric").textContent = "Loading daemon status…";
       byId("c1-context").textContent = "Fetching daemon status from /api/openviking/overview…";
       byId("c2-metric").textContent = "Loading hit rate…";
       byId("c2-context").textContent = "Fetching 5-slot Turn-1 injection sample…";
@@ -1168,46 +1155,26 @@ button:focus-visible,
         b.setAttribute("data-icon", "circle-check");
         b.textContent = "● Loading…";
       });
-      slotRows.forEach(function (r, idx) {
-        var b = r.querySelector(".badge");
-        var m = r.querySelector("[data-figure]");
-        if (b) {
-          b.className = "badge badge-info";
-          b.textContent = `● Slot ${slotNums[idx]} Loading…`;
-        }
-        if (m) m.textContent = "Loading slot metrics…";
-      });
+      setSlotMeta("Loading slot metrics…");
       banner.className = "state-banner badge-info";
       bTitle.textContent = "Loading OpenViking telemetry snapshot…";
-      bBody.textContent = "Reading the overview, namespace entries and audit log from 127.0.0.1:1933.";
+      bBody.textContent = "Reading the overview and namespace entries from 127.0.0.1:1933, and commit events from the local audit file.";
     } else {
       hdr.className = "badge badge-healthy";
       hdr.setAttribute("data-icon", "circle-check");
-      hdr.textContent = "● Active (15/15 Roles Live)";
-      sub.textContent = "OpenViking sidecar is actively injecting L0 & Turn-1 memories across all 15 roles and recording verified post-turn lessons.";
+      hdr.textContent = "● Active";
+      sub.textContent = "The OpenViking sidecar on 127.0.0.1:1933 answers its health check. Each panel below shows when it was last read.";
       chk.textContent = "Last injection 4s ago · Last commit 5m ago · 30s cadence";
       badges.forEach(function (b) {
         b.className = "badge badge-healthy";
         b.setAttribute("data-icon", "circle-check");
         b.textContent = "● Healthy";
       });
-      slotRows.forEach(function (r, idx) {
-        var b = r.querySelector(".badge");
-        var m = r.querySelector("[data-figure]");
-        if (b) {
-          if (idx < 4) {
-            b.className = "badge badge-healthy";
-            b.textContent = `● Slot ${slotNums[idx]} Hit`;
-          } else {
-            b.className = "badge badge-healthy";
-            b.textContent = "● Slot 5 L0 Menu";
-          }
-        }
-        if (m) m.textContent = slotLiveMeta[idx];
-      });
+      setSlotMeta("Not measured yet · read 1m ago");
       banner.className = "state-banner hidden";
     }
     applyPanelState(st);
+    followState(st);
 
     document.querySelectorAll("[data-set-state]").forEach(function (btn) {
       btn.setAttribute("aria-pressed", btn.getAttribute("data-set-state") === st ? "true" : "false");
@@ -1234,16 +1201,17 @@ button:focus-visible,
       },
       note: { loading: "Loading namespace entries…", error: "Entries stay hidden until 127.0.0.1:1933 answers again." }
     },
+    // #275 S-1: in error card 3 and this tab tell one story (A27): both unreachable, no events listed
     "commit-audit": {
-      hideRows: ["loading", "empty"],
+      hideRows: ["loading", "empty", "error"],
       label: {
         live: "Audit log read 5m ago · 18 commits in 24h · latest 3 shown",
         stale: "Stale · audit log read 42m ago · 18 commits in 24h · latest 3 shown",
         empty: "Audit log checked 4s ago · 0 commits in 24h",
-        error: "Offline · daemon unreachable · local audit file, newest event 23m ago",
+        error: "Server unreachable · audit events not loaded · last contact 18m ago",
         loading: "Loading audit log…"
       },
-      note: { loading: "Loading audit events…", empty: "No commits in the last 24 hours. The daemon answered its health check 4s ago." }
+      note: { loading: "Loading audit events…", error: "Audit events stay hidden until 127.0.0.1:1933 answers again, the same as the Commit & Guard card.", empty: "No commits in the last 24 hours. The daemon answered its health check 4s ago." }
     }
   };
   var ROW_META = {
@@ -1253,9 +1221,9 @@ button:focus-visible,
     "mem-2": { live: "ops tooling · updated 8m ago", stale: "ops tooling · updated 26m ago", empty: "ops tooling · updated 5d ago" },
     "mem-3": { live: "ops · updated 3m ago", stale: "ops · updated 21m ago", empty: "ops · updated 3d ago" },
     "mem-4": { live: "design · updated 5m ago", stale: "design · updated 23m ago", empty: "design · updated 2d ago" },
-    "aud-1": { live: "allowed · role=ops · 5m ago", stale: "allowed · role=ops · 42m ago", error: "allowed · role=ops · 23m ago" },
-    "aud-2": { live: "allowed · role=backend · 12m ago", stale: "allowed · role=backend · 49m ago", error: "allowed · role=backend · 30m ago" },
-    "aud-3": { live: "rejected · role=backend · 28m ago", stale: "rejected · role=backend · 1h ago", error: "rejected · role=backend · 46m ago" }
+    "aud-1": { live: "allowed · role=ops · 5m ago", stale: "allowed · role=ops · 42m ago" },
+    "aud-2": { live: "allowed · role=backend · 12m ago", stale: "allowed · role=backend · 49m ago" },
+    "aud-3": { live: "rejected · role=backend · 28m ago", stale: "rejected · role=backend · 1h ago" }
   };
 
   function applyPanelState(st) {
@@ -1263,7 +1231,7 @@ button:focus-visible,
       var cfg = PANEL_STATE[key];
       var panel = document.querySelector('[data-tabpanel="' + key + '"]');
       var hideRows = cfg.hideRows.indexOf(st) !== -1;
-      panel.querySelectorAll('.row-list, [aria-label="Layer Scope Filter"]').forEach(function (el) {
+      panel.querySelectorAll('.row-list, [aria-label="Layer Scope Filter"], [data-namespace-summary]').forEach(function (el) {
         el.classList.toggle("hidden", hideRows);
       });
       if (cfg.label) panel.querySelector("[data-panel-updated-label]").textContent = cfg.label[st] || cfg.label.live;
@@ -1282,45 +1250,46 @@ button:focus-visible,
   var ISOLATED = "[Isolated per-role memory — metadata only (R-ISOLATION-1)]";
   var UNAVAILABLE = "Unavailable — role isolation (R-ISOLATION-1)";
   var DRAWER_DATA = {
+    // #275 M-3: a slot is a mount position (uri_prefix only, types.ts slots[]), not one stored document
     "slot-1": {
       scope: "Shared layer · Slot 1 · project overview (direct read)",
-      uri: "viking://resources/pi-web-ui/.overview.md",
-      l0: "pi-web-ui is the owner's chat web app: chat sessions, role queues, and the pi-web-deploy release path.",
-      l1: "Overview: pi-web-ui serves chats on the loopback port behind tailscale, runs the role queues, and ships through pi-web-deploy.",
-      l2: "Full text: the server keeps chat sessions and queue state; the client renders chats, queues and Show&Tell; releases are built aside, swapped in, checked, and rolled back on failure.",
-      prov: "Provenance: Turn-1 mount · slot 1 · direct read of the project overview · read 1m ago"
+      uri: "viking://resources/<project>/.overview.md",
+      l0: "The project's L1 overview, read directly at the start of every queued task.",
+      l1: "Unavailable here: slot 1 resolves to the task's own project, so there is no single overview to show. Per-slot reads are not measured yet.",
+      l2: "Unavailable here: slot 1 keeps no copy of the overview text; open the project's entry in the Namespace Explorer instead.",
+      prov: "Provenance: Turn-1 mount · slot 1 · direct read of the project overview"
     },
     "slot-2": {
       scope: "Shared layer · Slot 2 · shared entity (direct read)",
-      uri: "viking://user/default/memories/entities/pi-web-ui.md",
-      l0: "pi-web-ui runs from the mine branch; installs go through pi-web-deploy with automatic rollback.",
-      l1: "Overview: current branch, last install, and the rollback path for pi-web-ui.",
-      l2: "Full text: pi-web-ui runs from mine; each install is checked on the server, the page and one throwaway chat before it stays live.",
-      prov: "Provenance: Turn-1 mount · slot 2 · direct read of the shared entity · read 1m ago"
+      uri: "viking://user/default/memories/entities/",
+      l0: "The project's shared entity file (branch, last install, status), read directly.",
+      l1: "Unavailable here: slot 2 resolves to the task's own project entity, so there is no single file to show. Per-slot reads are not measured yet.",
+      l2: "Unavailable here: slot 2 keeps no copy of the entity text.",
+      prov: "Provenance: Turn-1 mount · slot 2 · direct read of the shared entity"
     },
     "slot-3": {
       scope: "Shared layer · Slot 3 · touched feature spec",
-      uri: "viking://resources/pi-web-ui/features/queue-priority/spec.md",
-      l0: "Queue tasks carry a P0 to P3 priority badge, and P0 tasks sort first in every queue view.",
-      l1: "Overview: priority values, sort order and badge rules for queue tasks.",
-      l2: "Full text: every task has a priority from P0 to P3; P0 sorts first, filters never hide P0, and each badge pairs a label with its color.",
-      prov: "Provenance: Turn-1 mount · slot 3 · matched the task's touched feature folder · read 1m ago"
+      uri: "viking://resources/<project>/features/",
+      l0: "The feature spec the task touches, else the best search match with score >= 0.35.",
+      l1: "Unavailable here: slot 3 picks a different spec for each task. Per-slot reads are not measured yet.",
+      l2: "Unavailable here: slot 3 keeps no copy of the spec text.",
+      prov: "Provenance: Turn-1 mount · slot 3 · touched feature folder, else search score >= 0.35"
     },
     "slot-4": {
-      scope: "Role layer · ops · Slot 4 · case (isolated)",
-      uri: "viking://agent/memories/cases/n544-openviking-service-and-0-5-4-api-traps.md",
+      scope: "Role layer · Slot 4 · cases and experiences (isolated)",
+      uri: "viking://agent/memories/",
       l0: ISOLATED,
       l1: UNAVAILABLE,
       l2: UNAVAILABLE,
-      prov: "Provenance: Turn-1 mount · slot 4 · ops case with score >= 0.35 · metadata only · read 1m ago"
+      prov: "Provenance: Turn-1 mount · slot 4 · top 2 role cases or experiences with score >= 0.35 · metadata only"
     },
     "slot-5": {
       scope: "Shared layer · Slot 5 · sibling L0 menu",
-      uri: "viking://resources/pi-web-ui/core/map.md",
-      l0: "Module map of pi-web-ui: server routes, chat state, the queue view, and deploy scripts.",
-      l1: "Overview: where each pi-web-ui module lives and which check covers it.",
-      l2: "Full text: server routes, chat state, the queue view and deploy scripts, each listed with its owning test folder.",
-      prov: "Provenance: Turn-1 mount · slot 5 · 3 sibling docs listed at L0 · read 1m ago"
+      uri: "viking://resources/<project>/",
+      l0: "Up to 8 sibling project docs, listed as one-line L0 abstracts.",
+      l1: "Unavailable here: slot 5 lists a different set of sibling docs for each project. Per-slot reads are not measured yet.",
+      l2: "Unavailable here: slot 5 shows L0 abstracts only and keeps no full text.",
+      prov: "Provenance: Turn-1 mount · slot 5 · up to 8 sibling docs listed at L0"
     },
     "mem-1": {
       scope: "Shared layer · repo pi-web-ui · resource · read-only",
@@ -1328,7 +1297,7 @@ button:focus-visible,
       l0: "The owner wants P0 tasks seen first in every queue, with a badge readable at a glance.",
       l1: "Overview: who sets priority, how P0 is shown, and what the owner sees first.",
       l2: "Full text: the owner sets P0 for work that blocks him; P0 tasks lead every queue list and keep their badge on phone widths.",
-      prov: "Provenance: entries · indexed from .temper/ on wt land · updated 3m ago"
+      prov: "Provenance: entries · indexed from .temper/ on wt land"
     },
     "mem-5": {
       scope: "Shared layer · repo pi-web-ui · event · read-only",
@@ -1336,7 +1305,7 @@ button:focus-visible,
       l0: "The pi-web-ui install of 3469d578 passed its page and chat checks and stayed live.",
       l1: "Overview: install time, commit, and the three checks that passed.",
       l2: "Full text: the install of 3469d578 was built aside, swapped in, and passed the server, page and chat checks; no rollback was needed.",
-      prov: "Provenance: entries · shared event recorded after the install · updated 41m ago"
+      prov: "Provenance: entries · shared event recorded after the install"
     },
     "mem-6": {
       scope: "Shared layer · repo rollcall · resource · read-only",
@@ -1344,7 +1313,7 @@ button:focus-visible,
       l0: "RollCall tracks covered-call positions and flags when a short call is due to roll.",
       l1: "Overview: positions, roll suggestions and the daily brief in RollCall.",
       l2: "Full text: RollCall imports covered-call positions, watches the cushion to each strike, and suggests a roll before expiry.",
-      prov: "Provenance: entries · indexed from the rollcall .temper/ folder · updated 2h ago"
+      prov: "Provenance: entries · indexed from the rollcall .temper/ folder"
     },
     "mem-2": {
       scope: "Shared layer · craft preferences · ops tooling · read-only",
@@ -1352,7 +1321,7 @@ button:focus-visible,
       l0: "Isolate work in dedicated git worktrees and deploy pi-web-ui exclusively via pi-web-deploy with health checks.",
       l1: "Overview: small reversible changes, isolated worktrees (wt new, wt check, wt land), and daemons with health checks.",
       l2: "Full text: keep changes small, reversible, and checked before they reach live services; know the undo path first; install pi-web-ui only through pi-web-deploy.",
-      prov: "Provenance: entries · shared craft preference, read-only to queued workers · updated 8m ago"
+      prov: "Provenance: entries · shared craft preference, read-only to queued workers"
     },
     "mem-3": {
       scope: "Role layer · ops · preference (isolated)",
@@ -1360,7 +1329,7 @@ button:focus-visible,
       l0: ISOLATED,
       l1: UNAVAILABLE,
       l2: UNAVAILABLE,
-      prov: "Provenance: entries · role=ops · metadata only · updated 3m ago"
+      prov: "Provenance: entries · role=ops · metadata only"
     },
     "mem-4": {
       scope: "Role layer · design · case (isolated)",
@@ -1368,7 +1337,7 @@ button:focus-visible,
       l0: ISOLATED,
       l1: UNAVAILABLE,
       l2: UNAVAILABLE,
-      prov: "Provenance: entries · role=design · metadata only · updated 5m ago"
+      prov: "Provenance: entries · role=design · metadata only"
     },
     "aud-1": {
       scope: "Role layer · ops · case (isolated)",
@@ -1376,7 +1345,7 @@ button:focus-visible,
       l0: ISOLATED,
       l1: UNAVAILABLE,
       l2: UNAVAILABLE,
-      prov: "Provenance: action=commit · role=ops · post-task case · guard_verdict=allowed · 5m ago"
+      prov: "Provenance: action=commit · role=ops · post-task case · guard_verdict=allowed"
     },
     "aud-2": {
       scope: "Shared layer · repo rollcall · resource",
@@ -1384,7 +1353,7 @@ button:focus-visible,
       l0: "Synced the roll-ladder feature spec from .temper/ into the Shared layer after wt land 5db1eb93.",
       l1: "Overview: the roll ladder lists the next three roll strikes for each covered call, with the net credit of each.",
       l2: "Full text: for every open covered call, RollCall shows three later expiries, each with its strike, net credit and cushion, sorted by credit.",
-      prov: "Provenance: action=commit · role=backend · .temper/ sync on wt land · guard_verdict=allowed · 12m ago"
+      prov: "Provenance: action=commit · role=backend · .temper/ sync on wt land · guard_verdict=allowed"
     },
     "aud-3": {
       scope: "Role layer · backend · preference (isolated)",
@@ -1392,7 +1361,7 @@ button:focus-visible,
       l0: ISOLATED,
       l1: UNAVAILABLE,
       l2: UNAVAILABLE,
-      prov: "Provenance: action=reject_noise · role=backend · preference files are read-only to workers (R-PREF-WRITE-GUARD-1) · guard_verdict=rejected · 28m ago"
+      prov: "Provenance: action=reject_noise · role=backend · preference files are read-only to workers (R-PREF-WRITE-GUARD-1) · guard_verdict=rejected"
     }
   };
 
@@ -1453,14 +1422,28 @@ button:focus-visible,
 
   // #269 M3: every field is rewritten for every row; a row without reader data is an error, never left-over content
   var DRAWER_FIELDS = { scope: "drawer-scope", uri: "drawer-uri", l0: "drawer-l0-body", l1: "drawer-l1-body", l2: "drawer-l2-body", prov: "drawer-prov" };
-  function populateDrawer(row) {
+  // #275 M-1/M-2: the drawer is rendered for the current state: the row's own age, and no :1933 layer text while offline
+  var OFFLINE = "Unavailable while offline: this layer is read from 127.0.0.1:1933, which is not answering.";
+  var AGE_RE = /(?:\b[a-z]+\s+)?\d+\s*[smhd]\s*ago\b/gi;
+  function rowAges(row) {
+    var ages = [];
+    row.querySelectorAll("[data-figure], [data-age-label]").forEach(function (el) {
+      (el.textContent.match(AGE_RE) || []).forEach(function (a) {
+        if (ages.indexOf(a) === -1) ages.push(a);
+      });
+    });
+    return ages;
+  }
+  function populateDrawer(row, st) {
     var key = row.getAttribute("data-item-key") || "";
     var d = DRAWER_DATA[key];
     if (!d) throw new Error("reader drawer: no DRAWER_DATA entry for row " + (key || "(missing data-item-key)"));
     Object.keys(DRAWER_FIELDS).forEach(function (field) {
-      byId(DRAWER_FIELDS[field]).textContent = d[field];
+      var offline = st === "error" && (field === "l1" || field === "l2");
+      byId(DRAWER_FIELDS[field]).textContent = offline ? OFFLINE : d[field];
     });
-    selectDrawerTab(drawerTabs[0]);
+    var ages = rowAges(row);
+    if (ages.length) byId("drawer-prov").textContent = d.prov + " · " + ages.join(" · ");
   }
 
   var drawerTabs = Array.prototype.slice.call(document.querySelectorAll("[data-drawer-tab]"));
@@ -1477,23 +1460,61 @@ button:focus-visible,
   wireTablist(drawerTabs, selectDrawerTab);
 
   var shell = document.querySelector(".shell");
+  var closeBtn = document.querySelector('[data-slot="drawer-close"]');
+  // #275 S-3: below 1024px the drawer is a bottom sheet that covers the page, so it is modal and keeps focus inside
+  var sheetQuery = window.matchMedia("(max-width: 1023.98px)");
+  function isSheet() {
+    return sheetQuery.matches && !drawer.classList.contains("hidden");
+  }
   function openDrawer(row) {
-    populateDrawer(row);
+    populateDrawer(row, currentState);
+    selectDrawerTab(drawerTabs[0]);
     row.setAttribute("aria-expanded", "true");
     drawer.classList.remove("hidden");
     if (shell) shell.classList.add("drawer-open");
     activeRow = row;
+    drawer.setAttribute("aria-modal", sheetQuery.matches ? "true" : "false");
+    if (sheetQuery.matches && closeBtn) closeBtn.focus();
   }
 
   // #269 M4: closing by button or Escape hands focus back to the row that opened the drawer
-  function closeDrawer() {
+  function closeDrawer(focusTarget) {
     drawer.classList.add("hidden");
     if (shell) shell.classList.remove("drawer-open");
     if (!activeRow) return;
     activeRow.setAttribute("aria-expanded", "false");
-    activeRow.focus();
+    (focusTarget || activeRow).focus();
     activeRow = null;
   }
+
+  // #275 M-1/M-2: a state switch re-renders the open drawer for the new state, or closes it when its row is no longer shown
+  function followState(st) {
+    if (!activeRow || drawer.classList.contains("hidden")) return;
+    if (activeRow.offsetParent !== null) {
+      populateDrawer(activeRow, st);
+      return;
+    }
+    closeDrawer(mainTabs.filter(function (b) {
+      return b.getAttribute("aria-selected") === "true";
+    })[0] || mainTabs[0]);
+  }
+
+  drawer.addEventListener("keydown", function (e) {
+    if (e.key !== "Tab" || !isSheet()) return;
+    var stops = Array.prototype.slice.call(drawer.querySelectorAll('button:not([tabindex="-1"])'));
+    var first = stops[0];
+    var last = stops[stops.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
+  document.addEventListener("focusin", function (e) {
+    if (isSheet() && !drawer.contains(e.target) && closeBtn) closeBtn.focus();
+  });
 
   document.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]').forEach(function (row) {
     function toggleRow() {
@@ -1516,8 +1537,9 @@ button:focus-visible,
     });
   });
 
-  var closeBtn = document.querySelector('[data-slot="drawer-close"]');
-  if (closeBtn) closeBtn.addEventListener("click", closeDrawer);
+  if (closeBtn) closeBtn.addEventListener("click", function () {
+    closeDrawer();
+  });
 
   document.querySelectorAll('[data-slot="tooltip-trigger"]').forEach(function (btn) {
     btn.addEventListener("click", function (e) {
