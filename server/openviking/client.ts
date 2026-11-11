@@ -1,16 +1,17 @@
 /**
- * OpenViking Memory Dashboard — canonical daemon client & state-file reader seam.
- *
- * Task 1 (#131) defines the shared TypeScript contract and module seam;
- * Task 2 (#132) implements the live HTTP and JSONL/JSON readers behind this seam.
+ * OpenViking Memory Dashboard — the client behind the three read-only endpoints: one `:1933`
+ * transport (GET only, 2000 ms deadline) and the `/home/shinelay/.pi/openviking/` state files.
  */
-import { join } from "node:path";
+import { buildAudit } from "./audit.js";
+import { OpenVikingDaemonHttp } from "./daemon-http.js";
+import { buildEntries, readContentTier } from "./entries.js";
+import { buildOverview } from "./overview.js";
+import { resolveOpenVikingStatePaths, type OpenVikingStatePaths } from "./state-files.js";
 import {
 	DEFAULT_OPENVIKING_DAEMON_BIND,
 	DEFAULT_OPENVIKING_DAEMON_URL,
 	DEFAULT_OPENVIKING_STATE_DIR,
 	DEFAULT_OPENVIKING_TIMEOUT_MS,
-	OpenVikingNotImplementedError,
 	type OpenVikingAuditQuery,
 	type OpenVikingAuditResponse,
 	type OpenVikingContentTierResult,
@@ -22,28 +23,9 @@ import {
 	type OpenVikingOverviewResponse,
 	type RewrittenVikingUri,
 } from "./types.js";
+import { resolveRequestHeaders, rewriteVikingUri } from "./uri.js";
 
-export interface OpenVikingStatePaths {
-	readonly stateDir: string;
-	readonly metricsJsonlPath: string;
-	readonly changelogJsonlPath: string;
-	readonly rolloutStateJsonPath: string;
-	readonly resourceSyncStateJsonPath: string;
-	readonly migrationVerificationJsonPath: string;
-	readonly seenRoleMessagesJsonPath: string;
-}
-
-export function resolveOpenVikingStatePaths(stateDir = DEFAULT_OPENVIKING_STATE_DIR): OpenVikingStatePaths {
-	return {
-		stateDir,
-		metricsJsonlPath: join(stateDir, "metrics.jsonl"),
-		changelogJsonlPath: join(stateDir, "memory-changelog.jsonl"),
-		rolloutStateJsonPath: join(stateDir, "rollout-state.json"),
-		resourceSyncStateJsonPath: join(stateDir, "resource-sync-state.json"),
-		migrationVerificationJsonPath: join(stateDir, "migration-verification.json"),
-		seenRoleMessagesJsonPath: join(stateDir, "seen-role-messages.json"),
-	};
-}
+export { resolveOpenVikingStatePaths, type OpenVikingStatePaths } from "./state-files.js";
 
 export class OpenVikingDaemonClient {
 	readonly daemonUrl: string;
@@ -53,6 +35,7 @@ export class OpenVikingDaemonClient {
 	readonly timeoutMs: number;
 	readonly fetchImpl: typeof fetch;
 	readonly now: () => number;
+	private readonly http: OpenVikingDaemonHttp;
 
 	constructor(options: OpenVikingDashboardOptions = {}) {
 		this.daemonUrl = (options.daemonUrl ?? DEFAULT_OPENVIKING_DAEMON_URL).replace(/\/+$/, "");
@@ -60,65 +43,53 @@ export class OpenVikingDaemonClient {
 		this.stateDir = options.stateDir ?? DEFAULT_OPENVIKING_STATE_DIR;
 		this.statePaths = resolveOpenVikingStatePaths(this.stateDir);
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_OPENVIKING_TIMEOUT_MS;
+		if (!Number.isInteger(this.timeoutMs) || this.timeoutMs <= 0) {
+			throw new RangeError(`OpenViking timeoutMs must be a positive integer, got ${String(options.timeoutMs)}`);
+		}
 		this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
 		this.now = options.now ?? (() => Date.now());
+		this.http = new OpenVikingDaemonHttp(this.daemonUrl, this.timeoutMs, this.fetchImpl);
 	}
 
 	/**
-	 * Enforces R-URI-REWRITE-1 and R-ISOLATION-1 for OpenViking 0.5.4 URIs and headers:
-	 * - Layer 1 Shared resources (`viking://resources/<repo>/...`):
-	 *   `X-OpenViking-Account: default`, `X-OpenViking-User: default`
-	 * - Layer 1 Shared memories (`viking://user/memories/...` -> `viking://user/default/memories/...`):
-	 *   `X-OpenViking-Account: default`, `X-OpenViking-User: default`
-	 * - Layer 2 Personal role memories (`viking://agent/memories/...` -> `viking://user/<role>/memories/...`):
-	 *   `X-OpenViking-Account: default`, `X-OpenViking-User: <role>`, `X-OpenViking-Agent: <role>`
+	 * R-URI-REWRITE-1 for OpenViking 0.5.4 URIs and headers:
+	 * - Layer 1 shared resources (`viking://resources/<repo>/...`): Account `default`, User `default`
+	 * - Layer 1 shared memories (`viking://user/memories/...` -> `viking://user/default/memories/...`):
+	 *   Account `default`, User `default`
+	 * - Layer 2 personal role memories (`viking://agent/memories/...` -> `viking://user/<role>/memories/...`):
+	 *   Account `default`, User `<role>`, Agent `<role>`
 	 */
-	rewriteVikingUri(_uri: string, _role?: string): RewrittenVikingUri {
-		throw new OpenVikingNotImplementedError("rewriteVikingUri");
+	rewriteVikingUri(uri: string, role?: string): RewrittenVikingUri {
+		return rewriteVikingUri(uri, role);
 	}
 
-	/**
-	 * Resolves R-URI-REWRITE-1 outbound headers for a given scope and role.
-	 */
-	resolveRequestHeaders(_scope: OpenVikingEntryScope, _role?: string): Record<string, string> {
-		throw new OpenVikingNotImplementedError("resolveRequestHeaders");
+	/** R-URI-REWRITE-1 outbound headers for a scope and role. */
+	resolveRequestHeaders(scope: OpenVikingEntryScope, role?: string): Record<string, string> {
+		return resolveRequestHeaders(scope, role);
 	}
 
-	/**
-	 * Reads L0 (`abstract`), L1 (`overview`), or L2 (`read`) content tier from `:1933`
-	 * while enforcing `R-URI-REWRITE-1` headers and `R-ISOLATION-1` cross-role isolation.
-	 */
+	/** One L0/L1/L2 tier of a Layer 1 shared URI; a personal role URI is a 403 (R-ISOLATION-1). */
 	async readContentTier(
-		_uri: string,
-		_tier: OpenVikingDisclosureTier,
-		_options?: { role?: string },
+		uri: string,
+		tier: OpenVikingDisclosureTier,
+		options: { role?: string } = {},
 	): Promise<OpenVikingContentTierResult> {
-		throw new OpenVikingNotImplementedError("readContentTier");
+		return readContentTier(this.http, uri, tier, options.role);
 	}
 
-	/**
-	 * Builds the `GET /api/openviking/overview` payload from `:1933` health/observer endpoints
-	 * and `/home/shinelay/.pi/openviking/` JSONL/JSON state files.
-	 */
+	/** `GET /api/openviking/overview`. */
 	async getOverview(): Promise<OpenVikingOverviewResponse> {
-		throw new OpenVikingNotImplementedError("getOverview");
+		return buildOverview(this.http, this.statePaths, this.now(), this.daemonBind);
 	}
 
-	/**
-	 * Builds the `GET /api/openviking/entries` payload with `R-URI-REWRITE-1` headers,
-	 * `R-ISOLATION-1` cross-role redaction, and `L0 / L1 / L2` progressive disclosure.
-	 */
-	async getEntries(_query: OpenVikingEntriesQuery = {}): Promise<OpenVikingEntriesResponse> {
-		throw new OpenVikingNotImplementedError("getEntries");
+	/** `GET /api/openviking/entries`. */
+	async getEntries(query: OpenVikingEntriesQuery = {}): Promise<OpenVikingEntriesResponse> {
+		return buildEntries(this.http, this.statePaths, query, this.now());
 	}
 
-	/**
-	 * Builds the `GET /api/openviking/audit` payload from `memory-changelog.jsonl` and
-	 * `metrics.jsonl`, mapping actions and `R-PREF-WRITE-GUARD-1` verdicts and redacting
-	 * cross-role `agent` memory summaries (`R-ISOLATION-1`).
-	 */
-	async getAudit(_query: OpenVikingAuditQuery = {}): Promise<OpenVikingAuditResponse> {
-		throw new OpenVikingNotImplementedError("getAudit");
+	/** `GET /api/openviking/audit`. */
+	async getAudit(query: OpenVikingAuditQuery = {}): Promise<OpenVikingAuditResponse> {
+		return buildAudit(this.statePaths, query, this.now());
 	}
 }
 

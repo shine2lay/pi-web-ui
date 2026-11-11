@@ -112,7 +112,7 @@ export const OPENVIKING_CONTEXT_SLOTS: readonly OpenVikingContextSlotDefinition[
 	{
 		slot_id: 2,
 		label: "Slot 2 Shared Entity Status",
-		uri_prefix: "viking://user/memories/entities/",
+		uri_prefix: "viking://user/default/memories/entities/",
 	},
 	{
 		slot_id: 3,
@@ -219,11 +219,13 @@ export interface OpenVikingAuxiliaryState {
 		phase: string | null;
 		notebook_retired: boolean | null;
 		cutover_ts: string | null;
+		updated_at: string | null;
+		fallback_roles: string[];
 		pending_wt_land_syncs: OpenVikingPendingWtLandSync[];
 	};
 	resource_sync: {
 		synced_at: string | null;
-		repos_synced: number;
+		repos_synced: number | null;
 		pending_syncs_count: number;
 		status: "ok" | "pending" | "missing";
 	};
@@ -238,7 +240,7 @@ export interface OpenVikingAuxiliaryState {
 		total_checked: number | null;
 	};
 	dedup: {
-		seen_count: number;
+		seen_count: number | null;
 		updated_at: string | null;
 	};
 }

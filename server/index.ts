@@ -45,7 +45,7 @@ import { chatImageHeaders, parseChatImageAddress, type ChatImage } from "./chat-
 import { isAbsoluteWirePath, wireToAbs } from "./files-service.js";
 import { WS_SERVER_OPTIONS } from "./ws-server-options.js";
 import { httpHostAllowed } from "./host-guard.js";
-import { registerFileTransferRoutes } from "./file-transfer-routes.js";
+import { registerRouteModules } from "./route-modules.js";
 import { initAttachmentStore, readAttachment } from "./attachment-store.js";
 import { isAudioFile, previewKind } from "./text-sniff.js";
 import { startControlServer } from "./control-socket.js";
@@ -469,7 +469,7 @@ const SERVICE_INFO = toServiceInfo(ORIGIN);
 /** PI_WEB_TABS: the tabs this instance offers. null = all of them, as before. */
 const TABS = parseTabs();
 
-registerFileTransferRoutes(app, (clientId) => service.get(clientId)?.cwd);
+registerRouteModules(app, (clientId) => service.get(clientId)?.cwd);
 
 app.get("/api/health", (_req, res) => {
 	// 审查 #352：该端点对未鉴权开放（监控探针需要），故只保留版本/引擎与 SDK
