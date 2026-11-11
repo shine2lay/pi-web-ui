@@ -724,6 +724,7 @@ Ops does not change their engine, credential or grading modules.
 }
 ```
 
+<!-- doc-check: paths-planned (proposed task S0, lead: Security; ops #309) -->
 ```usage-task
 {
   "id": "S0",
@@ -844,6 +845,7 @@ Ops does not change their engine, credential or grading modules.
 }
 ```
 
+<!-- doc-check: paths-planned (proposed task W6, lead: Ops; ops #309) -->
 ```usage-task
 {
   "id": "W6",
@@ -884,6 +886,7 @@ Ops does not change their engine, credential or grading modules.
 }
 ```
 
+<!-- doc-check: paths-planned (proposed task R0, lead: Ops; ops #309) -->
 ```usage-task
 {
   "id": "R0",
@@ -904,6 +907,7 @@ Ops does not change their engine, credential or grading modules.
 }
 ```
 
+<!-- doc-check: paths-planned (proposed task T0, lead: Ops; ops #309) -->
 ```usage-task
 {
   "id": "T0",
@@ -924,6 +928,7 @@ Ops does not change their engine, credential or grading modules.
 }
 ```
 
+<!-- doc-check: paths-planned (proposed task T1, lead: Ops; ops #309) -->
 ```usage-task
 {
   "id": "T1",
@@ -944,6 +949,7 @@ Ops does not change their engine, credential or grading modules.
 }
 ```
 
+<!-- doc-check: paths-planned (proposed task O0, lead: Ops; ops #309) -->
 ```usage-task
 {
   "id": "O0",
@@ -965,6 +971,7 @@ Ops does not change their engine, credential or grading modules.
 }
 ```
 
+<!-- doc-check: paths-planned (proposed task D0a, lead: Data; ops #309) -->
 ```usage-task
 {
   "id": "D0a",
@@ -985,6 +992,7 @@ Ops does not change their engine, credential or grading modules.
 }
 ```
 
+<!-- doc-check: paths-planned (proposed task D0b, lead: Data; ops #309) -->
 ```usage-task
 {
   "id": "D0b",
@@ -1005,6 +1013,7 @@ Ops does not change their engine, credential or grading modules.
 }
 ```
 
+<!-- doc-check: paths-planned (proposed task C0, lead: Ops; ops #309) -->
 ```usage-task
 {
   "id": "C0",

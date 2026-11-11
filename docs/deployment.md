@@ -182,6 +182,7 @@ DelegateSubgroup=server
 `/api`、`/themes` 全部请求都会带上 `/pi/` 前缀，因此只需一条转发规则，无需
 额外配置：
 
+<!-- doc-check: paths-illustrative -->
 ```nginx
 server {
     listen 80;

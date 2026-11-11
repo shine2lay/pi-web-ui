@@ -185,6 +185,7 @@ not by substituting fake failures or mocking the request helper.
 
 Checks run in this worktree:
 
+<!-- doc-check: paths-historical -->
 ```sh
 VITEST_MAX_WORKERS=2 scripts/sealed.sh env TZ=UTC npx vitest run tests/unit/durable-board-admission.test.ts tests/unit/app-admit.test.ts tests/unit/role-board.test.ts tests/unit/roles-view.test.ts tests/unit/roles-live.test.ts tests/unit/roles-answer-ui.test.ts
 scripts/sealed.sh node tests/durable-board-admission-test.mjs --baseline

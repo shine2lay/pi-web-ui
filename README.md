@@ -787,6 +787,7 @@ Serve pi-web-ui behind nginx on the same host (it binds loopback only, so a
 same-machine reverse proxy is the supported remote-access path — no
 `PI_WEB_HOST=0.0.0.0` needed):
 
+<!-- doc-check: paths-illustrative -->
 ```nginx
 # pi-web-ui on 127.0.0.1:8787, exposed as https://your-host/pi/
 server {

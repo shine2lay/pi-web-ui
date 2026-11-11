@@ -614,6 +614,7 @@ pi-web-ui uninstall <id>      # 卸载插件
 pi-web-ui 默认只绑 loopback，同机 nginx 反代是官方支持的远程访问方式（无需
 `PI_WEB_HOST=0.0.0.0`）：
 
+<!-- doc-check: paths-illustrative -->
 ```nginx
 # pi-web-ui 在 127.0.0.1:8787，对外暴露为 https://your-host/pi/
 server {

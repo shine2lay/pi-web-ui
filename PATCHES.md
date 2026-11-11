@@ -8654,3 +8654,12 @@ on, backtest, cost and result: `docs/stall-watch.md`.
 - Checks: `tests/unit/queue-lane-resilience.test.ts` (Q-ASSERT-1..6), `tests/unit/queue-lane-seam.test.ts`, `tests/unit/queue-done-hidden.test.ts` (Ops #771), the queue host tests, full sealed suite, build, typecheck, prettier-scope, `wt check --task1-ref 831349d4`.
 - Undo: revert this commit and `pi-web-deploy` it (the three global chains come back).
 
+## doc-check-path-markers: say which blocks write planned, recorded or illustrative paths
+
+- `local` (Ops #841; Architecture `rm-12051e15`, contract `/home/shinelay/architecture-dept/conventions/deliverable-checks/definition-d-measured-rulings.md`, rules `D-PLANNED-1`, `D-TRANSCRIPT-1`, `D-ROUTE-1`). Problem: the `D-FENCE-1` measurement (Ops #835) found 52 path tokens in this repo's docs that look like rot and are not — files a proposed task would create, a transcript of a past run, and nginx samples whose location prefixes are URL routes, not files. `D-ROUTE-1` refuses to extend the checker's route skip list, so the doc says it instead.
+- `docs/usage-accounting-wiring.md`: nine `<!-- doc-check: paths-planned (proposed task <id>, lead: <role>; ops #309) -->` lines, one before each proposed `usage-task` package (S0, W6, R0, T0, T1, O0, D0a, D0b, C0). `D-PLANNED-1` requires the naming; an unnamed marker is ignored by the checker.
+- `docs/durable-board-admission.md`: one `<!-- doc-check: paths-historical -->` before the recorded check run (the sealed browser test it names was deleted by the `roles-legacy-cleanup` patch above, and was there when the run happened).
+- `README.md`, `README.zh-CN.md`, `docs/deployment.md`: one `<!-- doc-check: paths-illustrative -->` before each nginx sample.
+- Sync cost: five one-line HTML comments, three of them in files upstream also edits; a conflict only if upstream changes the line directly above those blocks. Checks: `doc-check`'s own marker suite in `agent-tools` plus the repo-wide measurement, which drops these 52 findings and adds none.
+- Undo: revert this commit (docs only; no deploy needed).
+
