@@ -12,12 +12,15 @@ import type {
 	OpenVikingEntriesResponse,
 	OpenVikingOverviewResponse,
 } from "../../../server/openviking/types.js";
+import { entryIsPersonal, type OpenVikingTierReadState } from "./drawer-view-model.js";
 import { formatAge, loadingValue, textValue } from "./format.js";
 import { buildStatePresentation } from "./state-presentation.js";
 import { OPENVIKING_UNREACHABLE_TEXT, OPENVIKING_ZERO_ACTIVITY_TEXT } from "./text.js";
 import type {
+	OpenVikingContentError,
 	OpenVikingDisplayValue,
 	OpenVikingDrawerSource,
+	OpenVikingEntryContent,
 	OpenVikingStatePresentation,
 	OpenVikingStatusHeaderModel,
 	OpenVikingSummaryCardModel,
@@ -107,4 +110,49 @@ export function resolveDrawerSource(
 	}
 	const slot = overview?.slots.find((candidate) => candidate.slot_id === address.slotId);
 	return slot ? { kind: "slot", rowKey: `slot-${address.slotId}`, slot } : null;
+}
+
+/** Which URI the container must deep-read for the open row; null when there is nothing to read. */
+export function deepReadUri(source: OpenVikingDrawerSource | null): string | null {
+	if (!source || source.kind !== "memory") return null;
+	// R-ISOLATION-1: another role's content is never even requested.
+	return entryIsPersonal(source.entry) ? null : source.entry.uri;
+}
+
+export interface OpenVikingDrawerInput {
+	readonly source: OpenVikingDrawerSource;
+	readonly contentError: OpenVikingContentError | null;
+	readonly read: OpenVikingTierReadState;
+}
+
+/**
+ * The open row plus the deep read of its `L1`/`L2` (#259). The list payload carries `L0` only, so
+ * without this the drawer would call every deeper tier "Not stored for this entry" even when the
+ * daemon holds the text. A read still in flight reads as "Loading…", a failed one says so.
+ */
+export function applyEntryContent(
+	source: OpenVikingDrawerSource | null,
+	content: OpenVikingEntryContent | null,
+): OpenVikingDrawerInput | null {
+	if (!source) return null;
+	const uri = deepReadUri(source);
+	if (uri === null || source.kind !== "memory") return { source, contentError: null, read: "settled" };
+	if (content === null || content.uri !== uri) return { source, contentError: null, read: "pending" };
+	if (content.status === "loading") return { source, contentError: null, read: "pending" };
+	if (content.status === "failed") return { source, contentError: content.error, read: "failed" };
+	const deep = content.entry;
+	return {
+		source: {
+			...source,
+			entry: {
+				...source.entry,
+				l0_abstract: deep.l0_abstract ?? source.entry.l0_abstract,
+				l1_overview: deep.l1_overview,
+				l2_content: deep.l2_content,
+				layers: deep.layers.length > 0 ? deep.layers : source.entry.layers,
+			},
+		},
+		contentError: null,
+		read: "settled",
+	};
 }

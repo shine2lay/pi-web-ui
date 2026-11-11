@@ -18,6 +18,7 @@ import {
 	OpenVikingDashboardView,
 	type OpenVikingAuditFilterSelection,
 	type OpenVikingDashboardSnapshot,
+	type OpenVikingEntryContent,
 	type OpenVikingTabId,
 } from "../openviking-dashboard";
 import { OPENVIKING_TABS } from "../openviking-dashboard/text.js";
@@ -35,14 +36,40 @@ export interface OpenVikingDashboardPageProps {
 
 async function getJson<T>(path: string, signal: AbortSignal): Promise<T> {
 	const response = await fetch(appUrl(path), { signal, headers: { accept: "application/json" } });
-	if (!response.ok) throw new Error(`${path} answered ${response.status}`);
+	if (!response.ok) throw await httpError(path, response);
 	return (await response.json()) as T;
+}
+
+/** The server's `{ error: { code, message } }` body, so a 403 reads as isolation and not as "empty". */
+async function httpError(path: string, response: Response): Promise<ContentFetchError> {
+	let code = `HTTP_${response.status}`;
+	let message = `${path} answered ${response.status}`;
+	try {
+		const body = (await response.json()) as { error?: { code?: string; message?: string } };
+		if (body.error?.code) code = body.error.code;
+		if (body.error?.message) message = body.error.message;
+	} catch {
+		/* a non-JSON body keeps the status-code fallback above */
+	}
+	return new ContentFetchError(code, message);
+}
+
+class ContentFetchError extends Error {
+	constructor(
+		readonly code: string,
+		message: string,
+	) {
+		super(message);
+		this.name = "ContentFetchError";
+	}
 }
 
 export function OpenVikingDashboardPage({ active }: OpenVikingDashboardPageProps) {
 	const [snapshot, setSnapshot] = useState<OpenVikingDashboardSnapshot>({ status: "loading" });
 	const [nowMs, setNowMs] = useState(() => Date.now());
 	const [search, setSearch] = useState(() => readSearch());
+	const [deepReadUri, setDeepReadUri] = useState<string | null>(null);
+	const [entryContent, setEntryContent] = useState<OpenVikingEntryContent | null>(null);
 	const generation = useRef(0);
 
 	const load = useCallback(async (signal: AbortSignal) => {
@@ -72,6 +99,39 @@ export function OpenVikingDashboardPage({ active }: OpenVikingDashboardPageProps
 			window.clearInterval(id);
 		};
 	}, [active, load]);
+
+	// The open row's L1/L2 (#259): the list request carries L0 only, so the drawer's deeper tiers are
+	// read per URI while the row is open, and dropped again when it closes.
+	useEffect(() => {
+		if (deepReadUri === null) {
+			setEntryContent(null);
+			return;
+		}
+		const uri = deepReadUri;
+		const controller = new AbortController();
+		setEntryContent({ uri, status: "loading" });
+		void (async () => {
+			try {
+				const path = `/api/openviking/entries?uri=${encodeURIComponent(uri)}&include_content=true`;
+				const answer = await getJson<OpenVikingEntriesResponse>(path, controller.signal);
+				const entry = answer.entries[0];
+				if (controller.signal.aborted) return;
+				if (!entry) throw new ContentFetchError("NOT_FOUND", `${uri} was not in the answer.`);
+				setEntryContent({ uri, status: "ready", entry });
+			} catch (error) {
+				if (controller.signal.aborted) return;
+				setEntryContent({
+					uri,
+					status: "failed",
+					error: {
+						code: error instanceof ContentFetchError ? error.code : "FETCH_FAILED",
+						message: error instanceof Error ? error.message : String(error),
+					},
+				});
+			}
+		})();
+		return () => controller.abort();
+	}, [deepReadUri]);
 
 	useEffect(() => {
 		const onPop = () => setSearch(readSearch());
@@ -106,6 +166,8 @@ export function OpenVikingDashboardPage({ active }: OpenVikingDashboardPageProps
 			nowMs={nowMs}
 			activeTab={activeTab}
 			onActiveTabChange={(tab) => writeParam(TAB_PARAM, tab === "mount-map" ? null : tab)}
+			entryContent={entryContent}
+			onDeepReadUriChange={setDeepReadUri}
 			auditFilter={auditFilter}
 			onAuditFilterChange={(next) => {
 				writeParam(ACTION_PARAM, next.action === "all" ? null : next.action);

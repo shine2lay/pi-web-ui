@@ -200,3 +200,13 @@ export interface OpenVikingContentError {
 	readonly code: string;
 	readonly message: string;
 }
+
+/**
+ * The deep read of one open row (frontend #259). The list request carries L0 only, so the drawer's
+ * `L1 Overview` / `L2 Full Content` are fetched per URI (`?uri=…&include_content=true`) while the
+ * row is open; until that answer lands the tiers say "Loading…" instead of "Not stored".
+ */
+export type OpenVikingEntryContent =
+	| { readonly uri: string; readonly status: "loading" }
+	| { readonly uri: string; readonly status: "ready"; readonly entry: OpenVikingExplorerEntry }
+	| { readonly uri: string; readonly status: "failed"; readonly error: OpenVikingContentError };

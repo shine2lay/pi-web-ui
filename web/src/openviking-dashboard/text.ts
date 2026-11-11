@@ -34,6 +34,26 @@ export const OPENVIKING_ISOLATION_NOTICE_TEXT = "Isolated per-role memory — me
 /** Pill text while the first fetch is in flight (design.md `loading`): no status glyph, no faked `0`. */
 export const OPENVIKING_LOADING_TEXT = "Loading…";
 
+/** A drawer tier whose deep read is still in flight: never "Not stored" before the answer is in (#259). */
+export const OPENVIKING_LOADING_CONTENT_TEXT = "Loading…";
+
+/** A tier the daemon really has no text for: said only after the content read answered (#259). */
+export const OPENVIKING_TIER_EMPTY_TEXT = "Not stored for this entry";
+
+/** The content read failed (not 403): the drawer says so instead of claiming the tier is empty (#259). */
+export const OPENVIKING_TIER_READ_FAILED_TEXT = "Could not be read just now";
+
+/**
+ * How much of an `L2` body is painted at once. The largest live entry is ~966,000 characters
+ * (`viking://resources/pi-web-ui/PATCHES.md`); a single `<pre>` that long stalls the drawer, so the
+ * read is clamped and the drawer says exactly how much of it is on screen (#259).
+ */
+export const OPENVIKING_TIER_BODY_LIMIT = 20_000;
+
+export function openVikingClampNote(shown: number, total: number): string {
+	return `\n\n… showing the first ${shown.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} characters.`;
+}
+
 /**
  * The two memory layers are always spelled out: `L0`/`L1`/`L2` name content levels only
  * (VERIFICATION.md M5.4 — the prototype's "L1 Shared + L2 Role" collision must never reach production).

@@ -33,12 +33,18 @@ import {
 import { InfoTooltip } from "./ui-primitives.js";
 import {
 	ageValue,
+	applyEntryContent,
+	deepReadUri,
 	guardZeroActivityCards,
 	guardZeroActivityHeader,
 	resolveDrawerSource,
 	type OpenVikingRowAddress,
 } from "./view-composition.js";
-import type { OpenVikingAuditFilterSelection, OpenVikingRenderState } from "./view-model-types.js";
+import type {
+	OpenVikingAuditFilterSelection,
+	OpenVikingEntryContent,
+	OpenVikingRenderState,
+} from "./view-model-types.js";
 
 /** What the page knows right now. `loading` is the browser's own state; the rest come from the API. */
 export type OpenVikingDashboardSnapshot =
@@ -60,6 +66,12 @@ export interface OpenVikingDashboardViewProps {
 	readonly onActiveTabChange?: (tab: OpenVikingTabId) => void;
 	readonly auditFilter?: OpenVikingAuditFilterSelection;
 	readonly onAuditFilterChange?: (selection: OpenVikingAuditFilterSelection) => void;
+	/**
+	 * The deep read of the open row's `L1`/`L2` (#259). The view never fetches: it says which URI it
+	 * needs through `onDeepReadUriChange` and paints whatever the container hands back.
+	 */
+	readonly entryContent?: OpenVikingEntryContent | null;
+	readonly onDeepReadUriChange?: (uri: string | null) => void;
 }
 
 const ALL_FILTERS: OpenVikingAuditFilterSelection = { action: "all", role: "all" };
@@ -117,11 +129,20 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 	const auditRows = buildAuditRows(audit, nowMs, renderState, auditFilter);
 	const auditFilters = buildAuditFilters(audit, auditFilter);
 	const drawerSource = resolveDrawerSource(openRow, overview, entries, audit);
-	const drawer = drawerSource ? buildDrawer(drawerSource, nowMs, renderState, null) : null;
+	const drawerInput = applyEntryContent(drawerSource, props.entryContent ?? null);
+	const drawer = drawerInput
+		? buildDrawer(drawerInput.source, nowMs, renderState, drawerInput.contentError, drawerInput.read)
+		: null;
 
 	useEffect(() => {
 		if (openRow && !drawerSource) setOpenRow(null);
 	}, [openRow, drawerSource]);
+
+	const wantedUri = deepReadUri(drawerSource);
+	const { onDeepReadUriChange } = props;
+	useEffect(() => {
+		onDeepReadUriChange?.(wantedUri);
+	}, [wantedUri, onDeepReadUriChange]);
 
 	return (
 		// <main>, so the page's own content sits inside a landmark instead of loose in the shell: axe

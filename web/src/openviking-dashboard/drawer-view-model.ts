@@ -9,7 +9,16 @@ import type {
 } from "../../../server/openviking/types.js";
 import { ISOLATED_AGENT_MEMORY_ABSTRACT } from "../../../server/openviking/types.js";
 import { formatDisplayUri } from "./format.js";
-import { OPENVIKING_ISOLATION_NOTICE_TEXT, OPENVIKING_LAYER_LABELS, OPENVIKING_OFFLINE_CONTENT_TEXT } from "./text.js";
+import {
+	openVikingClampNote,
+	OPENVIKING_ISOLATION_NOTICE_TEXT,
+	OPENVIKING_LAYER_LABELS,
+	OPENVIKING_LOADING_CONTENT_TEXT,
+	OPENVIKING_OFFLINE_CONTENT_TEXT,
+	OPENVIKING_TIER_BODY_LIMIT,
+	OPENVIKING_TIER_EMPTY_TEXT,
+	OPENVIKING_TIER_READ_FAILED_TEXT,
+} from "./text.js";
 import type {
 	OpenVikingContentError,
 	OpenVikingDrawerModel,
@@ -24,6 +33,18 @@ const TIER_LABELS: Record<OpenVikingDisclosureTier, string> = {
 	L2: "L2 Full Content",
 };
 
+/**
+ * How far the deep read of this row has got (#259). The list payload carries `L0` only, so
+ * `L1`/`L2` may be null because nobody has asked for them yet — which is not the same as empty.
+ */
+export type OpenVikingTierReadState = "settled" | "pending" | "failed";
+
+/** Long bodies are clamped so one 966,000-character `L2` cannot stall the drawer (#259). */
+function clampBody(body: string): string {
+	if (body.length <= OPENVIKING_TIER_BODY_LIMIT) return body;
+	return body.slice(0, OPENVIKING_TIER_BODY_LIMIT) + openVikingClampNote(OPENVIKING_TIER_BODY_LIMIT, body.length);
+}
+
 /** What the drawer may paint for one tier, once isolation and reachability have had their say. */
 function buildTier(
 	tier: OpenVikingDisclosureTier,
@@ -31,6 +52,7 @@ function buildTier(
 	body: string | null,
 	isolated: boolean,
 	offline: boolean,
+	read: OpenVikingTierReadState = "settled",
 ): OpenVikingDrawerTierModel {
 	const head = { tier, label: TIER_LABELS[tier], sourceUri };
 	if (tier === "L0") {
@@ -40,11 +62,15 @@ function buildTier(
 	// R-ISOLATION-1 first: another role's memory text is never painted, even when a payload carries it.
 	if (isolated) return { ...head, body: "", unavailableReason: OPENVIKING_ISOLATION_NOTICE_TEXT };
 	if (offline) return { ...head, body: "", unavailableReason: OPENVIKING_OFFLINE_CONTENT_TEXT };
-	if (body === null || body === "") return { ...head, body: "", unavailableReason: "Not stored for this entry" };
-	return { ...head, body, unavailableReason: null };
+	if (body !== null && body !== "") return { ...head, body: clampBody(body), unavailableReason: null };
+	// Nothing to paint yet: say which of the three reasons it is, never "empty" before the read answered.
+	if (read === "pending") return { ...head, body: "", unavailableReason: OPENVIKING_LOADING_CONTENT_TEXT };
+	if (read === "failed") return { ...head, body: "", unavailableReason: OPENVIKING_TIER_READ_FAILED_TEXT };
+	return { ...head, body: "", unavailableReason: OPENVIKING_TIER_EMPTY_TEXT };
 }
 
-function entryIsPersonal(entry: OpenVikingExplorerEntry): boolean {
+/** The one test for "this row's text belongs to another role" (Rule 23: a single canonical owner). */
+export function entryIsPersonal(entry: OpenVikingExplorerEntry): boolean {
 	return entry.layer === "layer2_personal" || entry.scope === "agent";
 }
 
@@ -56,13 +82,14 @@ function memoryTiers(
 	entry: OpenVikingExplorerEntry,
 	isolated: boolean,
 	offline: boolean,
+	read: OpenVikingTierReadState,
 ): readonly OpenVikingDrawerTierModel[] {
 	const bodies: Record<OpenVikingDisclosureTier, string | null> = {
 		L0: entry.l0_abstract,
 		L1: entry.l1_overview,
 		L2: entry.l2_content,
 	};
-	return entry.layers.map((tier) => buildTier(tier, entry.uri, bodies[tier], isolated, offline));
+	return entry.layers.map((tier) => buildTier(tier, entry.uri, bodies[tier], isolated, offline, read));
 }
 
 /**
@@ -74,6 +101,7 @@ export function buildDrawer(
 	nowMs: number,
 	renderState: OpenVikingRenderState,
 	contentError: OpenVikingContentError | null,
+	read: OpenVikingTierReadState = "settled",
 ): OpenVikingDrawerModel {
 	void nowMs;
 	const offline = renderState === "error";
@@ -87,7 +115,7 @@ export function buildDrawer(
 			displayUri: formatDisplayUri(entry.uri),
 			scopeLabel: entry.scope,
 			layerLabel: isolated ? OPENVIKING_LAYER_LABELS.layer2_personal : OPENVIKING_LAYER_LABELS[entry.layer],
-			tiers: memoryTiers(entry, isolated, offline),
+			tiers: memoryTiers(entry, isolated, offline, contentError ? "failed" : read),
 			provenance: entry.provenance,
 			isolationNotice: isolated ? OPENVIKING_ISOLATION_NOTICE_TEXT : null,
 		};
