@@ -373,6 +373,69 @@ describe("openviking drawer — the deep read of L1 / L2 (#259)", () => {
 	});
 });
 
+describe("openviking drawer — the L0 / L1 / L2 tabs actually switch (#259)", () => {
+	function openShared(extra: Record<string, unknown> = {}): HTMLElement {
+		const container = renderDeep({ entryContent: readyContent(L1_TEXT, L2_TEXT), ...extra });
+		click(opener(memoryRows(container)[rowIndexOf(SHARED_URI)]!));
+		return container;
+	}
+
+	function tierTab(container: HTMLElement, tier: "L0" | "L1" | "L2"): HTMLElement {
+		return drawer(container)!.querySelector<HTMLElement>(`[data-tier-tab="${tier}"]`)!;
+	}
+
+	function shownTier(container: HTMLElement): string | null {
+		const panel = drawer(container)!.querySelector("[data-tier]:not(.ovk-is-hidden)");
+		return panel?.getAttribute("data-tier") ?? null;
+	}
+
+	it("shows the L1 body after its tab is clicked", () => {
+		const container = openShared();
+		expect(shownTier(container)).toBe("L0");
+		click(tierTab(container, "L1"));
+		expect(shownTier(container)).toBe("L1");
+		expect(tierTab(container, "L1").getAttribute("aria-selected")).toBe("true");
+		expect(text(drawer(container)!.querySelector('[data-tier="L1"]'))).toContain("lives where");
+	});
+
+	it("keeps the chosen level across a poll that rebuilds the model", () => {
+		const container = openShared();
+		click(tierTab(container, "L2"));
+		expect(shownTier(container)).toBe("L2");
+		mounted!.rerender({
+			snapshot: { status: "ready", overview: liveOverview(), entries: listEntries(), audit: auditResponse() },
+			nowMs: NOW_MS + 30_000,
+			activeTab: "namespace-explorer",
+			entryContent: readyContent(L1_TEXT, L2_TEXT),
+		} as never);
+		expect(shownTier(container)).toBe("L2");
+	});
+
+	it("moves between levels with the arrow keys and names its panel", () => {
+		const container = openShared();
+		const first = tierTab(container, "L0");
+		focus(first);
+		pressKey(first, "ArrowRight");
+		expect(shownTier(container)).toBe("L1");
+		pressKey(tierTab(container, "L1"), "End");
+		expect(shownTier(container)).toBe("L2");
+		pressKey(tierTab(container, "L2"), "Home");
+		expect(shownTier(container)).toBe("L0");
+	});
+
+	it("ties each tab to the panel it shows", () => {
+		const container = openShared();
+		for (const tier of ["L0", "L1", "L2"] as const) {
+			const tab = tierTab(container, tier);
+			const panel = drawer(container)!.querySelector(`[data-tier="${tier}"]`)!;
+			expect(tab.getAttribute("aria-controls")).toBe(panel.id);
+			expect(panel.getAttribute("role")).toBe("tabpanel");
+			expect(panel.getAttribute("aria-labelledby")).toBe(tab.id);
+			expect(tab.tabIndex).toBe(tab.getAttribute("aria-selected") === "true" ? 0 : -1);
+		}
+	});
+});
+
 describe("applyEntryContent — content belongs to the row it was read for (#259)", () => {
 	const source = { kind: "memory" as const, rowKey: "mem-1", entry: listedEntry(SHARED_URI) };
 

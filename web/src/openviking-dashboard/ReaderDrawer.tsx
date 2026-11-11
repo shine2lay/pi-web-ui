@@ -21,9 +21,13 @@ export function ReaderDrawer({
 	const drawerRef = useRef<HTMLDivElement | null>(null);
 	const [activeTier, setActiveTier] = useState<OpenVikingDisclosureTier>(model.tiers[0]?.tier ?? "L0");
 
+	// Only a different row resets the level. `model.tiers` is rebuilt on every poll, so depending on it
+	// (as this did until #259) re-selected L0 within milliseconds of every click: on the live page the
+	// L1 and L2 tabs could be clicked but never became the shown level.
 	useEffect(() => {
 		setActiveTier(model.tiers[0]?.tier ?? "L0");
-	}, [model.rowKey, model.tiers]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- see above: row identity only
+	}, [model.rowKey]);
 
 	// A dialog that never gets focus is a lie: `aria-modal="true"` tells a screen reader the rest of the
 	// page is inert, and the Escape handler below only fires while focus is inside. Measured on the live
@@ -91,15 +95,20 @@ export function ReaderDrawer({
 				</p>
 			) : null}
 			<div className="ovk-drawer-tabs" role="tablist" aria-label="Disclosure level">
-				{model.tiers.map((tier) => (
+				{model.tiers.map((tier, index) => (
 					<button
 						key={tier.tier}
+						id={`${titleId}-tab-${tier.tier}`}
 						type="button"
 						role="tab"
 						className="ovk-drawer-tab"
 						data-tier-tab={tier.tier}
 						aria-selected={tier.tier === activeTier}
+						aria-controls={`${titleId}-panel-${tier.tier}`}
+						// Roving tabindex (WAI-ARIA APG tabs): one stop for the whole list, arrows move inside it.
+						tabIndex={tier.tier === activeTier ? 0 : -1}
 						onClick={() => setActiveTier(tier.tier)}
+						onKeyDown={(event) => moveTierFocus(event, model.tiers, index, setActiveTier)}
 					>
 						{tier.label}
 					</button>
@@ -108,9 +117,11 @@ export function ReaderDrawer({
 			{model.tiers.map((tier) => (
 				<section
 					key={tier.tier}
+					id={`${titleId}-panel-${tier.tier}`}
 					className={tier.tier === shown?.tier ? "ovk-drawer-tier" : "ovk-drawer-tier ovk-is-hidden"}
 					data-tier={tier.tier}
-					aria-label={tier.label}
+					role="tabpanel"
+					aria-labelledby={`${titleId}-tab-${tier.tier}`}
 				>
 					{tier.unavailableReason ? (
 						<p className="ovk-drawer-unavailable">{tier.unavailableReason}</p>
@@ -136,6 +147,37 @@ export function ReaderDrawer({
 }
 
 const DRAWER_FOCUS_STOPS = 'button, [href], select, textarea, input, [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Arrow keys, Home and End move between the L0 / L1 / L2 tabs and select the one they land on
+ * (WAI-ARIA APG tabs, automatic activation). Without this the tablist has one focus stop and no way
+ * to reach the other levels from the keyboard.
+ */
+function moveTierFocus(
+	event: KeyboardEvent<HTMLButtonElement>,
+	tiers: readonly { readonly tier: OpenVikingDisclosureTier }[],
+	index: number,
+	select: (tier: OpenVikingDisclosureTier) => void,
+): void {
+	const last = tiers.length - 1;
+	const next =
+		event.key === "ArrowRight" || event.key === "ArrowDown"
+			? (index + 1) % tiers.length
+			: event.key === "ArrowLeft" || event.key === "ArrowUp"
+				? (index + last) % tiers.length
+				: event.key === "Home"
+					? 0
+					: event.key === "End"
+						? last
+						: null;
+	const target = next === null ? undefined : tiers[next];
+	if (!target) return;
+	event.preventDefault();
+	event.stopPropagation();
+	select(target.tier);
+	const list = event.currentTarget.parentElement;
+	list?.querySelectorAll<HTMLElement>('[role="tab"]')[next as number]?.focus();
+}
 
 /** Tab and Shift+Tab cycle inside the open drawer, which is what `aria-modal="true"` promises. */
 function keepTabInside(event: KeyboardEvent<HTMLDivElement>, drawer: HTMLDivElement | null): void {
