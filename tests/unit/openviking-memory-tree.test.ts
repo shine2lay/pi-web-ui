@@ -102,7 +102,12 @@ describe("walkMemoryTree reaches every depth (Backend #142)", () => {
 		const roleRoot = "viking://user/qa/memories";
 		const { http } = treeDaemon(roleRoot, ["cases/a.md", "events/2026/11/01/e.md"], `${roleRoot}/events/2026/11/01`);
 		// Backend #149: a listing the daemon failed is a read that did not happen, never "this role has no folder".
-		expect(await walkRoleTree(http, "qa")).toEqual({ state: "unmeasured" });
+		// Backend #151: the rows it did read come back with the reading, for a listing that declares the shortfall.
+		expect(await walkRoleTree(http, "qa")).toEqual({
+			state: "unmeasured",
+			files: [expect.objectContaining({ relPath: "cases/a.md", category: "cases" })],
+			unreadListings: 1,
+		});
 	});
 
 	it("reads a role's root NOT_FOUND as an absent folder, and a measured tree as its files (Backend #149)", async () => {
@@ -116,8 +121,8 @@ describe("walkMemoryTree reaches every depth (Backend #142)", () => {
 		const absent = treeDaemon(roleRoot, ["cases/a.md"], roleRoot, { code: "NOT_FOUND", status: 404 });
 		expect(await walkRoleTree(absent.http, "qa")).toEqual({ state: "absent" });
 
-		// The same root listing, failed for any other daemon reason: unmeasured.
+		// The same root listing, failed for any other daemon reason: unmeasured, with no row read below it.
 		const busy = treeDaemon(roleRoot, ["cases/a.md"], roleRoot, { code: "UNAVAILABLE", status: 503 });
-		expect(await walkRoleTree(busy.http, "qa")).toEqual({ state: "unmeasured" });
+		expect(await walkRoleTree(busy.http, "qa")).toEqual({ state: "unmeasured", files: [], unreadListings: 1 });
 	});
 });

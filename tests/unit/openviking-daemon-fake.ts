@@ -23,6 +23,11 @@ export interface DaemonCall {
  * `state.errorLsRoles` are roles whose listings answer `503 UNAVAILABLE` (a read that failed; the folder is
  * there), `state.absentRoles` are roles whose listings answer `404 NOT_FOUND` (the daemon says there is no
  * such folder), and `state.failAllLs` makes every `fs/ls` answer `503` (a whole refresh that failed).
+ *
+ * Backend #151 adds the pieces of one listing: `state.hangContentMatching` is a healthy daemon whose
+ * `/api/v1/content/*` reads for URIs containing that string never answer (past both deadlines, as the one
+ * stalled L0 abstract of row 39), `state.errorContentMatching` has them answer `503`, and
+ * `state.errorLsMatching` has the listings of URIs containing that string answer `503`.
  */
 export type DaemonMode = "up" | "down" | "hang" | "stall-once" | "unhealthy";
 
@@ -61,10 +66,14 @@ export function daemon(initial: DaemonMode = "up") {
 	const state = {
 		mode: initial,
 		hangLsMatching: null as string | null,
+		errorLsMatching: null as string | null,
+		hangContentMatching: null as string | null,
+		errorContentMatching: null as string | null,
 		errorLsRoles: [] as string[],
 		absentRoles: [] as string[],
 		failAllLs: false,
 	};
+	const matches = (uri: string, needle: string | null) => needle !== null && uri.includes(needle);
 	const fetchImpl: typeof fetch = async (input, init) => {
 		const url = new URL(String(input));
 		calls.push({ url, method: init?.method ?? "GET", headers: { ...(init?.headers as Record<string, string>) } });
@@ -76,11 +85,10 @@ export function daemon(initial: DaemonMode = "up") {
 				init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)),
 			);
 		}
-		const hungLs =
-			url.pathname === "/api/v1/fs/ls" &&
-			state.hangLsMatching !== null &&
-			(url.searchParams.get("uri") ?? "").includes(state.hangLsMatching);
-		if (hungLs) {
+		const askedUri = url.searchParams.get("uri") ?? "";
+		const hungLs = url.pathname === "/api/v1/fs/ls" && matches(askedUri, state.hangLsMatching);
+		const hungContent = url.pathname.startsWith("/api/v1/content/") && matches(askedUri, state.hangContentMatching);
+		if (hungLs || hungContent) {
 			return new Promise<Response>((_, reject) =>
 				init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)),
 			);
@@ -91,7 +99,9 @@ export function daemon(initial: DaemonMode = "up") {
 		if (url.pathname === "/api/v1/fs/ls") {
 			const uri = url.searchParams.get("uri") ?? "";
 			const role = lsRole(uri);
-			if (state.failAllLs) return daemonError(503, "UNAVAILABLE", `daemon busy: ${uri}`);
+			if (state.failAllLs || matches(uri, state.errorLsMatching)) {
+				return daemonError(503, "UNAVAILABLE", `daemon busy: ${uri}`);
+			}
 			if (role !== null && state.errorLsRoles.includes(role)) {
 				return daemonError(503, "UNAVAILABLE", `daemon busy: ${uri}`);
 			}
@@ -100,7 +110,12 @@ export function daemon(initial: DaemonMode = "up") {
 			}
 			return ok(lsResult(uri));
 		}
-		if (url.pathname.startsWith("/api/v1/content/")) return ok(`${url.pathname} of ${url.searchParams.get("uri")}`);
+		if (url.pathname.startsWith("/api/v1/content/")) {
+			if (matches(askedUri, state.errorContentMatching)) {
+				return daemonError(503, "UNAVAILABLE", `daemon busy: ${askedUri}`);
+			}
+			return ok(`${url.pathname} of ${askedUri}`);
+		}
 		return new Response(JSON.stringify({ status: "error", error: { code: "NOT_FOUND" } }), { status: 404 });
 	};
 	return { fetchImpl, calls, state };

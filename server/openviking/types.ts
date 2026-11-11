@@ -265,7 +265,8 @@ export interface OpenVikingAuxiliaryState {
 	resource_sync: {
 		synced_at: string | null;
 		repos_synced: number | null;
-		pending_syncs_count: number;
+		/** Null while `status` is `"missing"`: no sync state was read, so there is no count (Backend #151). */
+		pending_syncs_count: number | null;
 		status: "ok" | "pending" | "missing";
 	};
 	migration: {
@@ -346,6 +347,14 @@ export interface OpenVikingEntriesResponse {
 	/** The true reason (ruling rm-b5272a3e): a sync-caused stale reads `"pending sync"`, never an age. */
 	stale_badge: "> 15m" | OpenVikingPendingSyncBadge | null;
 	entries: OpenVikingExplorerEntry[];
+	/**
+	 * Backend #151: present only when a listing or a piece did not answer. The rows returned are readable, the
+	 * list may be short, rows may carry a null `l0_abstract` — and the UI must say so rather than present the
+	 * list as the whole store. A listing that read everything carries neither field (today's shape, unchanged).
+	 */
+	entries_partial?: true;
+	/** With `entries_partial`: how many reads did not answer (listings that may hide rows, plus null pieces). */
+	unread_count?: number;
 }
 
 export interface OpenVikingAuditQuery {

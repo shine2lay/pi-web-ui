@@ -247,7 +247,9 @@ export async function buildOverview(
 		resource_sync: {
 			synced_at: resourceSync.synced_at,
 			repos_synced: resourceSync.repos_synced,
-			pending_syncs_count: pendingSyncs,
+			// No sync state file read, no count: `0 pending` under a `missing` status is a figure for something
+			// nobody measured (Backend #151, the same principle as #149's unmeasured roles).
+			pending_syncs_count: resourceSync.present ? pendingSyncs : null,
 			status: !resourceSync.present ? "missing" : pendingSyncs > 0 || resourceSync.status !== "ok" ? "pending" : "ok",
 		},
 		migration: {

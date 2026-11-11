@@ -2,24 +2,28 @@
  * OpenViking Memory Dashboard — `GET /api/openviking/entries`: the Memory Explorer list and the
  * L0/L1/L2 reader. Content (`/api/v1/content/*`) is read only for Layer 1 shared URIs; every
  * personal role entry is metadata only (R-ISOLATION-1), and asking for its content is a 403.
+ *
+ * Reachability is `/health`'s alone (spec-states.md §4, Backend #147). One listing fans out over ~1700 reads;
+ * below that gate a read the daemon will not answer leaves its own piece unread — its row still comes back,
+ * with that piece null — and the response declares the shortfall with `entries_partial` + `unread_count`. A
+ * missed deadline on one read never reports the store unreachable and never empties the panel (#151, row 39).
  */
 import { auditActionOf, guardVerdictOf } from "./activity.js";
-import {
-	mapWithLimit,
-	OpenVikingDaemonRequestError,
-	OpenVikingDaemonUnreachableError,
-	type OpenVikingDaemonHttp,
-} from "./daemon-http.js";
+import { mapWithLimit, type OpenVikingDaemonHttp } from "./daemon-http.js";
 import {
 	listDir,
+	readDir,
+	readMemoryTree,
 	RESOURCES_ROOT_URI,
-	roleTreeFiles,
+	roleTreeReadFiles,
+	roleTreeUnreadListings,
 	SHARED_MEMORIES_ROOT_URI,
-	walkMemoryTree,
 	walkRoleTrees,
+	type OpenVikingDirReading,
 	type OpenVikingLsItem,
 	type OpenVikingMemoryFile,
 	type OpenVikingRoleTree,
+	type OpenVikingTreeReading,
 } from "./memory-tree.js";
 import { panelHealth, pendingSyncCause } from "./overview.js";
 import { readChangelogRecords, readRolloutState, type OpenVikingStatePaths } from "./state-files.js";
@@ -162,41 +166,65 @@ function toEntry(
 	};
 }
 
-/** Fills each shared entry's missing L0 from `/api/v1/content/abstract`; a failed read stays null. */
-async function fillSharedAbstracts(http: OpenVikingDaemonHttp, entries: OpenVikingExplorerEntry[]): Promise<void> {
+/**
+ * Fills each shared entry's missing L0 from `/api/v1/content/abstract`, and counts the reads the daemon would
+ * not answer — rejected or past both deadlines. Their row keeps `l0_abstract: null` (unmeasured): one stalled
+ * piece costs its own abstract, never the listing and never the panel (#151).
+ */
+async function fillSharedAbstracts(http: OpenVikingDaemonHttp, entries: OpenVikingExplorerEntry[]): Promise<number> {
 	const missing = entries.filter((e) => e.layer === "layer1_shared" && e.l0_abstract === null);
-	await mapWithLimit(missing, ABSTRACT_CALLS_IN_FLIGHT, async (e) => {
+	const unread = await mapWithLimit(missing, ABSTRACT_CALLS_IN_FLIGHT, async (e): Promise<number> => {
 		try {
 			e.l0_abstract = (await readContentTier(http, e.canonical_uri, "L0")).content;
+			return 0;
 		} catch (err) {
-			if (!(err instanceof OpenVikingDaemonRequestError)) throw err;
+			if (!(err instanceof OpenVikingDashboardError)) throw err;
+			return 1;
 		}
 	});
+	return unread.reduce((a, b) => a + b, 0);
 }
+
+/** How far one listing got: the rows it produced, and the reads that did not answer. */
+interface EntriesReading {
+	entries: OpenVikingExplorerEntry[];
+	/** Listings the daemon would not answer; each may hide rows the list never shows. */
+	unreadListings: number;
+	/** Pieces (L0 abstracts) it would not answer; each leaves its own row's abstract null. */
+	unreadPieces: number;
+}
+
+const NO_DIR: OpenVikingDirReading = { items: [], unread: [] };
+const NO_TREE: OpenVikingTreeReading = { files: [], unread: [] };
 
 async function listEntries(
 	http: OpenVikingDaemonHttp,
 	req: EntriesRequest,
 	provenance: Map<string, OpenVikingEntryProvenance>,
-): Promise<OpenVikingExplorerEntry[]> {
+): Promise<EntriesReading> {
 	const want = (s: "resources" | "user" | "agent") => req.scope === "all" || req.scope === s;
 	const shared = rewriteVikingUri(RESOURCES_ROOT_URI).headers;
 	const [repos, memories, roleTrees] = await Promise.all([
-		want("resources") ? listDir(http, RESOURCES_ROOT_URI, shared) : [],
-		want("user") ? walkMemoryTree(http, SHARED_MEMORIES_ROOT_URI, shared) : [],
-		want("agent") ? walkRoleTrees(http, req.role ? [req.role] : OPENVIKING_ROLES) : new Map(),
+		want("resources") ? readDir(http, RESOURCES_ROOT_URI, shared) : NO_DIR,
+		want("user") ? readMemoryTree(http, SHARED_MEMORIES_ROOT_URI, shared) : NO_TREE,
+		want("agent")
+			? walkRoleTrees(http, req.role ? [req.role] : OPENVIKING_ROLES)
+			: new Map<string, OpenVikingRoleTree>(),
 	]);
 	const fileEntry = (f: OpenVikingMemoryFile, role?: string) =>
 		toEntry(f, f.category, rewriteVikingUri(f.uri, role), provenance);
+	const trees = [...roleTrees];
 	const entries = [
-		...repos.filter((r) => r.isDir).map((r) => toEntry(r, "repository", rewriteVikingUri(r.uri), provenance)),
-		...memories.map((f) => fileEntry(f)),
-		...[...(roleTrees as Map<string, OpenVikingRoleTree>)].flatMap(([role, tree]) =>
-			roleTreeFiles(tree).map((f) => fileEntry(f, role)),
-		),
+		...repos.items.filter((r) => r.isDir).map((r) => toEntry(r, "repository", rewriteVikingUri(r.uri), provenance)),
+		...memories.files.map((f) => fileEntry(f)),
+		...trees.flatMap(([role, tree]) => roleTreeReadFiles(tree).map((f) => fileEntry(f, role))),
 	];
-	await fillSharedAbstracts(http, entries);
-	return entries;
+	return {
+		entries,
+		unreadListings:
+			repos.unread.length + memories.unread.length + trees.reduce((n, [, t]) => n + roleTreeUnreadListings(t), 0),
+		unreadPieces: await fillSharedAbstracts(http, entries),
+	};
 }
 
 /** One URI: metadata from its parent listing, plus the asked-for tiers when it is shared. */
@@ -227,6 +255,24 @@ async function readOneEntry(
 	return entry;
 }
 
+/**
+ * The one invariant of a short list (#151 (f)): a response built from reads that did not all answer declares
+ * both the flag and the count, and a complete one declares neither. A mismatch is a bug in this file — a
+ * listing nobody can tell is short — so it fails loudly instead of shipping.
+ */
+function assertShortListSaysSo(res: OpenVikingEntriesResponse, unread: number): void {
+	const declared = res.entries_partial === true && res.unread_count === unread;
+	const silent = res.entries_partial === undefined && res.unread_count === undefined;
+	if (unread > 0 ? !declared : !silent) {
+		throw new OpenVikingDashboardError(
+			`OpenViking entries left ${unread} read(s) unread without declaring it.`,
+			500,
+			"INTERNAL",
+			{ unread_count: unread },
+		);
+	}
+}
+
 export async function buildEntries(
 	http: OpenVikingDaemonHttp,
 	paths: OpenVikingStatePaths,
@@ -236,29 +282,27 @@ export async function buildEntries(
 	const req = parseEntriesQuery(query);
 	const panel_updated_at = new Date(nowMs).toISOString();
 	const [provenance, rollout] = await Promise.all([provenanceByUri(paths), readRolloutState(paths)]);
-	const unreachable: OpenVikingEntriesResponse = {
-		panel_updated_at,
-		health_state: "server-unreachable",
-		stale_badge: null,
-		entries: [],
-	};
-	if (req.uri === undefined && !(await http.isHealthy(rewriteVikingUri(RESOURCES_ROOT_URI).headers)))
-		return unreachable;
-	let entries: OpenVikingExplorerEntry[];
-	try {
-		entries =
-			req.uri !== undefined
-				? [await readOneEntry(http, { ...req, uri: req.uri }, provenance)]
-				: await listEntries(http, req, provenance);
-	} catch (err) {
-		if (err instanceof OpenVikingDaemonUnreachableError && req.uri === undefined) return unreachable;
-		throw err;
+	// The listing comes from `:1933` inside this request, so it has no age of its own: inside its `15m` cadence by
+	// construction, stale only while a `wt land` sync waits, and never a false `"> 15m"` (ruling rm-b5272a3e).
+	const health = (rows: number) =>
+		panelHealth(rows, nowMs, nowMs, ENTRIES_CADENCE_MS, "> 15m" as const, pendingSyncCause(rollout));
+	if (req.uri !== undefined) {
+		const entry = await readOneEntry(http, { ...req, uri: req.uri }, provenance);
+		return { panel_updated_at, ...health(1), entries: [entry] };
 	}
-	return {
+	// The one reachability verdict: `/health`. Nothing below it may turn the panel unreachable (§4, #147, #151).
+	if (!(await http.isHealthy(rewriteVikingUri(RESOURCES_ROOT_URI).headers))) {
+		return { panel_updated_at, health_state: "server-unreachable", stale_badge: null, entries: [] };
+	}
+	const reading = await listEntries(http, req, provenance);
+	const unread = reading.unreadListings + reading.unreadPieces;
+	const res: OpenVikingEntriesResponse = {
 		panel_updated_at,
-		// The listing comes from `:1933` inside this request, so it has no age of its own: inside its `15m` cadence by
-		// construction, stale only while a `wt land` sync waits, and never a false `"> 15m"` (ruling rm-b5272a3e).
-		...panelHealth(entries.length, nowMs, nowMs, ENTRIES_CADENCE_MS, "> 15m" as const, pendingSyncCause(rollout)),
-		entries,
+		...health(reading.entries.length),
+		entries: reading.entries,
+		// A listing that read everything carries neither field: the shape every reader already knows (#151 (d)).
+		...(unread > 0 ? { entries_partial: true as const, unread_count: unread } : {}),
 	};
+	assertShortListSaysSo(res, unread);
+	return res;
 }
