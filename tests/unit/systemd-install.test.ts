@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { posix } from "node:path";
+import { join, posix } from "node:path";
+import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
@@ -116,29 +117,33 @@ function environment(unit: string): Record<string, string> {
 	return result;
 }
 
+/** Run `pi-web-ui server install --print` (Linux, port 80) through the CLI at `cliUrl` in a child node; its stdout. */
+function printLinuxUnit(cliUrl: string): string {
+	const script = `
+		import cp from 'node:child_process';
+		import { syncBuiltinESMExports } from 'node:module';
+		cp.spawnSync = () => { throw new Error('Unexpected external command during --print'); };
+		syncBuiltinESMExports();
+		Object.defineProperty(process, 'platform', { value: 'linux' });
+		process.argv = [process.execPath, 'pi-web-ui', 'server', 'install', '--print', '--cwd', ${JSON.stringify(tmpdir())}];
+		await import(${JSON.stringify(cliUrl)});
+	`;
+	return execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+		encoding: "utf8",
+		env: {
+			PATH: process.env.PATH,
+			SystemRoot: process.env.SystemRoot,
+			LANG: "C.UTF-8",
+			PI_WEB_PORT: "80",
+			PI_WEB_HOST: "0.0.0.0",
+			PI_WEB_TOKEN: "cli-test-token",
+		},
+	});
+}
+
 describe("Linux systemd installation", () => {
 	it("prints the actual Linux CLI configuration without running privileged commands", () => {
-		const cliUrl = new URL("../../bin/pi-web-ui.mjs", import.meta.url).href;
-		const script = `
-			import cp from 'node:child_process';
-			import { syncBuiltinESMExports } from 'node:module';
-			cp.spawnSync = () => { throw new Error('Unexpected external command during --print'); };
-			syncBuiltinESMExports();
-			Object.defineProperty(process, 'platform', { value: 'linux' });
-			process.argv = [process.execPath, 'pi-web-ui', 'server', 'install', '--print', '--cwd', ${JSON.stringify(tmpdir())}];
-			await import(${JSON.stringify(cliUrl)});
-		`;
-		const unit = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
-			encoding: "utf8",
-			env: {
-				PATH: process.env.PATH,
-				SystemRoot: process.env.SystemRoot,
-				LANG: "C.UTF-8",
-				PI_WEB_PORT: "80",
-				PI_WEB_HOST: "0.0.0.0",
-				PI_WEB_TOKEN: "cli-test-token",
-			},
-		});
+		const unit = printLinuxUnit(new URL("../../bin/pi-web-ui.mjs", import.meta.url).href);
 		expect(unit).toContain("CapabilityBoundingSet=CAP_NET_BIND_SERVICE");
 		expect(unit).toContain("AmbientCapabilities=CAP_NET_BIND_SERVICE");
 		expect(environment(unit)).toMatchObject({
@@ -146,6 +151,26 @@ describe("Linux systemd installation", () => {
 			PI_WEB_HOST: "0.0.0.0",
 			PI_WEB_TOKEN: "cli-test-token",
 		});
+	});
+	// Ops #811 (Architecture rm-a86b4982): `check.sh --fast` skips the build, so this file must not need dist/.
+	// The same CLI source, copied into a package folder that has no dist/ at all, still prints the unit.
+	it("needs no build: prints the unit from a package folder without dist/ (Ops #811)", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-web-ui-no-dist-"));
+		try {
+			mkdirSync(join(root, "bin"));
+			const cli = join(root, "bin", "pi-web-ui.mjs");
+			copyFileSync(new URL("../../bin/pi-web-ui.mjs", import.meta.url), cli);
+			expect(existsSync(join(root, "dist"))).toBe(false);
+			const unit = printLinuxUnit(pathToFileURL(cli).href);
+			expect(unit).toContain("CapabilityBoundingSet=CAP_NET_BIND_SERVICE");
+			expect(unit).toContain(
+				`ExecStart=${JSON.stringify(process.execPath)} ${JSON.stringify(join(root, "dist", "server", "index.js"))}\n`,
+			);
+			expect(environment(unit)).toMatchObject({ PI_WEB_PORT: "80", PI_WEB_TOKEN: "cli-test-token" });
+			expect(existsSync(join(root, "dist"))).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 	it("ExecStart 带上「优先用全局 pi SDK」钩子（issue #260）", () => {
 		const h = harness({ PI_WEB_PORT: "8787" });
