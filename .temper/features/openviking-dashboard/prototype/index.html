@@ -1,0 +1,1286 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenViking Memory Dashboard — pi-web-ui</title>
+<style>
+/* BEGIN GENERATED TOKENS (from .temper/design/tokens.json) */
+:root {
+  --bg-canvas: #0d0d0d;
+  --bg-surface: #161616;
+  --bg-elevated: #1f1f1f;
+  --bg-hover: #262626;
+  --border-subtle: #2a2a2a;
+  --border-strong: #3a3a3a;
+  --text-primary: #ececec;
+  --text-secondary: #a0a0a0;
+  --text-muted: #94949c;
+  --text-muted-legacy: #6b6b6b;
+  --accent-primary: #10a37f;
+  --status-healthy-fg: #34d399;
+  --status-healthy-bg: #06281e;
+  --status-stale-fg: #fbbf24;
+  --status-stale-bg: #2a1f06;
+  --status-unreachable-fg: #f87171;
+  --status-unreachable-bg: #2c0b0e;
+  --status-zero-fg: #b4b4bb;
+  --status-zero-bg: #222226;
+  --status-info-fg: #60a5fa;
+  --status-info-bg: #0b1d36;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", Consolas, monospace;
+  --size-xs: 12px;
+  --size-sm: 13px;
+  --size-md: 14px;
+  --size-body: 16px;
+  --size-lg: 18px;
+  --size-xl: 24px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+}
+html[data-theme="light"] {
+  --bg-canvas: #f7f6f2;
+  --bg-surface: #ffffff;
+  --bg-elevated: #eeece6;
+  --bg-hover: #e5e2da;
+  --border-subtle: #dfdcd4;
+  --border-strong: #c8c4ba;
+  --text-primary: #1f1e1c;
+  --text-secondary: #57544e;
+  --text-muted: #68645d;
+  --text-muted-legacy: #8a867e;
+  --accent-primary: #0b7a5e;
+  --status-healthy-fg: #065f46;
+  --status-healthy-bg: #ecfdf5;
+  --status-stale-fg: #92400e;
+  --status-stale-bg: #fffbeb;
+  --status-unreachable-fg: #b91c1c;
+  --status-unreachable-bg: #fef2f2;
+  --status-zero-fg: #4b5563;
+  --status-zero-bg: #f3f4f6;
+  --status-info-fg: #1e40af;
+  --status-info-bg: #eff6ff;
+}
+/* END GENERATED TOKENS */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  min-height: 100%;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--size-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  padding: var(--space-3);
+}
+
+@media (min-width: 380px) {
+  body {
+    padding: var(--space-4);
+  }
+}
+
+@media (min-width: 960px) {
+  body {
+    padding: var(--space-6);
+  }
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+button:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.shell {
+  max-width: 1360px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.proto-bar {
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.proto-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.proto-label {
+  font-size: var(--size-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.proto-btn,
+.tab-btn,
+.tip-btn,
+.close-btn,
+.filter-btn {
+  min-width: 28px;
+  min-height: 28px;
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--size-xs);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+}
+
+.tab-btn {
+  min-height: 36px;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--size-md);
+}
+
+.proto-btn[aria-pressed="true"],
+.tab-btn[aria-selected="true"],
+.filter-btn[aria-pressed="true"],
+.drawer-tab[aria-selected="true"] {
+  background: var(--status-healthy-bg);
+  color: var(--status-healthy-fg);
+  border-color: var(--accent-primary);
+}
+
+.header,
+.card,
+.panel,
+.drawer {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+@media (min-width: 960px) {
+  .header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.header-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.header-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.title-h1 {
+  font-size: var(--size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.subtitle {
+  font-size: var(--size-body);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+@media (min-width: 960px) {
+  .cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.card-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--size-md);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.metric {
+  font-size: var(--size-xl);
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.metric[data-unreachable-value="true"] {
+  color: var(--status-unreachable-fg);
+}
+
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.meta {
+  font-size: var(--size-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.age-footer {
+  font-size: var(--size-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--size-xs);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  border-width: 1px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.badge-healthy {
+  color: var(--status-healthy-fg);
+  background: var(--status-healthy-bg);
+  border-style: solid;
+  border-color: var(--status-healthy-fg);
+}
+
+.badge-stale {
+  color: var(--status-stale-fg);
+  background: var(--status-stale-bg);
+  border-style: dashed;
+  border-color: var(--status-stale-fg);
+}
+
+.badge-zero {
+  color: var(--status-zero-fg);
+  background: var(--status-zero-bg);
+  border-style: dotted;
+  border-color: var(--status-zero-fg);
+}
+
+.badge-unreachable {
+  color: var(--status-unreachable-fg);
+  background: var(--status-unreachable-bg);
+  border-style: double;
+  border-width: 3px;
+  border-color: var(--status-unreachable-fg);
+}
+
+.badge-info {
+  color: var(--status-info-fg);
+  background: var(--status-info-bg);
+  border-style: solid;
+  border-color: var(--status-info-fg);
+}
+
+.state-banner {
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--size-sm);
+}
+
+.tabs-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.concepts-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.concept-wrap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.tooltip {
+  display: none;
+  font-size: var(--size-xs);
+  font-weight: 500;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  padding: var(--space-2);
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+
+.tip-btn:focus + .tooltip,
+.tip-btn:focus-visible + .tooltip,
+.tip-btn:hover + .tooltip,
+.concept-wrap.is-open .tooltip {
+  display: inline-block;
+}
+
+.row-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.row {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  cursor: pointer;
+  min-width: 0;
+}
+
+@media (min-width: 960px) {
+  .row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+}
+
+.row:hover,
+.row[aria-expanded="true"] {
+  background: var(--bg-hover);
+  border-color: var(--accent-primary);
+}
+
+.row-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+
+.row-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.uri-code {
+  font-family: var(--font-mono);
+  font-size: var(--size-xs);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.body-copy {
+  font-size: var(--size-body);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.abstract-copy {
+  font-size: var(--size-body);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.drawer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-color: var(--accent-primary);
+}
+
+.drawer-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.drawer-box {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-wrap: anywhere;
+}
+
+.hidden {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .row,
+  .proto-btn,
+  .tab-btn,
+  .tip-btn,
+  .close-btn,
+  .filter-btn {
+    transition: border-color 120ms ease, outline-color 120ms ease;
+  }
+}
+</style>
+</head>
+<body>
+<div class="shell" id="app" data-screen-state="live">
+  <!-- Prototype-only preview switcher (hidden automatically when ?state= or ?capture=1 is present) -->
+  <aside class="proto-bar" id="protoChrome" data-prototype-only="true" aria-label="Prototype state preview controls">
+    <div class="proto-group">
+      <span class="proto-label">Preview State:</span>
+      <button type="button" class="proto-btn" data-set-state="live" aria-pressed="true">Live</button>
+      <button type="button" class="proto-btn" data-set-state="loading" aria-pressed="false">Loading</button>
+      <button type="button" class="proto-btn" data-set-state="empty" aria-pressed="false">Empty (Zero Activity)</button>
+      <button type="button" class="proto-btn" data-set-state="stale" aria-pressed="false">Stale</button>
+      <button type="button" class="proto-btn" data-set-state="error" aria-pressed="false">Error (Offline)</button>
+    </div>
+    <div class="proto-group">
+      <span class="proto-label">Theme:</span>
+      <button type="button" class="proto-btn" id="themeToggleBtn" aria-pressed="false">Light / Dark</button>
+    </div>
+  </aside>
+
+  <!-- Tier 1: Status Header -->
+  <header class="header" data-component="status-header">
+    <div class="header-main">
+      <div class="header-title-row">
+        <h1 class="title-h1" data-body-copy="true">OpenViking Memory Observability</h1>
+        <span id="hdr-mode" class="badge badge-healthy" data-slot="mode-badge" data-icon="circle-check" data-figure="true" data-source-field="observer.mode_label" data-age="4s">● Active (15/15 Roles Live)</span>
+      </div>
+      <p class="subtitle" id="hdr-subtitle" data-body-copy="true">
+        OpenViking sidecar is actively injecting L0 &amp; Turn-1 memories across all 15 roles and recording verified post-turn lessons.
+      </p>
+    </div>
+    <div class="header-meta">
+      <span class="meta" id="hdr-checked" data-age-label="true">Last injection 4s ago · Last commit 5m ago · 30s cadence</span>
+    </div>
+  </header>
+
+  <!-- State Diagnostic Callout Banner (visible in Stale / Empty / Error / Loading) -->
+  <section class="state-banner badge-stale hidden" id="state-banner" aria-live="polite">
+    <strong id="state-banner-title">◐ Stale — Exceeded Expected Active Cadence (&gt; 5m)</strong>
+    <span id="state-banner-body">Daemon is reachable, but no new memory commits or slot injections arrived inside the expected cadence window.</span>
+  </section>
+
+  <!-- Tier 1: 3 Grouped Summary Cards (strictly 5 data-field elements each) -->
+  <section class="cards" aria-label="Summary Cards">
+    <!-- Card 1: System & Daemon Health / Two-Layer Memory Store -->
+    <article class="card" data-component="summary-card" data-card-id="system-health" data-panel-updated-at="2026-11-10T20:15:00Z">
+      <div class="card-title-row" data-field="title">
+        <span>System &amp; Daemon Health</span>
+        <span class="concept-wrap" data-concept="sidecar-mode">
+          <span class="meta">Mode 1 L0</span>
+          <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain Mode 1 L0 and sidecar" aria-describedby="tip-sidecar">(?)</button>
+          <span id="tip-sidecar" role="tooltip" class="tooltip">Mode 1 Always-On L0 &amp; OpenViking sidecar bound to loopback; degrades cleanly to local .temper/ files if offline.</span>
+        </span>
+      </div>
+      <div class="metric" id="c1-metric" data-field="metric" data-figure="true" data-source-field="observer.roles_online_count" data-age="4s">15 / 15 Roles</div>
+      <div class="status-row" data-field="status">
+        <span id="c1-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check">● Healthy</span>
+        <span id="c1-stale-pill" class="badge badge-stale hidden" data-stale-badge="true">◐ Stale (&gt; 30s cadence)</span>
+      </div>
+      <div class="meta" id="c1-context" data-field="context" data-figure="true" data-source-field="observer.queue_depth" data-age="4s">127.0.0.1:1933 · 0 queued · Two-Layer Store (L1 Shared + L2 Role)</div>
+      <div class="age-footer" id="c1-age" data-field="age" data-age-label="true" data-panel-updated-label="true">Updated 4s ago · 30s cadence</div>
+    </article>
+
+    <!-- Card 2: Context & Token Injection / Live Injection & Retrieval -->
+    <article class="card" data-component="summary-card" data-card-id="context-injection" data-panel-updated-at="2026-11-10T20:14:00Z">
+      <div class="card-title-row" data-field="title">
+        <span>Context &amp; Token Injection</span>
+        <span class="concept-wrap" data-concept="slot-mount">
+          <span class="meta">Mode 2 Turn-1</span>
+          <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain Mode 2 Turn-1 5-Slot mount" aria-describedby="tip-slots">(?)</button>
+          <span id="tip-slots" role="tooltip" class="tooltip">Mode 2 5-Slot Turn-1 mount injects Project L1, Entity Status, Top Spec, Role Cases, and Sibling Docs when score &gt;= 0.35.</span>
+        </span>
+      </div>
+      <div class="metric" id="c2-metric" data-field="metric" data-figure="true" data-source-field="metrics.slot_hit_rate_pct" data-age="1m">94.2% Hit Rate</div>
+      <div class="status-row" data-field="status">
+        <span id="ci-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check">● Healthy</span>
+        <span id="stale-pill" class="badge badge-stale hidden" data-stale-badge="true">◐ Stale (&gt; 5m cadence)</span>
+      </div>
+      <div class="meta" id="c2-context" data-field="context" data-figure="true" data-source-field="metrics.avg_injected_tokens" data-age="1m">1,420 avg tok · 48 turns sampled (24h)</div>
+      <div class="age-footer" id="c2-age" data-field="age" data-age-label="true" data-panel-updated-label="true">Updated 1m ago · 5m cadence</div>
+    </article>
+
+    <!-- Card 3: Commit & Guard Governance / Guardrails & Commit Audit -->
+    <article class="card" data-component="summary-card" data-card-id="commit-governance" data-panel-updated-at="2026-11-10T20:10:00Z">
+      <div class="card-title-row" data-field="title">
+        <span>Commit &amp; Guard Governance</span>
+        <span class="concept-wrap" data-concept="commit-guard">
+          <span class="meta">Commit Guard</span>
+          <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain Commit Guard and thresholds" aria-describedby="tip-guard">(?)</button>
+          <span id="tip-guard" role="tooltip" class="tooltip">Commit guard enforces R-PREF-WRITE-GUARD-1, secret filtering, and worker (140K) / lead (200K) token thresholds.</span>
+        </span>
+      </div>
+      <div class="metric" id="c3-metric" data-field="metric" data-figure="true" data-source-field="changelog.commits_24h" data-age="5m">18 Commits</div>
+      <div class="status-row" data-field="status">
+        <span id="c3-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check">● Healthy</span>
+        <span id="c3-stale-pill" class="badge badge-stale hidden" data-stale-badge="true">◐ Stale (&gt; 15m cadence)</span>
+      </div>
+      <div class="meta" id="c3-context" data-field="context" data-figure="true" data-source-field="changelog.promotions_24h" data-age="5m">5 shared syncs · 1 guard rejection (24h)</div>
+      <div class="age-footer" id="c3-age" data-field="age" data-age-label="true" data-panel-updated-label="true">Updated 5m ago · 15m cadence</div>
+    </article>
+  </section>
+
+  <!-- Tier 1: 3 Workspace Tabs -->
+  <nav class="tabs-bar" aria-label="OpenViking Workspace Tabs">
+    <div class="tabs" role="tablist" aria-label="Workspace Views">
+      <button type="button" class="tab-btn" role="tab" data-tab="mount-map" aria-selected="true">5-Slot Context Mount</button>
+      <button type="button" class="tab-btn" role="tab" data-tab="namespace-explorer" aria-selected="false">Memory Namespace Explorer</button>
+      <button type="button" class="tab-btn" role="tab" data-tab="commit-audit" aria-selected="false">Commit &amp; Guard Audit</button>
+    </div>
+    <span class="meta">Click any slot, memory, or audit row to inspect L0 / L1 / L2 in reader drawer</span>
+  </nav>
+
+  <!-- Tab 1: 5-Slot Context Mount (Live Activity) -->
+  <section class="panel" role="tabpanel" data-tabpanel="mount-map" data-panel-updated-at="2026-11-10T20:14:00Z">
+    <div class="panel-head">
+      <strong class="body-copy" data-body-copy="true">5-Slot Turn-1 Context Mount &amp; Live Injection Activity</strong>
+      <span class="meta" id="p1-updated" data-panel-updated-label="true" data-age-label="true">Slot metrics sampled 1m ago · 5m cadence</span>
+    </div>
+
+    <div class="concepts-strip" aria-label="Contract Concept Badges">
+      <span class="concept-wrap" data-concept="layer-l1">
+        <span class="meta">L0 / L1 / L2 Granularity</span>
+        <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain L0 L1 L2 tiers" aria-describedby="tip-l1">(?)</button>
+        <span id="tip-l1" role="tooltip" class="tooltip">L0 is a 1-sentence abstract, L1 is an overview under 2,000 tokens, and L2 is full canonical document text.</span>
+      </span>
+      <span class="concept-wrap" data-concept="token-thresholds">
+        <span class="meta">Worker 140K / Lead 200K Gate</span>
+        <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain Worker and Lead token thresholds" aria-describedby="tip-thresh">(?)</button>
+        <span id="tip-thresh" role="tooltip" class="tooltip">Worker turns use 140K ACP context threshold and Lead sessions commit-and-evict at 200K tokens.</span>
+      </span>
+      <span class="concept-wrap" data-concept="land-sync">
+        <span class="meta">wt land Sync</span>
+        <button type="button" class="tip-btn" data-slot="tooltip-trigger" aria-label="Explain wt land resource sync" aria-describedby="tip-landsync">(?)</button>
+        <span id="tip-landsync" role="tooltip" class="tooltip">Landing on mine automatically indexes .temper/ specs and docs into Layer 1 viking://resources/.</span>
+      </span>
+    </div>
+
+    <div class="row-list">
+      <div class="row" data-slot-id="1" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-1">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-healthy">● Slot 1 Hit</span>
+            <strong class="body-copy" data-body-copy="true">Project L1 Overview</strong>
+            <span class="uri-code">viking://resources/pi-web-ui/core/map.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Canonical module map for pi-web-ui server routes, session state, and .temper/ verification adapters.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="slots[].hit_rate_pct" data-age="1m" data-age-label="true">98.0% · 410 tok · 1m ago</span>
+      </div>
+
+      <div class="row" data-slot-id="2" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-2">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-healthy">● Slot 2 Hit</span>
+            <strong class="body-copy" data-body-copy="true">Shared Entity Status</strong>
+            <span class="uri-code">viking://user/memories/entities/openviking-rollout.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Tracks 15-role OpenViking 0.5.4 rollout status, URI normalization rules, and active systemd unit bindings.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="slots[].avg_tokens" data-age="1m" data-age-label="true">94.5% · 285 tok · 1m ago</span>
+      </div>
+
+      <div class="row" data-slot-id="3" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-3">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-healthy">● Slot 3 Hit</span>
+            <strong class="body-copy" data-body-copy="true">Top Matching Feature Spec</strong>
+            <span class="uri-code">viking://resources/pi-web-ui/features/openviking-dashboard/design.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Defines the 5-second glance test, 3-tier progressive disclosure, and distinct non-color state cues.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="slots[].hit_rate_pct" data-age="1m" data-age-label="true">96.2% · 520 tok · 1m ago</span>
+      </div>
+
+      <div class="row" data-slot-id="4" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-4">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-healthy">● Slot 4 Hit</span>
+            <strong class="body-copy" data-body-copy="true">Personal Role Memories (design)</strong>
+            <span class="uri-code">viking://agent/memories/cases/ui-check-zero-overlap.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Keep summary cards capped at 5 fields so 320px, 390px, and 1440px viewports pass ui-check cleanly.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="slots[].avg_tokens" data-age="1m" data-age-label="true">91.0% · 195 tok · 1m ago</span>
+      </div>
+
+      <div class="row" data-slot-id="5" data-component="memory-row" role="button" tabindex="0" aria-expanded="false" data-item-key="slot-5">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-zero">◌ Slot 5 Skipped (&lt; 0.35)</span>
+            <strong class="body-copy" data-body-copy="true">Sibling Project Docs</strong>
+            <span class="uri-code">viking://resources/rollcall/core/tokens-parity.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Candidate relevance score 0.28 fell below the 0.35 Turn-1 threshold; skipped to preserve prompt budget.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="slots[].state" data-age="1m" data-age-label="true">score 0.28 · 0 tok · 1m ago</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tab 2: Memory Namespace Explorer (Layer 1 Shared vs Layer 2 Personal) -->
+  <section class="panel hidden" role="tabpanel" data-tabpanel="namespace-explorer" data-panel-updated-at="2026-11-10T20:12:00Z">
+    <div class="panel-head">
+      <strong class="body-copy" data-body-copy="true">Two-Layer Memory Namespace Explorer (Layer 1 Shared vs Layer 2 Per-Role)</strong>
+      <span class="meta" data-panel-updated-label="true" data-age-label="true">Namespace indexed 3m ago · 15m cadence</span>
+    </div>
+
+    <div class="proto-group" role="group" aria-label="Layer Scope Filter">
+      <button type="button" class="filter-btn" data-layer-filter="all" aria-pressed="true">All Scopes (4)</button>
+      <button type="button" class="filter-btn" data-layer-filter="shared" aria-pressed="false">Layer 1: Shared (2)</button>
+      <button type="button" class="filter-btn" data-layer-filter="personal" aria-pressed="false">Layer 2: Per-Role (2)</button>
+    </div>
+
+    <div class="row-list" id="explorer-list">
+      <div class="row" data-component="memory-row" data-layer="shared" role="button" tabindex="0" aria-expanded="false" data-item-key="mem-1">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-info">Layer 1 · Shared Resource · L0 / L1 / L2</span>
+            <span class="uri-code">viking://resources/pi-web-ui/design/DESIGN.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Defines atmospheric minimalism, WCAG 2.2 AA contrast pairings, tabular numeric discipline, and non-color state cues.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="entries[].l0_abstract" data-age="3m" data-age-label="true">design · Updated 3m ago</span>
+      </div>
+
+      <div class="row" data-component="memory-row" data-layer="shared" role="button" tabindex="0" aria-expanded="false" data-item-key="mem-2">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-info">Layer 1 · Shared Craft · L0 / L1 / L2</span>
+            <span class="uri-code">viking://user/memories/preferences/ops_tooling.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Isolate work in dedicated git worktrees and deploy pi-web-ui exclusively via pi-web-deploy with health checks.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="entries[].updated_at" data-age="8m" data-age-label="true">ops · Updated 8m ago</span>
+      </div>
+
+      <div class="row" data-component="memory-row" data-layer="personal" role="button" tabindex="0" aria-expanded="false" data-item-key="mem-3">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-healthy">Layer 2 · Role (ops) · L0 / L1 / L2</span>
+            <span class="uri-code">viking://agent/memories/instructions/preferences.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Manage user systemd units bound to loopback and normalize OpenViking 0.5.4 user memory URIs on fs/content endpoints.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="entries[].l0_abstract" data-age="3m" data-age-label="true">ops · Updated 3m ago</span>
+      </div>
+
+      <div class="row" data-component="memory-row" data-layer="personal" role="button" tabindex="0" aria-expanded="false" data-item-key="mem-4">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-healthy">Layer 2 · Role (design) · L0 / L1 / L2</span>
+            <span class="uri-code">viking://agent/memories/cases/ui-check-zero-overlap.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Never render fake zero counters when an endpoint is unreachable; distinguish Healthy, Stale, Zero Activity, and Offline.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="entries[].updated_at" data-age="5m" data-age-label="true">design · Updated 5m ago</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tab 3: Commit & Guard Audit -->
+  <section class="panel hidden" role="tabpanel" data-tabpanel="commit-audit" data-panel-updated-at="2026-11-10T20:10:00Z">
+    <div class="panel-head">
+      <strong class="body-copy" data-body-copy="true">Post-Turn Commit &amp; Guard Verdict Stream</strong>
+      <span class="meta" data-panel-updated-label="true" data-age-label="true">Audit log updated 5m ago · 15m cadence</span>
+    </div>
+
+    <div class="row-list">
+      <div class="row" data-component="audit-row" role="button" tabindex="0" aria-expanded="false" data-item-key="aud-1">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-healthy">● commit</span>
+            <span class="uri-code">viking://user/memories/preferences/ops_tooling.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Post-task queue_done commit verified by Commit Guard; secret scan and L0/L1/L2 structure passed.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="events[].guard_verdict" data-age="5m" data-age-label="true">PASS_GUARD · role=ops · 5m ago</span>
+      </div>
+
+      <div class="row" data-component="audit-row" role="button" tabindex="0" aria-expanded="false" data-item-key="aud-2">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-info">● shared_sync</span>
+            <span class="uri-code">viking://resources/pi-web-ui/features/openviking-dashboard/design.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Indexed .temper/ design foundation and feature spec into Layer 1 shared resources after wt land 5db1eb93.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="events[].action" data-age="12m" data-age-label="true">PASS_SYNC · role=design · 12m ago</span>
+      </div>
+
+      <div class="row" data-component="audit-row" role="button" tabindex="0" aria-expanded="false" data-item-key="aud-3">
+        <div class="row-main">
+          <div class="row-top">
+            <span class="badge badge-unreachable">✕ reject_noise</span>
+            <span class="uri-code">viking://agent/memories/instructions/preferences.md</span>
+          </div>
+          <p class="abstract-copy" data-body-copy="true">Commit Guard rejected unverified worker preference candidate; zero changes committed.</p>
+        </div>
+        <span class="meta" data-figure="true" data-source-field="events[].guard_verdict" data-age="28m" data-age-label="true">REJECT_GUARD · role=backend · 28m ago</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tier 3: Reader Drawer -->
+  <aside class="drawer hidden" id="reader-drawer" data-component="reader-drawer" role="dialog" aria-label="Memory Reader Drawer">
+    <div class="drawer-head">
+      <div>
+        <span class="badge badge-info" id="drawer-scope">Layer 2 · Role (ops) · Read-Only</span>
+        <strong class="body-copy" id="drawer-uri" data-body-copy="true">viking://agent/memories/instructions/preferences.md</strong>
+      </div>
+      <button type="button" class="close-btn" data-slot="drawer-close" aria-label="Close reader drawer">Close ✕</button>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Memory Granularity Tiers">
+      <button type="button" class="tab-btn drawer-tab" role="tab" data-drawer-tab="l0" aria-selected="true">L0 Abstract</button>
+      <button type="button" class="tab-btn drawer-tab" role="tab" data-drawer-tab="l1" aria-selected="false">L1 Overview</button>
+      <button type="button" class="tab-btn drawer-tab" role="tab" data-drawer-tab="l2" aria-selected="false">L2 Full Content</button>
+    </div>
+    <div class="drawer-box" id="drawer-tier-l0" data-drawer-panel="l0">
+      <strong class="meta">L0 Abstract (1-sentence routing summary)</strong>
+      <p class="body-copy" id="drawer-l0-body" data-body-copy="true">Manage services via user systemd units bound to 127.0.0.1 and normalize OpenViking 0.5.4 user memory URIs.</p>
+    </div>
+    <div class="drawer-box hidden" id="drawer-tier-l1" data-drawer-panel="l1">
+      <strong class="meta">L1 Overview (.overview.md structured summary, &lt; 2,000 tokens)</strong>
+      <p class="body-copy" id="drawer-l1-body" data-body-copy="true">Covers user systemd unit conventions, isolated git worktrees (wt new / wt check / wt land), pi-web-deploy rollouts, and OpenViking 0.5.4 URI normalization rules.</p>
+    </div>
+    <div class="drawer-box hidden" id="drawer-tier-l2" data-drawer-panel="l2">
+      <strong class="meta">L2 Full Content (canonical document text, read-only)</strong>
+      <p class="body-copy" id="drawer-l2-body" data-body-copy="true">1. Bind all internal services to 127.0.0.1 via ~/.config/systemd/user/*.service. 2. Work in isolated git worktrees and deploy pi-web-ui exclusively via pi-web-deploy. 3. Normalize viking://user/memories/... URIs to viking://user/default/memories/... on /api/v1/fs/* and /api/v1/content/* endpoints.</p>
+    </div>
+    <div class="meta" id="drawer-prov" data-slot="drawer-provenance">Provenance: action=commit · role=ops · commit=5db1eb93 · guard_verdict=PASS_GUARD · Updated 3m ago</div>
+  </aside>
+<script>
+(function () {
+  var LIVE_FIGURES = {
+    "c1-metric": "15 / 15 Roles",
+    "c1-context": "127.0.0.1:1933 · 0 queued · Two-Layer Store (L1 Shared + L2 Role)",
+    "c2-metric": "94.2% Hit Rate",
+    "c2-context": "1,420 avg tok · 48 turns sampled (24h)",
+    "c3-metric": "18 Commits",
+    "c3-context": "5 shared syncs · 1 guard rejection (24h)"
+  };
+
+  function byId(id) {
+    return document.getElementById(id);
+  }
+
+  function applyState(st) {
+    var app = byId("app");
+    app.setAttribute("data-screen-state", st);
+
+    Object.keys(LIVE_FIGURES).forEach(function (id) {
+      var el = byId(id);
+      if (el) {
+        el.removeAttribute("data-unreachable-value");
+        el.textContent = LIVE_FIGURES[id];
+      }
+    });
+
+    var hdr = byId("hdr-mode");
+    var sub = byId("hdr-subtitle");
+    var chk = byId("hdr-checked");
+    var banner = byId("state-banner");
+    var bTitle = byId("state-banner-title");
+    var bBody = byId("state-banner-body");
+    var badges = [byId("c1-badge"), byId("ci-badge"), byId("c3-badge")];
+    var stalePills = [byId("c1-stale-pill"), byId("stale-pill"), byId("c3-stale-pill")];
+    var c1Age = byId("c1-age");
+    var c2Age = byId("c2-age");
+    var c3Age = byId("c3-age");
+    var slotRows = document.querySelectorAll("[data-slot-id]");
+    var slotNums = ["1", "2", "3", "4", "5"];
+    var slotLiveMeta = [
+      "98.0% · 410 tok · 1m ago",
+      "94.5% · 285 tok · 1m ago",
+      "96.2% · 520 tok · 1m ago",
+      "91.0% · 195 tok · 1m ago",
+      "score 0.28 · 0 tok · 1m ago"
+    ];
+    var slotStaleMeta = [
+      "98.0% · 410 tok · 19m ago",
+      "94.5% · 285 tok · 19m ago",
+      "96.2% · 520 tok · 19m ago",
+      "91.0% · 195 tok · 19m ago",
+      "score 0.28 · 0 tok · 19m ago"
+    ];
+    var p1Upd = byId("p1-updated");
+
+    c1Age.textContent = "Updated 4s ago · 30s cadence";
+    c2Age.textContent = "Updated 1m ago · 5m cadence";
+    c3Age.textContent = "Updated 5m ago · 15m cadence";
+    if (p1Upd) p1Upd.textContent = "Slot metrics sampled 1m ago · 5m cadence";
+
+    stalePills.forEach(function (p) {
+      if (p) p.classList.add("hidden");
+    });
+
+    if (st === "stale") {
+      hdr.className = "badge badge-stale";
+      hdr.setAttribute("data-icon", "clock-stale");
+      hdr.textContent = "◐ Degraded Local Fallback";
+      sub.textContent = "Daemon is reachable, but recent slot sampling and commits exceeded expected active cadence.";
+      chk.textContent = "Last injection 19m ago · Last commit 42m ago · 30s cadence";
+      c1Age.textContent = "Updated 19m ago · 30s cadence";
+      c2Age.textContent = "Updated 19m ago · 5m cadence";
+      c3Age.textContent = "Updated 42m ago · 15m cadence";
+      if (p1Upd) p1Upd.textContent = "Slot metrics sampled 19m ago (stale > 5m cadence)";
+      badges.forEach(function (b) {
+        b.className = "badge badge-stale";
+        b.setAttribute("data-icon", "clock-stale");
+        b.textContent = "◐ Stale";
+      });
+      stalePills.forEach(function (p) {
+        if (p) p.classList.remove("hidden");
+      });
+      slotRows.forEach(function (r, idx) {
+        var b = r.querySelector(".badge");
+        var m = r.querySelector("[data-figure]");
+        if (b && idx < 4) {
+          b.className = "badge badge-stale";
+          b.textContent = `◐ Slot ${slotNums[idx]} Stale (19m ago)`;
+        }
+        if (m) m.textContent = slotStaleMeta[idx];
+      });
+      banner.className = "state-banner badge-stale";
+      bTitle.textContent = "◐ Stale — Exceeded Expected Active Cadence (> 30s / > 5m / > 15m)";
+      bBody.textContent = "Showing last verified telemetry values with explicit stale cadence badges until the next turn completes.";
+    } else if (st === "empty") {
+      hdr.className = "badge badge-zero";
+      hdr.setAttribute("data-icon", "circle-empty");
+      hdr.textContent = "◌ Zero Activity (0 events in window)";
+      sub.textContent = "OpenViking daemon is online and responsive, with 0 events in window (server online).";
+      chk.textContent = "Checked 4s ago · 0 events in window · 30s cadence";
+      c1Age.textContent = "Checked 4s ago · 30s cadence";
+      c2Age.textContent = "Checked 4s ago · 5m cadence";
+      c3Age.textContent = "Checked 4s ago · 15m cadence";
+      if (p1Upd) p1Upd.textContent = "Checked 4s ago · 0 turns in window · 5m cadence";
+      byId("c2-metric").textContent = "0 turns in window";
+      byId("c2-context").textContent = "0 avg tok · 0 turns sampled (server online)";
+      byId("c3-metric").textContent = "0 commits in window";
+      byId("c3-context").textContent = "0 shared syncs · 0 guard rejections (server online)";
+      badges.forEach(function (b) {
+        b.className = "badge badge-zero";
+        b.setAttribute("data-icon", "circle-empty");
+        b.textContent = "◌ Zero Activity";
+      });
+      slotRows.forEach(function (r, idx) {
+        var b = r.querySelector(".badge");
+        var m = r.querySelector("[data-figure]");
+        if (b) {
+          b.className = "badge badge-zero";
+          b.textContent = `◌ Slot ${slotNums[idx]} Idle (0 turns)`;
+        }
+        if (m) m.textContent = "0 turns · 0 tok · checked 4s ago";
+      });
+      banner.className = "state-banner badge-zero";
+      bTitle.textContent = "◌ Zero Activity — 0 events in window (server online)";
+      bBody.textContent = "Distinct from Stale and Server Unreachable: daemon answered health checks cleanly, and no turns ran in this window.";
+    } else if (st === "error") {
+      hdr.className = "badge badge-unreachable";
+      hdr.setAttribute("data-icon", "octagon-x");
+      hdr.textContent = "✕ Offline";
+      sub.textContent = "Cannot reach 127.0.0.1:1933 — role chats are on Degraded Local Fallback (.temper/ disk files). Figures are withheld rather than shown as 0.";
+      chk.textContent = "Last seen 18m ago · 30s cadence";
+      c1Age.textContent = "Last seen 18m ago · 30s cadence";
+      c2Age.textContent = "Last seen 18m ago · 5m cadence";
+      c3Age.textContent = "Last seen 18m ago · 15m cadence";
+      if (p1Upd) p1Upd.textContent = "Server Unreachable · last seen 18m ago · 5m cadence";
+      badges.forEach(function (b) {
+        b.className = "badge badge-unreachable";
+        b.setAttribute("data-icon", "octagon-x");
+        b.textContent = "✕ Server Unreachable";
+      });
+      document.querySelectorAll('[data-component="summary-card"] [data-figure]').forEach(function (f) {
+        f.setAttribute("data-unreachable-value", "true");
+        f.textContent = "— (Unreachable)";
+      });
+      slotRows.forEach(function (r, idx) {
+        var b = r.querySelector(".badge");
+        var m = r.querySelector("[data-figure]");
+        if (b) {
+          b.className = "badge badge-unreachable";
+          b.textContent = `✕ Slot ${slotNums[idx]} Unreachable`;
+        }
+        if (m) m.textContent = "— (Unreachable) · last seen 18m ago";
+      });
+      banner.className = "state-banner badge-unreachable";
+      bTitle.textContent = "✕ Server Unreachable — Cannot reach 127.0.0.1:1933 (Offline)";
+      bBody.textContent = "Summary cards render — (Unreachable) instead of 0 so an unreachable daemon never masquerades as healthy or idle.";
+    } else if (st === "loading") {
+      hdr.className = "badge badge-info";
+      hdr.setAttribute("data-icon", "circle-check");
+      hdr.textContent = "● Loading Telemetry Snapshot…";
+      sub.textContent = "Reading OpenViking overview, namespace entries, and commit audit snapshot without flashing zero counters…";
+      if (p1Upd) p1Upd.textContent = "Loading slot telemetry… · 5m cadence";
+      byId("c1-metric").textContent = "Loading roles…";
+      byId("c1-context").textContent = "Fetching daemon status from /api/openviking/overview…";
+      byId("c2-metric").textContent = "Loading hit rate…";
+      byId("c2-context").textContent = "Fetching 5-slot Turn-1 injection sample…";
+      byId("c3-metric").textContent = "Loading commits…";
+      byId("c3-context").textContent = "Fetching post-turn Commit Guard audit stream…";
+      badges.forEach(function (b) {
+        b.className = "badge badge-info";
+        b.setAttribute("data-icon", "circle-check");
+        b.textContent = "● Loading…";
+      });
+      slotRows.forEach(function (r, idx) {
+        var b = r.querySelector(".badge");
+        var m = r.querySelector("[data-figure]");
+        if (b) {
+          b.className = "badge badge-info";
+          b.textContent = `● Slot ${slotNums[idx]} Loading…`;
+        }
+        if (m) m.textContent = "Loading slot metrics…";
+      });
+      banner.className = "state-banner badge-info";
+      bTitle.textContent = "Loading OpenViking telemetry snapshot…";
+      bBody.textContent = "Preserving card geometry while fetching /api/openviking/overview.";
+    } else {
+      hdr.className = "badge badge-healthy";
+      hdr.setAttribute("data-icon", "circle-check");
+      hdr.textContent = "● Active (15/15 Roles Live)";
+      sub.textContent = "OpenViking sidecar is actively injecting L0 & Turn-1 memories across all 15 roles and recording verified post-turn lessons.";
+      chk.textContent = "Last injection 4s ago · Last commit 5m ago · 30s cadence";
+      badges.forEach(function (b) {
+        b.className = "badge badge-healthy";
+        b.setAttribute("data-icon", "circle-check");
+        b.textContent = "● Healthy";
+      });
+      slotRows.forEach(function (r, idx) {
+        var b = r.querySelector(".badge");
+        var m = r.querySelector("[data-figure]");
+        if (b) {
+          if (idx < 4) {
+            b.className = "badge badge-healthy";
+            b.textContent = `● Slot ${slotNums[idx]} Hit`;
+          } else {
+            b.className = "badge badge-zero";
+            b.textContent = "◌ Slot 5 Skipped (< 0.35)";
+          }
+        }
+        if (m) m.textContent = slotLiveMeta[idx];
+      });
+      banner.className = "state-banner hidden";
+    }
+
+    document.querySelectorAll("[data-set-state]").forEach(function (btn) {
+      btn.setAttribute("aria-pressed", btn.getAttribute("data-set-state") === st ? "true" : "false");
+    });
+  }
+
+  var DRAWER_DATA = {
+    "mem-1": {
+      scope: "Layer 1 · Shared Resource · Read-Only",
+      uri: "viking://resources/pi-web-ui/design/DESIGN.md",
+      l0: "Defines atmospheric minimalism, WCAG 2.2 AA contrast pairings, tabular numeric discipline, and non-color state cues.",
+      l1: "L1 Overview (< 2,000 tokens): Captures measured pi-web-ui surface tokens, recorded drift across legacy stylesheets, and WCAG 2.2 AA rules.",
+      l2: "L2 Full Content: Every dashboard view in pi-web-ui uses .temper/design/tokens.json variables, 12px minimum font floor, 16px body copy, and distinct icon+border+label state badges.",
+      prov: "Provenance: action=shared_sync · role=design · commit=5db1eb93 · guard_verdict=PASS_SYNC · Updated 3m ago"
+    },
+    "mem-2": {
+      scope: "Layer 1 · Shared Craft · Read-Only",
+      uri: "viking://user/memories/preferences/ops_tooling.md",
+      l0: "Isolate work in dedicated git worktrees and deploy pi-web-ui exclusively via pi-web-deploy with health checks.",
+      l1: "L1 Overview (< 2,000 tokens): Covers reversible changes, isolated worktrees (wt new / wt check / wt land), and observable daemons.",
+      l2: "L2 Full Content: Keep changes small, reversible, and checked before reaching live services; always know the undo path first and deploy via pi-web-deploy.",
+      prov: "Provenance: action=commit · role=ops · commit=9c41a02b · guard_verdict=PASS_GUARD · Updated 8m ago"
+    },
+    "mem-3": {
+      scope: "Layer 2 · Role (ops) · Read-Only",
+      uri: "viking://agent/memories/instructions/preferences.md",
+      l0: "Manage user systemd units bound to loopback and normalize OpenViking 0.5.4 user memory URIs on fs/content endpoints.",
+      l1: "L1 Overview (< 2,000 tokens): Covers user systemd unit bindings, isolated worktrees, pi-web-deploy rollouts, and OpenViking 0.5.4 URI normalization rules.",
+      l2: "L2 Full Content: 1. Bind internal services to 127.0.0.1. 2. Work in isolated git worktrees. 3. Normalize viking://user/memories/... URIs to viking://user/default/memories/... on fs and content endpoints.",
+      prov: "Provenance: action=commit · role=ops · commit=5db1eb93 · guard_verdict=PASS_GUARD · Updated 3m ago"
+    },
+    "mem-4": {
+      scope: "Layer 2 · Role (design) · Read-Only",
+      uri: "viking://agent/memories/cases/ui-check-zero-overlap.md",
+      l0: "Never render fake zero counters when an endpoint is unreachable; distinguish Healthy, Stale, Zero Activity, and Offline.",
+      l1: "L1 Overview (< 2,000 tokens): Summary cards cap at <= 5 data fields and render explicit — (Unreachable) when the local daemon is down.",
+      l2: "L2 Full Content: Verified across 320px, 390px, and 1440px in light and dark modes. Healthy, Stale, Zero Activity, and Server Unreachable each carry a unique glyph, border style, and token.",
+      prov: "Provenance: action=commit · role=design · commit=5db1eb93 · guard_verdict=PASS_GUARD · Updated 5m ago"
+    }
+  };
+
+  document.querySelectorAll('[role="tab"][data-tab]').forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var target = btn.getAttribute("data-tab");
+      document.querySelectorAll('[role="tab"][data-tab]').forEach(function (b) {
+        b.setAttribute("aria-selected", b === btn ? "true" : "false");
+      });
+      document.querySelectorAll('[role="tabpanel"]').forEach(function (p) {
+        p.classList.toggle("hidden", p.getAttribute("data-tabpanel") !== target);
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-layer-filter]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var filter = btn.getAttribute("data-layer-filter") || "all";
+      document.querySelectorAll("[data-layer-filter]").forEach(function (b) {
+        b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+      });
+      document.querySelectorAll("#explorer-list [data-layer]").forEach(function (row) {
+        var scope = row.getAttribute("data-layer");
+        row.classList.toggle("hidden", filter !== "all" && scope !== filter);
+      });
+    });
+  });
+
+  var drawer = byId("reader-drawer");
+  var activeRow = null;
+
+  function populateDrawer(row) {
+    var key = row.getAttribute("data-item-key") || "";
+    var d = DRAWER_DATA[key];
+    if (d) {
+      byId("drawer-scope").textContent = d.scope;
+      byId("drawer-uri").textContent = d.uri;
+      byId("drawer-l0-body").textContent = d.l0;
+      byId("drawer-l1-body").textContent = d.l1;
+      byId("drawer-l2-body").textContent = d.l2;
+      byId("drawer-prov").textContent = d.prov;
+    } else {
+      var uriEl = row.querySelector(".uri-code");
+      var absEl = row.querySelector(".abstract-copy");
+      var uriTxt = uriEl ? uriEl.textContent.trim() : "viking://resources/pi-web-ui/core/map.md";
+      var absTxt = absEl ? absEl.textContent.trim() : "One-sentence L0 routing abstract.";
+      byId("drawer-uri").textContent = uriTxt;
+      byId("drawer-l0-body").textContent = absTxt;
+    }
+  }
+
+  document.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]').forEach(function (row) {
+    function toggleRow() {
+      var isOpen = row.getAttribute("aria-expanded") === "true";
+      document.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]').forEach(function (r) {
+        r.setAttribute("aria-expanded", "false");
+      });
+      if (isOpen) {
+        drawer.classList.add("hidden");
+        activeRow = null;
+      } else {
+        populateDrawer(row);
+        row.setAttribute("aria-expanded", "true");
+        drawer.classList.remove("hidden");
+        activeRow = row;
+      }
+    }
+    row.addEventListener("click", toggleRow);
+    row.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleRow();
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-drawer-tab]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var t = btn.getAttribute("data-drawer-tab");
+      document.querySelectorAll("[data-drawer-tab]").forEach(function (b) {
+        b.setAttribute("aria-selected", b === btn ? "true" : "false");
+      });
+      document.querySelectorAll("[data-drawer-panel]").forEach(function (p) {
+        p.classList.toggle("hidden", p.getAttribute("data-drawer-panel") !== t);
+      });
+    });
+  });
+
+  var closeBtn = document.querySelector('[data-slot="drawer-close"]');
+  if (closeBtn) {
+    closeBtn.addEventListener("click", function () {
+      drawer.classList.add("hidden");
+      if (activeRow) activeRow.setAttribute("aria-expanded", "false");
+    });
+  }
+
+  document.querySelectorAll('[data-slot="tooltip-trigger"]').forEach(function (btn) {
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var wrap = btn.closest(".concept-wrap");
+      if (!wrap) return;
+      var wasOpen = wrap.classList.contains("is-open");
+      document.querySelectorAll(".concept-wrap.is-open").forEach(function (w) {
+        w.classList.remove("is-open");
+      });
+      if (!wasOpen) wrap.classList.add("is-open");
+    });
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") {
+      drawer.classList.add("hidden");
+      if (activeRow) activeRow.setAttribute("aria-expanded", "false");
+      document.querySelectorAll(".concept-wrap.is-open").forEach(function (w) {
+        w.classList.remove("is-open");
+      });
+    }
+  });
+
+  document.querySelectorAll("[data-set-state]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      applyState(btn.getAttribute("data-set-state") || "live");
+    });
+  });
+
+  var themeBtn = byId("themeToggleBtn");
+  if (themeBtn) {
+    themeBtn.addEventListener("click", function () {
+      var cur = document.documentElement.getAttribute("data-theme") || "dark";
+      var next = cur === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      themeBtn.setAttribute("aria-pressed", next === "light" ? "true" : "false");
+    });
+  }
+
+  var params = new URLSearchParams(window.location.search);
+  if (params.has("state") || params.get("capture") === "1") {
+    var protoChrome = byId("protoChrome");
+    if (protoChrome) protoChrome.classList.add("hidden");
+  }
+  applyState(params.get("state") || "live");
+})();
+</script>
+</div>
+</body>
+</html>
