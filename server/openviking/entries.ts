@@ -13,11 +13,13 @@ import {
 import {
 	listDir,
 	RESOURCES_ROOT_URI,
+	roleTreeFiles,
 	SHARED_MEMORIES_ROOT_URI,
 	walkMemoryTree,
 	walkRoleTrees,
 	type OpenVikingLsItem,
 	type OpenVikingMemoryFile,
+	type OpenVikingRoleTree,
 } from "./memory-tree.js";
 import { panelHealth, pendingSyncCause } from "./overview.js";
 import { readChangelogRecords, readRolloutState, type OpenVikingStatePaths } from "./state-files.js";
@@ -189,8 +191,8 @@ async function listEntries(
 	const entries = [
 		...repos.filter((r) => r.isDir).map((r) => toEntry(r, "repository", rewriteVikingUri(r.uri), provenance)),
 		...memories.map((f) => fileEntry(f)),
-		...[...(roleTrees as Map<string, OpenVikingMemoryFile[] | null>)].flatMap(([role, files]) =>
-			(files ?? []).map((f) => fileEntry(f, role)),
+		...[...(roleTrees as Map<string, OpenVikingRoleTree>)].flatMap(([role, tree]) =>
+			roleTreeFiles(tree).map((f) => fileEntry(f, role)),
 		),
 	];
 	await fillSharedAbstracts(http, entries);

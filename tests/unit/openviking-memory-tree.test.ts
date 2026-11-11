@@ -21,7 +21,12 @@ const FILES = [
 /** Like 0.5.4: a recursive listing returns descendants at most this many levels below the listed folder. */
 const RECURSIVE_LEVEL_CAP = 3;
 
-function treeDaemon(root: string, files: readonly string[], failUri?: string) {
+function treeDaemon(
+	root: string,
+	files: readonly string[],
+	failUri?: string,
+	failWith: { code: string; status: number } = { code: "INTERNAL", status: 500 },
+) {
 	const paths = new Set<string>();
 	for (const f of files) {
 		const parts = f.split("/");
@@ -41,8 +46,8 @@ function treeDaemon(root: string, files: readonly string[], failUri?: string) {
 		await new Promise((r) => setTimeout(r, 1));
 		inFlight--;
 		if (uri === failUri) {
-			return new Response(JSON.stringify({ status: "error", error: { code: "INTERNAL", message: "boom" } }), {
-				status: 500,
+			return new Response(JSON.stringify({ status: "error", error: { code: failWith.code, message: "boom" } }), {
+				status: failWith.status,
 			});
 		}
 		const dir = uri === root ? "" : uri.slice(root.length + 1);
@@ -89,13 +94,30 @@ describe("walkMemoryTree reaches every depth (Backend #142)", () => {
 		expect(stats.maxInFlight).toBeLessThanOrEqual(8);
 	});
 
-	it("one failed deep sub-listing fails the whole tree; a role's tree reads as null", async () => {
+	it("one failed deep sub-listing fails the whole tree; the role's reading is unmeasured, not absent", async () => {
 		const failing = `${ROOT}/events/2026/11/02`;
 		await expect(walkMemoryTree(treeDaemon(ROOT, FILES, failing).http, ROOT, {})).rejects.toBeInstanceOf(
 			OpenVikingDaemonRequestError,
 		);
 		const roleRoot = "viking://user/qa/memories";
 		const { http } = treeDaemon(roleRoot, ["cases/a.md", "events/2026/11/01/e.md"], `${roleRoot}/events/2026/11/01`);
-		expect(await walkRoleTree(http, "qa")).toBeNull();
+		// Backend #149: a listing the daemon failed is a read that did not happen, never "this role has no folder".
+		expect(await walkRoleTree(http, "qa")).toEqual({ state: "unmeasured" });
+	});
+
+	it("reads a role's root NOT_FOUND as an absent folder, and a measured tree as its files (Backend #149)", async () => {
+		const roleRoot = "viking://user/qa/memories";
+		const present = treeDaemon(roleRoot, ["cases/a.md", "instructions/preferences.md"]);
+		expect(await walkRoleTree(present.http, "qa")).toEqual({
+			state: "measured",
+			files: expect.arrayContaining([expect.objectContaining({ relPath: "cases/a.md", category: "cases" })]),
+		});
+
+		const absent = treeDaemon(roleRoot, ["cases/a.md"], roleRoot, { code: "NOT_FOUND", status: 404 });
+		expect(await walkRoleTree(absent.http, "qa")).toEqual({ state: "absent" });
+
+		// The same root listing, failed for any other daemon reason: unmeasured.
+		const busy = treeDaemon(roleRoot, ["cases/a.md"], roleRoot, { code: "UNAVAILABLE", status: 503 });
+		expect(await walkRoleTree(busy.http, "qa")).toEqual({ state: "unmeasured" });
 	});
 });

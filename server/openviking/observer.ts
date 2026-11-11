@@ -87,8 +87,14 @@ function storeCounts(tree: OpenVikingMemoryTree | null): OpenVikingStoreCounts {
 	const entities = inShared("entities");
 	const events = inShared("events");
 	const roleTrees = tree?.role_trees ?? null;
+	const readings = roleTrees === null ? null : [...roleTrees.values()];
+	// One role the daemon would not list makes the whole personal layer unmeasured (Backend #149, #148 row 37):
+	// a sum over the roles that did answer, shown as a figure, reads as a healthy count of a store never seen.
+	// A role the daemon says has no folder is a measured absence: it counts as 0 of a whole that is still a figure.
 	const found =
-		roleTrees === null ? null : [...roleTrees.values()].filter((t): t is OpenVikingMemoryFile[] => t !== null);
+		readings === null || readings.some((r) => r.state === "unmeasured")
+			? null
+			: readings.flatMap((r) => (r.state === "measured" ? [r.files] : []));
 	const inRoles = (category: string) =>
 		found === null ? null : found.reduce((n, t) => n + t.filter((f) => f.category === category).length, 0);
 	const preferences =

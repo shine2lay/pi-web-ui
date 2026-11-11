@@ -18,6 +18,11 @@ export interface DaemonCall {
  * `down` refuses the connection, `hang` never answers (past every deadline), `stall-once` misses only the first
  * /health deadline, `unhealthy` answers /health with `{status: "ok", healthy: false}`. `state.hangLsMatching` is
  * orthogonal: a healthy daemon whose `fs/ls` for URIs containing that string never answers (Backend #147).
+ *
+ * Backend #149 adds the two answers a healthy daemon gives about a folder, which must never be conflated:
+ * `state.errorLsRoles` are roles whose listings answer `503 UNAVAILABLE` (a read that failed; the folder is
+ * there), `state.absentRoles` are roles whose listings answer `404 NOT_FOUND` (the daemon says there is no
+ * such folder), and `state.failAllLs` makes every `fs/ls` answer `503` (a whole refresh that failed).
  */
 export type DaemonMode = "up" | "down" | "hang" | "stall-once" | "unhealthy";
 
@@ -25,6 +30,14 @@ const ok = (result: unknown, healthy = true) =>
 	new Response(JSON.stringify({ status: "ok", healthy, result }), {
 		headers: { "Content-Type": "application/json" },
 	});
+/** The daemon's own error envelope, as `:1933` 0.5.4 answers it (`NOT_FOUND` on a folder that is not there). */
+const daemonError = (status: number, code: string, message: string) =>
+	new Response(JSON.stringify({ status: "error", result: null, error: { code, message } }), {
+		status,
+		headers: { "Content-Type": "application/json" },
+	});
+/** `viking://user/<role>/memories...` belongs to `role`. */
+const lsRole = (uri: string): string | null => /^viking:\/\/user\/([a-z0-9_-]+)\/memories(\/|$)/.exec(uri)?.[1] ?? null;
 const item = (uri: string, isDir: boolean, abstract = "") => ({
 	uri,
 	isDir,
@@ -45,7 +58,13 @@ function lsResult(uri: string): unknown[] {
 
 export function daemon(initial: DaemonMode = "up") {
 	const calls: DaemonCall[] = [];
-	const state = { mode: initial, hangLsMatching: null as string | null };
+	const state = {
+		mode: initial,
+		hangLsMatching: null as string | null,
+		errorLsRoles: [] as string[],
+		absentRoles: [] as string[],
+		failAllLs: false,
+	};
 	const fetchImpl: typeof fetch = async (input, init) => {
 		const url = new URL(String(input));
 		calls.push({ url, method: init?.method ?? "GET", headers: { ...(init?.headers as Record<string, string>) } });
@@ -69,7 +88,18 @@ export function daemon(initial: DaemonMode = "up") {
 		if (url.pathname === "/health") return ok(undefined, mode !== "unhealthy");
 		if (url.pathname === "/api/v1/observer/queue") return ok({ status: QUEUE });
 		if (url.pathname === "/api/v1/observer/system") return ok({ components: {} });
-		if (url.pathname === "/api/v1/fs/ls") return ok(lsResult(url.searchParams.get("uri") ?? ""));
+		if (url.pathname === "/api/v1/fs/ls") {
+			const uri = url.searchParams.get("uri") ?? "";
+			const role = lsRole(uri);
+			if (state.failAllLs) return daemonError(503, "UNAVAILABLE", `daemon busy: ${uri}`);
+			if (role !== null && state.errorLsRoles.includes(role)) {
+				return daemonError(503, "UNAVAILABLE", `daemon busy: ${uri}`);
+			}
+			if (role !== null && state.absentRoles.includes(role)) {
+				return daemonError(404, "NOT_FOUND", `Directory not found: ${uri}`);
+			}
+			return ok(lsResult(uri));
+		}
 		if (url.pathname.startsWith("/api/v1/content/")) return ok(`${url.pathname} of ${url.searchParams.get("uri")}`);
 		return new Response(JSON.stringify({ status: "error", error: { code: "NOT_FOUND" } }), { status: 404 });
 	};
