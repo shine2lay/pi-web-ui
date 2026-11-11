@@ -5191,11 +5191,18 @@ the TL;DR and Telegram links open it, and opening it puts it back in Recent chat
    most 200) instead of 3 times the limit, so many hidden task chats can't leave Recent chats short.
 5. `server/queue-host.ts`: the comment says what `closeChat` does now.
 6. **settle-stale: never closed mid-run** (Ops #771, H-SETTLE-STALE-1, `docs/settle-stale-771.md`): `queueCloseChat`
-   waits for the chat to be idle however long that takes (it used to give up after 2 minutes and close a
+   waits for the chat to be idle (it used to give up after 2 minutes and close a
    chat still working after `queue_done`: the chat's session was disposed mid-turn, its reply was lost and
    every add-on's `agent_before_settle`/`agent_settled` hit a stale ctx, with "turn_end could not resolve
    the persisted assistant entry ID"). Each look takes the chat's current session (`queueSessionFor`), so
    one a force reset replaced can't hold it open, and a chat that is no longer open ends the wait.
+7. **queue-close-lane: never-idle close bounded and isolated from task-open lane** (Ops #807,
+   `server/queue-chat-lane.ts`, `server/agent-service.ts`, `tests/unit/queue-done-hidden.test.ts`):
+   `queueCloseChat` runs its release step on a dedicated `queueCloseChain` (separate from `queueTasksChain`
+   that opens new task chats) and bounds its idle wait to `QUEUE_CLOSE_DEADLINE_MS` (15 minutes). If a
+   finished task chat still has not gone idle by the deadline, `runQueueCloseChat` logs a `console.warn`
+   naming the chat and transcript path, leaves the still-working chat open (never disposing it mid-turn),
+   and resolves `false` so neither the close lane nor the task-open lane can be wedged forever.
 
 pi-queue (its own repo, same task): a lane task removed from the queue gets `closeChat` once its chat has
 stopped working on it (done, needs you or on hold, by its own record): at once, or when that chat next

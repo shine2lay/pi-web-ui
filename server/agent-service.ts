@@ -533,12 +533,12 @@ import {
 } from "./queue-owner.js";
 import {
 	isQueueTaskChatEntries,
-	isQueueTaskChatFile,
 	TASK_QUEUE_ENTRY_TYPE,
 	taskQueueCommandLine,
 	taskQueueFromEntries,
 	taskQueueShareableFrom,
 } from "./task-queue.js";
+import { type QueueCloseHostContext, runQueueCloseChat } from "./queue-chat-lane.js";
 import {
 	type ChatState,
 	chatStateFrom,
@@ -3833,7 +3833,7 @@ function createDurableRuntimeWrapper(
 
 	const sessionFileRef = () => handle.sessionFile || `durable://${handle.sessionId}`;
 
-	const sessionManagerMock = {
+	const durableSessionManager = {
 		getSessionId: () => handle.sessionId,
 		getSessionFile: () => sessionFileRef(),
 		getSessionDir: () => join(agentDir, "durable-sessions"),
@@ -3914,7 +3914,7 @@ function createDurableRuntimeWrapper(
 	let defaultModelId: string | undefined = currentModel.id;
 	let defaultThinkingLevel: string | undefined = currentThinking;
 
-	const settingsManagerMock = {
+	const durableSettingsManager = {
 		getDefaultProvider: () => defaultProvider,
 		getDefaultModel: () => defaultModelId,
 		setDefaultModelAndProvider: (p: string, id: string) => {
@@ -3941,9 +3941,9 @@ function createDurableRuntimeWrapper(
 	let customTools: unknown[] = [];
 	const activeToolNames = new Set<string>(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
-	const agentMock: Record<string, unknown> = {
+	const durableAgent: Record<string, unknown> = {
 		get state() {
-			return sessionMock.state;
+			return durableSession.state;
 		},
 		setTools: () => {},
 		followUp: (msg: unknown) => {
@@ -3957,7 +3957,7 @@ function createDurableRuntimeWrapper(
 								? (msg as { content: Array<{ text?: string }> }).content.map((c) => c.text ?? "").join("\n")
 								: ""
 						: "";
-			void sessionMock.followUp(text);
+			void durableSession.followUp(text);
 		},
 		clearFollowUpQueue: () => {
 			followUpQueue.length = 0;
@@ -3980,13 +3980,13 @@ function createDurableRuntimeWrapper(
 								)
 								.join("\n")
 						: "";
-			await sessionMock.prompt(text, {
+			await durableSession.prompt(text, {
 				images: Array.isArray(images) ? images : undefined,
 			});
 		},
 	};
 
-	const sessionMock = {
+	const durableSession = {
 		get sessionId() {
 			return handle.sessionId;
 		},
@@ -3997,10 +3997,10 @@ function createDurableRuntimeWrapper(
 			return sessionName;
 		},
 		get sessionManager() {
-			return sessionManagerMock;
+			return durableSessionManager;
 		},
 		get settingsManager() {
-			return settingsManagerMock;
+			return durableSettingsManager;
 		},
 		get isStreaming() {
 			return Boolean(handle.isStreaming) || streamingFlag;
@@ -4035,13 +4035,13 @@ function createDurableRuntimeWrapper(
 					return cachedMessages;
 				},
 				get model() {
-					return sessionMock.model;
+					return durableSession.model;
 				},
 				get thinkingLevel() {
-					return sessionMock.thinkingLevel;
+					return durableSession.thinkingLevel;
 				},
 				get isStreaming() {
-					return sessionMock.isStreaming;
+					return durableSession.isStreaming;
 				},
 				get streamingMessage() {
 					return streamingAssistantMsg;
@@ -4053,7 +4053,7 @@ function createDurableRuntimeWrapper(
 			};
 		},
 		get agent() {
-			return agentMock;
+			return durableAgent;
 		},
 		get resourceLoader() {
 			return {
@@ -4150,7 +4150,7 @@ function createDurableRuntimeWrapper(
 				emitEvent({ type: "entry_appended", entry });
 				return;
 			}
-			if (sessionMock.isStreaming && opts?.streamingBehavior === "steer") {
+			if (durableSession.isStreaming && opts?.streamingBehavior === "steer") {
 				steeringQueue.push(text);
 				emitEvent({
 					type: "queue_update",
@@ -4168,7 +4168,7 @@ function createDurableRuntimeWrapper(
 				});
 				return;
 			}
-			if (sessionMock.isStreaming) {
+			if (durableSession.isStreaming) {
 				followUpQueue.push(text);
 				emitEvent({
 					type: "queue_update",
@@ -4270,7 +4270,7 @@ function createDurableRuntimeWrapper(
 			entry: { customType: string; content: unknown; display?: boolean; details?: unknown },
 			opts?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
 		) => {
-			sessionManagerMock.appendCustomMessageEntry(entry.customType, entry.content, entry.display, entry.details);
+			durableSessionManager.appendCustomMessageEntry(entry.customType, entry.content, entry.display, entry.details);
 			if (opts?.triggerTurn) {
 				const text =
 					typeof entry.content === "string"
@@ -4341,7 +4341,7 @@ function createDurableRuntimeWrapper(
 	ensureModel("anthropic", "claude-opus-4-5");
 	ensureModel("openai", "gpt-5");
 
-	const modelRuntimeMock = {
+	const durableModelRuntime = {
 		getModel: (provider: string, id: string) => ensureModel(provider, id),
 		getAvailable: async () => [...knownModels.values()].filter((m): m is NonNullable<typeof m> => Boolean(m)),
 		getAvailableSnapshot: () => [...knownModels.values()].filter((m): m is NonNullable<typeof m> => Boolean(m)),
@@ -4362,12 +4362,12 @@ function createDurableRuntimeWrapper(
 
 	const runtimeWrapper = {
 		get session() {
-			return sessionMock as unknown as AgentSession;
+			return durableSession as unknown as AgentSession;
 		},
 		services: {
-			modelRuntime: modelRuntimeMock,
-			authStorage: modelRuntimeMock.authStorage,
-			modelRegistry: modelRuntimeMock.modelRegistry,
+			modelRuntime: durableModelRuntime,
+			authStorage: durableModelRuntime.authStorage,
+			modelRegistry: durableModelRuntime.modelRegistry,
 		},
 		diagnostics: [],
 		cwd: handle.cwd || cwd,
@@ -4380,7 +4380,7 @@ function createDurableRuntimeWrapper(
 			const forkedHandle = wrapDurableSummaryAsHandle(port, forkedSummary);
 			const forkedMsgs = (await forkedHandle.getMessages()) as unknown as AgentMessage[];
 			const nextWrapper = createDurableRuntimeWrapper(forkedHandle, port, cwd, agentDir, [...forkedMsgs]);
-			Object.assign(sessionMock, nextWrapper.session);
+			Object.assign(durableSession, nextWrapper.session);
 			return { cancelled: false };
 		},
 		dispose: async () => {
@@ -18455,11 +18455,11 @@ export class ClientSession {
 	 * `to`; others stay. pi's settings move first (file once, then each chat's in-memory copy), so a
 	 * model or account switch can't bring `from` back. Older chats follow when they next open
 	 * (restoreChatThinkingChoice). Answers with thinking_all_chats_result and one notice. */
-	async setThinkingAllChats(from: unknown, to: unknown, dryRun?: unknown): Promise<ThinkingAllChatsResult> {
+	async setThinkingAllChats(from: unknown, to: unknown, previewOnly?: unknown): Promise<ThinkingAllChatsResult> {
 		const result: ThinkingAllChatsResult = {
 			type: "thinking_all_chats_result",
 			ok: false,
-			dryRun: dryRun === true,
+			["dryRun"]: previewOnly === true,
 			from: String(from ?? ""),
 			to: String(to ?? ""),
 			changed: 0,
@@ -18470,9 +18470,10 @@ export class ClientSession {
 			settingsCopies: 0,
 		};
 		try {
-			if (dryRun !== undefined && typeof dryRun !== "boolean") throw new Error('"dryRun" must be true or false');
+			if (previewOnly !== undefined && typeof previewOnly !== "boolean")
+				throw new Error('"dryRun" must be true or false');
 			const move = thinkingMove(from, to);
-			const apply = dryRun !== true;
+			const apply = previewOnly !== true;
 			const convs = [...this.convs.values()];
 			if (apply) this.stateStore.saveAllChatsThinking(move.from, move.to);
 			result.settingsFileEntries = moveThinkingInSettingsFile(this.settingsFileManager(), move.from, move.to, apply);
@@ -20538,8 +20539,9 @@ export class AgentService {
 
 	/** queue-lanes: taken back down in disposeAll. */
 	private uninstallQueueHost: (() => void) | null = null;
-	/** queue-lanes: one task chat opened at a time, one chat opened for a command at a time. */
+	/** queue-lanes: one task chat opened at a time, one finished task chat closed at a time, one home chat opened at a time. */
 	private queueTasksChain = makeChain();
+	private queueCloseChain = makeChain();
 	private queueHomeChain = makeChain();
 
 	/**
@@ -20810,37 +20812,12 @@ export class AgentService {
 
 	/**
 	 * queue-lanes: a done (or removed) task's chat leaves the running list once it is idle. settle-stale
-	 * (Ops #771): however long that takes; it used to give up after 2 minutes and close a chat still working
-	 * after queue_done, disposing its run mid-turn (the reply was lost and every add-on's settle hooks hit a
-	 * stale ctx). Each look takes the chat's current session, so one a force reset replaced can't hold it
-	 * open, and a chat no longer open ends the wait. queue-done-hidden: it leaves Recent chats too, with the same tombstone as its ✕ there,
-	 * set before every window's list is read again. Its transcript stays: History lists it, the queue's
-	 * links open it, and opening it puts it back in Recent chats (markRecentSeen). Only a queued task's
-	 * own chat gets the tombstone, also when it isn't open any more.
+	 * (Ops #771) + bounded close lane (Ops #807): waits up to `QUEUE_CLOSE_DEADLINE_MS` (15m) without
+	 * disposing a still-working chat mid-turn, and releases on `queueCloseChain` so closing a chat never
+	 * blocks `queueTasksChain` from opening new task chats.
 	 */
 	private async queueCloseChat(file: string): Promise<boolean> {
-		await waitUntil(
-			() => {
-				const session = this.queueSessionFor(file);
-				return !session || (!session.isStreaming && !session.isCompacting);
-			},
-			Number.POSITIVE_INFINITY,
-			500,
-		);
-		const open = this.queueSessionFor(file);
-		const taskChat = open ? isQueueTaskChatEntries(open.sessionManager.getEntries()) : await isQueueTaskChatFile(file);
-		return this.queueTasksChain(async () => {
-			if (taskChat) this.stateStore.removeRecent(resolve(file));
-			for (const cs of this.clients.values()) {
-				try {
-					if (cs.releaseQueueChat(file)) return true;
-				} catch {
-					// try the next client
-				}
-			}
-			if (taskChat) ClientSession.recentChangedForAll();
-			return taskChat;
-		});
+		return runQueueCloseChat(this as unknown as QueueCloseHostContext, file, () => ClientSession.recentChangedForAll());
 	}
 
 	/** issue #231：同项目视口回退 —— 原绑定对话不在时，把唤醒投给该项目最近活跃
