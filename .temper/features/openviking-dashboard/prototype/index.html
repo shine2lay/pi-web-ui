@@ -1148,7 +1148,7 @@ button:focus-visible,
       });
       banner.className = "state-banner badge-unreachable";
       bTitle.textContent = "✕ Server Unreachable — Cannot reach 127.0.0.1:1933 (Offline)";
-      bBody.textContent = "Last contact 18m ago. Figures, entries and audit events come back when the daemon answers again.";
+      bBody.textContent = "Last contact 18m ago. Figures and entries come back when the daemon answers again; the audit tab still reads the local audit file.";
     } else if (st === "loading") {
       hdr.className = "badge badge-info";
       hdr.setAttribute("data-icon", "circle-check");
