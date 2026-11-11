@@ -50,8 +50,80 @@ export function roleMemoryFolderCountText(count: number): string {
 
 /** `changelog.session_commits_24h`: panel wording is "N session commits", never a bare "commits". */
 export function sessionCommitsText(count: number): string {
-	return `${count} session commits`;
+	return `${groupCount(count)} session commits`;
 }
+
+/** Thousands separators, so a four-figure count reads as one number next to the cards' other figures. */
+function groupCount(count: number): string {
+	return count.toLocaleString("en-US");
+}
+
+/** `changelog.promotions_24h`: a promotion into the shared layer, never a `wt land` sync. */
+export function sharedPromotionsText(count: number): string {
+	return `${groupCount(count)} shared promotions`;
+}
+
+/** `changelog.rejected_24h`: writes the guard turned away in the window. */
+export function guardRejectionsText(count: number): string {
+	return `${groupCount(count)} guard rejections (24h)`;
+}
+
+/** The three Tier-1 cards: title, the caption that says when the data is used, and the cadence. */
+export const OPENVIKING_CARD_TEXT = {
+	"system-health": {
+		title: "System & Daemon Health",
+		caption: "Shown at chat start (L0)",
+		cadence: "30s cadence",
+	},
+	"context-injection": {
+		title: "Context & Token Injection",
+		caption: "Added on a worker's first turn",
+		cadence: "5m cadence",
+	},
+	"commit-governance": {
+		title: "Commit & Guard Governance",
+		caption: "Commit Guard",
+		cadence: "15m cadence",
+	},
+} as const;
+
+/** The three workspace tabs (design.md Tier 1). `data-tab` values are part of the DOM contract. */
+export const OPENVIKING_TABS = [
+	{ tab: "mount-map", label: "Live Activity", panelTitle: "Context Mount Map" },
+	{ tab: "namespace-explorer", label: "Memory Explorer", panelTitle: "Memory Explorer" },
+	{ tab: "commit-audit", label: "Guardrail & Changelog Audit", panelTitle: "Commit & Guardrail Audit" },
+] as const;
+
+export type OpenVikingTabId = (typeof OPENVIKING_TABS)[number]["tab"];
+
+/** Tier-2 progressive disclosure: the `(?)` contract badges and what each one explains. */
+export const OPENVIKING_CONTRACT_TOOLTIPS = [
+	{
+		id: "mode-1-l0",
+		label: "Mode 1 L0",
+		body: "Mode 1: at chat start the lead is given the L0 abstract of each matching memory — a one-line summary, never the full document.",
+	},
+	{
+		id: "mode-2-turn-1",
+		label: "Mode 2 Turn-1",
+		body: "Mode 2: a worker's first turn is prefetched from the five context slots below, so its opening answer already carries the project's memory.",
+	},
+	{
+		id: "write-guard",
+		label: "Write Guard",
+		body: "R-PREF-WRITE-GUARD-1: a worker may not write a role preference. The guard turns the write away and records it in the audit stream below.",
+	},
+	{
+		id: "wt-land-sync",
+		label: "wt land Sync",
+		body: "Shared resources are refreshed when a change lands. A sync still waiting marks its panel stale with 'pending sync' rather than an age.",
+	},
+	{
+		id: "granularity",
+		label: "L0 / L1 / L2 Granularity",
+		body: "L0 is the one-line abstract, L1 the overview, L2 the full document. Open any row to read all three in the drawer.",
+	},
+] as const;
 
 /** `data-source-field` values painted next to every figure and age (design.md §Endpoint Shapes). */
 export const OPENVIKING_SOURCE_FIELDS = {
@@ -74,6 +146,18 @@ export const OPENVIKING_SOURCE_FIELDS = {
 	slotSampledAt: "slots[].last_sampled_at",
 	entryUpdatedAt: "entries[].updated_at",
 	auditEventAt: "events[].ts",
+	retrievalHitRate: "observer.retrieval_hit_rate_pct",
+	retrievalLatency: "observer.retrieval_latency_avg_ms",
+	layer1Total: "observer.store_counts.layer1_shared.total_count",
+	layer2Total: "observer.store_counts.layer2_personal.total_count",
+	mode1Injections: "metrics.mode1_lead_l0_injections_24h",
+	mode2Prefetches: "metrics.mode2_worker_turn1_prefetches_24h",
+	leadCommits: "metrics.lead_200k_commits_24h",
+	dedupSkipped: "metrics.rm_dedup_skipped_24h",
+	pendingWtLandSyncs: "auxiliary.rollout.pending_wt_land_syncs",
+	liveActivity: "live_activity[].ts",
+	entriesPanelUpdatedAt: "entries.panel_updated_at",
+	auditPanelUpdatedAt: "audit.panel_updated_at",
 } as const;
 
 export type OpenVikingSourceFieldName = (typeof OPENVIKING_SOURCE_FIELDS)[keyof typeof OPENVIKING_SOURCE_FIELDS];

@@ -12,7 +12,8 @@ let pendingFocus: string | null = null;
 /** roles-overview: `?view=roles` (and `#r-<role id>`): open the Roles page (at that role). */
 let pendingView: ViewLink | null = null;
 /** initiatives-page: `?view=initiatives` opens the Initiatives tab. */
-export type ViewLink = { view: "roles"; role?: string } | { view: "initiatives" };
+/** openviking-dashboard: `?view=openviking` opens the Memory tab. */
+export type ViewLink = { view: "roles"; role?: string } | { view: "initiatives" } | { view: "openviking" };
 
 /** Take `?chat=` (and `&focus=`) and `?view=roles` off the address bar and remember them. Call once at startup. */
 export function initChatLink(): void {
@@ -31,6 +32,7 @@ export function initChatLink(): void {
 				pendingView = { view: "roles", ...(m ? { role: m[1].toLowerCase() } : {}) };
 				if (m) url.hash = "";
 			} else if (view.trim().toLowerCase() === "initiatives") pendingView = { view: "initiatives" };
+			else if (view.trim().toLowerCase() === "openviking") pendingView = { view: "openviking" };
 		}
 		window.history.replaceState(window.history.state, "", url.toString());
 		if (value !== null) {

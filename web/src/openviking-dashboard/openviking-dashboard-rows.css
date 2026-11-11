@@ -1,0 +1,401 @@
+/*
+ * OpenViking Memory Dashboard — rows, filters, tooltips and the reader drawer (frontend #258).
+ *
+ * Imported by `openviking-dashboard.css`; split from it only to keep every file under 500 lines
+ * (Rule 23, enforced by `wt check` and the production-source guard in the acceptance suite).
+ */
+
+/* ---------- rows ---------- */
+
+.ovk-slot-list,
+.ovk-row-list,
+.ovk-activity-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.ovk-row-button {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	width: 100%;
+	min-height: 44px;
+	padding: 8px 10px;
+	border: 1px solid var(--border-soft);
+	border-radius: 8px;
+	background: var(--bg-elev2);
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.ovk-row-button:hover {
+	border-color: var(--border);
+}
+
+.ovk-slot-top,
+.ovk-row-top {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+}
+
+.ovk-slot-name,
+.ovk-row-title {
+	font-size: 13px;
+	font-weight: 600;
+	min-width: 0;
+}
+
+.ovk-slot-uri,
+.ovk-row-uri {
+	color: var(--text-faint);
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.ovk-slot-figures,
+.ovk-row-foot {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+	align-items: baseline;
+	font-size: 11px;
+	color: var(--text-faint);
+}
+
+.ovk-row-abstract {
+	font-size: 12px;
+	color: var(--text-dim);
+	line-height: 1.45;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.ovk-chip {
+	display: inline-flex;
+	align-items: center;
+	min-height: 20px;
+	padding: 1px 8px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	background: var(--bg-elev);
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--text-dim);
+}
+
+.ovk-chip-muted {
+	color: var(--text-faint);
+	font-weight: 500;
+}
+
+.ovk-chip-guard[data-guard-verdict="rejected"] {
+	color: var(--red);
+	border-color: color-mix(in srgb, var(--red) 50%, transparent);
+}
+
+.ovk-chip-guard[data-guard-verdict="allowed"] {
+	color: var(--green);
+	border-color: color-mix(in srgb, var(--green) 50%, transparent);
+}
+
+.ovk-activity-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+	align-items: baseline;
+	padding: 6px 10px;
+	border-radius: 8px;
+	background: var(--bg-elev2);
+	font-size: 12px;
+	min-width: 0;
+}
+
+.ovk-activity-role {
+	font-weight: 600;
+}
+
+.ovk-activity-action {
+	color: var(--accent-text);
+}
+
+.ovk-activity-summary {
+	color: var(--text-dim);
+	min-width: 0;
+	flex: 1 1 180px;
+}
+
+.ovk-activity-count {
+	color: var(--text-faint);
+}
+
+/* ---------- filters ---------- */
+
+.ovk-filter-bar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 16px;
+	align-items: center;
+}
+
+.ovk-filter-group {
+	display: inline-flex;
+	gap: 6px;
+	align-items: center;
+}
+
+.ovk-filter-label {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-faint);
+}
+
+.ovk-select {
+	min-height: 28px;
+	padding: 2px 8px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg-elev2);
+	color: var(--text);
+	font: inherit;
+	font-size: 12px;
+}
+
+/* ---------- tooltips ---------- */
+
+.ovk-tooltip-host {
+	position: relative;
+	display: inline-flex;
+}
+
+.ovk-tooltip-trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	min-width: 24px;
+	min-height: 24px;
+	padding: 2px 6px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--bg-elev2);
+	color: var(--text-dim);
+	font: inherit;
+	font-size: 11px;
+	line-height: 1.4;
+	cursor: help;
+}
+
+.ovk-tooltip-badge {
+	font-weight: 600;
+}
+
+.ovk-help-mark {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	border: 1px solid currentColor;
+	font-size: 9px;
+	font-weight: 700;
+}
+
+.ovk-tooltip {
+	position: absolute;
+	z-index: 40;
+	top: calc(100% + 6px);
+	left: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	width: max-content;
+	max-width: min(280px, 78vw);
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--tooltip-bg);
+	color: var(--text);
+	font-size: 11px;
+	line-height: 1.5;
+	font-weight: 400;
+	text-align: left;
+	box-shadow: 0 6px 18px color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+.ovk-tooltip-title {
+	font-weight: 700;
+}
+
+/* ---------- reader drawer ---------- */
+
+.ovk-drawer {
+	position: fixed;
+	z-index: 60;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: min(520px, 100vw);
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	border-radius: 0;
+	border-width: 0 0 0 1px;
+	overflow-y: auto;
+	box-shadow: -8px 0 24px color-mix(in srgb, var(--bg) 60%, transparent);
+}
+
+.ovk-drawer-head {
+	display: flex;
+	gap: 10px;
+	align-items: flex-start;
+	justify-content: space-between;
+}
+
+.ovk-drawer-ident {
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.ovk-drawer-title {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.ovk-drawer-uri,
+.ovk-drawer-scope {
+	margin: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	color: var(--text-faint);
+}
+
+.ovk-drawer-close {
+	flex: none;
+	width: 32px;
+	height: 32px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev2);
+	color: var(--text-dim);
+	font: inherit;
+	cursor: pointer;
+}
+
+.ovk-drawer-isolation,
+.ovk-drawer-unavailable {
+	margin: 0;
+	padding: 8px 10px;
+	border: 1px dashed var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev2);
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.ovk-drawer-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.ovk-drawer-tab {
+	min-height: 28px;
+	padding: 3px 10px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg-elev2);
+	color: var(--text-dim);
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+
+.ovk-drawer-tab[aria-selected="true"] {
+	background: var(--accent-soft);
+	border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+	color: var(--accent-text);
+	font-weight: 600;
+}
+
+.ovk-drawer-body {
+	margin: 0;
+	padding: 10px;
+	border: 1px solid var(--border-soft);
+	border-radius: 8px;
+	background: var(--bg-elev2);
+	font-family: var(--mono);
+	font-size: 12px;
+	line-height: 1.55;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.ovk-drawer-provenance {
+	margin-top: auto;
+	padding-top: 10px;
+	border-top: 1px solid var(--border-soft);
+}
+
+.ovk-prov-list {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+	gap: 6px 12px;
+	margin: 6px 0 0;
+}
+
+.ovk-prov-item dt {
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-faint);
+}
+
+.ovk-prov-item dd {
+	margin: 0;
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
+/* ---------- focus ---------- */
+
+.ovk-dashboard :focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+	border-radius: 6px;
+}
+
+/* ---------- narrow screens ---------- */
+
+@media (max-width: 640px) {
+	.ovk-drawer {
+		top: auto;
+		left: 0;
+		width: 100%;
+		max-height: 86vh;
+		border-width: 1px 0 0;
+		border-radius: var(--ovk-radius) var(--ovk-radius) 0 0;
+		box-shadow: 0 -8px 24px color-mix(in srgb, var(--bg) 60%, transparent);
+	}
+
+	.ovk-tooltip {
+		left: auto;
+		right: 0;
+		max-width: min(260px, 86vw);
+	}
+}

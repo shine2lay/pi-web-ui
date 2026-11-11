@@ -1,0 +1,413 @@
+/*
+ * OpenViking Memory Dashboard (frontend #258, Task 2).
+ *
+ * Colour comes only from the app's design tokens, so light and dark themes follow the rest of the
+ * app with no second palette to keep in step. Every interactive target is at least 24x24px and
+ * keeps a visible :focus-visible ring (WCAG 2.2 AA).
+ *
+ * Rows, filters, tooltips and the reader drawer live in `openviking-dashboard-rows.css`.
+ */
+
+@import "./openviking-dashboard-rows.css";
+
+.ovk-dashboard {
+	--ovk-gap: 16px;
+	--ovk-pad: 16px;
+	--ovk-radius: 10px;
+	display: flex;
+	flex-direction: column;
+	gap: var(--ovk-gap);
+	padding: var(--ovk-gap);
+	max-width: 1280px;
+	margin: 0 auto;
+	width: 100%;
+	box-sizing: border-box;
+	color: var(--text);
+	font-family: var(--sans);
+	overflow-wrap: anywhere;
+}
+
+.ovk-dashboard *,
+.ovk-dashboard *::before,
+.ovk-dashboard *::after {
+	box-sizing: border-box;
+}
+
+.ovk-sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+.ovk-is-hidden {
+	display: none;
+}
+
+.ovk-mono {
+	font-family: var(--mono);
+	font-size: 12px;
+}
+
+.ovk-num,
+.ovk-figure {
+	font-variant-numeric: tabular-nums;
+}
+
+/* ---------- surfaces ---------- */
+
+.ovk-status-header,
+.ovk-card,
+.ovk-workspace,
+.ovk-drawer {
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: var(--ovk-radius);
+	padding: var(--ovk-pad);
+}
+
+.ovk-status-header {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.ovk-status-main {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	justify-content: space-between;
+	align-items: flex-start;
+}
+
+.ovk-status-title {
+	margin: 0 0 8px;
+	font-size: 17px;
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+.ovk-status-pills {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+
+.ovk-mode-label {
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.ovk-status-folders {
+	font-size: 13px;
+	color: var(--text-dim);
+}
+
+.ovk-status-facts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 20px;
+	margin: 0;
+}
+
+.ovk-status-fact {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.ovk-status-fact dt {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-faint);
+}
+
+.ovk-status-fact dd {
+	margin: 0;
+	font-size: 13px;
+}
+
+.ovk-status-subtitle,
+.ovk-status-lastanswered {
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--text-dim);
+}
+
+/* ---------- pills ---------- */
+
+.ovk-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 24px;
+	padding: 2px 10px;
+	border-radius: 999px;
+	border-width: 1px;
+	border-style: solid;
+	border-color: var(--border);
+	background: var(--bg-elev2);
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1.4;
+}
+
+.ovk-pill[data-border="dashed"] {
+	border-style: dashed;
+}
+.ovk-pill[data-border="dotted"] {
+	border-style: dotted;
+}
+.ovk-pill[data-border="double"] {
+	border-style: double;
+	border-width: 3px;
+}
+.ovk-pill[data-border="none"] {
+	border-style: solid;
+	border-color: transparent;
+}
+
+.ovk-pill[data-health-state="healthy"] {
+	color: var(--green);
+	border-color: color-mix(in srgb, var(--green) 55%, transparent);
+	background: var(--green-soft);
+}
+.ovk-pill[data-health-state="stale"] {
+	color: var(--amber-fg);
+	border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+	background: color-mix(in srgb, var(--amber) 16%, transparent);
+}
+.ovk-pill[data-health-state="zero-activity"] {
+	color: var(--text-dim);
+}
+.ovk-pill[data-health-state="server-unreachable"] {
+	color: var(--red);
+	border-color: color-mix(in srgb, var(--red) 55%, transparent);
+	background: var(--red-soft);
+}
+
+.ovk-pill-glyph {
+	font-size: 11px;
+	line-height: 1;
+}
+
+/* ---------- summary cards ---------- */
+
+.ovk-card-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: var(--ovk-gap);
+}
+
+.ovk-card {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-width: 0;
+}
+
+.ovk-card-top {
+	display: flex;
+	gap: 8px;
+	justify-content: space-between;
+	align-items: flex-start;
+}
+
+.ovk-card-title {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.ovk-card-caption {
+	display: inline-flex;
+	gap: 4px;
+	align-items: center;
+	font-size: 11px;
+	color: var(--text-faint);
+	text-align: right;
+}
+
+.ovk-card-headline {
+	margin: 0;
+	font-size: 20px;
+	font-weight: 650;
+	line-height: 1.25;
+}
+
+.ovk-card-pill {
+	align-self: flex-start;
+}
+
+.ovk-card-fields {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.ovk-card-foot {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 8px;
+	padding-top: 8px;
+	border-top: 1px solid var(--border-soft);
+	font-size: 11px;
+	color: var(--text-faint);
+}
+
+.ovk-card-source-note {
+	font-style: italic;
+}
+
+/* ---------- workspace ---------- */
+
+.ovk-workspace {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 0;
+}
+
+.ovk-tabbar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 12px;
+	align-items: center;
+	justify-content: space-between;
+	padding: 10px var(--ovk-pad);
+	border-bottom: 1px solid var(--border);
+}
+
+.ovk-tablist {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.ovk-tab {
+	min-height: 32px;
+	padding: 4px 12px;
+	border: 1px solid transparent;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--text-dim);
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.ovk-tab[aria-selected="true"] {
+	background: var(--accent-soft);
+	border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+	color: var(--accent-text);
+	font-weight: 600;
+}
+
+.ovk-tab-hint {
+	margin: 0;
+	font-size: 11px;
+	color: var(--text-faint);
+}
+
+.ovk-panel {
+	padding: 0 var(--ovk-pad) var(--ovk-pad);
+}
+
+.ovk-panel-body {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.ovk-panel-header-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 12px;
+	align-items: baseline;
+	justify-content: space-between;
+}
+
+.ovk-panel-title {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.ovk-panel-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+	font-size: 11px;
+	color: var(--text-faint);
+}
+
+.ovk-panel-stale {
+	color: var(--amber-fg);
+	font-weight: 600;
+}
+
+.ovk-badge-strip {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 8px;
+}
+
+.ovk-subhead {
+	margin: 4px 0 0;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text-dim);
+}
+
+.ovk-empty-note {
+	margin: 0;
+	font-size: 12px;
+	color: var(--text-faint);
+}
+
+/* ---------- narrow screens ---------- */
+
+@media (max-width: 640px) {
+	.ovk-dashboard {
+		--ovk-gap: 12px;
+		--ovk-pad: 12px;
+	}
+
+	.ovk-card-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.ovk-status-main {
+		flex-direction: column;
+	}
+
+	.ovk-status-facts {
+		gap: 8px 14px;
+	}
+}
+
+@media (max-width: 360px) {
+	.ovk-card-headline {
+		font-size: 18px;
+	}
+
+	.ovk-status-title {
+		font-size: 16px;
+	}
+}

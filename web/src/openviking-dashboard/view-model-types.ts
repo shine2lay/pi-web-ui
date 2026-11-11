@@ -167,6 +167,11 @@ export interface OpenVikingAuditFilterSelection {
 export interface OpenVikingDrawerTierModel {
 	readonly tier: OpenVikingDisclosureTier;
 	readonly label: string;
+	/**
+	 * The logical URI this tier was read from (frontend #258). A tier carries its own source, so a
+	 * body can never be painted under another row (VERIFICATION.md M3).
+	 */
+	readonly sourceUri: string;
 	readonly body: string;
 	/** "Unavailable while offline" / isolation notice; null when real content is shown. */
 	readonly unavailableReason: string | null;

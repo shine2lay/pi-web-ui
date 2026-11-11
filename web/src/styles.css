@@ -410,6 +410,13 @@ html.vv-fallback .app {
 	cursor: col-resize;
 	touch-action: none;
 }
+/* The grip straddles a pane gap with -3px on each side. The right-hand grip becomes the last item
+   in the row whenever the right panel is away, and the outer -3px then hangs past the window edge.
+   Taking the whole -6px on the left keeps the gap maths identical and the grip always inside. */
+.resize-handle.resize-right {
+	margin-right: 0;
+	margin-left: -6px;
+}
 .resize-handle::after {
 	content: "";
 	position: absolute;
@@ -15866,7 +15873,9 @@ button.source-default-toggle {
 		z-index: 60;
 		width: min(300px, 86vw);
 		background: var(--bg-elev);
-		transition: transform 0.25s ease;
+		transition:
+			transform 0.25s ease,
+			visibility 0.25s ease;
 	}
 	.panel-drawer.drawer-left {
 		left: 0;
@@ -15882,6 +15891,14 @@ button.source-default-toggle {
 	}
 	.panel-drawer.open {
 		transform: translateX(0);
+		visibility: visible;
+	}
+	/* A closed drawer is parked past the viewport edge. Keeping it merely transformed left it
+	   focusable, announced by screen readers, and counted as 300px of horizontal overflow on every
+	   page. `visibility: hidden` takes it out of the tab order and the a11y tree; transitioning
+	   visibility keeps the slide-out, because the discrete flip lands at the end of the transform. */
+	.panel-drawer:not(.open) {
+		visibility: hidden;
 	}
 	.panel-drawer .panel {
 		width: 100%;

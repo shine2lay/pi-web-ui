@@ -2043,6 +2043,8 @@
 		"rolesTabTip": "Funções: o que cada função está fazendo e o que espera por você",
 		"initiativesTab": "Iniciativas",
 		"initiativesTabTip": "Iniciativas: cada decisão por trás de cada uma, quem de fato a tomou e o que ela significa para você",
+		"openVikingTab": "Memória",
+		"openVikingTabTip": "Memória do OpenViking: o que está sendo injetado e registrado agora e o que há na memória compartilhada e na de cada papel",
 		"ivTitle": "Iniciativas",
 		"ivIntro": "As decisões nos registros das funções, por iniciativa: quem escreveu cada uma, como foi aprovada e o que significa para você.",
 		"ivListLabel": "Iniciativas",

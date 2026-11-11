@@ -39,13 +39,9 @@ import { DshQuestionDialog } from "./components/DshQuestionDialog";
 import { RoleGuardOwnerQuestions } from "./components/RoleGuardOwnerQuestions";
 // 终端视图懒加载：xterm.js 体积大且只在切到终端时才需要，拆出主包
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
-// roles-overview: the Roles page loads with its first opening and stays mounted after it.
-const RolesExactView = lazy(() => import("./components/RolesExactView").then((m) => ({ default: m.RolesExactView })));
-// initiatives-page: the Initiatives tab, the same way (loads with its first opening, stays mounted).
-// initiatives-page-exact (#225): the supplied design; the old InitiativesView stays in source, unmounted.
-const InitiativesPage = lazy(() =>
-	import("./components/InitiativesPage").then((m) => ({ default: m.InitiativesPage })),
-);
+// Roles, Initiatives and Memory (openviking-dashboard) live in PagePanes.tsx: each loads with its
+// first opening and stays mounted after it.
+import { PagePanes } from "./components/PagePanes";
 import { ScmPanel } from "./components/SCMPanel";
 import { PluginView } from "./components/PluginView";
 import { PluginViewFallback } from "./components/PluginViewFallback";
@@ -304,7 +300,7 @@ function PanelRail({ side, onClick }: { side: PanelSide; onClick: () => void }) 
 }
 
 /** 顶栏视图：内置三个 + 每个已装插件一个 `plugin:<id>`。 roles-overview: plus the Roles page. */
-type ViewName = "chat" | "terminal" | "git" | "roles" | "initiatives" | `plugin:${string}`;
+type ViewName = "chat" | "terminal" | "git" | "roles" | "initiatives" | "openviking" | `plugin:${string}`;
 
 /**
  * 插件项目会话的目录授权（issue #146）：插件经 host.openSession 打开一个新目录的会话前，
@@ -573,15 +569,9 @@ export function App() {
 		if (!link) return;
 		setView(link.view);
 	}, []);
-	const [rolesLoaded, setRolesLoaded] = useState(false);
 	useEffect(() => {
-		if (view === "roles") setRolesLoaded(true);
 		// pages-live (Ops #244): the connection note and its trace know which view is shown.
 		setPageView(view === "roles" || view === "initiatives" || view === "chat" ? view : "other");
-	}, [view]);
-	const [initiativesLoaded, setInitiativesLoaded] = useState(false);
-	useEffect(() => {
-		if (view === "initiatives") setInitiativesLoaded(true);
 	}, [view]);
 	// 已安装且未在设置面板禁用的插件（决定 tab 与视图加载）。
 	const enabledPlugins = useMemo(
@@ -2697,27 +2687,12 @@ export function App() {
 						onUiAction={onUiAction}
 					/>
 				</div>
-				{/* roles-overview: the Roles page: what every role is doing and what waits on the owner. */}
-				<div className={`view-pane roles-pane ${view === "roles" ? "" : "hidden"}`}>
-					{(rolesLoaded || view === "roles") && (
-						<Suspense fallback={null}>
-							<RolesExactView
-								active={view === "roles"}
-								dialogs={chat.ready ? nativeDialogs : []}
-								onOpen={openFromRolesPage}
-								onAbout={aboutFromRoles}
-							/>
-						</Suspense>
-					)}
-				</div>
-				{/* initiatives-page: the supplied design with the work registry, decisions and the leads' updates. */}
-				<div className={`view-pane initiatives-pane ${view === "initiatives" ? "" : "hidden"}`}>
-					{(initiativesLoaded || view === "initiatives") && (
-						<Suspense fallback={null}>
-							<InitiativesPage active={view === "initiatives"} onOpen={openFromRolesPage} />
-						</Suspense>
-					)}
-				</div>
+				<PagePanes
+					view={view}
+					dialogs={chat.ready ? nativeDialogs : []}
+					onOpen={openFromRolesPage}
+					onAbout={aboutFromRoles}
+				/>
 				{pluginViews.map((entry) => {
 					const name = `plugin:${entry.info.id}` as ViewName;
 					return (

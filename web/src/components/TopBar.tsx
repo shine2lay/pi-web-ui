@@ -24,6 +24,7 @@ import type { CommandDef } from "../types";
 import { buildUpdateCommand } from "../update-command";
 import { randomUuid } from "../uuid";
 import { Dropdown, DropdownItem } from "./Dropdown";
+import { buildPageTabs } from "./TopBarPageTabs";
 import { SoundSettingsPanel } from "./SoundSettings";
 import { BrowserControl } from "./BrowserControl";
 import { BROWSER_PAGE_TOOL_NAME } from "../../../server/tool-manager.js";
@@ -157,8 +158,10 @@ interface TopBarProps {
 		}) => void;
 		restart: (id: string) => void;
 	};
-	view: "chat" | "terminal" | "git" | "roles" | "initiatives" | `plugin:${string}`;
-	onViewChange: (view: "chat" | "terminal" | "git" | "roles" | "initiatives" | `plugin:${string}`) => void;
+	view: "chat" | "terminal" | "git" | "roles" | "initiatives" | "openviking" | `plugin:${string}`;
+	onViewChange: (
+		view: "chat" | "terminal" | "git" | "roles" | "initiatives" | "openviking" | `plugin:${string}`,
+	) => void;
 	/** Installed optional plugins (<dataDir>/plugins) — one view tab each
 	 *  (view:false renderer-only plugins are filtered out by the caller). */
 	plugins: {
@@ -1048,40 +1051,8 @@ export function TopBar({
 				<span>{t("scmTab")}</span>
 			</button>
 		) : null,
-		// roles-overview: the Roles page; the amber badge counts what waits on the owner (none: no badge).
-		"host:roles": tabOn("roles") ? (
-			<button
-				type="button"
-				role="tab"
-				aria-selected={view === "roles"}
-				className={`tb-tab roles-tab${view === "roles" ? " active" : ""}`}
-				data-tip={t("rolesTabTip")}
-				{...(rolesAsks > 0 ? { "aria-label": t("rolesTabWaiting", { n: rolesAsks }) } : {})}
-				onClick={() => onViewChange("roles")}
-			>
-				<FiUsers />
-				<span>{t("rolesTab")}</span>
-				{rolesAsks > 0 && (
-					<span className="roles-badge" aria-hidden="true">
-						{rolesAsks > 99 ? "99+" : rolesAsks}
-					</span>
-				)}
-			</button>
-		) : null,
-		// initiatives-page: each initiative's decisions, who really made them, and what they cost the owner.
-		"host:initiatives": tabOn("initiatives") ? (
-			<button
-				type="button"
-				role="tab"
-				aria-selected={view === "initiatives"}
-				className={`tb-tab initiatives-tab${view === "initiatives" ? " active" : ""}`}
-				data-tip={t("initiativesTabTip")}
-				onClick={() => onViewChange("initiatives")}
-			>
-				<FiFlag />
-				<span>{t("initiativesTab")}</span>
-			</button>
-		) : null,
+		// 页面 tab（Roles / Initiatives / Memory）在 TopBarPageTabs.tsx。
+		...buildPageTabs({ t, view, onViewChange, tabOn, rolesAsks }),
 		// 插件面板入口（Chrome 扩展图标那个位置）：列出全部已装插件，每行带「钉到顶栏」
 		// 开关。钉住的插件视图 tab 才回到直流里（合成条目默认 hidden，见 withPluginViewItems）。
 		// 图标用矢量 FiBox 而不用 🧩 emoji：🧩 是 Unicode 11（2018）的字，旧 Windows 的

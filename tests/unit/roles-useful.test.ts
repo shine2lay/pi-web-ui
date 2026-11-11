@@ -848,11 +848,18 @@ describe("closed boundary and the actual store", () => {
 	it("source route: the app mounts the exact page; the closed model has no rich content or side-effect APIs", () => {
 		const model = readFileSync(resolve(process.cwd(), "web/src/roles-useful-model.ts"), "utf8");
 		const app = readFileSync(resolve(process.cwd(), "web/src/App.tsx"), "utf8");
-		// roles-exact: the supplied design uses this same closed model.
-		expect(app).toContain('import("./components/RolesExactView")');
-		// roles-panel: About & rules opens Settings at the role, the way the old panel did.
+		// openviking-dashboard (#258): the whole-window page panes moved out of `App.tsx` into
+		// `PagePanes.tsx`, so the mount is asserted along its full chain instead of in one file.
+		const panes = readFileSync(resolve(process.cwd(), "web/src/components/PagePanes.tsx"), "utf8");
+		expect(app).toContain('from "./components/PagePanes"');
 		expect(app).toMatch(
-			/<RolesExactView\s+active=\{view === "roles"\}\s+dialogs=\{chat.ready \? nativeDialogs : \[\]\}\s+onOpen=\{openFromRolesPage\}\s+onAbout=\{aboutFromRoles\}\s+\/>/,
+			/<PagePanes\s+view=\{view\}\s+dialogs=\{chat\.ready \? nativeDialogs : \[\]\}\s+onOpen=\{openFromRolesPage\}\s+onAbout=\{aboutFromRoles\}\s*\/>/,
+		);
+		// roles-exact: the supplied design uses this same closed model.
+		expect(panes).toContain('import("./RolesExactView")');
+		// roles-panel: About & rules opens Settings at the role, the way the old panel did.
+		expect(panes).toMatch(
+			/<RolesExactView\s+active=\{view === "roles"\}\s+dialogs=\{dialogs\}\s+onOpen=\{onOpen\}\s+onAbout=\{onAbout\}\s*\/>/,
 		);
 		// The page's opens are remembered first (fixed words on failure), then go the existing way.
 		expect(app).toMatch(/markRolesOpen\(target\.file\);\s*openFromRoles\(target\);/);

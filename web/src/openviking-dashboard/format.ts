@@ -1,14 +1,35 @@
 /**
- * OpenViking Memory Dashboard — pure display formatting (frontend #261, Task 1 seam).
+ * OpenViking Memory Dashboard — pure display formatting (frontend #258 implements the #261 seam).
  *
  * Formatting only (spec.md `A07`): a timestamp becomes "18m ago", a number becomes text with its
  * source field. No sums, averages, percentages or health verdicts are computed here.
- *
- * Task 2 (#258) implements these; the signatures are the contract.
  */
 
-import { notImplemented } from "./not-implemented.js";
+import {
+	OPENVIKING_LOADING_TEXT,
+	OPENVIKING_NO_CONTACT_TEXT,
+	OPENVIKING_NOT_MEASURED_TEXT,
+	OPENVIKING_SOURCE_FIELDS,
+	OPENVIKING_UNREACHABLE_TEXT,
+} from "./text.js";
 import type { OpenVikingDisplayValue, OpenVikingLastAnsweredLine } from "./view-model-types.js";
+
+/** Wording the server already decided (a mode label, a bind address): painted as-is, with its field. */
+export function textValue(text: string, sourceField: string, ariaLabel?: string): OpenVikingDisplayValue {
+	return ariaLabel === undefined
+		? { text, sourceField, unreachable: false, notMeasured: false }
+		: { text, sourceField, unreachable: false, notMeasured: false, ariaLabel };
+}
+
+/** Before the first answer: no number is known yet, so nothing is painted that could read as one. */
+export function loadingValue(sourceField: string): OpenVikingDisplayValue {
+	return { text: OPENVIKING_LOADING_TEXT, sourceField, unreachable: false, notMeasured: false };
+}
+
+const SECOND_MS = 1000;
+const MINUTE_MS = 60 * SECOND_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 
 /**
  * "4s" / "18m" / "3h" / "2d" — the age of `iso` at `nowMs`.
@@ -18,9 +39,15 @@ import type { OpenVikingDisplayValue, OpenVikingLastAnsweredLine } from "./view-
  * a missing timestamp has no age and must never be painted as `0` or "just now".
  */
 export function formatAge(iso: string | null, nowMs: number): string | null {
-	void iso;
-	void nowMs;
-	return notImplemented("formatAge");
+	if (iso === null) return null;
+	const parsed = Date.parse(iso);
+	if (Number.isNaN(parsed)) return null;
+	// A clock skew that puts the stamp in the future reads as "0s", never as a negative age.
+	const elapsed = Math.max(0, nowMs - parsed);
+	if (elapsed < MINUTE_MS) return `${Math.floor(elapsed / SECOND_MS)}s`;
+	if (elapsed < HOUR_MS) return `${Math.floor(elapsed / MINUTE_MS)}m`;
+	if (elapsed < DAY_MS) return `${Math.floor(elapsed / HOUR_MS)}h`;
+	return `${Math.floor(elapsed / DAY_MS)}d`;
 }
 
 /**
@@ -29,9 +56,24 @@ export function formatAge(iso: string | null, nowMs: number): string | null {
  * "No successful contact since the dashboard server started" when it is null (`isDuration: false`).
  */
 export function formatLastAnswered(lastReachableAt: string | null, nowMs: number): OpenVikingLastAnsweredLine {
-	void lastReachableAt;
-	void nowMs;
-	return notImplemented("formatLastAnswered");
+	const age = formatAge(lastReachableAt, nowMs);
+	if (age === null) {
+		return {
+			text: OPENVIKING_NO_CONTACT_TEXT,
+			isDuration: false,
+			sourceField: OPENVIKING_SOURCE_FIELDS.lastReachableAt,
+		};
+	}
+	return {
+		text: `Last answered ${age} ago`,
+		isDuration: true,
+		sourceField: OPENVIKING_SOURCE_FIELDS.lastReachableAt,
+	};
+}
+
+/** Thousands separators so "1820 avg tok" reads as "1,820 avg tok" (design.md §Summary Cards). */
+function groupDigits(value: number): string {
+	return value.toLocaleString("en-US");
 }
 
 /**
@@ -42,12 +84,22 @@ export function formatLastAnswered(lastReachableAt: string | null, nowMs: number
 export function formatFigure(
 	value: number | null,
 	sourceField: string,
-	options?: { readonly suffix?: string; readonly notMeasured?: boolean },
+	options?: { readonly suffix?: string; readonly notMeasured?: boolean; readonly notMeasuredSuffix?: string },
 ): OpenVikingDisplayValue {
-	void value;
-	void sourceField;
-	void options;
-	return notImplemented("formatFigure");
+	if (options?.notMeasured === true) {
+		// The suffix names what is not measured, so the row is never a bare "Not measured".
+		const unmeasured =
+			options.notMeasuredSuffix === undefined
+				? OPENVIKING_NOT_MEASURED_TEXT
+				: `${OPENVIKING_NOT_MEASURED_TEXT} ${options.notMeasuredSuffix}`;
+		return { text: unmeasured, sourceField, unreachable: false, notMeasured: true };
+	}
+	if (value === null) {
+		return { text: OPENVIKING_UNREACHABLE_TEXT, sourceField, unreachable: true, notMeasured: false };
+	}
+	const suffix = options?.suffix;
+	const text = suffix === undefined ? groupDigits(value) : `${groupDigits(value)} ${suffix}`;
+	return { text, sourceField, unreachable: false, notMeasured: false };
 }
 
 /**
@@ -57,18 +109,34 @@ export function formatFigure(
 export function formatPercent(
 	value: number | null,
 	sourceField: string,
-	options?: { readonly notMeasured?: boolean },
+	options?: { readonly notMeasured?: boolean; readonly suffix?: string },
 ): OpenVikingDisplayValue {
-	void value;
-	void sourceField;
-	void options;
-	return notImplemented("formatPercent");
+	if (options?.notMeasured === true) {
+		return { text: OPENVIKING_NOT_MEASURED_TEXT, sourceField, unreachable: false, notMeasured: true };
+	}
+	if (value === null) {
+		return { text: OPENVIKING_UNREACHABLE_TEXT, sourceField, unreachable: true, notMeasured: false };
+	}
+	// One decimal, and no trailing ".0": the server owns the arithmetic, this only spells it.
+	const rounded = Math.round(value * 10) / 10;
+	// The suffix names what the number measures; a bare "98.6%" in a card list says nothing.
+	const text = options?.suffix === undefined ? `${rounded}%` : `${rounded}% ${options.suffix}`;
+	return { text, sourceField, unreachable: false, notMeasured: false };
 }
+
+/** A storage address that must never reach a row: a 64-char content hash. */
+const CONTENT_HASH_RE = /\b[0-9a-f]{64}\b/gi;
 
 /** A row's visible URI: the logical `viking://…` form, never a 64-char hash or an AGFS storage path. */
 export function formatDisplayUri(uri: string): string {
-	void uri;
-	return notImplemented("formatDisplayUri");
+	// A logical URI is already safe to paint and is shown exactly as the server sent it.
+	if (uri.startsWith("viking://") && !/[0-9a-f]{64}/i.test(uri)) return uri;
+	const withoutHashes = uri.replace(CONTENT_HASH_RE, "").replace(/\/{2,}(?!\/)/g, "/");
+	const logical = withoutHashes.match(/viking:\/\/\S*/);
+	if (logical !== null) return logical[0].replace(/\/+$/, "");
+	// Not a logical URI: keep the last two path parts so no absolute filesystem path is painted.
+	const parts = withoutHashes.split("/").filter((part) => part.length > 0);
+	return parts.slice(-2).join("/");
 }
 
 /**
@@ -82,9 +150,8 @@ export function formatPanelAge(
 	nowMs: number,
 	sourceField: string,
 ): OpenVikingDisplayValue | null {
-	void label;
-	void iso;
-	void nowMs;
-	void sourceField;
-	return notImplemented("formatPanelAge");
+	const age = formatAge(iso, nowMs);
+	if (age === null) return null;
+	// An empty label gives the bare "5m ago" a compact row needs, with no leading space.
+	return { text: `${label} ${age} ago`.trim(), sourceField, unreachable: false, notMeasured: false };
 }

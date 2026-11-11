@@ -2043,6 +2043,8 @@
 		"rolesTabTip": "Rôles : ce que fait chaque rôle et ce qui vous attend",
 		"initiativesTab": "Initiatives",
 		"initiativesTabTip": "Initiatives : chaque décision derrière chacune, qui l’a vraiment prise et ce qu’elle signifie pour vous",
+		"openVikingTab": "Mémoire",
+		"openVikingTabTip": "Mémoire OpenViking : ce qu’elle injecte et enregistre en ce moment, et ce que contiennent la mémoire partagée et celle de chaque rôle",
 		"ivTitle": "Initiatives",
 		"ivIntro": "Les décisions tirées des archives des rôles, par initiative : qui a écrit chacune, comment elle a été approuvée et ce qu’elle signifie pour vous.",
 		"ivListLabel": "Initiatives",

@@ -2043,6 +2043,8 @@
 		"rolesTabTip": "역할: 각 역할이 하는 일과 나를 기다리는 일",
 		"initiativesTab": "이니셔티브",
 		"initiativesTabTip": "이니셔티브: 각 이니셔티브 뒤의 모든 결정, 실제로 누가 내렸는지, 나에게 어떤 의미인지",
+		"openVikingTab": "기억",
+		"openVikingTabTip": "OpenViking 기억: 지금 무엇을 주입하고 기록하는지, 공유 기억과 역할별 기억에는 무엇이 담겨 있는지",
 		"ivTitle": "이니셔티브",
 		"ivIntro": "역할들의 기록에 나온 결정을 이니셔티브별로 보여줍니다: 누가 썼는지, 어떻게 승인됐는지, 나에게 어떤 의미인지.",
 		"ivListLabel": "이니셔티브",

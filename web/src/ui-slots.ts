@@ -33,6 +33,7 @@ import type {
 	UiSelectOption,
 	UiSlotId,
 } from "./types";
+import { PAGE_TAB_UI_ITEMS } from "./ui-slots-page-tabs";
 
 /**
  * 合并过程中的一条**诊断**（P0-1：失败不许静默）。与「静默丢弃」相对：未知 slot /
@@ -323,31 +324,8 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		group: "views",
 		align: "start",
 	},
-	// roles-overview: the Roles page, the fourth view (what every role is doing and what waits on you).
-	// It folds into "\u22ef" only after Terminal and Git (LATE_TOPBAR_ITEM_IDS, topbar-fit.ts).
-	{
-		id: "host:roles",
-		slot: "topbar.primary",
-		labelKey: "rolesTab",
-		icon: "users",
-		kind: "view",
-		view: "roles",
-		order: 22.5,
-		group: "views",
-		align: "start",
-	},
-	// initiatives-page: the Initiatives tab, next to Roles (each initiative's decisions and who made them).
-	{
-		id: "host:initiatives",
-		slot: "topbar.primary",
-		labelKey: "initiativesTab",
-		icon: "list",
-		kind: "view",
-		view: "initiatives",
-		order: 22.6,
-		group: "views",
-		align: "start",
-	},
+	// 页面 tab（Roles / Initiatives / Memory）在 ui-slots-page-tabs.ts，order 22.5〜22.7。
+	...PAGE_TAB_UI_ITEMS,
 	// 插件面板（Chrome 扩展图标那个位置）：一个 🧩 入口列出全部已装插件，每行带「钉到顶栏」
 	// 开关。插件视图 tab 默认不钉（合成条目 hidden，见 withPluginViewItems），钉住的才回到
 	// 这里当 tab（order 23，紧跟本条目之前）。图标用 emoji 而不是词表名：词表名会被布局页

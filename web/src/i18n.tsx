@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
+import { pageTabsEn } from "./i18n-page-tabs";
 
 /** Locale code. pi-web-ui speaks English only, so it is always "en". */
 export type Locale = string;
@@ -2163,13 +2164,7 @@ export const en = {
 	limitsMinAgo: "{n} min ago",
 	limitsHoursAgo: "{n} h ago",
 	limitsDaysAgo: "{n} d ago",
-	// roles-overview: the Roles page (a top bar view) and the owner's fields in Settings -> Identities.
-	rolesTab: "Roles",
-	rolesTabWaiting: "Roles, {n} waiting on you",
-	rolesTabTip: "Roles: what every role is doing and what waits on you",
-	// initiatives-page: the Initiatives tab (decisions per initiative, who really decided, what they cost you).
-	initiativesTab: "Initiatives",
-	initiativesTabTip: "Initiatives: every decision behind each one, who really made it, and what it means for you",
+	...pageTabsEn, // the top bar's page tabs (Roles, Initiatives, Memory), i18n-page-tabs.ts
 	ivTitle: "Initiatives",
 	ivIntro:
 		"The decisions in the roles' records, by initiative: who wrote each one, how it was approved, and what it means for you.",

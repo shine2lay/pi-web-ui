@@ -1,25 +1,70 @@
 /**
  * OpenViking Memory Dashboard — `GET /api/openviking/audit` -> audit rows and filters
- * (frontend #261, Task 1 seam). Task 2 (#258) implements the bodies.
+ * (frontend #258 implements the #261 seam).
  */
 
-import type { OpenVikingAuditResponse } from "../../../server/openviking/types.js";
-import { notImplemented } from "./not-implemented.js";
+import type {
+	OpenVikingAuditAction,
+	OpenVikingAuditEvent,
+	OpenVikingAuditResponse,
+	OpenVikingGuardVerdict,
+} from "../../../server/openviking/types.js";
+import { OPENVIKING_AUDIT_ACTIONS } from "../../../server/openviking/types.js";
+import { formatDisplayUri, formatFigure, formatPanelAge } from "./format.js";
+import { OPENVIKING_ISOLATION_NOTICE_TEXT, OPENVIKING_SOURCE_FIELDS } from "./text.js";
 import type {
 	OpenVikingAuditFiltersModel,
 	OpenVikingAuditFilterSelection,
 	OpenVikingAuditRowModel,
+	OpenVikingFilterOption,
 	OpenVikingRenderState,
 } from "./view-model-types.js";
 
 /**
- * Audit rows in server order. The action badge comes from `events[].action` only — the five
- * contract actions `commit` | `role_memory_write` | `promote_shared` | `reject_noise` |
- * `sidecar_timeout` (spec.md §3). A `role_memory_write` is labelled as a role memory write and
- * never as a commit: only a session committing its own work is a commit.
- *
- * Personal (agent) rows stay redacted: the server sends no `summary_1line` for them
- * (`R-ISOLATION-1`) and the row shows metadata only.
+ * The five contract actions (spec.md §3). A `role_memory_write` is a role writing its own memory —
+ * only a session committing its own work is a commit, so the two never share a word.
+ */
+const ACTION_LABELS: Record<OpenVikingAuditAction, string> = {
+	commit: "Session commit",
+	role_memory_write: "Role memory write",
+	promote_shared: "Promoted to shared",
+	reject_noise: "Rejected as noise",
+	sidecar_timeout: "Sidecar timeout",
+};
+
+const GUARD_LABELS: Record<OpenVikingGuardVerdict, string> = {
+	allowed: "Allowed",
+	rejected: "Rejected by guard",
+	degraded_skip: "Skipped while degraded",
+};
+
+/** A personal (agent) URI: the row stays metadata only, whatever the payload carries. */
+function isPersonalUri(event: OpenVikingAuditEvent): boolean {
+	return event.uri.startsWith("viking://agent/");
+}
+
+function buildRow(event: OpenVikingAuditEvent, nowMs: number): OpenVikingAuditRowModel {
+	const isolated = isPersonalUri(event);
+	return {
+		key: event.id,
+		action: event.action,
+		actionLabel: ACTION_LABELS[event.action],
+		roleLabel: event.role,
+		displayUri: formatDisplayUri(event.uri),
+		// The server sends no summary for a personal row; the browser adds the reason, never the text.
+		summaryLine: isolated ? OPENVIKING_ISOLATION_NOTICE_TEXT : event.summary_1line,
+		guardVerdict: event.guard_verdict,
+		guardLabel: GUARD_LABELS[event.guard_verdict],
+		age:
+			formatPanelAge("", event.ts, nowMs, OPENVIKING_SOURCE_FIELDS.auditEventAt) ??
+			formatFigure(null, OPENVIKING_SOURCE_FIELDS.auditEventAt, { notMeasured: true }),
+		isolated,
+	};
+}
+
+/**
+ * Audit rows in server order, filtered by the current selection only. The action badge comes from
+ * `events[].action` alone; no count, rate or verdict is computed in the browser.
  */
 export function buildAuditRows(
 	audit: OpenVikingAuditResponse | null,
@@ -27,23 +72,34 @@ export function buildAuditRows(
 	renderState: OpenVikingRenderState,
 	selection: OpenVikingAuditFilterSelection,
 ): readonly OpenVikingAuditRowModel[] {
-	void audit;
-	void nowMs;
-	void renderState;
-	void selection;
-	return notImplemented("buildAuditRows");
+	if (audit === null || renderState === "loading") return [];
+	return audit.events
+		.filter((event) => selection.action === "all" || event.action === selection.action)
+		.filter((event) => selection.role === "all" || event.role === selection.role)
+		.map((event) => buildRow(event, nowMs));
+}
+
+function option(value: string, label: string, selected: boolean): OpenVikingFilterOption {
+	return { value, label, selected };
 }
 
 /**
  * The audit stream's filter controls: one option per contract action (plus "all") and one per role
- * present in the response (plus "all"), with the current selection marked. Filtering is a view
- * concern; no count, rate or verdict is computed in the browser.
+ * present in the response (plus "all"), with the current selection marked.
  */
 export function buildAuditFilters(
 	audit: OpenVikingAuditResponse | null,
 	selection: OpenVikingAuditFilterSelection,
 ): OpenVikingAuditFiltersModel {
-	void audit;
-	void selection;
-	return notImplemented("buildAuditFilters");
+	const roles = [...new Set((audit?.events ?? []).map((event) => event.role))].sort((a, b) => a.localeCompare(b));
+	return {
+		actions: [
+			option("all", "All actions", selection.action === "all"),
+			...OPENVIKING_AUDIT_ACTIONS.map((action) => option(action, ACTION_LABELS[action], selection.action === action)),
+		],
+		roles: [
+			option("all", "All roles", selection.role === "all"),
+			...roles.map((role) => option(role, role, selection.role === role)),
+		],
+	};
 }

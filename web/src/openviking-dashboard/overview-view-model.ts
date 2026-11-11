@@ -1,17 +1,17 @@
 /**
- * OpenViking Memory Dashboard — `GET /api/openviking/overview` -> status header, 3 summary cards,
- * 5 mount-map rows (frontend #261, Task 1 seam). Task 2 (#258) implements the bodies.
+ * OpenViking Memory Dashboard — `GET /api/openviking/overview` -> status header and the five
+ * context-mount rows (frontend #258 implements the #261 seam).
  */
 
 import type { OpenVikingOverviewResponse } from "../../../server/openviking/types.js";
-import { notImplemented } from "./not-implemented.js";
-import type {
-	OpenVikingRenderState,
-	OpenVikingSlotRowModel,
-	OpenVikingStatePresentation,
-	OpenVikingStatusHeaderModel,
-	OpenVikingSummaryCardModel,
-} from "./view-model-types.js";
+import { OPENVIKING_CONTEXT_SLOTS } from "../../../server/openviking/types.js";
+import { formatFigure, formatLastAnswered, formatPanelAge, formatPercent, loadingValue, textValue } from "./format.js";
+import { buildNotMeasuredPresentation, buildStatePresentation } from "./state-presentation.js";
+import { OPENVIKING_SOURCE_FIELDS, roleMemoryFolderCountText } from "./text.js";
+import type { OpenVikingRenderState, OpenVikingSlotRowModel, OpenVikingStatusHeaderModel } from "./view-model-types.js";
+
+export { buildStatePresentation } from "./state-presentation.js";
+export { buildSummaryCards } from "./summary-cards.js";
 
 /**
  * Status header: mode badge (`observer.mode_label` verbatim), "N role memory folders" (a folder
@@ -23,27 +23,36 @@ export function buildStatusHeader(
 	nowMs: number,
 	renderState: OpenVikingRenderState,
 ): OpenVikingStatusHeaderModel {
-	void overview;
-	void nowMs;
-	void renderState;
-	return notImplemented("buildStatusHeader");
-}
+	const fields = OPENVIKING_SOURCE_FIELDS;
+	if (overview === null) {
+		return {
+			renderState,
+			presentation: buildStatePresentation("loading", null),
+			modeLabel: null,
+			roleMemoryFolders: loadingValue(fields.folderCount),
+			daemonBind: loadingValue(fields.daemonBind),
+			checkedAge: loadingValue(fields.checkedAt),
+			lastAnswered: null,
+		};
+	}
 
-/**
- * The three summary cards, in order: `system-health` (30s), `context-injection` (5m),
- * `commit-governance` (15m). Each carries its own panel's `health_state` (never the screen's) and
- * at most five text fields. `observer.queue_depth` is always null -> "Unavailable", never `0`.
- * `changelog.session_commits_24h` reads "N session commits", never a bare "commits".
- */
-export function buildSummaryCards(
-	overview: OpenVikingOverviewResponse | null,
-	nowMs: number,
-	renderState: OpenVikingRenderState,
-): readonly OpenVikingSummaryCardModel[] {
-	void overview;
-	void nowMs;
-	void renderState;
-	return notImplemented("buildSummaryCards");
+	const observer = overview.observer;
+	const folders =
+		observer.role_memory_folder_count === null
+			? formatFigure(null, fields.folderCount)
+			: textValue(roleMemoryFolderCountText(observer.role_memory_folder_count), fields.folderCount);
+
+	return {
+		renderState,
+		presentation: buildStatePresentation(observer.health_state, observer.stale_badge),
+		modeLabel: observer.mode_label,
+		roleMemoryFolders: folders,
+		daemonBind: textValue(observer.daemon_bind, fields.daemonBind),
+		checkedAge:
+			formatPanelAge("Checked", observer.checked_at, nowMs, fields.checkedAt) ?? loadingValue(fields.checkedAt),
+		// Best-effort context for an outage only; it gates nothing and is absent in every other state.
+		lastAnswered: renderState === "error" ? formatLastAnswered(observer.last_reachable_at, nowMs) : null,
+	};
 }
 
 /**
@@ -56,22 +65,39 @@ export function buildSlotRows(
 	nowMs: number,
 	renderState: OpenVikingRenderState,
 ): readonly OpenVikingSlotRowModel[] {
-	void overview;
-	void nowMs;
-	void renderState;
-	return notImplemented("buildSlotRows");
-}
+	const fields = OPENVIKING_SOURCE_FIELDS;
+	const loading = overview === null || renderState === "loading";
 
-/**
- * A panel's pill: its own `health_state` plus the glyph, `data-icon` and border that make the state
- * readable without colour. `staleBadge` is the API's own `stale_badge` string, verbatim — the
- * browser never invents an age for a sync-caused stale.
- */
-export function buildStatePresentation(
-	healthState: OpenVikingStatePresentation["healthState"],
-	staleBadge: string | null,
-): OpenVikingStatePresentation {
-	void healthState;
-	void staleBadge;
-	return notImplemented("buildStatePresentation");
+	return OPENVIKING_CONTEXT_SLOTS.map((definition): OpenVikingSlotRowModel => {
+		const found = overview?.slots.find((candidate) => candidate.slot_id === definition.slot_id) ?? null;
+		// A slot nothing samples yet has no figures at all: it is read as unmeasured, never as a zero.
+		const measuredState = found === null || found.state === "unmeasured-gap" ? null : found.state;
+		const slot = measuredState === null ? null : found;
+		const hitRateMissing = slot === null || slot.hit_rate_pct === null;
+		const tokensMissing = slot === null || slot.avg_tokens === null;
+
+		return {
+			slotId: definition.slot_id,
+			label: definition.label,
+			uriPrefix: definition.uri_prefix,
+			hitRate: loading
+				? loadingValue(fields.slotHitRatePerSlot)
+				: formatPercent(slot?.hit_rate_pct ?? null, fields.slotHitRatePerSlot, { notMeasured: hitRateMissing }),
+			avgTokens: loading
+				? loadingValue(fields.slotAvgTokens)
+				: formatFigure(slot?.avg_tokens ?? null, fields.slotAvgTokens, {
+						notMeasured: tokensMissing,
+						suffix: "avg tok",
+					}),
+			presentation: loading
+				? buildStatePresentation("loading", null)
+				: measuredState === null
+					? buildNotMeasuredPresentation()
+					: buildStatePresentation(measuredState, null),
+			age:
+				formatPanelAge("Sampled", found?.last_sampled_at ?? null, nowMs, fields.slotSampledAt) ??
+				formatFigure(null, fields.slotSampledAt, { notMeasured: true }),
+			tooltipId: `openviking-slot-tip-${definition.slot_id}`,
+		};
+	});
 }
