@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Acceptance assertion runner for OpenViking Memory Dashboard (openviking-dashboard).
-# Exit codes: 0 = all 17 assertions pass, 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
+# Exit codes: 0 = every assertion below passes (A01-A37), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
 # Task #269 appends A18-A23 (state honesty, summary/detail parity, drawer integrity, role isolation, focus/keyboard, unmeasured slots); exit 0 now means all 23 pass.
 # Task #275 appends A24-A28 (drawer honours and follows state, neutral unmeasured slots, error card 3 / Tab 3 parity, no role liveness claim); exit 0 now means all 28 pass.
 # A26 reads slot fields and uri_prefix values from server/openviking/types.ts; a missing or unreadable types file is exit 2.
 # Task #280 narrows A04 to :1933-sourced figures (lead ruling on TASK-7-REPORT.md item 1) and appends A29-A31 (session-commit label, phone sheet focus trap,
 # local JSONL panels survive error); exit 0 now means all 31 pass. A04 and A31 read which figure comes from :1933 or a local JSONL from spec.md's
 # source table; a missing or unparseable spec.md is exit 2.
+# Task #284 appends A32-A37 (each card pill shows its own panel's health, no age without a timestamp field, header mode = observer.mode_label,
+# selection never wears a status colour, loading shows no status, percentages achievable from their counts); exit 0 now means all 37 pass.
+# A32/A34/A36 read pill labels and status icons from design.md §Screen States and mode labels / timestamp fields from types.ts; missing is exit 2.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,6 +59,11 @@ export OV_TYPES_PATH
 OV_SPEC_PATH="${SCRIPT_DIR}/spec.md"
 [[ ! -f "${OV_SPEC_PATH}" ]] && emit_exit2 "feature spec not found: ${OV_SPEC_PATH}" "${PROTO_PATH}"
 export OV_SPEC_PATH
+
+# Task #284 (A32/A34/A36): design.md owns the pill label, icon and border for each health state; never restated in this checker
+OV_DESIGN_PATH="${SCRIPT_DIR}/design.md"
+[[ ! -f "${OV_DESIGN_PATH}" ]] && emit_exit2 "feature design not found: ${OV_DESIGN_PATH}" "${PROTO_PATH}"
+export OV_DESIGN_PATH
 
 python3 - "${PROTO_PATH}" "${TOKENS_PATH}" "${JSON_OUT}" <<'PYEOF'
 import json, math, pathlib, re, sys
@@ -127,6 +135,48 @@ def source_of(field):
 
 # design.md §Screen States: the visible label a local figure carries in error
 LOCAL_SOURCE_LABEL = {"memory-changelog.jsonl": "from local audit log", "metrics.jsonl": "from local metrics log"}
+
+# Task #284 (A32/A34/A36): design.md §Screen States -> visible pill labels and icon per data-health-state
+try:
+    design_src = pathlib.Path(os.environ["OV_DESIGN_PATH"]).read_text(encoding="utf-8")
+except Exception as exc:
+    exit2(f"failed to read feature design: {exc}")
+_states_sec = re.search(r"^## Screen States\n(.*?)(?=^## )", design_src, re.S | re.M)
+HEALTH_LABELS, STATUS_ICONS = {}, set()
+for _line in (_states_sec.group(1).splitlines() if _states_sec else []):
+    _hs = re.search(r'data-health-state="([\w-]+)"', _line)
+    _lbl = re.search(r"label ((?:`[^`]+`(?:,? or |, )?)+)", _line)
+    if _hs and _lbl:
+        HEALTH_LABELS[_hs.group(1)] = re.findall(r"`([^`]+)`", _lbl.group(1))
+        STATUS_ICONS.update(re.findall(r'data-icon="([\w-]+)"', _line))
+if set(HEALTH_LABELS) != {"healthy", "stale", "zero-activity", "server-unreachable"} or len(STATUS_ICONS) != 4:
+    exit2(f"could not read 4 health labels and icons from design.md §Screen States: {HEALTH_LABELS}, {STATUS_ICONS}")
+
+# Task #284 (A33/A34): types.ts -> observer.mode_label values and every timestamp field, named as the page cites it (family.field)
+_mode = re.search(r"export type OpenVikingModeLabel\s*=\s*([^;]+);", types_src)
+MODE_LABELS = re.findall(r'"([^"]+)"', _mode.group(1)) if _mode else []
+_ifaces = {n: b for n, b in re.findall(r"export interface (\w+)\s*\{(.*?)\n\}", types_src, re.S)}
+_ts_names = lambda body: [f for f, t in re.findall(r"^\t(\w+)\??:\s*([^;]+);", body, re.M) if re.fullmatch(r"\w+_at|ts", f) and "string" in t]
+TS_FIELDS = set()
+for _resp in ("OpenVikingOverviewResponse", "OpenVikingEntriesResponse", "OpenVikingAuditResponse"):
+    for _fam, _typ, _arr in re.findall(r"^\t(\w+)\??:\s*(\w+)(\[\])?;", _ifaces.get(_resp, ""), re.M):
+        TS_FIELDS.update(f"{_fam}{_arr}.{f}" for f in _ts_names(_ifaces.get(_typ, "")))
+if len(MODE_LABELS) != 3 or not TS_FIELDS:
+    exit2(f"could not read OpenVikingModeLabel values and timestamp fields from {os.environ['OV_TYPES_PATH']}: {MODE_LABELS}, {sorted(TS_FIELDS)}")
+
+# Task #284 (A32/A34): what the server reports for each prototype screen. Panel health follows overview.ts panelHealth
+# (0 events -> zero-activity; age > cadence -> stale; else healthy; never server-unreachable for the local-log panels) and the
+# daemon's observer.health_state (down -> server-unreachable; degraded rollout -> stale; else healthy). Screen facts:
+#   live:  daemon answers, rollout clean; last injection 1m (< 5m), last audit event 5m (< 15m)
+#   stale: daemon answers, rollout degraded (worktree syncs pending); last injection 19m (> 5m), last audit event 42m (> 15m)
+#   empty: daemon answers, rollout clean; 0 turns and 0 audit events in 24h
+#   error: daemon down; local logs: last injection 18m (> 5m), last audit event 18m (> 15m)
+SCREEN_TRUTH = {
+    "live":  {"mode": "Active", "system-health": "healthy", "context-injection": "healthy", "commit-governance": "healthy"},
+    "stale": {"mode": "Degraded Local Fallback", "system-health": "stale", "context-injection": "stale", "commit-governance": "stale"},
+    "empty": {"mode": "Active", "system-health": "healthy", "context-injection": "zero-activity", "commit-governance": "zero-activity"},
+    "error": {"mode": "Offline", "system-health": "server-unreachable", "context-injection": "stale", "commit-governance": "stale"},
+}
 
 def oklch_to_srgb(L, C, h_deg):
     rad = math.radians(h_deg)
@@ -1192,6 +1242,162 @@ try:
             elif not r["l0"] or re.search(r"unavailable while offline", r["l0"], re.I):
                 a31_bad.append(f"tab:commit-audit:{r['key']}: L0 '{r['l0'][:40]}' is not the local record")
         record("A31-LOCAL-PANELS-SURVIVE-ERROR", len(a31_bad) == 0, f"localFigures={len(a31_local)}, tab3Rows={len(a31['rows'])}, card3Commits={a31['commits']}, violations={a31_bad[:12]} (total={len(a31_bad)})", "error: every local-JSONL figure (spec.md source table) shows its count/age and 'from local audit log' or 'from local metrics log', never unreachable; card 3 has one; Tab 3 lists its events and each opens the reader with the local L0")
+
+        # ---- A32-A37 (task #284) ----
+        # A32: each card pill shows its own panel's health (SCREEN_TRUTH), local-log panels never Unreachable, label per design.md
+        a32_bad = []
+        for st, truth in SCREEN_TRUTH.items():
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            pills = page.evaluate("() => {" + JS_HELPERS + r"""
+                return [...document.querySelectorAll('[data-component="summary-card"]')].map(c => {
+                    const p = c.querySelector('[data-slot="state-badge"]');
+                    return { card: c.getAttribute('data-card-id') || '', hs: p ? (p.getAttribute('data-health-state') || '') : null,
+                             text: p ? norm(p.textContent) : '', shown: vis(p),
+                             fields: [...c.querySelectorAll('[data-figure][data-source-field]')].map(f => f.getAttribute('data-source-field')) };
+                });
+            }""")
+            for pl in pills:
+                want = truth.get(pl["card"])
+                local = any(source_of(f)[0] == "local" for f in pl["fields"])
+                if want is None:
+                    a32_bad.append(f"{st}:{pl['card']}: no expected health for this card")
+                    continue
+                if pl["hs"] is None or not pl["shown"]:
+                    a32_bad.append(f"{st}:{pl['card']}: no visible state pill")
+                    continue
+                if pl["hs"] != want:
+                    a32_bad.append(f"{st}:{pl['card']}: pill data-health-state='{pl['hs']}', panel health_state is '{want}'")
+                if local and pl["hs"] == "server-unreachable":
+                    a32_bad.append(f"{st}:{pl['card']}: local-log panel ({pl['fields'][0]}) marked server-unreachable")
+                own = HEALTH_LABELS.get(pl["hs"], [])
+                others = [l for h, ls in HEALTH_LABELS.items() if h != pl["hs"] for l in ls if l not in own]
+                if not any(l in pl["text"] for l in own) or any(l in pl["text"] for l in others):
+                    a32_bad.append(f"{st}:{pl['card']}: pill text '{pl['text'][:40]}' is not design.md's label {own} for {pl['hs'] or '(none)'}")
+            if len(pills) != 3:
+                a32_bad.append(f"{st}: {len(pills)} summary cards, expected 3")
+        record("A32-CARD-PILL-OWN-HEALTH", len(a32_bad) == 0, f"violations={a32_bad[:12]} (total={len(a32_bad)})", "live/stale/empty/error: every card pill's data-health-state = its panel's health_state; local-log panels never server-unreachable; pill text = design.md label for that health")
+
+        # A33: every visible age sits under a data-source-field naming a types.ts timestamp field; no 'Last seen' / 'Last contact' anywhere
+        a33_bad = [f"source: '{m.group(0)}'" for m in re.finditer(r"last\s+(?:seen|contact)", raw_html, re.I)]
+        a33_seen = 0
+        for st in ["live", "stale", "empty", "error", "loading"]:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            res = page.evaluate("(tsFields) => {" + JS_HELPERS + r"""
+                const AGE = /\d+\s?(?:s|m|h|d) (?:ago|old)\b/i;
+                const out = [];
+                const scan = (where) => {
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+                        const m = (n.nodeValue || '').match(AGE);
+                        if (!m || !vis(n.parentElement) || n.parentElement.closest('[role="tooltip"], script, style')) continue;
+                        const src = n.parentElement.closest('[data-source-field]');
+                        const field = src ? src.getAttribute('data-source-field') : '';
+                        out.push({ where, age: m[0], field, ok: tsFields.includes(field), text: norm(n.parentElement.textContent).slice(0, 60) });
+                    }
+                };
+                const drawer = document.querySelector('[data-component="reader-drawer"]');
+                for (const t of tabs()) {
+                    const panel = openTab(t);
+                    scan(t.getAttribute('data-tab'));
+                    const row = panel ? rowsIn(panel)[0] : null;
+                    if (row) {
+                        row.click();
+                        scan(`${t.getAttribute('data-tab')}:drawer`);
+                        const close = drawer && drawer.querySelector('[data-slot="drawer-close"]');
+                        if (close && vis(drawer)) close.click();
+                    }
+                }
+                tabs()[0]?.click();
+                return out;
+            }""", sorted(TS_FIELDS))
+            a33_seen += len(res)
+            for r in res:
+                if not r["ok"]:
+                    a33_bad.append(f"{st}:{r['where']}: '{r['age']}' in '{r['text']}' cites '{r['field'] or '(no data-source-field)'}'")
+        a33_bad = list(dict.fromkeys(a33_bad))
+        record("A33-NO-UNBACKED-AGE", len(a33_bad) == 0 and a33_seen > 0, f"agesSeen={a33_seen}, violations={a33_bad[:12]} (total={len(a33_bad)})", f"every visible 'N(s|m|h|d) ago|old' sits under a data-source-field in {sorted(TS_FIELDS)}; 'Last seen' / 'Last contact' never in the page")
+
+        # A34: the header mode badge reads exactly one observer.mode_label value (types.ts), the one the server sends for that screen
+        a34_bad = []
+        for st, truth in SCREEN_TRUTH.items():
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            hdr = page.evaluate(r"""() => { const b = document.querySelector('[data-component="status-header"] [data-slot="mode-badge"]'); return b ? b.textContent.replace(/\s+/g, ' ').trim() : null; }""")
+            label = re.sub(r"^[^A-Za-z]+", "", hdr or "").strip()
+            if label not in MODE_LABELS:
+                a34_bad.append(f"{st}: mode badge '{hdr}' is not one of {MODE_LABELS}")
+            elif label != truth["mode"]:
+                a34_bad.append(f"{st}: mode badge '{label}', server sends '{truth['mode']}'")
+        record("A34-MODE-LABEL-VALUES", len(a34_bad) == 0, f"violations={a34_bad}", f"header mode badge text in {MODE_LABELS} (freshness detail beside it, not inside)")
+
+        # A35: selected tab, filter and drawer tier never wear a status-* token colour (both themes, every screen)
+        status_vars = sorted(set(re.findall(r"--(status-[\w-]+)\s*:", raw_html)))
+        a35_bad, a35_n = [], 0
+        for st in ["live", "stale", "empty", "error"]:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            for theme in ["dark", "light"]:
+                res = page.evaluate("([theme, vars]) => {" + JS_HELPERS + r"""
+                    document.documentElement.setAttribute('data-theme', theme);
+                    const probe = document.createElement('span');
+                    document.body.appendChild(probe);
+                    const tok = {};
+                    for (const v of vars) { probe.style.backgroundColor = `var(--${v})`; tok[getComputedStyle(probe).backgroundColor] = v; }
+                    probe.remove();
+                    const groups = { tab: '[role="tab"][data-tab][aria-selected="true"]',
+                                     filter: '.filter-btn[aria-pressed="true"]', tier: '[data-drawer-tab][aria-selected="true"]' };
+                    const out = [];
+                    for (const [g, sel] of Object.entries(groups)) {
+                        const els = [...document.querySelectorAll(sel)];
+                        if (!els.length) out.push({ g, bg: '', hit: '(no selected element)' });
+                        for (const el of els) { const bg = getComputedStyle(el).backgroundColor; out.push({ g, bg, hit: tok[bg] || '' }); }
+                    }
+                    return out;
+                }""", [theme, status_vars])
+                for r in res:
+                    a35_n += 1
+                    if r["hit"]:
+                        a35_bad.append(f"{st}/{theme}:{r['g']}: background {r['bg']} = {r['hit']}")
+        a35_bad = list(dict.fromkeys(a35_bad))
+        record("A35-SELECTION-NOT-STATUS", len(a35_bad) == 0 and len(status_vars) >= 8, f"statusTokens={len(status_vars)}, selectedChecked={a35_n}, violations={a35_bad[:10]} (total={len(a35_bad)})", "selected tab / filter / drawer tier background is never a --status-* token colour")
+
+        # A36: loading shows skeletons and no status: no status data-icon, no status glyph or label in any pill or badge
+        page.goto(f"{file_url}?state=loading", wait_until="load")
+        a36 = page.evaluate("([icons, labels]) => {" + JS_HELPERS + r"""
+            const bad = [];
+            const GLYPH = /[\u25cf\u25d0\u25cc\u2715]/;
+            for (const el of [...document.querySelectorAll('[data-icon]')].filter(vis))
+                if (icons.includes(el.getAttribute('data-icon'))) bad.push(`data-icon=${el.getAttribute('data-icon')} on '${norm(el.textContent).slice(0, 30)}'`);
+            for (const el of [...document.querySelectorAll('.badge, [data-slot="state-badge"], [data-slot="mode-badge"]')].filter(vis)) {
+                if (el.closest('.proto-btn, [data-set-state]')) continue;
+                const t = norm(el.textContent);
+                if (GLYPH.test(t) || labels.some(l => t.includes(l))) bad.push(`pill '${t.slice(0, 30)}'`);
+            }
+            const cards = [...document.querySelectorAll('[data-component="summary-card"]')];
+            const skel = cards.filter(c => [...c.querySelectorAll('[data-skeleton="true"]')].some(vis)).length;
+            if (skel !== cards.length || !cards.length) bad.push(`${skel}/${cards.length} summary cards show a skeleton`);
+            return bad;
+        }""", [sorted(STATUS_ICONS), sorted({l for ls in HEALTH_LABELS.values() for l in ls} | set(MODE_LABELS))])
+        record("A36-LOADING-NO-STATUS", len(a36) == 0, f"violations={a36[:10]} (total={len(a36)})", f"loading: 0 visible data-icon in {sorted(STATUS_ICONS)}, 0 pills with a status glyph or label, a skeleton in every summary card")
+
+        # A37: every percentage shown next to a count can come from that count (round(100k/n) for some integer 0 <= k <= n)
+        a37_bad, a37_pairs = [], 0
+        for st in ["live", "stale", "error"]:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            blocks = page.evaluate("() => {" + JS_HELPERS + r"""
+                const out = [...document.querySelectorAll('[data-component="summary-card"]')].filter(vis).map(c => [c.getAttribute('data-card-id'), norm(c.innerText)]);
+                for (const t of tabs()) { const p = openTab(t); if (p && vis(p)) out.push([t.getAttribute('data-tab'), norm(p.innerText)]); }
+                tabs()[0]?.click();
+                return out;
+            }""")
+            for where, txt in blocks:
+                counts = [int(c.replace(",", "")) for c in re.findall(r"\b(\d[\d,]*)\s+turns?\b", txt)]
+                for pct in re.findall(r"\b(\d+(?:\.\d+)?)\s?%", txt):
+                    dec = len(pct.split(".")[1]) if "." in pct else 0
+                    for n in [c for c in counts if c > 0]:
+                        a37_pairs += 1
+                        if not any(abs(100.0 * k / n - float(pct)) <= 0.5 * 10 ** -dec + 1e-9 for k in range(n + 1)):
+                            a37_bad.append(f"{st}:{where}: {pct}% cannot come from {n} turns")
+        a37_bad = list(dict.fromkeys(a37_bad))
+        record("A37-FIXTURE-ARITHMETIC", len(a37_bad) == 0 and a37_pairs > 0, f"pairsChecked={a37_pairs}, violations={a37_bad}", "each N% beside an 'M turns' count equals round(100k/M) for some integer k")
 
         browser.close()
 except Exception as exc:
