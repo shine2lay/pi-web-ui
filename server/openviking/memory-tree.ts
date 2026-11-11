@@ -9,8 +9,10 @@ import { resolveRequestHeaders } from "./uri.js";
 export const RESOURCES_ROOT_URI = "viking://resources";
 export const SHARED_MEMORIES_ROOT_URI = "viking://user/default/memories";
 export const roleMemoriesRootUri = (role: string) => `viking://user/${role}/memories`;
-/** Each role walk is 1 + (sub-folders) listings; a few at a time keeps the daemon responsive. */
+/** Each role walk is one listing per folder; a few at a time keeps the daemon responsive. */
 const ROLE_WALKS_IN_FLIGHT = 4;
+/** Folder listings in flight within one walk (one tree level at a time). */
+const LISTINGS_IN_FLIGHT = 8;
 
 export interface OpenVikingLsItem {
 	uri: string;
@@ -49,10 +51,8 @@ export async function listDir(
 	http: OpenVikingDaemonHttp,
 	uri: string,
 	headers: Record<string, string>,
-	recursive = false,
 ): Promise<OpenVikingLsItem[]> {
-	const params: Record<string, string> = recursive ? { uri, recursive: "true" } : { uri };
-	return toLsItems(await http.result("/api/v1/fs/ls", params, headers));
+	return toLsItems(await http.result("/api/v1/fs/ls", { uri }, headers));
 }
 
 function toMemoryFile(rootUri: string, item: OpenVikingLsItem): OpenVikingMemoryFile {
@@ -61,15 +61,22 @@ function toMemoryFile(rootUri: string, item: OpenVikingLsItem): OpenVikingMemory
 	return { ...item, relPath, category: slash > 0 ? relPath.slice(0, slash) : "root" };
 }
 
-/** Every file under `rootUri`: one listing of the root, then one recursive listing per sub-folder. */
+/**
+ * Every file under `rootUri` at any depth: breadth-first, each folder listed once with a plain (one-level) listing.
+ * The daemon's `recursive=true` listing stops 3 levels down (0.5.4), so it is not used. A failed listing fails the walk.
+ */
 export async function walkMemoryTree(
 	http: OpenVikingDaemonHttp,
 	rootUri: string,
 	headers: Record<string, string>,
 ): Promise<OpenVikingMemoryFile[]> {
-	const top = await listDir(http, rootUri, headers);
-	const nested = await Promise.all(top.filter((i) => i.isDir).map((dir) => listDir(http, dir.uri, headers, true)));
-	return [...top, ...nested.flat()].filter((i) => !i.isDir).map((i) => toMemoryFile(rootUri, i));
+	const files: OpenVikingMemoryFile[] = [];
+	for (let level = [rootUri]; level.length > 0;) {
+		const items = (await mapWithLimit(level, LISTINGS_IN_FLIGHT, (uri) => listDir(http, uri, headers))).flat();
+		for (const i of items) if (!i.isDir) files.push(toMemoryFile(rootUri, i));
+		level = items.filter((i) => i.isDir).map((i) => i.uri);
+	}
+	return files;
 }
 
 /** A role's personal tree under canonical `viking://user/<role>/memories`, or null when the daemon has no such folder. */
