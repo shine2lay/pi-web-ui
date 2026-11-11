@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Acceptance assertion runner for OpenViking Memory Dashboard (openviking-dashboard).
 # Exit codes: 0 = all 17 assertions pass, 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
+# Task #269 appends A18-A23 (state honesty, summary/detail parity, drawer integrity, role isolation, focus/keyboard, unmeasured slots); exit 0 now means all 23 pass.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -435,6 +436,325 @@ try:
         }""")
         a17_ok = len(style_leaks["inlineStyles"]) == 0 and len(style_leaks["colorLit"]) == 0 and len(style_leaks["spaceLit"]) == 0
         record("A17-CSS-TOKENS-ONLY", a17_ok, f"inline={style_leaks['inlineStyles']}, colors={style_leaks['colorLit']}, spacing={style_leaks['spaceLit']}", "0 inline styles, 0 color/spacing literals outside token block")
+
+        # ---- A18-A23 (task #269) ----
+        ROWS_SEL = '[data-component="memory-row"], [data-component="audit-row"]'
+        JS_HELPERS = r"""
+            const vis = (el) => {
+                if (!el) return false;
+                const s = getComputedStyle(el);
+                const r = el.getBoundingClientRect();
+                return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) > 0 && r.width > 0 && r.height > 0;
+            };
+            const UNIT = { s: 1, m: 60, h: 3600, d: 86400 };
+            const agesOf = (txt) => [...(txt || '').matchAll(/(?:\b([a-z]+)\s+)?(\d+)\s*(s|m|h|d)\s*ago\b/gi)].map(m => ({ word: (m[1] || '').toLowerCase(), secs: parseInt(m[2], 10) * UNIT[m[3].toLowerCase()] }));
+            const tabs = () => [...document.querySelectorAll('[role="tab"][data-tab]')];
+            const openTab = (t) => { t.click(); return document.querySelector(`[role="tabpanel"][data-tabpanel="${t.getAttribute('data-tab')}"]`); };
+            const rowsIn = (root) => [...root.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]')].filter(vis);
+            const rowUri = (r) => (((r && r.innerText) || '').match(/viking:\/\/[^\s\u00b7,;)]+/) || [''])[0];
+            const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+        """
+
+        # A18: error / stale / loading reach every tab panel and every age label
+        a18_bad = []
+        for st in ["error", "stale", "loading"]:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            a18_bad.extend(page.evaluate("(st) => {" + JS_HELPERS + r"""
+                const bad = [];
+                const FRESH_SECS = 300;
+                const STATE_RE = { error: /unreachable|offline/i, stale: /stale/i, loading: /loading/i };
+                const checkAges = (els, where) => {
+                    for (const el of els.filter(vis)) {
+                        const txt = norm(el.innerText || el.textContent);
+                        const ages = agesOf(txt);
+                        if (st === 'loading') {
+                            if (ages.length || !/loading|fetching|waiting/i.test(txt)) bad.push(`${st}:${where}:age-label '${txt.slice(0, 60)}'`);
+                        } else if (ages.some(a => a.secs < FRESH_SECS)) {
+                            bad.push(`${st}:${where}:fresh-age '${txt.slice(0, 60)}'`);
+                        }
+                    }
+                };
+                const healthy = (root, where) => {
+                    for (const el of [...root.querySelectorAll('.badge-healthy, [data-health-state="healthy"]')].filter(vis)) {
+                        if (where === 'summary' && el.closest('[role="tabpanel"]')) continue;
+                        bad.push(`${st}:${where}:healthy-badge '${norm(el.textContent).slice(0, 40)}'`);
+                    }
+                };
+                checkAges([...document.querySelectorAll('[data-age-label]')].filter(el => !el.closest('[role="tabpanel"]')), 'summary');
+                healthy(document, 'summary');
+                for (const t of tabs()) {
+                    const key = t.getAttribute('data-tab');
+                    const panel = openTab(t);
+                    if (!panel || !vis(panel)) { bad.push(`${st}:${key}:panel-not-visible`); continue; }
+                    const label = panel.querySelector('[data-panel-updated-label]');
+                    const labelTxt = label && vis(label) ? norm(label.innerText) : '';
+                    const staleBadge = [...panel.querySelectorAll('[data-stale-badge="true"]')].some(vis);
+                    if (!(STATE_RE[st].test(labelTxt) || (st === 'stale' && staleBadge))) bad.push(`${st}:${key}:panel-label '${labelTxt.slice(0, 60)}'`);
+                    if (st === 'loading') {
+                        for (const r of rowsIn(panel)) if (rowUri(r)) bad.push(`${st}:${key}:row-before-load '${rowUri(r)}'`);
+                    }
+                    checkAges([...panel.querySelectorAll('[data-age-label]')], key);
+                    healthy(panel, key);
+                }
+                tabs()[0]?.click();
+                return [...new Set(bad)];
+            }""", st))
+        record("A18-ALL-PANELS-HONOR-STATE", len(a18_bad) == 0, f"violations={a18_bad[:14]} (total={len(a18_bad)})", "error/stale/loading: every tab panel label names the state, no visible age label < 5m ago (loading: no age at all), no healthy badge, no loaded rows while loading")
+
+        # A19: summary cards and their detail tabs tell the same story
+        a19_bad = []
+        for st in ["live", "stale", "empty"]:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            a19_bad.extend(page.evaluate("(st) => {" + JS_HELPERS + r"""
+                const bad = [];
+                const firstInt = (txt) => { const m = (txt || '').replace(/,/g, '').match(/\b(\d+)\b/); return m ? parseInt(m[1], 10) : null; };
+                const card = (id) => document.querySelector(`[data-component="summary-card"][data-card-id="${id}"]`);
+                const panelOf = (key) => { const t = document.querySelector(`[role="tab"][data-tab="${key}"]`); const p = t ? openTab(t) : null; return { p, txt: p && vis(p) ? norm(p.innerText).replace(/,/g, '') : '' }; };
+                const c3fig = card('commit-governance')?.querySelector('[data-source-field="changelog.commits_24h"]');
+                const commits = c3fig && c3fig.getAttribute('data-unreachable-value') !== 'true' ? firstInt(c3fig.innerText) : null;
+                const t3 = panelOf('commit-audit');
+                const auditRows = t3.p ? rowsIn(t3.p) : [];
+                if (commits === 0 && auditRows.length) bad.push(`${st}:card3=0 commits but commit-audit lists ${auditRows.length} events`);
+                if (commits !== null && commits > 0) {
+                    if (!auditRows.length) bad.push(`${st}:card3=${commits} commits but commit-audit lists 0 events`);
+                    if (!new RegExp(`\\b${commits}\\b`).test(t3.txt)) bad.push(`${st}:card3=${commits} commits not cited in commit-audit`);
+                }
+                const c2figs = [...(card('context-injection')?.querySelectorAll('[data-figure]') || [])].filter(f => f.getAttribute('data-unreachable-value') !== 'true');
+                const turns = c2figs.map(f => norm(f.innerText).replace(/,/g, '').match(/\b(\d+)\s+turns\b/i)).find(Boolean);
+                const t1 = panelOf('mount-map');
+                if (turns && !new RegExp(`\\b${turns[1]}\\s+turns?\\b`, 'i').test(t1.txt)) bad.push(`${st}:card2=${turns[1]} turns not cited in mount-map`);
+                if (st === 'empty') {
+                    for (const t of tabs()) {
+                        const p = openTab(t);
+                        if (!p || !vis(p)) continue;
+                        for (const r of rowsIn(p)) {
+                            if (r.getAttribute('data-component') === 'audit-row') { bad.push(`empty:${t.getAttribute('data-tab')}:event listed '${rowUri(r)}'`); continue; }
+                            const labels = [...r.querySelectorAll('[data-age-label]')].filter(vis);
+                            if (r.hasAttribute('data-age-label')) labels.push(r);
+                            for (const el of labels) for (const a of agesOf(el.innerText)) {
+                                if (a.secs < 86400 && a.word !== 'checked') bad.push(`empty:${t.getAttribute('data-tab')}:in-window '${norm(el.innerText).slice(0, 50)}'`);
+                            }
+                        }
+                    }
+                }
+                tabs()[0]?.click();
+                return [...new Set(bad)];
+            }""", st))
+        record("A19-SUMMARY-MATCHES-DETAIL", len(a19_bad) == 0, f"violations={a19_bad[:12]} (total={len(a19_bad)})", "card3 commit count cited by commit-audit (0 -> no events), card2 turn count cited by mount-map, empty state lists no event inside the 24h window")
+
+        # A20 + A21 share one walk over every clickable row of every tab
+        page.goto(f"{file_url}?state=live", wait_until="load")
+        walk = page.evaluate("() => {" + JS_HELPERS + r"""
+            const drawer = document.querySelector('[data-component="reader-drawer"]');
+            if (!drawer) return { rows: [], initial: null, error: 'missing reader drawer' };
+            const field = (name, legacy) => drawer.querySelector(`[data-drawer-field="${name}"]`) || drawer.querySelector(legacy);
+            const read = () => ({
+                uri: norm(field('uri', '#drawer-uri')?.textContent),
+                scope: norm(field('scope', '#drawer-scope')?.textContent),
+                l0: norm(field('l0', '#drawer-l0-body')?.textContent),
+                l1: norm(field('l1', '#drawer-l1-body')?.textContent),
+                l2: norm(field('l2', '#drawer-l2-body')?.textContent),
+                prov: norm(drawer.querySelector('[data-slot="drawer-provenance"]')?.textContent)
+            });
+            const initial = read();
+            const rows = [];
+            for (const t of tabs()) {
+                const panel = openTab(t);
+                if (!panel || !vis(panel)) continue;
+                for (const row of rowsIn(panel)) {
+                    if (row.getAttribute('aria-expanded') === 'true') row.click();
+                    row.click();
+                    rows.push({
+                        key: row.getAttribute('data-item-key') || rowUri(row),
+                        uri: rowUri(row),
+                        abstract: norm(row.querySelector('[data-row-field="l0"], .abstract-copy')?.textContent),
+                        drawerVisible: vis(drawer),
+                        d: read()
+                    });
+                }
+            }
+            drawer.querySelector('[data-slot="drawer-close"]')?.click();
+            tabs()[0]?.click();
+            return { rows, initial, error: null };
+        }""")
+        a20_bad = [walk["error"]] if walk["error"] else []
+        prev_uri, prev_d = "initial-markup", walk["initial"] or {}
+        is_gap = lambda s: bool(re.search(r"unavailable|isolat", s or "", re.I))
+        for r in walk["rows"]:
+            d, issues = r["d"], []
+            role_uri = r["uri"].startswith("viking://agent/")
+            if not r["drawerVisible"]:
+                issues.append("drawer hidden")
+            issues += [f"{k} empty" for k in ["uri", "scope", "l0", "l1", "l2", "prov"] if not d[k]]
+            if r["uri"] and d["uri"] != r["uri"]:
+                issues.append(f"uri={d['uri']!r}")
+            scope_ok = (re.search(r"\brole\b", d["scope"], re.I) and not re.search(r"shared", d["scope"], re.I)) if role_uri else (re.search(r"shared", d["scope"], re.I) and not re.search(r"\brole\b", d["scope"], re.I))
+            if not scope_ok:
+                issues.append(f"scope={d['scope']!r} for {'role' if role_uri else 'shared'} uri")
+            if r["abstract"] and d["l0"] != r["abstract"]:
+                issues.append(f"l0 != row abstract ({d['l0'][:40]!r})")
+            if prev_uri != r["uri"]:
+                for k in ["l1", "l2", "prov"]:
+                    if d[k] and d[k] == prev_d.get(k) and not (k != "prov" and is_gap(d[k])):
+                        issues.append(f"{k} left over from {prev_uri}")
+            if issues:
+                a20_bad.append(f"{r['key']}: {'; '.join(issues)}")
+            prev_uri, prev_d = r["uri"] or r["key"], d
+        record("A20-DRAWER-MATCHES-ROW", len(walk["rows"]) >= 1 and len(a20_bad) == 0, f"rows={len(walk['rows'])}, violations={a20_bad[:10]} (total={len(a20_bad)})", "every clickable row opens a visible drawer whose uri/scope/L0/L1/L2/provenance belong to that row; nothing left over from the previous row")
+
+        # A21: per-role memory rows show only the isolation placeholder; drawer L1/L2 null or unavailable
+        a21_bad, role_rows = [], 0
+        for r in walk["rows"]:
+            if not r["uri"].startswith("viking://agent/memories/"):
+                continue
+            role_rows += 1
+            d = r["d"]
+            if not re.search(r"isolated per-role memory", r["abstract"], re.I) or len(r["abstract"]) > 120:
+                a21_bad.append(f"{r['key']}: row L0 {r['abstract'][:50]!r}")
+            if not re.search(r"isolated per-role memory", d["l0"], re.I) or len(d["l0"]) > 120:
+                a21_bad.append(f"{r['key']}: drawer L0 {d['l0'][:50]!r}")
+            for k in ["l1", "l2"]:
+                if d[k] and (not (re.search(r"unavailable", d[k], re.I) and re.search(r"isolat", d[k], re.I)) or len(d[k]) > 200):
+                    a21_bad.append(f"{r['key']}: drawer {k.upper()} {d[k][:50]!r}")
+        record("A21-ROLE-ISOLATION", role_rows >= 1 and len(a21_bad) == 0, f"roleRows={role_rows}, violations={a21_bad[:10]} (total={len(a21_bad)})", "every viking://agent/memories/ row: row + drawer L0 = isolated placeholder only; drawer L1/L2 null or 'unavailable (isolation)'")
+
+        # A22: drawer focus return, Escape on tooltips, tooltip as overlay, drawer in viewport (S1), tablist keys (S4)
+        a22_bad = []
+        for vw, vh in [(1440, 900), (390, 844)]:
+            page.set_viewport_size({"width": vw, "height": vh})
+            page.goto(f"{file_url}?state=live", wait_until="load")
+            try:
+                idx = page.evaluate("() => {" + JS_HELPERS + r"""
+                    for (const t of tabs()) {
+                        const p = openTab(t);
+                        const r = p && vis(p) ? rowsIn(p)[0] : null;
+                        if (r) return [...document.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]')].indexOf(r);
+                    }
+                    return -1;
+                }""")
+                if idx < 0:
+                    a22_bad.append(f"{vw}px: no clickable row")
+                    continue
+                row = page.locator(ROWS_SEL).nth(idx)
+                drawer_state = r"""(idx) => {
+                    const d = document.querySelector('[data-component="reader-drawer"]');
+                    const row = document.querySelectorAll('[data-component="memory-row"], [data-component="audit-row"]')[idx];
+                    const s = d ? getComputedStyle(d) : null;
+                    const r = d ? d.getBoundingClientRect() : { top: 0, left: 0, bottom: 0, right: 0, width: 0 };
+                    const open = !!s && s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0;
+                    const inView = open && r.top >= -1 && r.left >= -1 && r.bottom <= innerHeight + 1 && r.right <= innerWidth + 1;
+                    return { open, inView, rect: [Math.trunc(r.top), Math.trunc(r.bottom), innerHeight], focusOnRow: document.activeElement === row };
+                }"""
+                # (a) close button returns focus to the row
+                row.focus()
+                page.keyboard.press("Enter")
+                st1 = page.evaluate(drawer_state, idx)
+                if not st1["open"]:
+                    a22_bad.append(f"{vw}px: Enter on row did not open drawer")
+                if not st1["inView"]:
+                    a22_bad.append(f"{vw}px: opened drawer outside viewport rect(top,bottom,vh)={st1['rect']}")
+                page.evaluate("() => { window.scrollTo(0, document.documentElement.scrollHeight); }")
+                st1b = page.evaluate(drawer_state, idx)
+                if st1["open"] and not st1b["inView"]:
+                    a22_bad.append(f"{vw}px: drawer leaves viewport after scrolling rect={st1b['rect']}")
+                page.evaluate("() => { const b = document.querySelector('[data-slot=\"drawer-close\"]'); if (b) { b.focus(); b.click(); } }")
+                if not page.evaluate(drawer_state, idx)["focusOnRow"]:
+                    a22_bad.append(f"{vw}px: close button did not return focus to the row")
+                # (b) Escape from inside the drawer closes it and returns focus to the row
+                row.focus()
+                page.keyboard.press("Enter")
+                page.evaluate("() => { const t = document.querySelector('[data-component=\"reader-drawer\"] [data-drawer-tab]'); if (t) t.focus(); }")
+                page.keyboard.press("Escape")
+                st2 = page.evaluate(drawer_state, idx)
+                if st2["open"] or not st2["focusOnRow"]:
+                    a22_bad.append(f"{vw}px: Escape open={st2['open']} focusOnRow={st2['focusOnRow']}")
+                # (c) drawer tablist: ArrowRight / End / Home move focus and selection
+                row.focus()
+                page.keyboard.press("Enter")
+                dtabs = page.locator('[data-component="reader-drawer"] [data-drawer-tab]')
+                if dtabs.count() >= 3:
+                    dtabs.nth(0).focus()
+                    for key, want in [("ArrowRight", 1), ("End", dtabs.count() - 1), ("Home", 0)]:
+                        page.keyboard.press(key)
+                        ok = page.evaluate(r"""(want) => {
+                            const ts = [...document.querySelectorAll('[data-component="reader-drawer"] [data-drawer-tab]')];
+                            return document.activeElement === ts[want] && ts[want].getAttribute('aria-selected') === 'true';
+                        }""", want)
+                        if not ok:
+                            a22_bad.append(f"{vw}px: drawer tablist {key} did not focus+select tab {want}")
+                page.keyboard.press("Escape")
+                # (d) workspace tablist: ArrowRight / End / Home / ArrowLeft wrap
+                wtabs = page.locator('[role="tab"][data-tab]')
+                n_tabs = wtabs.count()
+                wtabs.nth(0).click()
+                wtabs.nth(0).focus()
+                for key, want in [("ArrowRight", 1), ("End", n_tabs - 1), ("Home", 0), ("ArrowLeft", n_tabs - 1)]:
+                    page.keyboard.press(key)
+                    ok = page.evaluate(r"""(want) => {
+                        const ts = [...document.querySelectorAll('[role="tab"][data-tab]')];
+                        const p = document.querySelector(`[role="tabpanel"][data-tabpanel="${ts[want].getAttribute('data-tab')}"]`);
+                        return document.activeElement === ts[want] && ts[want].getAttribute('aria-selected') === 'true' && !!p && getComputedStyle(p).display !== 'none';
+                    }""", want)
+                    if not ok:
+                        a22_bad.append(f"{vw}px: workspace tablist {key} did not focus+select+show tab {want}")
+                wtabs.nth(0).click()
+                # (e) tooltips: Escape hides a focused tooltip; showing one moves no card/row/panel by more than 1px
+                tips = page.evaluate("() => {" + JS_HELPERS + r"""
+                    const boxes = () => [...document.querySelectorAll('[data-component="summary-card"], [role="tabpanel"], [data-component="memory-row"], [data-component="audit-row"]')].filter(vis).map(el => { const r = el.getBoundingClientRect(); return [r.left + scrollX, r.top + scrollY, r.width, r.height]; });
+                    const out = [];
+                    document.querySelectorAll('button[data-slot="tooltip-trigger"]').forEach((btn, i) => {
+                        if (!vis(btn)) return;
+                        const before = boxes();
+                        btn.focus({ preventScroll: true });
+                        const after = boxes();
+                        let shift = 0;
+                        before.forEach((b, j) => { const a = after[j] || b; for (let k = 0; k < 4; k++) shift = Math.max(shift, Math.abs(a[k] - b[k])); });
+                        out.push({ i, tip: btn.getAttribute('aria-describedby') || '', shift });
+                        btn.blur();
+                    });
+                    return out;
+                }""")
+                for t in tips:
+                    if t["shift"] > 1:
+                        a22_bad.append(f"{vw}px: tooltip {t['tip']} moved layout by {t['shift']:.0f}px")
+                trig = page.locator('button[data-slot="tooltip-trigger"]')
+                for t in tips:
+                    trig.nth(t["i"]).focus()
+                    page.keyboard.press("Escape")
+                    shown = page.evaluate(r"""(id) => {
+                        const tip = document.getElementById(id);
+                        if (!tip) return false;
+                        const s = getComputedStyle(tip);
+                        return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) > 0 && tip.getBoundingClientRect().width > 0;
+                    }""", t["tip"])
+                    if shown:
+                        a22_bad.append(f"{vw}px: Escape left tooltip {t['tip']} visible while its trigger has focus")
+            except Exception as exc:
+                a22_bad.append(f"{vw}px: interaction error {str(exc).splitlines()[0][:120]}")
+        page.set_viewport_size({"width": 1440, "height": 900})
+        record("A22-DRAWER-FOCUS-AND-TOOLTIP-ESC", len(a22_bad) == 0, f"violations={a22_bad[:14]} (total={len(a22_bad)})", "at 1440+390: close/Escape return focus to the row, Escape hides a focused tooltip, tooltip moves layout <=1px, opened drawer inside viewport (S1), Arrow/Home/End move both tablists (S4)")
+
+        # A23: per-slot hit rate and tokens are unmeasured in v1 (spec G3): never a number
+        a23_bad, slots_seen = [], 0
+        for st in ["live", "stale", "empty", "loading", "error"]:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            res = page.evaluate("(st) => {" + JS_HELPERS + r"""
+                const bad = []; let n = 0;
+                tabs().find(t => t.getAttribute('data-tab') === 'mount-map')?.click();
+                for (const r of [...document.querySelectorAll('[data-slot-id]')].filter(vis)) {
+                    n++;
+                    const txt = norm(r.innerText);
+                    const id = r.getAttribute('data-slot-id');
+                    const m = txt.match(/\d+(?:\.\d+)?\s*%|\b\d[\d,]*\s*(?:avg\s*)?tok(?:en)?s?\b/i);
+                    if (m) bad.push(`${st}:slot${id}:'${m[0]}'`);
+                    if ((st === 'live' || st === 'stale') && !/not measured yet/i.test(txt)) bad.push(`${st}:slot${id}:missing 'not measured yet'`);
+                }
+                return { n, bad };
+            }""", st)
+            a23_bad.extend(res["bad"])
+            if st == "live":
+                slots_seen = res["n"]
+        record("A23-UNMEASURED-PER-SLOT", slots_seen >= 1 and len(a23_bad) == 0, f"liveSlots={slots_seen}, violations={a23_bad[:12]} (total={len(a23_bad)})", "every slot row says 'not measured yet' (live/stale) and never shows a per-slot % or token number in any state")
 
         browser.close()
 except Exception as exc:
