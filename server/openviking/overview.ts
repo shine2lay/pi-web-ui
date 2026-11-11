@@ -106,7 +106,7 @@ export function summarizeChangelog(
 	const actions = recent.map(auditActionOf);
 	const last = latestMs(records.filter((r) => r.action !== null));
 	return {
-		commits_24h: actions.filter((a) => a === "commit").length,
+		commits_24h: recent.filter((r) => r.sessionCommit).length,
 		promotions_24h: actions.filter((a) => a === "promote_shared").length,
 		rejected_24h: actions.filter((a) => a === "reject_noise").length,
 		last_event_at: isoOrNull(last),
@@ -164,14 +164,14 @@ export async function buildOverview(
 	const degraded = isDegraded(snapshot, rollout, totalRoles);
 	const screen_state = screenStateOf(snapshot, degraded, metrics, changelog);
 	const lastInjection = latestMs(metricsRecords.filter((r) => r.injection));
-	const lastCommit = latestMs(changelogRecords.filter((r) => auditActionOf(r) === "commit"));
+	const lastCommit = latestMs(changelogRecords.filter((r) => r.sessionCommit));
 
 	const observer: OpenVikingObserverSummary = {
 		mode_label: !snapshot.reachable ? "Offline" : degraded ? "Degraded Local Fallback" : "Active (15/15 Roles Live)",
 		roles_online_count: snapshot.roles_online_count,
 		roles_total_count: totalRoles,
 		daemon_bind: daemonBind,
-		queue_depth: snapshot.queue_depth,
+		queue_depth: null,
 		checked_at: new Date(nowMs).toISOString(),
 		health_state: !snapshot.reachable ? "server-unreachable" : degraded ? "stale" : "healthy",
 		stale_badge: null,

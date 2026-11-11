@@ -1,7 +1,8 @@
 /**
  * Backend #132: the OpenViking dashboard API beyond Task 1's acceptance suite: cross-role isolation (no
  * `/api/v1/content/*` call for a personal URI), old and new telemetry names in the same files (Ops #808-#810),
- * `:1933` down or slow, and the read-only HTTP boundary (non-GET 405, nothing written, nothing sent upstream).
+ * `:1933` down or slow, the read-only HTTP boundary (non-GET 405, nothing written, nothing sent upstream), and (#136)
+ * queue depth never scraped (R-QUEUE-DEPTH-1) and `changelog.commits_24h` counting session commits only (spec "Session Commits", rm-9724bae9).
  */
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -19,7 +20,6 @@ import {
 	type OpenVikingDashboardOptions,
 	type OpenVikingEntriesResponse,
 } from "../../server/openviking/index.js";
-import { parseQueueDepth } from "../../server/openviking/observer.js";
 import { registerRouteModules } from "../../server/route-modules.js";
 
 const NOW = Date.parse("2026-11-11T08:30:00.000Z");
@@ -112,9 +112,9 @@ const MIXED_METRICS = [
 		],
 	},
 ];
-const change = (min: number, action: string, role: string, uri: string, summary: string) => ({
+const change = (min: number, action: string, role: string, uri: string, summary: string, source = "test") => ({
 	timestamp: minutesAgo(min),
-	source: "test",
+	source,
 	role,
 	taskId: `${role}#7`,
 	uri,
@@ -123,7 +123,7 @@ const change = (min: number, action: string, role: string, uri: string, summary:
 });
 const MIXED_CHANGELOG = [
 	change(9, "session_commit", "ops", "viking://user/ops/memories/cases/old.md", "ops private old-name commit"),
-	change(8, "add", "qa", "viking://agent/memories/cases/new.md", "qa private new-name commit"),
+	change(8, "add", "qa", "viking://agent/memories/cases/new.md", "qa private new-name commit", "queue_done"),
 	change(7, "preference_write", "ops", "viking://user/default/memories/preferences/backend_code.md", "old promote"),
 	change(6, "update", "architecture", "viking://user/memories/preferences/frontend_code.md", "new promote"),
 	change(5, "preference_write_blocked", "backend", "viking://user/default/memories/preferences/x.md", "old reject"),
@@ -209,7 +209,7 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 	});
 
 	it("reads old and new telemetry names from the same files (G2-G7)", async () => {
-		const { fetchImpl } = daemon();
+		const { fetchImpl, calls } = daemon();
 		const dir = stateDir({
 			"rollout-state.json": { stage: "phase2-live", updated_at: minutesAgo(30), pending_wt_land_syncs: [] },
 			"migration-verification.json": {
@@ -243,7 +243,9 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 		expect(o.auxiliary.migration).toMatchObject({ verified_at: "2026-11-11T00:53:35.455Z", total_checked: 3 });
 		expect(o.auxiliary.dedup.seen_count).toBe(3);
 		expect(o.auxiliary.resource_sync.status).toBe("missing");
-		expect(o.observer.queue_depth).toBe(5);
+		// R-QUEUE-DEPTH-1 (spec G1, Architecture rm-a374e16b): unavailable in v1, never scraped, never 0.
+		expect(o.observer.queue_depth).toBeNull();
+		expect(calls.some((c) => c.url.pathname === "/api/v1/observer/queue")).toBe(false);
 
 		const audit = await client({ stateDir: dir, fetchImpl }).getAudit({ action: "reject_noise" });
 		expect(audit.events.map((e) => [e.raw_action, e.guard_verdict])).toEqual([
@@ -387,16 +389,30 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 		}
 	});
 
-	it("G1: queue depth is Pending + In Progress of the TOTAL row, and null when the table drifts", () => {
-		expect(parseQueueDepth(QUEUE)).toBe(5);
-		for (const drifted of [
-			"| Queue | Pending | In Progress |\n| Embedding | 4 | 1 |",
-			"| Queue | Waiting | In Progress |\n| TOTAL | 4 | 1 |",
-			"| Queue | Pending | In Progress |\n| TOTAL | 4 | n/a |",
-			"queue idle",
-			undefined,
-		]) {
-			expect(parseQueueDepth(drifted)).toBeNull();
-		}
+	it("Session Commits: commits_24h and last_commit_at count session commits only (queue_done + 200K lead), old and new names", async () => {
+		const { fetchImpl } = daemon();
+		const session = (min: number, action: string, uri: string, source: string) =>
+			change(min, action, "ops", uri, "session commit", source);
+		const write = (min: number, action: string, role: string, source: string) =>
+			change(min, action, role, `viking://user/${role}/memories/cases/c${min}.md`, "role memory write", source);
+		const dir = stateDir({
+			"memory-changelog.jsonl": [
+				change(25 * 60, "add", "ops", "viking://session/old-day", "older than 24 h", "queue_done"),
+				session(30, "session_commit", "viking://user/ops/memories/cases/old-name.md", "queue_done"),
+				session(29, "add", "viking://session/20261111-a", "queue_done"),
+				session(28, "add", "viking://session/20261111-b/history/archive_001", "session_commit_200k"),
+				write(27, "added", "architecture", "migration"),
+				write(26, "updated", "backend", "migration"),
+				write(25, "add", "qa", "migration"),
+				write(24, "added", "marketing", "lead_direct"),
+				write(23, "updated", "marketing", "lead_direct"),
+				change(22, "update", "ops", "viking://resources/rollcall/core/gotchas.md", "Synced", "queue_done"),
+				change(21, "add", "ops", "viking://resources/rollcall/core/new.md", "Synced", "queue_done"),
+			],
+		});
+		const o = await client({ stateDir: dir, fetchImpl }).getOverview();
+		expect(o.changelog).toMatchObject({ commits_24h: 3, promotions_24h: 2, rejected_24h: 0 });
+		expect(o.observer.last_commit_at).toBe(minutesAgo(28));
+		expect(o.changelog.last_event_at).toBe(minutesAgo(21));
 	});
 });

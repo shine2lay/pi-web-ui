@@ -1,7 +1,7 @@
 /**
- * OpenViking Memory Dashboard — one live snapshot of the `:1933` daemon: reachability, queue and
- * retrieval figures, roles online and the two-layer store counts. When the daemon is down every
- * figure is null (`— (Unreachable)`), never 0.
+ * OpenViking Memory Dashboard — one live snapshot of the `:1933` daemon: reachability, retrieval
+ * figures, roles online and the two-layer store counts. When the daemon is down every figure is null
+ * (`— (Unreachable)`), never 0. Queue depth is not read at all (R-QUEUE-DEPTH-1, spec G1).
  */
 import {
 	OpenVikingDaemonRequestError,
@@ -21,7 +21,6 @@ import { resolveRequestHeaders } from "./uri.js";
 
 export interface OpenVikingObserverSnapshot {
 	reachable: boolean;
-	queue_depth: number | null;
 	retrieval_latency_avg_ms: number | null;
 	retrieval_hit_rate_pct: number | null;
 	roles_online_count: number | null;
@@ -47,25 +46,6 @@ export function parseAsciiTable(text: unknown): string[][] | null {
 	return rows;
 }
 
-const strictInt = (s: string | undefined) => (s !== undefined && /^\d+$/.test(s) ? Number(s) : null);
-
-/**
- * G1: `Pending + In Progress` of the `TOTAL` row of `/api/v1/observer/queue` `result.status`.
- * Anchored on the exact header names; any drift in the table (renamed column, missing TOTAL row,
- * non-integer cell) yields null, never a guessed 0.
- */
-export function parseQueueDepth(status: unknown): number | null {
-	const rows = parseAsciiTable(status);
-	if (!rows || rows[0][0] !== "Queue") return null;
-	const pending = rows[0].indexOf("Pending");
-	const inProgress = rows[0].indexOf("In Progress");
-	const total = rows.find((r) => r[0] === "TOTAL");
-	if (pending < 0 || inProgress < 0 || !total) return null;
-	const p = strictInt(total[pending]);
-	const i = strictInt(total[inProgress]);
-	return p === null || i === null ? null : p + i;
-}
-
 /** `Avg Latency (ms)` and `100 - Zero-Result Rate` from the retrieval component's metric table. */
 export function parseRetrievalStats(status: unknown): { avgLatencyMs: number | null; hitRatePct: number | null } {
 	const rows = parseAsciiTable(status);
@@ -83,7 +63,6 @@ function componentStatus(system: unknown, name: string): unknown {
 
 const UNREACHABLE: OpenVikingObserverSnapshot = {
 	reachable: false,
-	queue_depth: null,
 	retrieval_latency_avg_ms: null,
 	retrieval_hit_rate_pct: null,
 	roles_online_count: null,
@@ -154,19 +133,16 @@ export async function readObserverSnapshot(http: OpenVikingDaemonHttp): Promise<
 	const headers = resolveRequestHeaders("user");
 	if (!(await http.isHealthy(headers))) return UNREACHABLE;
 	try {
-		const [system, queue, resources, shared, roleTrees] = await Promise.all([
+		const [system, resources, shared, roleTrees] = await Promise.all([
 			orNull(http.result("/api/v1/observer/system", {}, headers)),
-			orNull(http.result("/api/v1/observer/queue", {}, headers)),
 			orNull(listDir(http, RESOURCES_ROOT_URI, headers)),
 			orNull(walkMemoryTree(http, SHARED_MEMORIES_ROOT_URI, headers)),
 			walkRoleTrees(http, OPENVIKING_ROLES),
 		]);
-		const queueStatus = (queue as { status?: unknown } | null)?.status ?? componentStatus(system, "queue");
 		const retrieval = parseRetrievalStats(componentStatus(system, "retrieval"));
 		const counts = storeCounts(resources ? resources.filter((i) => i.isDir).length : null, shared, roleTrees);
 		return {
 			reachable: true,
-			queue_depth: parseQueueDepth(queueStatus),
 			retrieval_latency_avg_ms: retrieval.avgLatencyMs,
 			retrieval_hit_rate_pct: retrieval.hitRatePct,
 			roles_online_count: counts.layer2_personal.roles_count,

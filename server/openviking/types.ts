@@ -162,7 +162,8 @@ export interface OpenVikingObserverSummary {
 	roles_online_count: number | null;
 	roles_total_count: number;
 	daemon_bind: string;
-	queue_depth: number | null;
+	/** R-QUEUE-DEPTH-1 (spec G1): unavailable in v1, never scraped, never 0. */
+	queue_depth: null;
 	checked_at: string;
 	health_state: OpenVikingHealthState;
 	stale_badge: "> 30s" | null;

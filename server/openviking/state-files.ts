@@ -7,6 +7,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_OPENVIKING_STATE_DIR, type OpenVikingPendingWtLandSync } from "./types.js";
+import { isSharedUri } from "./uri.js";
 
 export interface OpenVikingStatePaths {
 	readonly stateDir: string;
@@ -198,6 +199,19 @@ const CHANGELOG_ACTIONS: Record<string, OpenVikingChangelogAction> = {
 	preference_write_blocked: "reject_preference_candidate",
 };
 
+/** Writers whose `add` is a session commit: post-task `queue_done` and the 200K lead commit. */
+const SESSION_COMMIT_SOURCES = new Set(["queue_done", "session_commit_200k"]);
+
+/**
+ * Spec "Session Commits" (rm-9724bae9): the pre-rename `session_commit` is one by itself; a contract
+ * `add` is one only from a session-commit writer and to a non-shared URI (a shared write is a promotion).
+ * Migration, lead_direct and wt_land writes are not commits.
+ */
+function isSessionCommit(r: Omit<OpenVikingChangelogRecord, "sessionCommit">): boolean {
+	if (r.rawAction === "session_commit") return true;
+	return r.action === "add" && SESSION_COMMIT_SOURCES.has(r.source) && !isSharedUri(r.uri, r.role);
+}
+
 export interface OpenVikingChangelogRecord {
 	line: number;
 	ts: string;
@@ -205,6 +219,8 @@ export interface OpenVikingChangelogRecord {
 	rawAction: string;
 	/** null for an action no writer is known to emit; such lines are kept out of every count. */
 	action: OpenVikingChangelogAction | null;
+	/** A session commit (spec "Session Commits"), the only kind `commits_24h` and `last_commit_at` count. */
+	sessionCommit: boolean;
 	source: string;
 	role: string | null;
 	taskId: string | number | null;
@@ -215,7 +231,7 @@ export interface OpenVikingChangelogRecord {
 export async function readChangelogRecords(paths: OpenVikingStatePaths): Promise<OpenVikingChangelogRecord[]> {
 	return (await readJsonl(paths.changelogJsonlPath)).map(({ line, ts, tsMs, obj }) => {
 		const rawAction = str(obj.action) ?? "unknown";
-		return {
+		const record = {
 			line,
 			ts,
 			tsMs,
@@ -227,6 +243,7 @@ export async function readChangelogRecords(paths: OpenVikingStatePaths): Promise
 			uri: str(obj.uri) ?? "",
 			summary: str(obj.summary) ?? "",
 		};
+		return { ...record, sessionCommit: isSessionCommit(record) };
 	});
 }
 

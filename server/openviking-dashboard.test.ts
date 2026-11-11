@@ -293,7 +293,8 @@ describe("OpenViking Memory Dashboard Server API (Task 1 Acceptance Suite)", () 
 		expect(body.observer.roles_online_count).toBe(15);
 		expect(body.observer.roles_total_count).toBe(15);
 		expect(body.observer.daemon_bind).toBe("127.0.0.1:1933");
-		expect(body.observer.queue_depth).toBe(3);
+		// R-QUEUE-DEPTH-1 (spec f153952b G1, Architecture rm-a374e16b/rm-d9b87acf): unavailable in v1, never scraped.
+		expect(body.observer.queue_depth).toBeNull();
 		expect(body.observer.retrieval_latency_avg_ms).toBeCloseTo(172.9, 1);
 		expect(body.observer.retrieval_hit_rate_pct).toBeCloseTo(99.7, 1);
 
