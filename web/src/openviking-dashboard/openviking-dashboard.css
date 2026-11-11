@@ -371,7 +371,10 @@
 }
 
 .ovk-panel-stale {
-	color: var(--amber-fg);
+	/* The same stale colour as the status pill: raw --amber-fg on the paper theme's panel measures
+	   3.6:1, which axe reports as a serious contrast failure (#259). The mix with --text keeps the
+	   amber reading in both palettes and clears 4.5:1. */
+	color: var(--ovk-stale-text);
 	font-weight: 600;
 }
 
