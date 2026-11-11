@@ -1,6 +1,6 @@
 /**
  * OpenViking Memory Dashboard — one live snapshot of the `:1933` daemon: reachability, retrieval
- * figures, roles online and the two-layer store counts. When the daemon is down every figure is null
+ * figures, role memory folders found and the two-layer store counts. When the daemon is down every figure is null
  * (`— (Unreachable)`), never 0. Queue depth is not read at all (R-QUEUE-DEPTH-1, spec G1).
  */
 import {
@@ -23,7 +23,8 @@ export interface OpenVikingObserverSnapshot {
 	reachable: boolean;
 	retrieval_latency_avg_ms: number | null;
 	retrieval_hit_rate_pct: number | null;
-	roles_online_count: number | null;
+	/** Canonical `viking://user/<role>/memories` folders found (spec 2677060e); not role liveness. */
+	role_memory_folder_count: number | null;
 	store_counts: OpenVikingStoreCounts;
 }
 
@@ -65,7 +66,7 @@ const UNREACHABLE: OpenVikingObserverSnapshot = {
 	reachable: false,
 	retrieval_latency_avg_ms: null,
 	retrieval_hit_rate_pct: null,
-	roles_online_count: null,
+	role_memory_folder_count: null,
 	store_counts: {
 		layer1_shared: {
 			repo_trees_count: null,
@@ -106,9 +107,9 @@ function storeCounts(
 	const craft = inShared("preferences");
 	const entities = inShared("entities");
 	const events = inShared("events");
-	const online = [...roleTrees.values()].filter((t): t is OpenVikingMemoryFile[] => t !== null);
-	const inRoles = (category: string) => online.reduce((n, t) => n + t.filter((f) => f.category === category).length, 0);
-	const preferences = online.filter((t) => t.some((f) => f.relPath === "instructions/preferences.md")).length;
+	const found = [...roleTrees.values()].filter((t): t is OpenVikingMemoryFile[] => t !== null);
+	const inRoles = (category: string) => found.reduce((n, t) => n + t.filter((f) => f.category === category).length, 0);
+	const preferences = found.filter((t) => t.some((f) => f.relPath === "instructions/preferences.md")).length;
 	const cases = inRoles("cases");
 	const experiences = inRoles("experiences");
 	return {
@@ -120,7 +121,7 @@ function storeCounts(
 			total_count: sumOrNull([resourceDirs, craft, entities, events]),
 		},
 		layer2_personal: {
-			roles_count: online.length,
+			roles_count: found.length,
 			preferences_count: preferences,
 			cases_count: cases,
 			experiences_count: experiences,
@@ -145,7 +146,7 @@ export async function readObserverSnapshot(http: OpenVikingDaemonHttp): Promise<
 			reachable: true,
 			retrieval_latency_avg_ms: retrieval.avgLatencyMs,
 			retrieval_hit_rate_pct: retrieval.hitRatePct,
-			roles_online_count: counts.layer2_personal.roles_count,
+			role_memory_folder_count: counts.layer2_personal.roles_count,
 			store_counts: counts,
 		};
 	} catch (err) {

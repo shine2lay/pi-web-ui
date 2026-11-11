@@ -85,7 +85,8 @@ export type OpenVikingAgentCategory = (typeof OPENVIKING_AGENT_CATEGORIES)[numbe
 
 export type OpenVikingScreenState = "live" | "stale" | "empty" | "error";
 export type OpenVikingHealthState = "healthy" | "stale" | "zero-activity" | "server-unreachable";
-export type OpenVikingModeLabel = "Active (15/15 Roles Live)" | "Degraded Local Fallback" | "Offline";
+/** Spec 2677060e: plain "Active"; nothing measures role liveness in v1, so no label states it. */
+export type OpenVikingModeLabel = "Active" | "Degraded Local Fallback" | "Offline";
 
 export type OpenVikingEntryScope = "resources" | "user" | "agent";
 export type OpenVikingEntriesFilterScope = "all" | OpenVikingEntryScope;
@@ -159,7 +160,11 @@ export interface OpenVikingStoreCounts {
 
 export interface OpenVikingObserverSummary {
 	mode_label: OpenVikingModeLabel;
-	roles_online_count: number | null;
+	/**
+	 * Spec 2677060e: canonical `viking://user/<role>/memories` folders found (0..15), null when `:1933` is down.
+	 * Not liveness: it never feeds `screen_state`, `mode_label` or a degraded verdict.
+	 */
+	role_memory_folder_count: number | null;
 	roles_total_count: number;
 	daemon_bind: string;
 	/** R-QUEUE-DEPTH-1 (spec G1): unavailable in v1, never scraped, never 0. */
@@ -188,7 +193,8 @@ export interface OpenVikingMetricsSummary {
 }
 
 export interface OpenVikingChangelogSummary {
-	commits_24h: number;
+	/** Spec "Session Commits" (rm-9724bae9): a session committing its own work (queue_done + 200K lead) only. */
+	session_commits_24h: number;
 	promotions_24h: number;
 	rejected_24h: number;
 	last_event_at: string | null;

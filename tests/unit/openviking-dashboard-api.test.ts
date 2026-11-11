@@ -2,7 +2,8 @@
  * Backend #132: the OpenViking dashboard API beyond Task 1's acceptance suite: cross-role isolation (no
  * `/api/v1/content/*` call for a personal URI), old and new telemetry names in the same files (Ops #808-#810),
  * `:1933` down or slow, the read-only HTTP boundary (non-GET 405, nothing written, nothing sent upstream), and (#136)
- * queue depth never scraped (R-QUEUE-DEPTH-1) and `changelog.commits_24h` counting session commits only (spec "Session Commits", rm-9724bae9).
+ * queue depth never scraped (R-QUEUE-DEPTH-1) and (#137) `changelog.session_commits_24h` counting session commits only
+ * (spec "Session Commits", rm-9724bae9, rm-84facfcf): a queue_done add to a role-memory URI is not one, only to a session URI.
  */
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -238,7 +239,12 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 			[5, null, null],
 		]);
 		expect(o.slots.filter((s) => s.state === "unmeasured-gap").map((s) => s.slot_id)).toEqual([2, 3, 5]);
-		expect(o.changelog).toMatchObject({ commits_24h: 2, promotions_24h: 2, rejected_24h: 2, health_state: "healthy" });
+		expect(o.changelog).toMatchObject({
+			session_commits_24h: 1,
+			promotions_24h: 2,
+			rejected_24h: 2,
+			health_state: "healthy",
+		});
 		expect(o.auxiliary.rollout).toMatchObject({ stage: "phase2-live", updated_at: minutesAgo(30) });
 		expect(o.auxiliary.migration).toMatchObject({ verified_at: "2026-11-11T00:53:35.455Z", total_checked: 3 });
 		expect(o.auxiliary.dedup.seen_count).toBe(3);
@@ -308,7 +314,7 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 			expect(o.observer).toMatchObject({
 				mode_label: "Offline",
 				health_state: "server-unreachable",
-				roles_online_count: null,
+				role_memory_folder_count: null,
 				queue_depth: null,
 				retrieval_latency_avg_ms: null,
 				retrieval_hit_rate_pct: null,
@@ -316,7 +322,7 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 			expect(Object.values(o.observer.store_counts.layer1_shared).every((v) => v === null)).toBe(true);
 			expect(Object.values(o.observer.store_counts.layer2_personal).every((v) => v === null)).toBe(true);
 			expect(o.metrics.turns_sampled_24h).toBe(3);
-			expect(o.changelog.commits_24h).toBe(2);
+			expect(o.changelog.session_commits_24h).toBe(1);
 
 			const entries = await c.getEntries({ scope: "all" });
 			expect(entries).toMatchObject({ health_state: "server-unreachable", entries: [] });
@@ -331,7 +337,7 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 		const o = await client({ stateDir: stateDir(), fetchImpl: stalled.fetchImpl, timeoutMs: 50 }).getOverview();
 		expect(o.screen_state).not.toBe("error");
 		expect(o.observer.mode_label).not.toBe("Offline");
-		expect(o.observer.roles_online_count).toBe(OPENVIKING_ROLES.length);
+		expect(o.observer.role_memory_folder_count).toBe(OPENVIKING_ROLES.length);
 		expect(stalled.calls.filter((c) => c.url.pathname === "/health")).toHaveLength(2);
 
 		const down = daemon("down");
@@ -389,7 +395,7 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 		}
 	});
 
-	it("Session Commits: commits_24h and last_commit_at count session commits only (queue_done + 200K lead), old and new names", async () => {
+	it("Session Commits: session_commits_24h and last_commit_at count session commits only (queue_done + 200K lead), old and new names", async () => {
 		const { fetchImpl } = daemon();
 		const session = (min: number, action: string, uri: string, source: string) =>
 			change(min, action, "ops", uri, "session commit", source);
@@ -411,7 +417,7 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 			],
 		});
 		const o = await client({ stateDir: dir, fetchImpl }).getOverview();
-		expect(o.changelog).toMatchObject({ commits_24h: 3, promotions_24h: 2, rejected_24h: 0 });
+		expect(o.changelog).toMatchObject({ session_commits_24h: 3, promotions_24h: 2, rejected_24h: 0 });
 		expect(o.observer.last_commit_at).toBe(minutesAgo(28));
 		expect(o.changelog.last_event_at).toBe(minutesAgo(21));
 	});

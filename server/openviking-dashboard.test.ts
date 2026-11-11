@@ -289,8 +289,10 @@ describe("OpenViking Memory Dashboard Server API (Task 1 Acceptance Suite)", () 
 
 		expect(body.screen_state).toBe("live");
 		expect(body.health_state).toBe("healthy");
-		expect(body.observer.mode_label).toBe("Active (15/15 Roles Live)");
-		expect(body.observer.roles_online_count).toBe(15);
+		// Spec 2677060e (Architecture rm-19da6607): no role liveness in v1; plain "Active", and a count of canonical
+		// viking://user/<role>/memories folders found, not roles online.
+		expect(body.observer.mode_label).toBe("Active");
+		expect(body.observer.role_memory_folder_count).toBe(15);
 		expect(body.observer.roles_total_count).toBe(15);
 		expect(body.observer.daemon_bind).toBe("127.0.0.1:1933");
 		// R-QUEUE-DEPTH-1 (spec f153952b G1, Architecture rm-a374e16b/rm-d9b87acf): unavailable in v1, never scraped.
@@ -323,7 +325,8 @@ describe("OpenViking Memory Dashboard Server API (Task 1 Acceptance Suite)", () 
 		expect(body.auxiliary.migration.total_checked).toBe(21);
 		expect(body.auxiliary.dedup.seen_count).toBe(2);
 
-		expect(body.changelog.commits_24h).toBe(1);
+		// Spec 3a56d6a3 "Session Commits" (Architecture rm-9724bae9): renamed from commits_24h.
+		expect(body.changelog.session_commits_24h).toBe(1);
 		expect(body.changelog.promotions_24h).toBe(2);
 		expect(body.changelog.rejected_24h).toBe(1);
 	});
@@ -362,7 +365,7 @@ describe("OpenViking Memory Dashboard Server API (Task 1 Acceptance Suite)", () 
 		expect(emptyOverview.metrics.turns_sampled_24h).toBe(0);
 		expect(emptyOverview.metrics.slot_hit_rate_pct).toBeNull();
 		expect(emptyOverview.metrics.avg_injected_tokens).toBeNull();
-		expect(emptyOverview.changelog.commits_24h).toBe(0);
+		expect(emptyOverview.changelog.session_commits_24h).toBe(0);
 
 		const offlineDir = makeTempStateDir();
 		seedStateFiles(offlineDir);
@@ -375,7 +378,8 @@ describe("OpenViking Memory Dashboard Server API (Task 1 Acceptance Suite)", () 
 		expect(offlineOverview.screen_state).toBe("error");
 		expect(offlineOverview.health_state).toBe("server-unreachable");
 		expect(offlineOverview.observer.mode_label).toBe("Offline");
-		expect(offlineOverview.observer.roles_online_count).toBeNull();
+		// Spec 2677060e (Architecture rm-19da6607): the folder count is null when :1933 is down.
+		expect(offlineOverview.observer.role_memory_folder_count).toBeNull();
 		expect(offlineOverview.observer.queue_depth).toBeNull();
 		expect(offlineOverview.observer.store_counts.layer1_shared.total_count).toBeNull();
 		expect(offlineOverview.observer.store_counts.layer2_personal.total_count).toBeNull();

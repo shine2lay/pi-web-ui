@@ -139,3 +139,6 @@ export function isSharedUri(uri: string, role: string | null): boolean {
 	const scope = scopeOfUri(uri, role)?.scope;
 	return scope === "resources" || scope === "user";
 }
+
+/** A session's own URI: `viking://session/<id>`, or its canonical form `viking://user/<role>/sessions/<id>`. */
+export const isSessionUri = (uri: string): boolean => /^viking:\/\/(?:session|user\/[^/]+\/sessions)\/[^/]/.test(uri);

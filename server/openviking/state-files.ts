@@ -7,7 +7,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_OPENVIKING_STATE_DIR, type OpenVikingPendingWtLandSync } from "./types.js";
-import { isSharedUri } from "./uri.js";
+import { isSessionUri } from "./uri.js";
 
 export interface OpenVikingStatePaths {
 	readonly stateDir: string;
@@ -203,14 +203,18 @@ const CHANGELOG_ACTIONS: Record<string, OpenVikingChangelogAction> = {
 const SESSION_COMMIT_SOURCES = new Set(["queue_done", "session_commit_200k"]);
 
 /**
- * Spec "Session Commits" (rm-9724bae9): the pre-rename `session_commit` is one by itself; a contract
- * `add` is one only from a session-commit writer and to a non-shared URI (a shared write is a promotion).
- * Migration, lead_direct and wt_land writes are not commits.
+ * Spec "Session Commits" (rm-9724bae9, rm-84facfcf): a session committing its own work, classified by meaning
+ * (URI + source) so no rename can re-include an excluded write. The pre-rename `session_commit` is one by itself;
+ * otherwise an `add` (or old `added`) to the session's own URI from `queue_done` / `session_commit_200k`.
+ * Migration, lead_direct and any other write, to any URI under any name, is not one.
  */
 function isSessionCommit(r: Omit<OpenVikingChangelogRecord, "sessionCommit">): boolean {
 	if (r.rawAction === "session_commit") return true;
-	return r.action === "add" && SESSION_COMMIT_SOURCES.has(r.source) && !isSharedUri(r.uri, r.role);
+	return r.action === "add" && SESSION_COMMIT_SOURCES.has(r.source) && isSessionUri(r.uri);
 }
+
+/** A memory write: a known action other than a failed resource sync, which wrote nothing (Ops #810). */
+export const isMemoryWrite = (r: OpenVikingChangelogRecord): boolean => r.action !== null && r.action !== "sync_failed";
 
 export interface OpenVikingChangelogRecord {
 	line: number;
@@ -219,7 +223,7 @@ export interface OpenVikingChangelogRecord {
 	rawAction: string;
 	/** null for an action no writer is known to emit; such lines are kept out of every count. */
 	action: OpenVikingChangelogAction | null;
-	/** A session commit (spec "Session Commits"), the only kind `commits_24h` and `last_commit_at` count. */
+	/** A session commit (spec "Session Commits"), the only kind `session_commits_24h` and `last_commit_at` count. */
 	sessionCommit: boolean;
 	source: string;
 	role: string | null;

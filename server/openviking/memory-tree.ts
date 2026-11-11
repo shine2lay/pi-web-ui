@@ -72,7 +72,7 @@ export async function walkMemoryTree(
 	return [...top, ...nested.flat()].filter((i) => !i.isDir).map((i) => toMemoryFile(rootUri, i));
 }
 
-/** A role's personal tree, or null when the daemon has no tree for that role (role not live). */
+/** A role's personal tree under canonical `viking://user/<role>/memories`, or null when the daemon has no such folder. */
 export async function walkRoleTree(http: OpenVikingDaemonHttp, role: string): Promise<OpenVikingMemoryFile[] | null> {
 	try {
 		return await walkMemoryTree(http, roleMemoriesRootUri(role), resolveRequestHeaders("agent", role));

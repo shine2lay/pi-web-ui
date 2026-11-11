@@ -6,6 +6,7 @@ import { auditActionOf, buildLiveActivity } from "./activity.js";
 import type { OpenVikingDaemonHttp } from "./daemon-http.js";
 import { readObserverSnapshot, type OpenVikingObserverSnapshot } from "./observer.js";
 import {
+	isMemoryWrite,
 	readChangelogRecords,
 	readMetricsRecords,
 	readMigrationState,
@@ -102,11 +103,12 @@ export function summarizeChangelog(
 	records: readonly OpenVikingChangelogRecord[],
 	nowMs: number,
 ): OpenVikingChangelogSummary {
-	const recent = records.filter((r) => nowMs - r.tsMs <= WINDOW_24H_MS && r.action !== null);
+	const writes = records.filter(isMemoryWrite);
+	const recent = writes.filter((r) => nowMs - r.tsMs <= WINDOW_24H_MS);
 	const actions = recent.map(auditActionOf);
-	const last = latestMs(records.filter((r) => r.action !== null));
+	const last = latestMs(writes);
 	return {
-		commits_24h: recent.filter((r) => r.sessionCommit).length,
+		session_commits_24h: recent.filter((r) => r.sessionCommit).length,
 		promotions_24h: actions.filter((a) => a === "promote_shared").length,
 		rejected_24h: actions.filter((a) => a === "reject_noise").length,
 		last_event_at: isoOrNull(last),
@@ -114,14 +116,12 @@ export function summarizeChangelog(
 	};
 }
 
-/** Degraded: wt land syncs waiting, roles on the local fallback, or fewer than all roles live. */
-function isDegraded(snapshot: OpenVikingObserverSnapshot, rollout: OpenVikingRolloutState, totalRoles: number) {
-	return (
-		rollout.pending_wt_land_syncs.length > 0 ||
-		rollout.fallback_roles.length > 0 ||
-		(snapshot.roles_online_count !== null && snapshot.roles_online_count < totalRoles)
-	);
-}
+/**
+ * Degraded: wt land syncs waiting or roles on the local fallback. The role memory folder count is not liveness
+ * and never feeds this verdict (spec 2677060e, "No role liveness (v1)").
+ */
+const isDegraded = (rollout: OpenVikingRolloutState) =>
+	rollout.pending_wt_land_syncs.length > 0 || rollout.fallback_roles.length > 0;
 
 const HEALTH_BY_SCREEN: Record<OpenVikingScreenState, OpenVikingHealthState> = {
 	live: "healthy",
@@ -160,16 +160,15 @@ export async function buildOverview(
 	]);
 	const metrics = summarizeMetrics(metricsRecords, nowMs);
 	const changelog = summarizeChangelog(changelogRecords, nowMs);
-	const totalRoles = OPENVIKING_ROLES.length;
-	const degraded = isDegraded(snapshot, rollout, totalRoles);
+	const degraded = isDegraded(rollout);
 	const screen_state = screenStateOf(snapshot, degraded, metrics, changelog);
 	const lastInjection = latestMs(metricsRecords.filter((r) => r.injection));
 	const lastCommit = latestMs(changelogRecords.filter((r) => r.sessionCommit));
 
 	const observer: OpenVikingObserverSummary = {
-		mode_label: !snapshot.reachable ? "Offline" : degraded ? "Degraded Local Fallback" : "Active (15/15 Roles Live)",
-		roles_online_count: snapshot.roles_online_count,
-		roles_total_count: totalRoles,
+		mode_label: !snapshot.reachable ? "Offline" : degraded ? "Degraded Local Fallback" : "Active",
+		role_memory_folder_count: snapshot.role_memory_folder_count,
+		roles_total_count: OPENVIKING_ROLES.length,
 		daemon_bind: daemonBind,
 		queue_depth: null,
 		checked_at: new Date(nowMs).toISOString(),
