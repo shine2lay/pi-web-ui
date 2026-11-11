@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Acceptance assertion runner for OpenViking Memory Dashboard (openviking-dashboard).
-# Exit codes: 0 = every assertion below passes (A01-A37), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
+# Exit codes: 0 = every assertion below passes (A01-A39), 1 = one or more assertion violations, 2 = could not run (e.g. prototype missing).
 # Task #269 appends A18-A23 (state honesty, summary/detail parity, drawer integrity, role isolation, focus/keyboard, unmeasured slots); exit 0 now means all 23 pass.
 # Task #275 appends A24-A28 (drawer honours and follows state, neutral unmeasured slots, error card 3 / Tab 3 parity, no role liveness claim); exit 0 now means all 28 pass.
 # A26 reads slot fields and uri_prefix values from server/openviking/types.ts; a missing or unreadable types file is exit 2.
@@ -10,6 +10,8 @@
 # Task #284 appends A32-A37 (each card pill shows its own panel's health, no age without a timestamp field, header mode = observer.mode_label,
 # selection never wears a status colour, loading shows no status, percentages achievable from their counts); exit 0 now means all 37 pass.
 # A32/A34/A36 read pill labels and status icons from design.md §Screen States and mode labels / timestamp fields from types.ts; missing is exit 2.
+# Task #286 appends A38-A39 (observer.last_reachable_at gates no state, pill, mode badge or verdict; null never reads as recent). The prototype
+# takes a last_reachable_at variant as ?state=<screen>_reach-<null|3s|1m|18m|3d> (prototype-only, like ?state=); exit 0 now means all 39 pass.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1403,6 +1405,70 @@ try:
                             a37_bad.append(f"{st}:{where}: {pct}% cannot come from {n} turns")
         a37_bad = list(dict.fromkeys(a37_bad))
         record("A37-FIXTURE-ARITHMETIC", len(a37_bad) == 0 and a37_pairs > 0, f"pairsChecked={a37_pairs}, violations={a37_bad}", "each N% beside an 'M turns' count equals round(100k/M) for some integer k")
+
+        # ---- A38-A39 (task #286): observer.last_reachable_at (spec §4, architecture ruling rm-5bbe0bcc) ----
+        REACH_FIELD = "observer.last_reachable_at"
+        REACH_NULL_TEXT = "No successful contact since the dashboard server started"  # ruling rm-5bbe0bcc condition 1, verbatim
+        REACH_SNAPSHOT_JS = "(field) => {" + JS_HELPERS + r"""
+            const pick = (el) => el ? [el.id || el.getAttribute('data-card-id') || '', el.getAttribute('data-health-state') || '', el.getAttribute('data-icon') || '',
+                                       el.getAttribute('data-stale-badge') || '', el.className || '', norm(el.textContent)] : null;
+            const banner = document.getElementById('state-banner');
+            return {
+                screen: [...document.querySelectorAll('[data-screen-state]')].map(e => e.getAttribute('data-screen-state')),
+                health: [...document.querySelectorAll('[data-health-state]')].map(e => [e.id || e.closest('[data-card-id]')?.getAttribute('data-card-id') || '', e.getAttribute('data-health-state')]),
+                pills: [...document.querySelectorAll('[data-slot="state-badge"], .badge')].filter(e => !e.closest('[data-prototype-only]')).map(pick),
+                mode: pick(document.querySelector('[data-component="status-header"] [data-slot="mode-badge"]')),
+                verdict: banner ? [banner.className, norm(banner.querySelector('strong')?.textContent)] : null,
+                reach: [...document.querySelectorAll(`[data-source-field="${field}"]`)].filter(vis).map(e => norm(e.textContent)),
+            };
+        }"""
+        REACH_SCREENS = ["live", "stale", "empty", "error", "loading"]
+
+        # A38: flipping last_reachable_at (null, 1m, 3d) changes no data-health-state, pill, mode badge, verdict banner or screen state anywhere;
+        # the flip must be observable on the Offline screen (3 distinct last_reachable_at readings), or the check proves nothing
+        a38_bad, a38_flip = [], {}
+        for st in REACH_SCREENS:
+            page.goto(f"{file_url}?state={st}", wait_until="load")
+            base = page.evaluate(REACH_SNAPSHOT_JS, REACH_FIELD)
+            for v in ["null", "1m", "3d"]:
+                page.goto(f"{file_url}?state={st}_reach-{v}", wait_until="load")
+                snap = page.evaluate(REACH_SNAPSHOT_JS, REACH_FIELD)
+                for key in ["screen", "health", "pills", "mode", "verdict"]:
+                    if snap[key] != base[key]:
+                        diff = next(((a, b) for a, b in zip(base[key] or [], snap[key] or []) if a != b), (base[key], snap[key]))
+                        a38_bad.append(f"{st} last_reachable_at={v}: {key} changed {str(diff[0])[:70]} -> {str(diff[1])[:70]}")
+                if st == "error":
+                    a38_flip[v] = " | ".join(snap["reach"])
+        if len({t for t in a38_flip.values() if t}) != 3:
+            a38_bad.append(f"error: last_reachable_at flip not observable, readings {a38_flip} (need 3 distinct visible {REACH_FIELD} texts)")
+        record("A38-LAST-REACHABLE-NOT-HEALTH", len(a38_bad) == 0, f"offlineReadings={a38_flip}, violations={a38_bad[:10]} (total={len(a38_bad)})", f"live/stale/empty/error/loading x last_reachable_at null/1m/3d: identical data-screen-state, data-health-state, pills, mode badge and verdict banner; error shows 3 distinct {REACH_FIELD} readings")
+
+        # A39: null reads as the ruling's sentence, never a duration, 0, dash or 'just now'; short ages read in seconds (never 0m);
+        # the reading shows only on the Offline screen (elsewhere the daemon answered this request and it would repeat checked_at)
+        REACH_EXPECT = {None: "Last answered 18m ago", "null": REACH_NULL_TEXT, "3s": "Last answered 3s ago", "1m": "Last answered 1m ago",
+                        "18m": "Last answered 18m ago", "3d": "Last answered 3d ago"}
+        RECENT_RE = re.compile(r"\d+\s?(?:s|sec|m|min|h|d)\b|(?<![\d.])0(?![\d.])|\u2014|-{1,2}|just now", re.I)
+        ZERO_RE = re.compile(r"(?<![\d.])0\s?(?:s|m|min|h|d)\b|just now|\u2014", re.I)
+        a39_bad = []
+        for st in REACH_SCREENS:
+            for v in REACH_EXPECT:
+                page.goto(f"{file_url}?state={st}" + (f"_reach-{v}" if v else ""), wait_until="load")
+                texts = page.evaluate(REACH_SNAPSHOT_JS, REACH_FIELD)["reach"]
+                tag = f"{st} last_reachable_at={v or 'default'}"
+                if st != "error":
+                    if texts:
+                        a39_bad.append(f"{tag}: shows {texts} (only the Offline screen shows it)")
+                    continue
+                if len(texts) != 1:
+                    a39_bad.append(f"{tag}: {len(texts)} visible {REACH_FIELD} readings, expected 1")
+                for t in texts:
+                    if t != REACH_EXPECT[v]:
+                        a39_bad.append(f"{tag}: reads '{t[:70]}', expected '{REACH_EXPECT[v]}'")
+                    if v == "null" and RECENT_RE.search(t):
+                        a39_bad.append(f"{tag}: null reading '{t[:70]}' contains '{RECENT_RE.search(t).group(0)}' (duration, 0, dash or just now)")
+                    if v != "null" and ZERO_RE.search(t):
+                        a39_bad.append(f"{tag}: reading '{t[:70]}' contains '{ZERO_RE.search(t).group(0)}'")
+        record("A39-NULL-NOT-JUST-NOW", len(a39_bad) == 0, f"violations={a39_bad[:10]} (total={len(a39_bad)})", f"error: null -> exactly '{REACH_NULL_TEXT}' with no duration/0/dash/just now; 3s -> 'Last answered 3s ago' (never 0m); 18m -> 'Last answered 18m ago'; other screens show no {REACH_FIELD} reading")
 
         browser.close()
 except Exception as exc:
