@@ -13,6 +13,7 @@ import { ensureAppToken } from "../../server/app-token.js";
 import { controlPath, startControlServer } from "../../server/control-socket.js";
 import {
 	checkOwnerTelegram,
+	ownerTelegramSender,
 	sendOwnerTelegram,
 	type OwnerTelegramNotice,
 	type OwnerTelegramResult,
@@ -85,6 +86,20 @@ describe("sendOwnerTelegram", () => {
 		});
 		for (const odd of [undefined, null, {}, { details: { ok: true } }, { details: { ok: true, messageIds: [null] } }])
 			expect(await sendOwnerTelegram(toolAnswering(odd), notice, "c")).toMatchObject({ ok: false, maybeSent: true });
+	});
+
+	it("ownerTelegramSender (Ops #813): finds telegram_send at send time, one prefixed call id per message", async () => {
+		const tool = toolAnswering({ details: { ok: true, messageIds: [7] } });
+		let loaded: typeof tool | undefined;
+		const agentToolOf = vi.fn((_plugin: string, _name: string) => loaded);
+		const send = ownerTelegramSender({ agentToolOf }, "queue-alarm");
+		expect(await send(notice)).toMatchObject({ ok: false, error: /isn't loaded here/ });
+		loaded = tool;
+		expect(await send(notice)).toEqual({ ok: true, messageIds: [7] });
+		await send(notice);
+		expect(agentToolOf.mock.calls).toEqual(Array(3).fill(["telegram", "telegram_send"]));
+		const ids = tool.execute.mock.calls.map((c) => (c as unknown[])[0] as string);
+		expect(ids.every((id) => /^queue-alarm-[0-9a-f-]{36}$/.test(id)) && new Set(ids).size === 2).toBe(true);
 	});
 });
 

@@ -49,13 +49,7 @@ import { registerRouteModules } from "./route-modules.js";
 import { initAttachmentStore, readAttachment } from "./attachment-store.js";
 import { isAudioFile, previewKind } from "./text-sniff.js";
 import { startControlServer } from "./control-socket.js";
-import {
-	OWNER_TELEGRAM_PLUGIN,
-	OWNER_TELEGRAM_TOOL,
-	type OwnerTelegramNotice,
-	type OwnerTelegramResult,
-	sendOwnerTelegram,
-} from "./owner-telegram.js";
+import { type OwnerTelegramSender, ownerTelegramSender } from "./owner-telegram.js";
 import { ensureAppToken } from "./app-token.js";
 import type { CiAlertResult, RoleReportReceipt, RoleReportResult, ScriptNoticeResult } from "./role-messages.js";
 import type { BoardChangeResult, BoardPostInput, BoardPostResult } from "./role-board.js";
@@ -1458,7 +1452,7 @@ export interface EngineService {
 	/** session-index (pi engine): bring the saved chat index up to date at startup. */
 	warmSessionIndex?(): void;
 	/** queue-lanes (pi engine): let pi-queue run queued tasks in chats of their own; a stalled lane pages the owner. */
-	installQueueHost?(sendAlarm?: (notice: OwnerTelegramNotice) => Promise<OwnerTelegramResult>): void;
+	installQueueHost?(sendAlarm?: OwnerTelegramSender): void;
 	/** stall-watch (pi engine): after the carry-on, open the queue chats whose tasks run in chats of their own. */
 	reopenQueueHomes?(): Promise<void>;
 	/** role-messages (pi engine): start delivering messages between role chats (after the carry-on). */
@@ -4568,13 +4562,7 @@ try {
 
 // queue-lanes: before any chat loads pi-queue, so it finds the host from the start. queue-resilience (Q-ALARM-2,
 // Architecture #516): a stalled queue lane pages the owner through the Telegram plugin's telegram_send tool.
-service.installQueueHost?.((notice) =>
-	sendOwnerTelegram(
-		pluginMgr.agentToolOf(OWNER_TELEGRAM_PLUGIN, OWNER_TELEGRAM_TOOL),
-		notice,
-		`queue-alarm-${randomUUID()}`,
-	),
-);
+service.installQueueHost?.(ownerTelegramSender(pluginMgr, "queue-alarm"));
 // role-messages: Settings -> Identities -> Role messages follows the store.
 service.onRoleMessagesChanged = () => {
 	pushRoleMessages();
@@ -4704,12 +4692,7 @@ const stopControl = startControlServer({
 	appToken,
 	// owner-telegram (Ops #783): a script's Telegram message to the owner goes through the Telegram plugin's own
 	// telegram_send tool (the bot token stays inside the plugin).
-	ownerTelegram: (notice) =>
-		sendOwnerTelegram(
-			pluginMgr.agentToolOf(OWNER_TELEGRAM_PLUGIN, OWNER_TELEGRAM_TOOL),
-			notice,
-			`control-telegram-${randomUUID()}`,
-		),
+	ownerTelegram: ownerTelegramSender(pluginMgr, "control-telegram"),
 	schedulerWake: (job) =>
 		wakeScheduledChat(job, {
 			service: service as unknown as SchedulerWakeService,

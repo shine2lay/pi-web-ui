@@ -14,6 +14,8 @@
 // it again blindly. Pure apart from the tool call; never logs.
 // ---------------------------------------------------------------------------
 
+import { randomUUID } from "node:crypto";
+
 /** The plugin and tool that send the owner's Telegram messages. */
 export const OWNER_TELEGRAM_PLUGIN = "telegram";
 export const OWNER_TELEGRAM_TOOL = "telegram_send";
@@ -97,6 +99,22 @@ export async function sendOwnerTelegram(
 		error: "the telegram_send tool gave an answer this can't read; it may have been sent",
 		maybeSent: true,
 	};
+}
+
+/** Sends the owner a Telegram message (control socket, queue alarm, Architecture #516 Q-ALARM-2). */
+export type OwnerTelegramSender = (notice: OwnerTelegramNotice) => Promise<OwnerTelegramResult>;
+
+/** A sender through the Telegram plugin's telegram_send tool as loaded at send time; call ids `<callPrefix>-<uuid>`. */
+export function ownerTelegramSender(
+	plugins: { agentToolOf(pluginId: string, name: string): OwnerTelegramTool | undefined },
+	callPrefix: string,
+): OwnerTelegramSender {
+	return (notice) =>
+		sendOwnerTelegram(
+			plugins.agentToolOf(OWNER_TELEGRAM_PLUGIN, OWNER_TELEGRAM_TOOL),
+			notice,
+			`${callPrefix}-${randomUUID()}`,
+		);
 }
 
 function oneLine(s: string): string {
