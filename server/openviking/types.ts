@@ -29,6 +29,14 @@ export const AUDIT_CADENCE_MS = 15 * 60_000;
 export const WINDOW_24H_MS = 24 * 60 * 60 * 1_000;
 
 /**
+ * The store-count walk over `fs/ls` (~83 GETs) is read again at the observer cadence; in between, an overview
+ * answers it from this process's memory (Backend #147). Nothing older than the serve age is answered with: past
+ * it the counts are `null` (unmeasured), never an earlier figure shown as the current one.
+ */
+export const MEMORY_TREE_CADENCE_MS = OVERVIEW_OBSERVER_CADENCE_MS;
+export const MEMORY_TREE_MAX_SERVE_AGE_MS = 4 * OVERVIEW_OBSERVER_CADENCE_MS;
+
+/**
  * The stale reason of a panel that is inside its cadence while a `wt land` sync waits (ruling rm-b5272a3e,
  * spec-states.md §4). Only `observer`, `entries` and `audit` can read it; metrics and changelog stay age-only.
  */

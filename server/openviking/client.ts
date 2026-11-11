@@ -5,6 +5,7 @@
 import { buildAudit } from "./audit.js";
 import { OpenVikingDaemonHttp } from "./daemon-http.js";
 import { buildEntries, readContentTier } from "./entries.js";
+import { OpenVikingMemoryTreeCache } from "./memory-tree-cache.js";
 import { buildOverview } from "./overview.js";
 import { resolveOpenVikingStatePaths, type OpenVikingStatePaths } from "./state-files.js";
 import {
@@ -36,6 +37,8 @@ export class OpenVikingDaemonClient {
 	readonly fetchImpl: typeof fetch;
 	readonly now: () => number;
 	private readonly http: OpenVikingDaemonHttp;
+	/** One held store-count walk per server process, refreshed at the observer cadence (#147). */
+	private readonly tree = new OpenVikingMemoryTreeCache();
 
 	constructor(options: OpenVikingDashboardOptions = {}) {
 		this.daemonUrl = (options.daemonUrl ?? DEFAULT_OPENVIKING_DAEMON_URL).replace(/\/+$/, "");
@@ -79,7 +82,7 @@ export class OpenVikingDaemonClient {
 
 	/** `GET /api/openviking/overview`. */
 	async getOverview(): Promise<OpenVikingOverviewResponse> {
-		return buildOverview(this.http, this.statePaths, this.now(), this.daemonBind);
+		return buildOverview(this.http, this.tree, this.statePaths, this.now(), this.daemonBind);
 	}
 
 	/** `GET /api/openviking/entries`. */

@@ -4,6 +4,7 @@
  */
 import { auditActionOf, buildLiveActivity } from "./activity.js";
 import type { OpenVikingDaemonHttp } from "./daemon-http.js";
+import type { OpenVikingMemoryTreeCache } from "./memory-tree-cache.js";
 import { readObserverSnapshot, type OpenVikingObserverSnapshot } from "./observer.js";
 import {
 	isMemoryWrite,
@@ -25,6 +26,7 @@ import {
 	OVERVIEW_CHANGELOG_CADENCE_MS,
 	OVERVIEW_METRICS_CADENCE_MS,
 	OVERVIEW_OBSERVER_CADENCE_MS,
+	OpenVikingDashboardError,
 	WINDOW_24H_MS,
 	type OpenVikingAuxiliaryState,
 	type OpenVikingChangelogSummary,
@@ -168,14 +170,33 @@ function screenStateOf(
 	return panels.includes("stale") ? "stale" : "live";
 }
 
+/**
+ * The #144 fingerprint, made impossible: an answer that calls `:1933` unreachable while its own
+ * `last_reachable_at` is later than its `checked_at` means `/health` answered ok inside this very request.
+ * Reachability is `/health`'s alone (§4), so the pair cannot be built; if it ever is again, the request fails
+ * loudly instead of showing the page a false `Offline`.
+ */
+function assertUnreachableIsConsistent(observer: OpenVikingObserverSummary): void {
+	if (observer.health_state !== "server-unreachable" || observer.last_reachable_at === null) return;
+	if (Date.parse(observer.last_reachable_at) <= Date.parse(observer.checked_at)) return;
+	throw new OpenVikingDashboardError(
+		`OpenViking overview calls the daemon unreachable, but /health answered ok at ${observer.last_reachable_at}, ` +
+			`after this request's checked_at ${observer.checked_at}`,
+		500,
+		"UNREACHABLE_CLAIM_INCONSISTENT",
+		{ last_reachable_at: observer.last_reachable_at, checked_at: observer.checked_at },
+	);
+}
+
 export async function buildOverview(
 	http: OpenVikingDaemonHttp,
+	tree: OpenVikingMemoryTreeCache,
 	paths: OpenVikingStatePaths,
 	nowMs: number,
 	daemonBind: string,
 ): Promise<OpenVikingOverviewResponse> {
 	const [snapshot, metricsRecords, changelogRecords, rollout, resourceSync, migration, seen] = await Promise.all([
-		readObserverSnapshot(http),
+		readObserverSnapshot(http, tree, nowMs),
 		readMetricsRecords(paths),
 		readChangelogRecords(paths),
 		readRolloutState(paths),
@@ -219,6 +240,7 @@ export async function buildOverview(
 		retrieval_hit_rate_pct: snapshot.retrieval_hit_rate_pct,
 		store_counts: snapshot.store_counts,
 	};
+	assertUnreachableIsConsistent(observer);
 	const pendingSyncs = rollout.pending_wt_land_syncs.length;
 	const auxiliary: OpenVikingAuxiliaryState = {
 		rollout,

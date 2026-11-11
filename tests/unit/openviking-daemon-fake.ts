@@ -16,7 +16,8 @@ export interface DaemonCall {
 
 /**
  * `down` refuses the connection, `hang` never answers (past every deadline), `stall-once` misses only the first
- * /health deadline, `unhealthy` answers /health with `{status: "ok", healthy: false}`.
+ * /health deadline, `unhealthy` answers /health with `{status: "ok", healthy: false}`. `state.hangLsMatching` is
+ * orthogonal: a healthy daemon whose `fs/ls` for URIs containing that string never answers (Backend #147).
  */
 export type DaemonMode = "up" | "down" | "hang" | "stall-once" | "unhealthy";
 
@@ -44,7 +45,7 @@ function lsResult(uri: string): unknown[] {
 
 export function daemon(initial: DaemonMode = "up") {
 	const calls: DaemonCall[] = [];
-	const state = { mode: initial };
+	const state = { mode: initial, hangLsMatching: null as string | null };
 	const fetchImpl: typeof fetch = async (input, init) => {
 		const url = new URL(String(input));
 		calls.push({ url, method: init?.method ?? "GET", headers: { ...(init?.headers as Record<string, string>) } });
@@ -52,6 +53,15 @@ export function daemon(initial: DaemonMode = "up") {
 		if (mode === "down") throw new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:1933");
 		const firstHealth = url.pathname === "/health" && calls.filter((c) => c.url.pathname === "/health").length === 1;
 		if (mode === "hang" || (mode === "stall-once" && firstHealth)) {
+			return new Promise<Response>((_, reject) =>
+				init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)),
+			);
+		}
+		const hungLs =
+			url.pathname === "/api/v1/fs/ls" &&
+			state.hangLsMatching !== null &&
+			(url.searchParams.get("uri") ?? "").includes(state.hangLsMatching);
+		if (hungLs) {
 			return new Promise<Response>((_, reject) =>
 				init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)),
 			);

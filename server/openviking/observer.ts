@@ -2,21 +2,15 @@
  * OpenViking Memory Dashboard — one live snapshot of the `:1933` daemon: reachability, retrieval
  * figures, role memory folders found and the two-layer store counts. When the daemon is down every figure is null
  * (`— (Unreachable)`), never 0. Queue depth is not read at all (R-QUEUE-DEPTH-1, spec G1).
+ *
+ * Reachability is `/health`'s alone (spec-states.md §4, `error` = `/health` fails). Every other read stands on
+ * its own: one that fails or misses its deadline leaves the fields it feeds null (unmeasured) and says nothing
+ * about the server being up (Backend #147, blind verify #144 row 33).
  */
-import {
-	OpenVikingDaemonRequestError,
-	OpenVikingDaemonUnreachableError,
-	type OpenVikingDaemonHttp,
-} from "./daemon-http.js";
-import {
-	listDir,
-	RESOURCES_ROOT_URI,
-	SHARED_MEMORIES_ROOT_URI,
-	walkMemoryTree,
-	walkRoleTrees,
-	type OpenVikingMemoryFile,
-} from "./memory-tree.js";
-import { OPENVIKING_ROLES, type OpenVikingStoreCounts } from "./types.js";
+import type { OpenVikingDaemonHttp } from "./daemon-http.js";
+import type { OpenVikingMemoryFile } from "./memory-tree.js";
+import type { OpenVikingMemoryTree, OpenVikingMemoryTreeCache } from "./memory-tree-cache.js";
+import { OpenVikingDashboardError, type OpenVikingStoreCounts } from "./types.js";
 import { resolveRequestHeaders } from "./uri.js";
 
 export interface OpenVikingObserverSnapshot {
@@ -62,35 +56,21 @@ function componentStatus(system: unknown, name: string): unknown {
 	return components?.[name]?.status;
 }
 
-const UNREACHABLE: OpenVikingObserverSnapshot = {
+/** `/health` failed (R-FAIL-1..3): every `:1933` figure is null, never 0 (§4). */
+const unreachableSnapshot = (): OpenVikingObserverSnapshot => ({
 	reachable: false,
 	retrieval_latency_avg_ms: null,
 	retrieval_hit_rate_pct: null,
 	role_memory_folder_count: null,
-	store_counts: {
-		layer1_shared: {
-			repo_trees_count: null,
-			craft_preference_domains_count: null,
-			entities_count: null,
-			events_count: null,
-			total_count: null,
-		},
-		layer2_personal: {
-			roles_count: null,
-			preferences_count: null,
-			cases_count: null,
-			experiences_count: null,
-			total_count: null,
-		},
-	},
-};
+	store_counts: storeCounts(null),
+});
 
-/** A failed request leaves its figure null; an unreachable daemon still fails the whole snapshot. */
+/** A read the daemon failed — rejected or past its deadline — leaves its own figure null and nothing else. */
 async function orNull<T>(p: Promise<T>): Promise<T | null> {
 	try {
 		return await p;
 	} catch (err) {
-		if (err instanceof OpenVikingDaemonRequestError) return null;
+		if (err instanceof OpenVikingDashboardError) return null;
 		throw err;
 	}
 }
@@ -98,18 +78,21 @@ async function orNull<T>(p: Promise<T>): Promise<T | null> {
 const sumOrNull = (vals: (number | null)[]) =>
 	vals.every((v): v is number => v !== null) ? vals.reduce((a, b) => a + b, 0) : null;
 
-function storeCounts(
-	resourceDirs: number | null,
-	shared: OpenVikingMemoryFile[] | null,
-	roleTrees: Map<string, OpenVikingMemoryFile[] | null>,
-): OpenVikingStoreCounts {
+/** The counts a walked tree gives; an unmeasured piece — or no servable tree at all — is null, never 0. */
+function storeCounts(tree: OpenVikingMemoryTree | null): OpenVikingStoreCounts {
+	const resourceDirs = tree?.resource_dir_count ?? null;
+	const shared = tree?.shared ?? null;
 	const inShared = (category: string) => (shared ? shared.filter((f) => f.category === category).length : null);
 	const craft = inShared("preferences");
 	const entities = inShared("entities");
 	const events = inShared("events");
-	const found = [...roleTrees.values()].filter((t): t is OpenVikingMemoryFile[] => t !== null);
-	const inRoles = (category: string) => found.reduce((n, t) => n + t.filter((f) => f.category === category).length, 0);
-	const preferences = found.filter((t) => t.some((f) => f.relPath === "instructions/preferences.md")).length;
+	const roleTrees = tree?.role_trees ?? null;
+	const found =
+		roleTrees === null ? null : [...roleTrees.values()].filter((t): t is OpenVikingMemoryFile[] => t !== null);
+	const inRoles = (category: string) =>
+		found === null ? null : found.reduce((n, t) => n + t.filter((f) => f.category === category).length, 0);
+	const preferences =
+		found === null ? null : found.filter((t) => t.some((f) => f.relPath === "instructions/preferences.md")).length;
 	const cases = inRoles("cases");
 	const experiences = inRoles("experiences");
 	return {
@@ -121,36 +104,34 @@ function storeCounts(
 			total_count: sumOrNull([resourceDirs, craft, entities, events]),
 		},
 		layer2_personal: {
-			roles_count: found.length,
+			roles_count: found === null ? null : found.length,
 			preferences_count: preferences,
 			cases_count: cases,
 			experiences_count: experiences,
-			total_count: preferences + cases + experiences,
+			total_count: sumOrNull([preferences, cases, experiences]),
 		},
 	};
 }
 
-export async function readObserverSnapshot(http: OpenVikingDaemonHttp): Promise<OpenVikingObserverSnapshot> {
+export async function readObserverSnapshot(
+	http: OpenVikingDaemonHttp,
+	tree: OpenVikingMemoryTreeCache,
+	nowMs: number,
+): Promise<OpenVikingObserverSnapshot> {
 	const headers = resolveRequestHeaders("user");
-	if (!(await http.isHealthy(headers))) return UNREACHABLE;
-	try {
-		const [system, resources, shared, roleTrees] = await Promise.all([
-			orNull(http.result("/api/v1/observer/system", {}, headers)),
-			orNull(listDir(http, RESOURCES_ROOT_URI, headers)),
-			orNull(walkMemoryTree(http, SHARED_MEMORIES_ROOT_URI, headers)),
-			walkRoleTrees(http, OPENVIKING_ROLES),
-		]);
-		const retrieval = parseRetrievalStats(componentStatus(system, "retrieval"));
-		const counts = storeCounts(resources ? resources.filter((i) => i.isDir).length : null, shared, roleTrees);
-		return {
-			reachable: true,
-			retrieval_latency_avg_ms: retrieval.avgLatencyMs,
-			retrieval_hit_rate_pct: retrieval.hitRatePct,
-			role_memory_folder_count: counts.layer2_personal.roles_count,
-			store_counts: counts,
-		};
-	} catch (err) {
-		if (err instanceof OpenVikingDaemonUnreachableError) return UNREACHABLE;
-		throw err;
-	}
+	// The one reachability verdict: `/health`. Nothing below may turn the snapshot unreachable (§4, #147).
+	if (!(await http.isHealthy(headers))) return unreachableSnapshot();
+	const [system, walked] = await Promise.all([
+		orNull(http.result("/api/v1/observer/system", {}, headers)),
+		orNull(tree.read(http, nowMs)),
+	]);
+	const retrieval = parseRetrievalStats(componentStatus(system, "retrieval"));
+	const counts = storeCounts(walked);
+	return {
+		reachable: true,
+		retrieval_latency_avg_ms: retrieval.avgLatencyMs,
+		retrieval_hit_rate_pct: retrieval.hitRatePct,
+		role_memory_folder_count: counts.layer2_personal.roles_count,
+		store_counts: counts,
+	};
 }
