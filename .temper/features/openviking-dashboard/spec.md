@@ -22,10 +22,11 @@ Pinned to `.temper/features/openviking-dashboard/design.md` (`design #274`, `28c
 - **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|null, events }` (`action`: `"commit"|"promote_shared"|"reject_noise"|"sidecar_timeout"`, `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
 
 ### 4. Operational States (Never Conflated)
-- **`live` (`Healthy`):** `/health` `"ok"`, age `<= cadence`, `> 0` events/24h (`status-healthy-fg`, `●` `circle-check`, `solid`, `data-health-state="healthy"`).
-- **`stale` (`Stale`):** `/health` `"ok"`, age `> cadence` (`> 30s`, `> 5m`, `> 15m`) or `pending_wt_land_syncs` non-empty (`status-stale-fg`, `Stale` / `Degraded Local Fallback`, `◐` `clock-stale`, `dashed`, `data-health-state="stale"`, `[data-stale-badge="true"]`).
-- **`empty` (`Zero Activity`):** `/health` `"ok"`, `0` events/24h (`status-zero-fg`, `◌` `circle-empty`, `dotted`, `data-health-state="zero-activity"`, `"0 events in window (server online)"`).
-- **`error` (`Server Unreachable` / `Offline`, `R-FAIL-1..3`):** `/health` fails (`status-unreachable-fg`, `✕` `octagon-x`, `double`, `data-health-state="server-unreachable"`). `:1933` fields return `null` -> `— (Unreachable)` (`data-unreachable-value="true"`), never `0`/`Healthy`; JSONL panels still show counts + staleness.
+Behaviour contract only. Each state's visuals (token, label, glyph + `data-icon`, border) are owned by `.temper/features/openviking-dashboard/design.md` §Screen States; values by `.temper/design/tokens.json`.
+- **`live`:** `/health` `"ok"`, age `<= cadence`, `> 0` events/24h (`data-health-state="healthy"`).
+- **`stale`:** `/health` `"ok"`, age `> cadence` (`> 30s`, `> 5m`, `> 15m`) or `pending_wt_land_syncs` non-empty (`data-health-state="stale"`, `[data-stale-badge="true"]`).
+- **`empty`:** `/health` `"ok"`, `0` events/24h (`data-health-state="zero-activity"`).
+- **`error` (`R-FAIL-1..3`):** `/health` fails (`data-health-state="server-unreachable"`). `:1933` fields return `null` -> `— (Unreachable)` (`data-unreachable-value="true"`), never `0`/`Healthy`; JSONL panels still show counts + staleness.
 - **`loading`:** `[data-screen-state="loading"]` skeletons; never fake `0` counters.
 - **No role liveness (v1):** nothing measures it: no panel, label or header may state or imply a role is live, online or healthy; folder count never feeds `screen_state`, `mode_label` or a degraded verdict.
 
