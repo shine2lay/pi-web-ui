@@ -71,6 +71,8 @@ export function ReaderDrawer({
 					type="button"
 					role="button"
 					className="ovk-drawer-close"
+					// design.md names this control `[data-slot="drawer-close"]`; QA and Design key on it (#259).
+					data-slot="drawer-close"
 					aria-label="Close reader"
 					onClick={onClose}
 					onKeyDown={(event) => {

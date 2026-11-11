@@ -313,7 +313,10 @@ describe("openviking drawer — the deep read of L1 / L2 (#259)", () => {
 		click(opener(memoryRows(container)[rowIndexOf(SHARED_URI)]!));
 		expect(asked.at(-1)).toBe(SHARED_URI);
 
-		click(drawer(container)!.querySelector<HTMLElement>("button.ovk-drawer-close")!);
+		// design.md names the close control `[data-slot="drawer-close"]` — the drawer must carry that hook.
+		const close = drawer(container)!.querySelector<HTMLElement>('[data-slot="drawer-close"]');
+		expect(close).not.toBeNull();
+		click(close!);
 		expect(asked.at(-1)).toBeNull();
 	});
 
