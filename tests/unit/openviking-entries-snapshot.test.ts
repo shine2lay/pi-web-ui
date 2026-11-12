@@ -271,12 +271,12 @@ describe("/entries serves a background snapshot (Backend #155)", () => {
 });
 
 /**
- * Backend #157 (QA #136 F5): the next build starts every cadence and its finish time becomes `panel_updated_at`,
- * so for the whole of every build the held snapshot is past one cadence. While a build runs the list reads stale
- * only past 2 cadences (`30m`); with none running it stays 1 cadence (`15m`), so a failed or hung build still
- * shows `"> 15m"`.
+ * R-SNAPSHOT-STALE-1 (architecture rm-3a23be76, QA #136 F5): the next build starts every cadence and its finish time
+ * becomes `panel_updated_at`, so for the whole of every build the held snapshot is past one cadence. The list reads
+ * `"> 15m"` iff the snapshot is older than 15m AND no build started under 5m ago is in flight: a young rebuild hides
+ * the badge, a failed build (none in flight) or one hung past 5m shows it.
  */
-describe("/entries is not stale while its next build runs (Backend #157)", () => {
+describe("/entries is not stale while a young rebuild runs (R-SNAPSHOT-STALE-1)", () => {
 	const dirs: string[] = [];
 	afterEach(() => {
 		for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -305,11 +305,15 @@ describe("/entries is not stale while its next build runs (Backend #157)", () =>
 		const clock = { t: NOW };
 		const pending: ((next: OpenVikingEntriesBuild | null) => void)[] = [];
 		let builds = 0;
-		const snapshot = new OpenVikingEntriesSnapshot(() => {
-			builds += 1;
-			if (builds === 1) return Promise.resolve({ entries: [ENTRY], unread_units: new Set(), finished_at_ms: NOW });
-			return new Promise((resolve) => pending.push(resolve));
-		});
+		const snapshot = new OpenVikingEntriesSnapshot(
+			() => {
+				builds += 1;
+				if (builds === 1)
+					return Promise.resolve({ entries: [ENTRY], unread_units: new Set(), finished_at_ms: NOW });
+				return new Promise((resolve) => pending.push(resolve));
+			},
+			() => clock.t,
+		);
 		await snapshot.refresh();
 		const http = new OpenVikingDaemonHttp("http://127.0.0.1:1933", 50, daemon("up").fetchImpl, () => clock.t);
 		const paths = resolveOpenVikingStatePaths(dir);
@@ -344,11 +348,25 @@ describe("/entries is not stale while its next build runs (Backend #157)", () =>
 		expect(res.entries).toEqual([ENTRY]);
 	});
 
-	it("(c) the next build still running at 31m -> '> 15m'", async () => {
+	it("(a2) 15m+1s old with a rebuild started 30s ago -> no badge", async () => {
 		const { clock, snapshot, pending, list } = await setup();
-		clock.t = NOW + 15 * MIN + 1;
+		clock.t = NOW + 15 * MIN + 1000 - 30_000;
 		const rebuild = snapshot.refresh();
-		clock.t = NOW + 31 * MIN;
+		clock.t = NOW + 15 * MIN + 1000;
+
+		const res = await list();
+
+		expect(pending).toHaveLength(1);
+		expect(res).toMatchObject({ health_state: "healthy", stale_badge: null });
+		pending.shift()?.(null);
+		await rebuild;
+	});
+
+	it("(c) a rebuild in flight that started 5m+1s ago -> '> 15m'", async () => {
+		const { clock, snapshot, pending, list } = await setup();
+		clock.t = NOW + 15 * MIN;
+		const rebuild = snapshot.refresh();
+		clock.t = NOW + 20 * MIN + 1000;
 
 		const res = await list();
 

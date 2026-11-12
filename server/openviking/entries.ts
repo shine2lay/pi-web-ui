@@ -37,6 +37,7 @@ import { panelHealth, pendingSyncCause } from "./overview.js";
 import { readChangelogRecords, readRolloutState, type OpenVikingStatePaths } from "./state-files.js";
 import {
 	ENTRIES_CADENCE_MS,
+	ENTRIES_REBUILD_GRACE_MS,
 	ISOLATED_AGENT_MEMORY_ABSTRACT,
 	OPENVIKING_ROLES,
 	OpenVikingDashboardError,
@@ -342,10 +343,12 @@ export async function buildEntries(
 		: { entries: [], unreadUnits: unitsInScope(req).length };
 	const builtAtMs = build?.finished_at_ms ?? nowMs;
 	// The snapshot's age is its own: `"> 15m"` once past the cadence (failing builds keep the last good one), else
-	// `"pending sync"` while a `wt land` sync waits (ruling rm-b5272a3e). Each build starts a cadence after the last
-	// one and stamps its finish, so while the next one runs the held one may be two cadences old (#157, QA #136 F5);
-	// a failed build (none running) or one hung past two cadences still reads `"> 15m"`.
-	const staleAfterMs = snapshot.rebuilding() ? 2 * ENTRIES_CADENCE_MS : ENTRIES_CADENCE_MS;
+	// `"pending sync"` while a `wt land` sync waits (ruling rm-b5272a3e). R-SNAPSHOT-STALE-1 (architecture rm-3a23be76,
+	// QA #136 F5): each build stamps its finish, so the held one passes the cadence while the next one runs; a build
+	// in flight that started under 5m ago hides the age badge, a failed build (none running) or one past 5m shows it.
+	const startedAtMs = snapshot.rebuildStartedAtMs();
+	const youngRebuild = startedAtMs !== null && nowMs - startedAtMs < ENTRIES_REBUILD_GRACE_MS;
+	const staleAfterMs = youngRebuild ? Number.POSITIVE_INFINITY : ENTRIES_CADENCE_MS;
 	const res: OpenVikingEntriesResponse = {
 		panel_updated_at: new Date(builtAtMs).toISOString(),
 		...panelHealth(entries.length, builtAtMs, nowMs, staleAfterMs, "> 15m" as const, pendingSync),

@@ -25,6 +25,8 @@ export const OVERVIEW_OBSERVER_CADENCE_MS = 30_000;
 export const OVERVIEW_METRICS_CADENCE_MS = 5 * 60_000;
 export const OVERVIEW_CHANGELOG_CADENCE_MS = 15 * 60_000;
 export const ENTRIES_CADENCE_MS = 15 * 60_000;
+/** R-SNAPSHOT-STALE-1: a rebuild in flight younger than this hides the entries age badge. */
+export const ENTRIES_REBUILD_GRACE_MS = 5 * 60_000;
 export const AUDIT_CADENCE_MS = 15 * 60_000;
 export const WINDOW_24H_MS = 24 * 60 * 60 * 1_000;
 
