@@ -5,7 +5,7 @@
  *
  * Real SDK session, faux model, inline extension: no real chat, no network.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
@@ -237,36 +237,34 @@ describe("prompt-start-race (H-PROMPT-RACE-1)", () => {
 		f.session.dispose();
 	});
 
-	it("backstop: a start that reaches the run step mid-run follows that run and leaves its flag alone", async () => {
+	// Ops #857 (pi 1.5.2 acceptance): pi 1.2.0 starts a run synchronously (_runAgentPrompt became _startRun),
+	// so the backstop around pi's run step has nothing left to catch. The follow-up conversion stays; the backstop goes.
+	it("a start racing a run still becomes a follow-up, and the guard leaves pi's run step alone (no backstop)", async () => {
 		const f = await fixture(true);
 		const run = f.session.prompt(`go ${TOOL_WORD}`);
 		await f.toolStarted;
-		const internal = f.session as unknown as { _runAgentPrompt: (m: unknown) => Promise<void> };
-		await internal._runAgentPrompt([
-			{ role: "user", content: [{ type: "text", text: "direct" }], timestamp: Date.now() },
-		]);
-		expect(f.session.isStreaming).toBe(true);
+		f.pi.sendUserMessage("from an extension");
+		await f.session.prompt("from the UI");
+		await tick();
+		expect(f.session.isStreaming, "the first run keeps its flag").toBe(true);
 		f.release();
 		await run;
 		await settled(f.session);
-		expect(shape(f.session)).toEqual([
+		expect(f.errors).toEqual([]);
+		expect(shape(f.session).filter((s) => s.startsWith("user:"))).toEqual([
 			`user:go ${TOOL_WORD}`,
-			"assistant:toolUse",
-			"toolResult",
-			"assistant",
-			"user:direct",
-			"assistant",
+			"user:from an extension",
+			"user:from the UI",
 		]);
-		f.session.dispose();
-	});
-
-	it("the SDK internals the guard leans on are still there", async () => {
-		const f = await fixture(false);
+		// What the guard still leans on is there; pi's run step is pi's own.
 		const internal = f.session as unknown as Record<string, unknown>;
-		expect(typeof internal._runAgentPrompt).toBe("function");
-		expect(typeof internal._isAgentRunActive).toBe("boolean");
 		expect(typeof internal._isEmittingAgentSettled).toBe("boolean");
+		expect(Array.isArray(internal._pendingNextTurnMessages)).toBe(true);
+		expect(typeof internal._preparePromptAndToolLoadout).toBe("function");
+		expect(Object.hasOwn(f.session, "_startRun"), "the guard must not wrap pi's run step").toBe(false);
 		f.session.dispose();
+		const guard = readFileSync(new URL("../../server/prompt-start-guard.ts", import.meta.url), "utf8");
+		expect(guard, "the backstop around pi 1.0.1's _runAgentPrompt is gone").not.toMatch(/_runAgentPrompt/);
 	});
 
 	it("three queued sends keep their order", async () => {

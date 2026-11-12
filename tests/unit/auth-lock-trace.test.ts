@@ -48,7 +48,9 @@ describe("auth-lock-trace on the installed pi SDK (canary)", () => {
 		const source = readFileSync(join(sdkCore, "auth-storage.js"), "utf8");
 		expect(source).toContain('import lockfile from "proper-lockfile";');
 		expect(source).toContain("release = await lockfile.lock(this.authPath, {");
-		expect(source).toContain("return lockfile.lockSync(path, { realpath: false });");
+		// pi 1.5.2 locks the resolved file (no { realpath: false }, upstream #11655); the trace still sees the
+		// auth.json path it is called with (Ops #857).
+		expect(source).toContain("return lockfile.lockSync(path);");
 	});
 
 	it("is installed at import on the copy the SDK uses, and sees the SDK's own holds", async () => {
