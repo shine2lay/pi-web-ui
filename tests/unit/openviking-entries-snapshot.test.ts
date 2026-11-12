@@ -308,8 +308,7 @@ describe("/entries is not stale while a young rebuild runs (R-SNAPSHOT-STALE-1)"
 		const snapshot = new OpenVikingEntriesSnapshot(
 			() => {
 				builds += 1;
-				if (builds === 1)
-					return Promise.resolve({ entries: [ENTRY], unread_units: new Set(), finished_at_ms: NOW });
+				if (builds === 1) return Promise.resolve({ entries: [ENTRY], unread_units: new Set(), finished_at_ms: NOW });
 				return new Promise((resolve) => pending.push(resolve));
 			},
 			() => clock.t,
