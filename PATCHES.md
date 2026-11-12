@@ -6802,8 +6802,10 @@ app, this wording": rule 13 gets an exception line for the Board and his routing
    Telegram): opened in the background, busy means try again (every 3 s, up to 3 sends, gives up after
    24 h), exactly once (the transcript is checked before each try). Not stored as a role request, asks
    for no reply, ends with the ack line. The rest see it at their next turn.
-3. **What a chat sees** (`agent-service.ts`, inline extension `pi-webui-board`, `before_agent_start`):
-   at the start of a role chat's turn, the posts it hasn't seen are one shown custom message "board"
+3. **What a chat sees** (`agent-service.ts`, inline extension `pi-webui-board`, `before_agent_start`
+   through `server/board-turn-hook.ts` `boardTurnHook`: only turns that start with a prompt; since pi
+   1.2.0 a run an extension starts with a custom message also fires the event, as messageType "custom"
+   with no prompt, and gets no note, Ops #858): at the start of a role chat's turn, the posts it hasn't seen are one shown custom message "board"
    ("[Board] N new posts[, M ended]"), saved in the transcript; the system prompt is left alone (prompt
    cache). Its details carry the chat's "seen up to" mark, so it survives reloads. Orders in every chat
    of the listed roles, in full, ending "When you have acted on it: board ack <id> "<what you did>"";

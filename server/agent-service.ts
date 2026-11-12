@@ -387,6 +387,7 @@ import { ClaimStore, matchClaims, mergeTouchSidecar, readTouchSidecar, removeTou
 import { makeClaimFilesTool, type ClaimFilesHost } from "./claim-files-tool.js";
 import { makeMessageRoleTool, type MessageRoleHost } from "./role-message-tool.js";
 import { makeBoardTool } from "./board-tool.js";
+import { boardTurnHook } from "./board-turn-hook.js";
 import { type DecisionLogHost, makeDecisionLogTool } from "./decision-log-tool.js";
 import { DecisionBatchControl } from "./decision-batches.js";
 import { boundedDecisionModel } from "./decision-bounded-model.js";
@@ -6486,7 +6487,7 @@ export class ClientSession {
 							name: "pi-webui-board",
 							hidden: true,
 							factory: (pi) => {
-								pi.on("before_agent_start", (event) => this.boardTurnNote(ownerId, event.prompt));
+								pi.on("before_agent_start", boardTurnHook(this.boardTurnNote.bind(this, ownerId)));
 							},
 						},
 					],
