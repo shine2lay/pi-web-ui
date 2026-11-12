@@ -5,8 +5,9 @@
  * runs a turn afterwards, so the queue's retry can't give the task a second chat.
  *
  * Real SDK session, faux model, inline extension: no real chat, no network. `send` stands in for
- * ClientSession.prompt: it hands pi the hooks the way promptInLine does (the gate first in
- * preflightResult) and reports the end the way prompt()'s finally does.
+ * ClientSession.prompt: it hands pi the hooks the way promptInLine does (through
+ * promptCatchingDeferred with the hooks' givenUp, the gate first in preflightResult) and reports the
+ * end the way prompt()'s finally does.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +23,7 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { promptCatchingDeferred } from "../../server/prompt-ack.js";
 import { startTaskChat, type TaskStartHooks } from "../../server/task-chat-start.js";
 import { HANG_GUARD_MS } from "./load-independent.js";
 
@@ -104,12 +106,20 @@ async function fixture(slowHookMs = 0): Promise<Fixture> {
 		prompts++;
 		let handedOver = false;
 		try {
-			await session.prompt("kickoff", {
-				preflightResult: (d) => {
-					hooks.gate(d);
-					handedOver = true;
-				},
-			});
+			// Ops #858: the same path promptInLine takes (a put-off text pi replays later goes through
+			// promptCatchingDeferred, which drops it once the start was given up; a refusal there ends it).
+			await promptCatchingDeferred(
+				session,
+				() =>
+					session.prompt("kickoff", {
+						preflightResult: (d) => {
+							hooks.gate(d);
+							handedOver = true;
+						},
+					}),
+				(err) => hooks.ended((err as Error).message),
+				() => hooks.givenUp(),
+			);
 		} catch (err) {
 			hooks.ended((err as Error).message);
 			return;

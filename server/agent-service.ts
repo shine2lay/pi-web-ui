@@ -13321,6 +13321,7 @@ export class ClientSession {
 							...(flow.source ? { source: flow.source, expandPromptTemplates: false } : {}),
 						}),
 					(err) => this.deferredPromptFailed(conv, receipt, flow, err),
+					() => flow.taskStart?.givenUp(),
 				);
 			} else {
 				await promptCatchingDeferred(
@@ -13333,6 +13334,7 @@ export class ClientSession {
 							...(flow.source ? { source: flow.source, expandPromptTemplates: false } : {}),
 						}),
 					(err) => this.deferredPromptFailed(conv, receipt, flow, err),
+					() => flow.taskStart?.givenUp(),
 				);
 			}
 			if (coordinator && receipt.id) {

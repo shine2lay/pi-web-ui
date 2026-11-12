@@ -252,12 +252,15 @@ let warnedNoDeferredList = false;
  * whoever waits for the earlier run. prompt() puts a text off in its first, synchronous step, so an
  * entry that appears in that list while `send` runs is this text's: it gets wrapped, so `onDeferredError`
  * gets anything it throws and pi goes on with its next put-off call.
- * tests/unit/prompt-ack.test.ts checks this against the real pi.
+ * `givenUp` (task-chat-start) is asked when pi gets round to the put-off text: a reason means the
+ * text is no longer wanted, so it never reaches pi and `onDeferredError` gets that reason instead.
+ * tests/unit/prompt-ack.test.ts and tests/unit/task-chat-start.test.ts check this against the real pi.
  */
 export function promptCatchingDeferred(
 	session: object,
 	send: () => Promise<void>,
 	onDeferredError: (err: unknown) => void,
+	givenUp?: () => string | undefined,
 ): Promise<void> {
 	const deferred = (session as { _deferredSettledActions?: unknown })._deferredSettledActions;
 	if (!Array.isArray(deferred)) {
@@ -272,6 +275,11 @@ export function promptCatchingDeferred(
 	if (deferred.length === before + 1) {
 		const putOff = deferred[before] as () => Promise<void>;
 		deferred[before] = async () => {
+			const dropped = givenUp?.();
+			if (dropped !== undefined) {
+				onDeferredError(new Error(dropped));
+				return;
+			}
 			try {
 				await putOff();
 			} catch (err) {

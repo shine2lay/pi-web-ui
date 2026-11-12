@@ -16,9 +16,15 @@
  * - failed: pi refuses it (the reason comes back through `ended`), or the prompt call ends without
  *   a turn (an add-on handled the text, or pi put it off).
  * There is no time limit: every step before the run is bounded by its own owner, and a window
- * shorter than those refused real starts. Once failure is reported the gate is shut: pi calls
- * preflightResult synchronously right before it starts the run, so the gate's throw makes the
- * prompt fail there and no turn can follow a reported failure.
+ * shorter than those refused real starts.
+ *
+ * Once failure is reported, the text must not start a run. A text pi put off (it was telling the
+ * add-ons a run settled) comes back later as pi's own replay: `givenUp` then answers, and the
+ * replay is dropped before pi sees it (promptCatchingDeferred), so no add-on step and no run.
+ * The gate stays as the last line: pi calls preflightResult right before the run, and its throw
+ * stops the run. On SDK 1.0.1 that leaves the chat idle; on 1.2.0+ pi has already marked the
+ * run active there and a throw leaves the chat busy (Ops #857), which is why the replay is
+ * dropped before it reaches pi.
  */
 export type StartDisposition = "started" | "queued" | "handled";
 
@@ -28,6 +34,8 @@ export interface TaskStartHooks {
 	gate(disposition: StartDisposition): void;
 	/** The prompt call is over for this text (prompt()'s finally); `refusal` = why it didn't reach the chat. */
 	ended(refusal?: string): void;
+	/** Why this text must not be handed to pi any more (the start was reported failed), else undefined. */
+	givenUp(): string | undefined;
 }
 
 /** The message a gate throws when pi tries to start a run that was already reported failed. */
@@ -72,6 +80,7 @@ export function startTaskChat(o: {
 				if (disposition !== "handled") start();
 			},
 			ended: (refusal) => over(refusal),
+			givenUp: () => (state === "failed" ? START_GIVEN_UP : undefined),
 		};
 		let sent: Promise<void>;
 		try {
