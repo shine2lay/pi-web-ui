@@ -342,10 +342,13 @@ export async function buildEntries(
 		: { entries: [], unreadUnits: unitsInScope(req).length };
 	const builtAtMs = build?.finished_at_ms ?? nowMs;
 	// The snapshot's age is its own: `"> 15m"` once past the cadence (failing builds keep the last good one), else
-	// `"pending sync"` while a `wt land` sync waits (ruling rm-b5272a3e).
+	// `"pending sync"` while a `wt land` sync waits (ruling rm-b5272a3e). Each build starts a cadence after the last
+	// one and stamps its finish, so while the next one runs the held one may be two cadences old (#157, QA #136 F5);
+	// a failed build (none running) or one hung past two cadences still reads `"> 15m"`.
+	const staleAfterMs = snapshot.rebuilding() ? 2 * ENTRIES_CADENCE_MS : ENTRIES_CADENCE_MS;
 	const res: OpenVikingEntriesResponse = {
 		panel_updated_at: new Date(builtAtMs).toISOString(),
-		...panelHealth(entries.length, builtAtMs, nowMs, ENTRIES_CADENCE_MS, "> 15m" as const, pendingSync),
+		...panelHealth(entries.length, builtAtMs, nowMs, staleAfterMs, "> 15m" as const, pendingSync),
 		entries_partial: unreadUnits > 0,
 		unread_count: unreadUnits,
 		entries,

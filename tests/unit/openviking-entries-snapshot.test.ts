@@ -12,12 +12,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OpenVikingDaemonHttp } from "../../server/openviking/daemon-http.js";
+import { buildEntries } from "../../server/openviking/entries.js";
 import { type OpenVikingEntriesBuild, OpenVikingEntriesSnapshot } from "../../server/openviking/entries-snapshot.js";
 import {
 	createOpenVikingClient,
 	ENTRIES_CADENCE_MS,
 	handleOpenVikingEntriesRequest,
 	OPENVIKING_ROLES,
+	resolveOpenVikingStatePaths,
 } from "../../server/openviking/index.js";
 import { type DaemonCall, daemon, minutesAgo, NOW } from "./openviking-daemon-fake.js";
 
@@ -264,5 +267,94 @@ describe("/entries serves a background snapshot (Backend #155)", () => {
 		snapshot.stop();
 		vi.advanceTimersByTime(3 * ENTRIES_CADENCE_MS);
 		expect(builds).toBe(3);
+	});
+});
+
+/**
+ * Backend #157 (QA #136 F5): the next build starts every cadence and its finish time becomes `panel_updated_at`,
+ * so for the whole of every build the held snapshot is past one cadence. While a build runs the list reads stale
+ * only past 2 cadences (`30m`); with none running it stays 1 cadence (`15m`), so a failed or hung build still
+ * shows `"> 15m"`.
+ */
+describe("/entries is not stale while its next build runs (Backend #157)", () => {
+	const dirs: string[] = [];
+	afterEach(() => {
+		for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+	});
+
+	const ENTRY = {
+		uri: "viking://resources/pi-web-ui/README.md",
+		canonical_uri: "viking://resources/pi-web-ui/README.md",
+		title: "README.md",
+		category: "repository",
+		scope: "resources",
+		layer: "layer1_shared",
+		role: null,
+		layers: ["L0"],
+		l0_abstract: null,
+		l1_overview: null,
+		l2_content: null,
+		updated_at: null,
+		provenance: null,
+	} as const satisfies OpenVikingEntriesBuild["entries"][number];
+
+	/** A fake clock and a fake builder: the first build finishes at once, each later one when the test settles it. */
+	const setup = async () => {
+		const dir = mkdtempSync(join(tmpdir(), "ov-entries-rebuild-"));
+		dirs.push(dir);
+		const clock = { t: NOW };
+		const pending: ((next: OpenVikingEntriesBuild | null) => void)[] = [];
+		let builds = 0;
+		const snapshot = new OpenVikingEntriesSnapshot(() => {
+			builds += 1;
+			if (builds === 1) return Promise.resolve({ entries: [ENTRY], unread_units: new Set(), finished_at_ms: NOW });
+			return new Promise((resolve) => pending.push(resolve));
+		});
+		await snapshot.refresh();
+		const http = new OpenVikingDaemonHttp("http://127.0.0.1:1933", 50, daemon("up").fetchImpl, () => clock.t);
+		const paths = resolveOpenVikingStatePaths(dir);
+		const list = () => buildEntries(http, snapshot, paths, { scope: "all" }, () => clock.t);
+		return { clock, snapshot, pending, list };
+	};
+
+	it("(a) 16m old with the next build running -> healthy, no badge", async () => {
+		const { clock, snapshot, pending, list } = await setup();
+		clock.t = NOW + 16 * MIN;
+		const rebuild = snapshot.refresh();
+
+		const res = await list();
+
+		expect(pending).toHaveLength(1);
+		expect(res).toMatchObject({ panel_updated_at: iso(NOW), health_state: "healthy", stale_badge: null });
+		expect(res.entries).toEqual([ENTRY]);
+		pending.shift()?.(null);
+		await rebuild;
+	});
+
+	it("(b) the build failed and the held one is 16m old -> '> 15m'", async () => {
+		const { clock, snapshot, pending, list } = await setup();
+		clock.t = NOW + 16 * MIN;
+		const rebuild = snapshot.refresh();
+		pending.shift()?.(null);
+		await rebuild;
+
+		const res = await list();
+
+		expect(res).toMatchObject({ panel_updated_at: iso(NOW), health_state: "stale", stale_badge: "> 15m" });
+		expect(res.entries).toEqual([ENTRY]);
+	});
+
+	it("(c) the next build still running at 31m -> '> 15m'", async () => {
+		const { clock, snapshot, pending, list } = await setup();
+		clock.t = NOW + 15 * MIN + 1;
+		const rebuild = snapshot.refresh();
+		clock.t = NOW + 31 * MIN;
+
+		const res = await list();
+
+		expect(pending).toHaveLength(1);
+		expect(res).toMatchObject({ panel_updated_at: iso(NOW), health_state: "stale", stale_badge: "> 15m" });
+		pending.shift()?.(null);
+		await rebuild;
 	});
 });

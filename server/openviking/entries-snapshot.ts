@@ -10,6 +10,7 @@
  * A build that failed keeps the last good snapshot (the #149 rule, as `memory-tree-cache.ts`): a failed build
  * (`null`: `/health` refused at build time) never replaces anything, and a partial build never replaces a
  * complete one — the complete one keeps answering, and its age shows as `"> 15m"` once past the cadence.
+ * While the next build runs, the held one is allowed two cadences (`rebuilding()`, #157, QA #136 F5).
  */
 import type { OpenVikingExplorerEntry } from "./types.js";
 
@@ -54,6 +55,11 @@ export class OpenVikingEntriesSnapshot {
 			});
 		this.inFlight = run;
 		return run;
+	}
+
+	/** A build is running now: the held snapshot may be past one cadence only because the next one is not done. */
+	rebuilding(): boolean {
+		return this.inFlight !== null;
 	}
 
 	/** Server start: one build now, then one per cadence; a tick while a build runs joins it (never overlaps). */
