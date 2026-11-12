@@ -112,6 +112,8 @@ export interface OpenVikingSlotSample {
 
 export interface OpenVikingInjection {
 	mode: OpenVikingInjectionMode | null;
+	/** The line's top-level project slug; `null` when the turn had none (absent, `null` or empty). */
+	project: string | null;
 	l0HitCount: number | null;
 	l1ExpandedCount: number | null;
 	injectedTokensEst: number | null;
@@ -177,6 +179,7 @@ function injectionOf(event: string, o: JsonObject): OpenVikingInjection | null {
 	const modeKey = firstStr(o.mode, o.chat_mode);
 	return {
 		mode: (modeKey ? MODE_ALIASES[modeKey] : undefined) ?? (event === "worker_prefetch_inject" ? "worker" : null),
+		project: str(o.project),
 		l0HitCount: firstNum(o.l0_hit_count, o.l0_hits),
 		l1ExpandedCount: firstNum(o.l1_expanded_count, o.l1_reads),
 		injectedTokensEst: firstNum(o.injected_tokens_est, o.tokens_est),

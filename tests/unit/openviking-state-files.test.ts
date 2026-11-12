@@ -301,10 +301,11 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 		});
 		const o = await overview(dir);
 		expect(o.metrics).toMatchObject({ turns_sampled_24h: 2, avg_injected_tokens: 1174, slot_hit_rate_pct: 100 });
+		// #156: `project: null`, so slots 1-3 have no sample from this turn (slot 3's `miss` included).
 		expect(o.slots.map((s) => [s.slot_id, s.hit_rate_pct, s.avg_tokens])).toEqual([
 			[1, null, null],
 			[2, null, null],
-			[3, 0, 0],
+			[3, null, null],
 			[4, 100, 1048],
 			[5, 0, 0],
 		]);

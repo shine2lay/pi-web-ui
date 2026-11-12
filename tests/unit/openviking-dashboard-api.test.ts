@@ -51,6 +51,7 @@ const MIXED_METRICS = [
 		event: "turn_start",
 		mode: "lead",
 		role: "backend",
+		project: "pi-web-ui",
 		l0_hit_count: 1,
 		injected_tokens_est: 200,
 		slots: [
@@ -232,6 +233,7 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 			event: "worker_prefetch_inject",
 			role: "ops",
 			chat_mode: "worker",
+			project: "pi-web-ui",
 			l0_hit_count: 2,
 			l1_expanded_count: 2,
 			injected_tokens_est: 400,
@@ -259,6 +261,85 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 			mode2_worker_turn1_prefetches_24h: 2,
 			avg_injected_tokens: 400,
 		});
+	});
+
+	it("#156 slots 1-3 look up by project: a turn with no project is not a slot 1-3 sample, whatever state it recorded", async () => {
+		type SlotRow = [state: string, hits: number, tokens: number];
+		const turn = (min: number, project: string | null, rows: SlotRow[]) => ({
+			timestamp: minutesAgo(min),
+			event: "worker_prefetch_inject",
+			role: "qa",
+			session_id: `01a1cb7f-f95a-7723-8686-${String(min).padStart(12, "0")}`,
+			chat_mode: "worker",
+			project,
+			l0_hit_count: 1,
+			injected_tokens_est: 100,
+			slots: rows.map(([state, hits, tokens], i) => ({
+				slot: i + 1,
+				state,
+				l0_hit_count: hits,
+				injected_tokens_est: tokens,
+			})),
+		});
+		// The pre-cutoff defect row as on spark (QA #136 F2): no project, slots 1-2 skipped, slot 3 a "miss".
+		const preCutoff = turn(50, null, [
+			["skipped", 0, 0],
+			["skipped", 0, 0],
+			["miss", 0, 0],
+			["hit", 1, 200],
+			["hit", 1, 100],
+		]);
+		// A later no-project turn that still recorded a state for slots 1-3: excluded all the same.
+		const laterNoProject = turn(10, null, [
+			["miss", 0, 0],
+			["hit", 1, 900],
+			["miss", 0, 0],
+			["miss", 0, 0],
+			["miss", 0, 0],
+		]);
+		const rows = [
+			preCutoff,
+			turn(30, "pi-web-ui", [
+				["hit", 1, 300],
+				["hit", 1, 100],
+				["hit", 1, 200],
+				["hit", 2, 400],
+				["miss", 0, 0],
+			]),
+			turn(20, "rollcall", [
+				["hit", 1, 100],
+				["miss", 0, 0],
+				["hit", 1, 220],
+				["miss", 0, 0],
+				["miss", 0, 0],
+			]),
+			laterNoProject,
+		];
+		const { fetchImpl } = daemon();
+		const o = await client({ stateDir: stateDir({ "metrics.jsonl": rows }), fetchImpl }).getOverview();
+		// Slots 1-3 read the two project turns only; slots 4-5 still read all four turns.
+		expect(o.slots.map((s) => [s.slot_id, s.hit_rate_pct, s.avg_tokens, s.last_sampled_at])).toEqual([
+			[1, 100, 200, minutesAgo(20)],
+			[2, 50, 50, minutesAgo(20)],
+			[3, 100, 210, minutesAgo(20)],
+			[4, 50, 150, minutesAgo(10)],
+			[5, 25, 25, minutesAgo(10)],
+		]);
+		// Totals are not per-slot figures: every turn still counts there.
+		expect(o.metrics.turns_sampled_24h).toBe(4);
+
+		// No-project turns alone: slots 1-3 were never measured (not a 0% rate); slots 4-5 are.
+		const onlyNoProject = await client({
+			stateDir: stateDir({ "metrics.jsonl": [preCutoff, laterNoProject] }),
+			fetchImpl,
+		}).getOverview();
+		expect(onlyNoProject.slots.map((s) => [s.slot_id, s.hit_rate_pct, s.state === "unmeasured-gap"])).toEqual([
+			[1, null, true],
+			[2, null, true],
+			[3, null, true],
+			[4, 50, false],
+			[5, 50, false],
+		]);
 	});
 
 	it(":1933 down or past the 2000 ms deadline: Offline with null daemon figures, never zeros; files still read", async () => {

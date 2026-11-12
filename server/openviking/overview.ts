@@ -99,11 +99,18 @@ export function summarizeMetrics(records: readonly OpenVikingMetricsRecord[], no
 /** A slot `skipped` (no project slug) or `unavailable` (server error) made no lookup, so it is not a miss (#809). */
 const NOT_LOOKED_UP = new Set(["skipped", "unavailable"]);
 
+/**
+ * #156 (QA #136 F2): slots 1-3 look things up by project, so a turn with no project is not a slot 1-3 sample,
+ * whatever state it recorded — the pre-fix lines marked slot 3 a `miss` with no project and diluted its rate.
+ */
+const PROJECT_SLOT_IDS = new Set([1, 2, 3]);
+
 /** G3: per-slot figures exist only once injection lines carry `slots[]`; until then `unmeasured-gap`. */
 export function summarizeSlots(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingSlotSummary[] {
 	const recent = measured(records, nowMs).filter((r) => r.injection?.slots);
 	return OPENVIKING_CONTEXT_SLOTS.map((def) => {
-		const samples = recent.flatMap((r) =>
+		const turns = PROJECT_SLOT_IDS.has(def.slot_id) ? recent.filter((r) => r.injection?.project) : recent;
+		const samples = turns.flatMap((r) =>
 			(r.injection?.slots ?? []).filter((s) => s.slot === def.slot_id).map((s) => ({ ...s, tsMs: r.tsMs })),
 		);
 		const base = { slot_id: def.slot_id, label: def.label, uri_prefix: def.uri_prefix };
