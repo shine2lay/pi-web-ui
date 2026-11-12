@@ -99,6 +99,20 @@ export function guardZeroActivityHeader(
 	return { ...header, presentation: guardPresentation(header.presentation, allowZero) };
 }
 
+/**
+ * Where a key moves the selection in a tablist of `count` tabs (WAI-ARIA APG tabs, automatic
+ * activation): Right/Down and Left/Up step and wrap, Home and End jump; any other key moves nothing.
+ * Both of the page's tablists (the workspace and the reader's L0 / L1 / L2) use this one rule.
+ */
+export function nextTabIndex(key: string, index: number, count: number): number | null {
+	if (count <= 0) return null;
+	if (key === "ArrowRight" || key === "ArrowDown") return (index + 1) % count;
+	if (key === "ArrowLeft" || key === "ArrowUp") return (index + count - 1) % count;
+	if (key === "Home") return 0;
+	if (key === "End") return count - 1;
+	return null;
+}
+
 /** "2m ago" for the header's own timestamps; a missing value never reads as a duration. */
 export function ageValue(
 	iso: string | null,

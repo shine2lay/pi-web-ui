@@ -8,6 +8,8 @@
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import type { OpenVikingDisclosureTier } from "../../../server/openviking/types.js";
+import { holdBackgroundInert } from "./modal-inert.js";
+import { nextTabIndex } from "./view-composition.js";
 import type { OpenVikingDrawerModel } from "./view-model-types.js";
 
 export function ReaderDrawer({
@@ -37,6 +39,30 @@ export function ReaderDrawer({
 		drawerRef.current?.focus();
 	}, [model.rowKey]);
 
+	// While open, the page behind is inert and Escape closes from anywhere (#274, M2). Escape used to be
+	// the dialog's own key handler, so once focus had slipped out (it did, on the third Tab) the drawer
+	// could not be closed from the keyboard at all: `{drawers: 1, focusBackOnRow: false}`.
+	const onCloseRef = useRef(onClose);
+	useEffect(() => {
+		onCloseRef.current = onClose;
+	}, [onClose]);
+	useEffect(() => {
+		const drawer = drawerRef.current;
+		if (!drawer) return;
+		const releaseInert = holdBackgroundInert(drawer);
+		const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
+			if (event.key !== "Escape" || event.defaultPrevented) return;
+			event.preventDefault();
+			onCloseRef.current();
+		};
+		const doc = drawer.ownerDocument;
+		doc.addEventListener("keydown", closeOnEscape);
+		return () => {
+			doc.removeEventListener("keydown", closeOnEscape);
+			releaseInert();
+		};
+	}, []);
+
 	const shown = model.tiers.find((tier) => tier.tier === activeTier) ?? model.tiers[0];
 
 	return (
@@ -50,12 +76,6 @@ export function ReaderDrawer({
 			aria-labelledby={titleId}
 			tabIndex={-1}
 			onKeyDown={(event) => {
-				if (event.key === "Escape") {
-					event.preventDefault();
-					event.stopPropagation();
-					onClose();
-					return;
-				}
 				if (event.key === "Tab") keepTabInside(event, drawerRef.current);
 			}}
 		>
@@ -146,7 +166,7 @@ export function ReaderDrawer({
 	);
 }
 
-const DRAWER_FOCUS_STOPS = 'button, [href], select, textarea, input, [tabindex]:not([tabindex="-1"])';
+const DRAWER_FOCUS_STOPS = "button, [href], select, textarea, input, [tabindex]";
 
 /**
  * Arrow keys, Home and End move between the L0 / L1 / L2 tabs and select the one they land on
@@ -159,17 +179,7 @@ function moveTierFocus(
 	index: number,
 	select: (tier: OpenVikingDisclosureTier) => void,
 ): void {
-	const last = tiers.length - 1;
-	const next =
-		event.key === "ArrowRight" || event.key === "ArrowDown"
-			? (index + 1) % tiers.length
-			: event.key === "ArrowLeft" || event.key === "ArrowUp"
-				? (index + last) % tiers.length
-				: event.key === "Home"
-					? 0
-					: event.key === "End"
-						? last
-						: null;
+	const next = nextTabIndex(event.key, index, tiers.length);
 	const target = next === null ? undefined : tiers[next];
 	if (!target) return;
 	event.preventDefault();
@@ -179,11 +189,17 @@ function moveTierFocus(
 	list?.querySelectorAll<HTMLElement>('[role="tab"]')[next as number]?.focus();
 }
 
-/** Tab and Shift+Tab cycle inside the open drawer, which is what `aria-modal="true"` promises. */
+/**
+ * Tab and Shift+Tab cycle inside the open drawer, which is what `aria-modal="true"` promises.
+ *
+ * The stops are the ones the browser's Tab really visits: enabled and `tabIndex >= 0`. Counting the
+ * two unselected tier tabs (`tabIndex=-1`, roving tabindex) made "L2 Full Content" the last stop, one
+ * Tab never reaches, so the wrap never fired and focus walked out into the app (#274, M2).
+ */
 function keepTabInside(event: KeyboardEvent<HTMLDivElement>, drawer: HTMLDivElement | null): void {
 	if (!drawer) return;
 	const stops = [...drawer.querySelectorAll<HTMLElement>(DRAWER_FOCUS_STOPS)].filter(
-		(stop) => !stop.hasAttribute("disabled"),
+		(stop) => !stop.hasAttribute("disabled") && stop.tabIndex >= 0,
 	);
 	const first = stops[0];
 	const last = stops.at(-1);

@@ -40,7 +40,7 @@
 	border-radius: 8px;
 	border: 1px solid color-mix(in srgb, var(--red) 55%, transparent);
 	background: var(--red-soft);
-	font-size: 12px;
+	font-size: var(--size-body);
 	line-height: 1.5;
 	color: var(--ovk-unreachable-text);
 }
@@ -61,7 +61,7 @@
 	border-radius: 999px;
 	/* Dashed: the shape says "incomplete" on top of the glyph and the words. */
 	border: 1px dashed color-mix(in srgb, var(--amber) 55%, transparent);
-	font-size: 11px;
+	font-size: var(--size-xs);
 	font-weight: 600;
 	color: var(--ovk-stale-text);
 	white-space: nowrap;
@@ -91,7 +91,7 @@
 	background: var(--bg-elev);
 	color: var(--text);
 	font: inherit;
-	font-size: 12px;
+	font-size: var(--size-sm);
 	font-weight: 600;
 	cursor: pointer;
 }

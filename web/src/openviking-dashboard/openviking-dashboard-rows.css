@@ -48,7 +48,7 @@
 
 .ovk-slot-name,
 .ovk-row-title {
-	font-size: 13px;
+	font-size: var(--size-md);
 	font-weight: 600;
 	min-width: 0;
 }
@@ -66,12 +66,12 @@
 	flex-wrap: wrap;
 	gap: 4px 10px;
 	align-items: baseline;
-	font-size: 11px;
+	font-size: var(--size-xs);
 	color: var(--text-faint);
 }
 
 .ovk-row-abstract {
-	font-size: 12px;
+	font-size: var(--size-body);
 	color: var(--text-dim);
 	line-height: 1.45;
 	display: -webkit-box;
@@ -89,7 +89,7 @@
 	border-radius: 999px;
 	border: 1px solid var(--border);
 	background: var(--bg-elev);
-	font-size: 11px;
+	font-size: var(--size-xs);
 	font-weight: 600;
 	color: var(--text-dim);
 }
@@ -117,7 +117,7 @@
 	padding: 6px 10px;
 	border-radius: 8px;
 	background: var(--bg-elev2);
-	font-size: 12px;
+	font-size: var(--size-md);
 	min-width: 0;
 }
 
@@ -158,7 +158,7 @@
 }
 
 .ovk-filter-label {
-	font-size: 11px;
+	font-size: var(--size-xs);
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
 	color: var(--text-faint);
@@ -190,7 +190,7 @@
 	background-repeat: no-repeat;
 	color: var(--text);
 	font: inherit;
-	font-size: 12px;
+	font-size: var(--size-sm);
 }
 
 .ovk-select option {
@@ -224,7 +224,7 @@
 	background: var(--bg-elev2);
 	color: var(--text-dim);
 	font: inherit;
-	font-size: 11px;
+	font-size: var(--size-xs);
 	line-height: 1.4;
 	cursor: help;
 }
@@ -237,11 +237,11 @@
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 14px;
-	height: 14px;
+	width: 16px;
+	height: 16px;
 	border-radius: 50%;
 	border: 1px solid currentColor;
-	font-size: 9px;
+	font-size: var(--size-xs);
 	font-weight: 700;
 }
 
@@ -260,7 +260,7 @@
 	border-radius: 8px;
 	background: var(--tooltip-bg);
 	color: var(--text);
-	font-size: 11px;
+	font-size: var(--size-xs);
 	line-height: 1.5;
 	font-weight: 400;
 	text-align: left;
@@ -305,7 +305,7 @@
 
 .ovk-drawer-title {
 	margin: 0;
-	font-size: 15px;
+	font-size: var(--size-lg);
 	font-weight: 600;
 }
 
@@ -337,7 +337,7 @@
 	border: 1px dashed var(--border);
 	border-radius: 8px;
 	background: var(--bg-elev2);
-	font-size: 12px;
+	font-size: var(--size-body);
 	color: var(--text-dim);
 }
 
@@ -355,7 +355,7 @@
 	background: var(--bg-elev2);
 	color: var(--text-dim);
 	font: inherit;
-	font-size: 12px;
+	font-size: var(--size-md);
 	cursor: pointer;
 }
 
@@ -374,7 +374,7 @@
 	border-radius: 8px;
 	background: var(--bg-elev2);
 	font-family: var(--mono);
-	font-size: 12px;
+	font-size: var(--size-body);
 	line-height: 1.55;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
@@ -394,7 +394,7 @@
 }
 
 .ovk-prov-item dt {
-	font-size: 10px;
+	font-size: var(--size-xs);
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
 	color: var(--text-faint);
@@ -402,7 +402,7 @@
 
 .ovk-prov-item dd {
 	margin: 0;
-	font-size: 12px;
+	font-size: var(--size-sm);
 	overflow-wrap: anywhere;
 }
 

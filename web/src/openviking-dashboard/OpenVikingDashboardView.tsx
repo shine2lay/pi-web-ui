@@ -7,7 +7,7 @@
  * `/api/openviking/{overview,entries,audit}` is `web/src/components/OpenVikingDashboardPage.tsx`.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import type {
 	OpenVikingAuditResponse,
 	OpenVikingEntriesResponse,
@@ -38,6 +38,7 @@ import {
 	formatRowAddress,
 	guardZeroActivityCards,
 	guardZeroActivityHeader,
+	nextTabIndex,
 	parseRowAddress,
 	resolveDrawerSource,
 	type OpenVikingRowAddress,
@@ -91,6 +92,9 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 	const [layerFilter, setLayerFilter] = useState<OpenVikingLayerFilter>("all");
 	const [ownOpenRow, setOwnOpenRow] = useState<string | null>(null);
 	const openerRef = useRef<HTMLElement | null>(null);
+	const tabsId = useId();
+	const tabId = (tab: OpenVikingTabId): string => `${tabsId}-tab-${tab}`;
+	const panelId = (tab: OpenVikingTabId): string => `${tabsId}-panel-${tab}`;
 
 	const activeTab = props.activeTab ?? ownTab;
 	const auditFilter = props.auditFilter ?? ownFilter;
@@ -111,6 +115,15 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 		},
 		[onActiveTabChange],
 	);
+	// Left / Right / Home / End select and focus the neighbouring tab (APG tabs, #274 / #269 F4).
+	const moveTab = (event: KeyboardEvent<HTMLButtonElement>, index: number): void => {
+		const next = nextTabIndex(event.key, index, OPENVIKING_TABS.length);
+		const target = next === null ? undefined : OPENVIKING_TABS[next];
+		if (!target) return;
+		event.preventDefault();
+		selectTab(target.tab);
+		event.currentTarget.ownerDocument.getElementById(tabId(target.tab))?.focus();
+	};
 	const selectFilter = useCallback(
 		(next: OpenVikingAuditFilterSelection) => {
 			setOwnFilter(next);
@@ -125,9 +138,12 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 		},
 		[setOpenRow],
 	);
+	// Focus goes back to the opener only after the reader has unmounted and released the inert page:
+	// focusing it while the page is still inert does nothing in a browser (#274).
+	const refocusOpenerRef = useRef(false);
 	const closeDrawer = useCallback(() => {
+		refocusOpenerRef.current = true;
 		setOpenRow(null);
-		openerRef.current?.focus();
 	}, [setOpenRow]);
 
 	// Tier 1 (status header + cards) is overview's alone: it paints as soon as overview answers.
@@ -163,6 +179,12 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 	useEffect(() => {
 		if (openRow && !drawerSource && !rowCallOut) setOpenRow(null);
 	}, [openRow, drawerSource, rowCallOut, setOpenRow]);
+	const drawerOpen = drawer !== null;
+	useEffect(() => {
+		if (drawerOpen || !refocusOpenerRef.current) return;
+		refocusOpenerRef.current = false;
+		openerRef.current?.focus();
+	}, [drawerOpen]);
 
 	const wantedUri = deepReadUri(drawerSource);
 	const { onDeepReadUriChange } = props;
@@ -174,113 +196,124 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 		// <main>, so the page's own content sits inside a landmark instead of loose in the shell: axe
 		// reported the status header, the tab bar and the drawer's text under `region` and the document
 		// under `landmark-one-main` (#259). The pane is display:none when another tab is shown, so this
-		// is never a second main.
-		<main className="ovk-dashboard" data-component="openviking-dashboard" data-screen-state={renderState}>
-			<StatusHeader
-				model={header}
-				lastInjection={ageValue(
-					overview?.observer.last_injection_at ?? null,
-					nowMs,
-					"observer.last_injection_at",
-					loading,
-				)}
-				lastCommit={ageValue(overview?.observer.last_commit_at ?? null, nowMs, "observer.last_commit_at", loading)}
-			/>
-			<SummaryCards cards={cards} />
-			<div className="ovk-workspace">
-				<div className="ovk-tabbar">
-					<div role="tablist" aria-label="OpenViking workspace" className="ovk-tablist">
-						{OPENVIKING_TABS.map((tab) => (
-							<button
-								key={tab.tab}
-								type="button"
-								role="tab"
-								className="ovk-tab"
-								data-tab={tab.tab}
-								aria-selected={tab.tab === activeTab}
-								onClick={() => selectTab(tab.tab)}
-							>
-								{tab.label}
-							</button>
-						))}
+		// is never a second main. The reader sits beside <main>, not in it, so that while it is open the
+		// whole page behind it can be made inert (#274, M2) without making the dialog inert too.
+		<div className="ovk-root">
+			<main className="ovk-dashboard" data-component="openviking-dashboard" data-screen-state={renderState}>
+				<StatusHeader
+					model={header}
+					lastInjection={ageValue(
+						overview?.observer.last_injection_at ?? null,
+						nowMs,
+						"observer.last_injection_at",
+						loading,
+					)}
+					lastCommit={ageValue(overview?.observer.last_commit_at ?? null, nowMs, "observer.last_commit_at", loading)}
+				/>
+				<SummaryCards cards={cards} />
+				<div className="ovk-workspace">
+					<div className="ovk-tabbar">
+						<div role="tablist" aria-label="OpenViking workspace" className="ovk-tablist">
+							{OPENVIKING_TABS.map((tab, index) => (
+								<button
+									key={tab.tab}
+									id={tabId(tab.tab)}
+									type="button"
+									role="tab"
+									className="ovk-tab"
+									data-tab={tab.tab}
+									aria-selected={tab.tab === activeTab}
+									aria-controls={panelId(tab.tab)}
+									// Roving tabindex: the tablist is one Tab stop, the arrows move inside it.
+									tabIndex={tab.tab === activeTab ? 0 : -1}
+									onClick={() => selectTab(tab.tab)}
+									onKeyDown={(event) => moveTab(event, index)}
+								>
+									{tab.label}
+								</button>
+							))}
+						</div>
+						<p className="ovk-tab-hint">Open any slot, memory or audit row to read its L0 / L1 / L2 in the drawer.</p>
 					</div>
-					<p className="ovk-tab-hint">Open any slot, memory or audit row to read its L0 / L1 / L2 in the drawer.</p>
+					<div className="ovk-panels">
+						<section
+							role="tabpanel"
+							data-tabpanel="mount-map"
+							id={panelId("mount-map")}
+							aria-labelledby={tabId("mount-map")}
+							className={panelClass(activeTab === "mount-map")}
+						>
+							<MountMapPanel
+								slots={slots}
+								activity={overview?.live_activity ?? []}
+								panelAge={formatPanelAge(
+									"Last turn",
+									overview?.metrics.last_recorded_at ?? null,
+									nowMs,
+									OPENVIKING_SOURCE_FIELDS.metricsRecordedAt,
+								)}
+								stale={Boolean(overview?.metrics.stale_badge)}
+								badges={<ContractBadges ids={MOUNT_MAP_BADGES} />}
+								onOpenSlot={(slotId, opener) => openRowFrom({ kind: "slot", slotId }, opener)}
+								openRowKey={openRow?.kind === "slot" ? `slot-${openRow.slotId}` : null}
+							/>
+						</section>
+						<section
+							role="tabpanel"
+							data-tabpanel="namespace-explorer"
+							id={panelId("namespace-explorer")}
+							aria-labelledby={tabId("namespace-explorer")}
+							className={panelClass(activeTab === "namespace-explorer")}
+						>
+							<ExplorerPanel
+								status={explorerStatus}
+								groups={groups}
+								panelAge={formatPanelAge(
+									"Updated",
+									entries?.panel_updated_at ?? null,
+									nowMs,
+									OPENVIKING_SOURCE_FIELDS.entriesPanelUpdatedAt,
+								)}
+								stale={Boolean(entries?.stale_badge)}
+								badges={<ContractBadges ids={EXPLORER_BADGES} />}
+								layerFilter={layerFilter}
+								onLayerFilterChange={setLayerFilter}
+								onOpenRow={(row, opener) => openRowFrom({ kind: "memory", uri: row.uri }, opener)}
+								openRowKey={drawerSource?.kind === "memory" ? drawerSource.rowKey : null}
+							/>
+						</section>
+						<section
+							role="tabpanel"
+							data-tabpanel="commit-audit"
+							id={panelId("commit-audit")}
+							aria-labelledby={tabId("commit-audit")}
+							className={panelClass(activeTab === "commit-audit")}
+						>
+							<AuditPanel
+								status={auditStatus}
+								rows={auditRows}
+								filters={auditFilters}
+								panelAge={formatPanelAge(
+									"Updated",
+									audit?.panel_updated_at ?? null,
+									nowMs,
+									OPENVIKING_SOURCE_FIELDS.auditPanelUpdatedAt,
+								)}
+								stale={Boolean(audit?.stale_badge)}
+								badges={<ContractBadges ids={AUDIT_BADGES} />}
+								onActionChange={(value) =>
+									selectFilter({ ...auditFilter, action: value as OpenVikingAuditFilterSelection["action"] })
+								}
+								onRoleChange={(value) => selectFilter({ ...auditFilter, role: value })}
+								onOpenRow={(rowKey, opener) => openRowFrom({ kind: "audit", rowKey }, opener)}
+								openRowKey={openRow?.kind === "audit" ? openRow.rowKey : null}
+							/>
+						</section>
+					</div>
 				</div>
-				<div className="ovk-panels">
-					<section
-						role="tabpanel"
-						data-tabpanel="mount-map"
-						aria-label="Live Activity"
-						className={panelClass(activeTab === "mount-map")}
-					>
-						<MountMapPanel
-							slots={slots}
-							activity={overview?.live_activity ?? []}
-							panelAge={formatPanelAge(
-								"Last turn",
-								overview?.metrics.last_recorded_at ?? null,
-								nowMs,
-								OPENVIKING_SOURCE_FIELDS.metricsRecordedAt,
-							)}
-							stale={Boolean(overview?.metrics.stale_badge)}
-							badges={<ContractBadges ids={MOUNT_MAP_BADGES} />}
-							onOpenSlot={(slotId, opener) => openRowFrom({ kind: "slot", slotId }, opener)}
-							openRowKey={openRow?.kind === "slot" ? `slot-${openRow.slotId}` : null}
-						/>
-					</section>
-					<section
-						role="tabpanel"
-						data-tabpanel="namespace-explorer"
-						aria-label="Memory Explorer"
-						className={panelClass(activeTab === "namespace-explorer")}
-					>
-						<ExplorerPanel
-							status={explorerStatus}
-							groups={groups}
-							panelAge={formatPanelAge(
-								"Updated",
-								entries?.panel_updated_at ?? null,
-								nowMs,
-								OPENVIKING_SOURCE_FIELDS.entriesPanelUpdatedAt,
-							)}
-							stale={Boolean(entries?.stale_badge)}
-							badges={<ContractBadges ids={EXPLORER_BADGES} />}
-							layerFilter={layerFilter}
-							onLayerFilterChange={setLayerFilter}
-							onOpenRow={(row, opener) => openRowFrom({ kind: "memory", uri: row.uri }, opener)}
-							openRowKey={drawerSource?.kind === "memory" ? drawerSource.rowKey : null}
-						/>
-					</section>
-					<section
-						role="tabpanel"
-						data-tabpanel="commit-audit"
-						aria-label="Guardrail and Changelog Audit"
-						className={panelClass(activeTab === "commit-audit")}
-					>
-						<AuditPanel
-							status={auditStatus}
-							rows={auditRows}
-							filters={auditFilters}
-							panelAge={formatPanelAge(
-								"Updated",
-								audit?.panel_updated_at ?? null,
-								nowMs,
-								OPENVIKING_SOURCE_FIELDS.auditPanelUpdatedAt,
-							)}
-							stale={Boolean(audit?.stale_badge)}
-							badges={<ContractBadges ids={AUDIT_BADGES} />}
-							onActionChange={(value) =>
-								selectFilter({ ...auditFilter, action: value as OpenVikingAuditFilterSelection["action"] })
-							}
-							onRoleChange={(value) => selectFilter({ ...auditFilter, role: value })}
-							onOpenRow={(rowKey, opener) => openRowFrom({ kind: "audit", rowKey }, opener)}
-							openRowKey={openRow?.kind === "audit" ? openRow.rowKey : null}
-						/>
-					</section>
-				</div>
-			</div>
+			</main>
 			{drawer ? <ReaderDrawer model={drawer} onClose={closeDrawer} /> : null}
-		</main>
+		</div>
 	);
 }
 
