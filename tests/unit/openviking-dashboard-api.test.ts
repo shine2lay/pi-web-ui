@@ -198,7 +198,14 @@ describe("OpenViking dashboard API (Backend #132)", () => {
 		expect(o.auxiliary.rollout).toMatchObject({ stage: "phase2-live", updated_at: minutesAgo(30) });
 		expect(o.auxiliary.migration).toMatchObject({ verified_at: "2026-11-11T00:53:35.455Z", total_checked: 3 });
 		expect(o.auxiliary.dedup.seen_count).toBe(3);
-		expect(o.auxiliary.resource_sync.status).toBe("missing");
+		// Spec 2500874d field table: `rollout-state.json` read with an empty `pending_wt_land_syncs` is `0`
+		// pending and `"ok"` — "looked and none pending", not "missing" (Backend #153).
+		expect(o.auxiliary.resource_sync).toEqual({
+			pending_syncs_count: 0,
+			status: "ok",
+			synced_at: null,
+			repos_synced: null,
+		});
 		// R-QUEUE-DEPTH-1 (spec G1, Architecture rm-a374e16b): unavailable in v1, never scraped, never 0.
 		expect(o.observer.queue_depth).toBeNull();
 		expect(calls.some((c) => c.url.pathname === "/api/v1/observer/queue")).toBe(false);

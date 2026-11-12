@@ -16,7 +16,6 @@ export interface OpenVikingStatePaths {
 	readonly metricsJsonlPath: string;
 	readonly changelogJsonlPath: string;
 	readonly rolloutStateJsonPath: string;
-	readonly resourceSyncStateJsonPath: string;
 	readonly migrationVerificationJsonPath: string;
 	readonly seenRoleMessagesJsonPath: string;
 }
@@ -27,7 +26,6 @@ export function resolveOpenVikingStatePaths(stateDir = DEFAULT_OPENVIKING_STATE_
 		metricsJsonlPath: join(stateDir, "metrics.jsonl"),
 		changelogJsonlPath: join(stateDir, "memory-changelog.jsonl"),
 		rolloutStateJsonPath: join(stateDir, "rollout-state.json"),
-		resourceSyncStateJsonPath: join(stateDir, "resource-sync-state.json"),
 		migrationVerificationJsonPath: join(stateDir, "migration-verification.json"),
 		seenRoleMessagesJsonPath: join(stateDir, "seen-role-messages.json"),
 	};
@@ -59,6 +57,18 @@ async function readJsonObject(path: string): Promise<JsonObject | null> {
 	const parsed: unknown = JSON.parse(text);
 	if (!isObject(parsed)) throw new Error(`${path} is not a JSON object`);
 	return parsed;
+}
+
+/**
+ * The same read for a file whose absence is itself an answer: gone, unreadable, bad JSON or not an object all
+ * read as `null`, so a caller can report "nothing was looked at" instead of a figure it never measured.
+ */
+async function readJsonObjectOrNull(path: string): Promise<JsonObject | null> {
+	try {
+		return await readJsonObject(path);
+	} catch {
+		return null;
+	}
 }
 
 interface JsonlLine {
@@ -305,10 +315,21 @@ function pendingSync(v: unknown): OpenVikingPendingWtLandSync[] {
 	];
 }
 
-export async function readRolloutState(paths: OpenVikingStatePaths): Promise<OpenVikingRolloutState> {
-	const o = (await readJsonObject(paths.rolloutStateJsonPath)) ?? {};
+/**
+ * One reading of `rollout-state.json`. `present` is `false` when the file is absent or unreadable: nothing was
+ * looked at, so `pending_wt_land_syncs.length` is not a count of anything (spec field table: `null`, never `0`
+ * — `0` means "looked and none pending").
+ */
+export interface OpenVikingRolloutReading {
+	present: boolean;
+	state: OpenVikingRolloutState;
+}
+
+export async function readRolloutState(paths: OpenVikingStatePaths): Promise<OpenVikingRolloutReading> {
+	const read = await readJsonObjectOrNull(paths.rolloutStateJsonPath);
+	const o = read ?? {};
 	const cutover = str(o.cutover_ts);
-	return {
+	const state: OpenVikingRolloutState = {
 		stage: str(o.stage),
 		notebook_retired: typeof o.notebook_retired === "boolean" ? o.notebook_retired : null,
 		fallback_roles: Array.isArray(o.fallback_roles)
@@ -318,28 +339,7 @@ export async function readRolloutState(paths: OpenVikingStatePaths): Promise<Ope
 		updated_at: str(o.updated_at) ?? cutover,
 		pending_wt_land_syncs: Array.isArray(o.pending_wt_land_syncs) ? o.pending_wt_land_syncs.flatMap(pendingSync) : [],
 	};
-}
-
-// ---- resource-sync-state.json ----
-
-export interface OpenVikingResourceSyncState {
-	present: boolean;
-	synced_at: string | null;
-	repos_synced: number | null;
-	status: string | null;
-}
-
-export async function readResourceSyncState(paths: OpenVikingStatePaths): Promise<OpenVikingResourceSyncState> {
-	const o = await readJsonObject(paths.resourceSyncStateJsonPath);
-	if (o === null) return { present: false, synced_at: null, repos_synced: null, status: null };
-	const repos = o.repos;
-	const repoCount = Array.isArray(repos) ? repos.length : isObject(repos) ? Object.keys(repos).length : null;
-	return {
-		present: true,
-		synced_at: firstStr(o.synced_at, o.syncedAt, o.updated_at),
-		repos_synced: firstNum(o.repos_synced, o.reposSynced) ?? repoCount,
-		status: str(o.status),
-	};
+	return { present: read !== null, state };
 }
 
 // ---- migration-verification.json (G6) ----

@@ -262,9 +262,14 @@ export interface OpenVikingAuxiliaryState {
 		pending_wt_land_syncs: OpenVikingPendingWtLandSync[];
 	};
 	resource_sync: {
+		/** Always `null`: nothing anywhere writes a resource-sync time (spec `2500874d` G5, Backend #153). */
 		synced_at: string | null;
+		/** Always `null`: nothing anywhere writes a synced-repo count (spec `2500874d` G5, Backend #153). */
 		repos_synced: number | null;
-		/** Null while `status` is `"missing"`: no sync state was read, so there is no count (Backend #151). */
+		/**
+		 * `rollout-state.json`'s `pending_wt_land_syncs.length`, or `null` while that file is absent or
+		 * unreadable — never `0` for a file nobody read, because `0` means "looked and none pending".
+		 */
 		pending_syncs_count: number | null;
 		status: "ok" | "pending" | "missing";
 	};
@@ -345,15 +350,21 @@ export interface OpenVikingEntriesResponse {
 	health_state: OpenVikingHealthState;
 	/** The true reason (ruling rm-b5272a3e): a sync-caused stale reads `"pending sync"`, never an age. */
 	stale_badge: "> 15m" | OpenVikingPendingSyncBadge | null;
-	entries: OpenVikingExplorerEntry[];
 	/**
-	 * Backend #151: present only when a listing or a piece did not answer. The rows returned are readable, the
-	 * list may be short, rows may carry a null `l0_abstract` — and the UI must say so rather than present the
-	 * list as the whole store. A listing that read everything carries neither field (today's shape, unchanged).
+	 * Spec `2500874d` §3a, on every answer: `true` exactly when `unread_count > 0` — this list is short, rows
+	 * the daemon would not list are missing from it, and the UI may not present it as the whole store. A row
+	 * that shipped with a null field does not make a list short.
 	 */
-	entries_partial?: true;
-	/** With `entries_partial`: how many reads did not answer (listings that may hide rows, plus null pieces). */
-	unread_count?: number;
+	entries_partial: boolean;
+	/**
+	 * Spec `2500874d` §3a, on every answer: how many read units did not answer. A read unit is one
+	 * all-or-nothing listing read — the `resources` root, the shared memories walk, one per role tree in scope
+	 * (`scope=all` without `role`: `2 + 15 = 17`, every one of them when `/health` is down). A root answered
+	 * `NOT_FOUND` is absent, not unread; a failed read inside a row that shipped is not a unit; `?uri=` is not a
+	 * listing, so it is `0`.
+	 */
+	unread_count: number;
+	entries: OpenVikingExplorerEntry[];
 }
 
 export interface OpenVikingAuditQuery {

@@ -84,7 +84,7 @@ export async function buildAudit(
 	return {
 		panel_updated_at: new Date(nowMs).toISOString(),
 		// Past the cadence the badge is the age; inside it, a waiting `wt land` sync (ruling rm-b5272a3e).
-		...panelHealth(in24h, lastMs, nowMs, AUDIT_CADENCE_MS, "> 15m" as const, pendingSyncCause(rollout)),
+		...panelHealth(in24h, lastMs, nowMs, AUDIT_CADENCE_MS, "> 15m" as const, pendingSyncCause(rollout.state)),
 		events,
 	};
 }

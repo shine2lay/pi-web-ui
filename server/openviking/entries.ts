@@ -7,6 +7,12 @@
  * below that gate a read the daemon will not answer leaves its own piece unread — its row still comes back,
  * with that piece null — and the response declares the shortfall with `entries_partial` + `unread_count`. A
  * missed deadline on one read never reports the store unreachable and never empties the panel (#151, row 39).
+ *
+ * What those two fields count is fixed by spec `2500874d` §3a and nothing else (#153): a **read unit** is one
+ * all-or-nothing listing read — the `resources` root, the shared memories walk, one per role tree in scope —
+ * and `unread_count` is how many of them did not answer, `entries_partial` exactly `unread_count > 0`. Both
+ * are on every answer. A root answered `NOT_FOUND` is absent, not unread; a failed read inside a row that did
+ * ship is not a unit, it nulls that one field.
  */
 import { auditActionOf, guardVerdictOf } from "./activity.js";
 import { mapWithLimit, type OpenVikingDaemonHttp } from "./daemon-http.js";
@@ -15,8 +21,8 @@ import {
 	readDir,
 	readMemoryTree,
 	RESOURCES_ROOT_URI,
+	roleTreeIsUnread,
 	roleTreeReadFiles,
-	roleTreeUnreadListings,
 	SHARED_MEMORIES_ROOT_URI,
 	walkRoleTrees,
 	type OpenVikingDirReading,
@@ -167,31 +173,33 @@ function toEntry(
 }
 
 /**
- * Fills each shared entry's missing L0 from `/api/v1/content/abstract`, and counts the reads the daemon would
- * not answer — rejected or past both deadlines. Their row keeps `l0_abstract: null` (unmeasured): one stalled
- * piece costs its own abstract, never the listing and never the panel (#151).
+ * Fills each shared entry's missing L0 from `/api/v1/content/abstract`. A read the daemon would not answer —
+ * rejected or past both deadlines — leaves that row's `l0_abstract: null` (unmeasured) and nothing else: it is
+ * a read inside a row that shipped, not a read unit, so it never makes the list short (§3a, #153).
  */
-async function fillSharedAbstracts(http: OpenVikingDaemonHttp, entries: OpenVikingExplorerEntry[]): Promise<number> {
+async function fillSharedAbstracts(http: OpenVikingDaemonHttp, entries: OpenVikingExplorerEntry[]): Promise<void> {
 	const missing = entries.filter((e) => e.layer === "layer1_shared" && e.l0_abstract === null);
-	const unread = await mapWithLimit(missing, ABSTRACT_CALLS_IN_FLIGHT, async (e): Promise<number> => {
+	await mapWithLimit(missing, ABSTRACT_CALLS_IN_FLIGHT, async (e): Promise<void> => {
 		try {
 			e.l0_abstract = (await readContentTier(http, e.canonical_uri, "L0")).content;
-			return 0;
 		} catch (err) {
 			if (!(err instanceof OpenVikingDashboardError)) throw err;
-			return 1;
 		}
 	});
-	return unread.reduce((a, b) => a + b, 0);
 }
 
-/** How far one listing got: the rows it produced, and the reads that did not answer. */
+/** How far one listing got: the rows it produced, and the read units that did not answer. */
 interface EntriesReading {
 	entries: OpenVikingExplorerEntry[];
-	/** Listings the daemon would not answer; each may hide rows the list never shows. */
-	unreadListings: number;
-	/** Pieces (L0 abstracts) it would not answer; each leaves its own row's abstract null. */
-	unreadPieces: number;
+	/** Read units (§3a) the daemon would not answer; each may hide rows the list never shows. */
+	unreadUnits: number;
+}
+
+/** Every read unit this scope covers: the `resources` root, the shared memories walk, each role tree (§3a). */
+function unitsInScope(req: EntriesRequest): number {
+	const want = (s: "resources" | "user" | "agent") => req.scope === "all" || req.scope === s;
+	const roles = req.role ? 1 : OPENVIKING_ROLES.length;
+	return (want("resources") ? 1 : 0) + (want("user") ? 1 : 0) + (want("agent") ? roles : 0);
 }
 
 const NO_DIR: OpenVikingDirReading = { items: [], unread: [] };
@@ -219,12 +227,13 @@ async function listEntries(
 		...memories.files.map((f) => fileEntry(f)),
 		...trees.flatMap(([role, tree]) => roleTreeReadFiles(tree).map((f) => fileEntry(f, role))),
 	];
-	return {
-		entries,
-		unreadListings:
-			repos.unread.length + memories.unread.length + trees.reduce((n, [, t]) => n + roleTreeUnreadListings(t), 0),
-		unreadPieces: await fillSharedAbstracts(http, entries),
-	};
+	await fillSharedAbstracts(http, entries);
+	// One unit per source, however many listings inside it failed: a walk is all-or-nothing (§3a).
+	const unreadUnits =
+		(repos.unread.length > 0 ? 1 : 0) +
+		(memories.unread.length > 0 ? 1 : 0) +
+		trees.filter(([, tree]) => roleTreeIsUnread(tree)).length;
+	return { entries, unreadUnits };
 }
 
 /** One URI: metadata from its parent listing, plus the asked-for tiers when it is shared. */
@@ -256,21 +265,18 @@ async function readOneEntry(
 }
 
 /**
- * The one invariant of a short list (#151 (f)): a response built from reads that did not all answer declares
- * both the flag and the count, and a complete one declares neither. A mismatch is a bug in this file — a
+ * The one invariant of a short list (§3a, #151 (f)): every answer carries both fields, the count is the number
+ * of read units that did not answer, and the flag is exactly `count > 0`. A mismatch is a bug in this file — a
  * listing nobody can tell is short — so it fails loudly instead of shipping.
  */
 function assertShortListSaysSo(res: OpenVikingEntriesResponse, unread: number): void {
-	const declared = res.entries_partial === true && res.unread_count === unread;
-	const silent = res.entries_partial === undefined && res.unread_count === undefined;
-	if (unread > 0 ? !declared : !silent) {
-		throw new OpenVikingDashboardError(
-			`OpenViking entries left ${unread} read(s) unread without declaring it.`,
-			500,
-			"INTERNAL",
-			{ unread_count: unread },
-		);
-	}
+	if (res.unread_count === unread && res.entries_partial === unread > 0) return;
+	throw new OpenVikingDashboardError(
+		`OpenViking entries left ${unread} read unit(s) unread without declaring it.`,
+		500,
+		"INTERNAL",
+		{ unread_count: unread, declared: res.unread_count, entries_partial: res.entries_partial },
+	);
 }
 
 export async function buildEntries(
@@ -282,27 +288,36 @@ export async function buildEntries(
 	const req = parseEntriesQuery(query);
 	const panel_updated_at = new Date(nowMs).toISOString();
 	const [provenance, rollout] = await Promise.all([provenanceByUri(paths), readRolloutState(paths)]);
+	const pendingSync = pendingSyncCause(rollout.state);
 	// The listing comes from `:1933` inside this request, so it has no age of its own: inside its `15m` cadence by
 	// construction, stale only while a `wt land` sync waits, and never a false `"> 15m"` (ruling rm-b5272a3e).
-	const health = (rows: number) =>
-		panelHealth(rows, nowMs, nowMs, ENTRIES_CADENCE_MS, "> 15m" as const, pendingSyncCause(rollout));
+	const health = (rows: number) => panelHealth(rows, nowMs, nowMs, ENTRIES_CADENCE_MS, "> 15m" as const, pendingSync);
 	if (req.uri !== undefined) {
+		// `?uri=` is not a listing (§3a): one entry or an HTTP error, so there is no unit and no short list.
 		const entry = await readOneEntry(http, { ...req, uri: req.uri }, provenance);
-		return { panel_updated_at, ...health(1), entries: [entry] };
+		return { panel_updated_at, ...health(1), entries_partial: false, unread_count: 0, entries: [entry] };
 	}
 	// The one reachability verdict: `/health`. Nothing below it may turn the panel unreachable (§4, #147, #151).
 	if (!(await http.isHealthy(rewriteVikingUri(RESOURCES_ROOT_URI).headers))) {
-		return { panel_updated_at, health_state: "server-unreachable", stale_badge: null, entries: [] };
+		// Not one unit of this scope was read, so every one of them is unread (§3a).
+		const unread = unitsInScope(req);
+		return {
+			panel_updated_at,
+			health_state: "server-unreachable",
+			stale_badge: null,
+			entries_partial: unread > 0,
+			unread_count: unread,
+			entries: [],
+		};
 	}
 	const reading = await listEntries(http, req, provenance);
-	const unread = reading.unreadListings + reading.unreadPieces;
 	const res: OpenVikingEntriesResponse = {
 		panel_updated_at,
 		...health(reading.entries.length),
+		entries_partial: reading.unreadUnits > 0,
+		unread_count: reading.unreadUnits,
 		entries: reading.entries,
-		// A listing that read everything carries neither field: the shape every reader already knows (#151 (d)).
-		...(unread > 0 ? { entries_partial: true as const, unread_count: unread } : {}),
 	};
-	assertShortListSaysSo(res, unread);
+	assertShortListSaysSo(res, reading.unreadUnits);
 	return res;
 }

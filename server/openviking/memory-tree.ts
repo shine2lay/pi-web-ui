@@ -93,6 +93,26 @@ async function listOrRecord(
 	}
 }
 
+/**
+ * The root listing of a read unit (spec 2500874d §3a). `NOT_FOUND` is the daemon answering "there is no such
+ * folder": absent, `0` rows, nothing unread. Every other failure is a read that did not happen.
+ */
+async function listRootOrRecord(
+	http: OpenVikingDaemonHttp,
+	uri: string,
+	headers: Record<string, string>,
+	unread: OpenVikingUnreadListing[],
+): Promise<OpenVikingLsItem[]> {
+	try {
+		return await listDir(http, uri, headers);
+	} catch (err) {
+		if (saysFolderIsNotThere(err)) return [];
+		if (!(err instanceof OpenVikingDashboardError)) throw err;
+		unread.push({ uri, error: err });
+		return [];
+	}
+}
+
 /** One listing as far as it answered, for a caller that returns its rows rather than failing (Backend #151). */
 export async function readDir(
 	http: OpenVikingDaemonHttp,
@@ -100,7 +120,7 @@ export async function readDir(
 	headers: Record<string, string>,
 ): Promise<OpenVikingDirReading> {
 	const unread: OpenVikingUnreadListing[] = [];
-	return { items: await listOrRecord(http, uri, headers, unread), unread };
+	return { items: await listRootOrRecord(http, uri, headers, unread), unread };
 }
 
 function toMemoryFile(rootUri: string, item: OpenVikingLsItem): OpenVikingMemoryFile {
@@ -136,7 +156,7 @@ export async function readMemoryTree(
 	headers: Record<string, string>,
 ): Promise<OpenVikingTreeReading> {
 	const unread: OpenVikingUnreadListing[] = [];
-	const rootItems = await listOrRecord(http, rootUri, headers, unread);
+	const rootItems = await listRootOrRecord(http, rootUri, headers, unread);
 	return filesBelow(http, rootUri, headers, rootItems, unread);
 }
 
@@ -179,17 +199,21 @@ export const roleTreeFiles = (tree: OpenVikingRoleTree): OpenVikingMemoryFile[] 
 export const roleTreeReadFiles = (tree: OpenVikingRoleTree): OpenVikingMemoryFile[] =>
 	tree.state === "absent" ? [] : tree.files;
 
-/** How many listings of this reading did not answer; each may hide rows (Backend #151). */
-export const roleTreeUnreadListings = (tree: OpenVikingRoleTree): number =>
-	tree.state === "unmeasured" ? tree.unreadListings : 0;
+/**
+ * Whether this role tree is one unread read unit (spec 2500874d §3a). A tree is all-or-nothing: however many
+ * of its listings did not answer, the unit is one — and a tree the daemon says is not there is absent, not
+ * unread, so it is never one.
+ */
+export const roleTreeIsUnread = (tree: OpenVikingRoleTree): boolean => tree.state === "unmeasured";
 
 /**
  * The daemon's own "there is no such folder" answer: `fs/ls` rejects the role's root listing with `NOT_FOUND`
  * (`:1933` 0.5.4 answers `404 {"error":{"code":"NOT_FOUND"}}`). Every other failure — `503`, `500`, a missed
  * deadline, a refused connection, an unreadable body — is a read that did not happen, not an absence.
  */
-const saysFolderIsNotThere = (err: unknown): boolean =>
-	err instanceof OpenVikingDaemonRequestError && err.upstreamCode === "NOT_FOUND";
+function saysFolderIsNotThere(err: unknown): boolean {
+	return err instanceof OpenVikingDaemonRequestError && err.upstreamCode === "NOT_FOUND";
+}
 
 /** A role's personal tree under canonical `viking://user/<role>/memories`. */
 export async function walkRoleTree(http: OpenVikingDaemonHttp, role: string): Promise<OpenVikingRoleTree> {

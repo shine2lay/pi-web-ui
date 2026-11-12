@@ -28,6 +28,11 @@ export interface DaemonCall {
  * `/api/v1/content/*` reads for URIs containing that string never answer (past both deadlines, as the one
  * stalled L0 abstract of row 39), `state.errorContentMatching` has them answer `503`, and
  * `state.errorLsMatching` has the listings of URIs containing that string answer `503`.
+ *
+ * Backend #153 (spec 2500874d §3a read units) adds `state.absentLsMatching` — any listing whose URI contains
+ * that string answers `404 NOT_FOUND`, so a root the daemon says is not there can be told from one it would
+ * not read — and `state.extraSharedDirs` / `state.extraRoleDirs`, which widen the shared and role trees so one
+ * walk can have more than one sub-listing fail (an all-or-nothing read unit is still one unit).
  */
 export type DaemonMode = "up" | "down" | "hang" | "stall-once" | "unhealthy";
 
@@ -51,12 +56,15 @@ const item = (uri: string, isDir: boolean, abstract = "") => ({
 	abstract,
 });
 
-function lsResult(uri: string): unknown[] {
+function lsResult(uri: string, extraSharedDirs: string[], extraRoleDirs: string[]): unknown[] {
 	if (uri === "viking://resources") return [item("viking://resources/pi-web-ui", true, "pi-web-ui L0 abstract")];
-	if (uri === "viking://user/default/memories") return [item(`${uri}/preferences`, true)];
+	if (uri === "viking://user/default/memories") {
+		return [item(`${uri}/preferences`, true), ...extraSharedDirs.map((d) => item(`${uri}/${d}`, true))];
+	}
 	if (uri === "viking://user/default/memories/preferences") return [item(`${uri}/backend_code.md`, false)];
-	const role = /^viking:\/\/user\/([a-z]+)\/memories(\/cases)?$/.exec(uri);
-	if (role && !role[2]) return [item(`${uri}/cases`, true)];
+	if (uri.startsWith("viking://user/default/memories/")) return [item(`${uri}/note.md`, false)];
+	const role = /^viking:\/\/user\/([a-z]+)\/memories(\/[a-z0-9_-]+)?$/.exec(uri);
+	if (role && !role[2]) return [item(`${uri}/cases`, true), ...extraRoleDirs.map((d) => item(`${uri}/${d}`, true))];
 	if (role) return [item(`${uri}/c1.md`, false)];
 	return [];
 }
@@ -71,6 +79,9 @@ export function daemon(initial: DaemonMode = "up") {
 		errorContentMatching: null as string | null,
 		errorLsRoles: [] as string[],
 		absentRoles: [] as string[],
+		absentLsMatching: null as string | null,
+		extraSharedDirs: [] as string[],
+		extraRoleDirs: [] as string[],
 		failAllLs: false,
 	};
 	const matches = (uri: string, needle: string | null) => needle !== null && uri.includes(needle);
@@ -105,10 +116,10 @@ export function daemon(initial: DaemonMode = "up") {
 			if (role !== null && state.errorLsRoles.includes(role)) {
 				return daemonError(503, "UNAVAILABLE", `daemon busy: ${uri}`);
 			}
-			if (role !== null && state.absentRoles.includes(role)) {
+			if ((role !== null && state.absentRoles.includes(role)) || matches(uri, state.absentLsMatching)) {
 				return daemonError(404, "NOT_FOUND", `Directory not found: ${uri}`);
 			}
-			return ok(lsResult(uri));
+			return ok(lsResult(uri, state.extraSharedDirs, state.extraRoleDirs));
 		}
 		if (url.pathname.startsWith("/api/v1/content/")) {
 			if (matches(askedUri, state.errorContentMatching)) {

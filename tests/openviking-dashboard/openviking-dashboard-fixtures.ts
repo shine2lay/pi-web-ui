@@ -68,8 +68,10 @@ const auxiliary = (pendingSyncs = 0): OpenVikingAuxiliaryState => ({
 		})),
 	},
 	resource_sync: {
-		synced_at: minutesAgo(21),
-		repos_synced: 6,
+		// Spec 2500874d field table (Backend #153): sync state is `rollout-state.json`'s `pending_wt_land_syncs`;
+		// no writer anywhere records a sync time or a synced-repo count, so the API never sends one.
+		synced_at: null,
+		repos_synced: null,
 		pending_syncs_count: pendingSyncs,
 		status: pendingSyncs > 0 ? "pending" : "ok",
 	},
@@ -285,6 +287,9 @@ export function entriesResponse(): OpenVikingEntriesResponse {
 		panel_updated_at: minutesAgo(3),
 		health_state: "healthy",
 		stale_badge: null,
+		// Spec 2500874d §3a: every answer declares its read units. This listing read all of them (Backend #153).
+		entries_partial: false,
+		unread_count: 0,
 		entries: [
 			entry({
 				uri: "viking://resources/rollcall/core/map.md",

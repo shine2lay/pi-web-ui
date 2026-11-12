@@ -192,7 +192,7 @@ const DEFAULT_CHANGELOG: object[] = [
 
 function seedStateFiles(
 	dir: string,
-	opts: { metricsLines?: object[]; changelogLines?: object[]; rollout?: object; resourceSync?: object | null } = {},
+	opts: { metricsLines?: object[]; changelogLines?: object[]; rollout?: object } = {},
 ): void {
 	const metrics = opts.metricsLines ?? DEFAULT_METRICS;
 	const changelog = opts.changelogLines ?? DEFAULT_CHANGELOG;
@@ -206,10 +206,6 @@ function seedStateFiles(
 	);
 	const defaultRollout = { phase: "phase2", notebook_retired: true, fallback_roles: [], pending_wt_land_syncs: [] };
 	writeFileSync(join(dir, "rollout-state.json"), JSON.stringify(opts.rollout ?? defaultRollout));
-	if (opts.resourceSync !== null) {
-		const defaultSync = { synced_at: "2026-11-11T08:26:00.000Z", repos_synced: 6, status: "ok" };
-		writeFileSync(join(dir, "resource-sync-state.json"), JSON.stringify(opts.resourceSync ?? defaultSync));
-	}
 	const mig = {
 		verified_at: "2026-11-11T00:53:35.455Z",
 		status: "PASS",
@@ -321,7 +317,14 @@ describe("OpenViking Memory Dashboard Server API (Task 1 Acceptance Suite)", () 
 		expect(body.observer.store_counts.layer2_personal.experiences_count).toBe(15);
 		expect(body.observer.store_counts.layer2_personal.total_count).toBe(60);
 		expect(body.auxiliary.rollout.stage).toBeNull();
-		expect(body.auxiliary.resource_sync.repos_synced).toBe(6);
+		// Spec 2500874d field table (Backend #153): sync state is `rollout-state.json`'s `pending_wt_land_syncs`
+		// and nothing else — none pending here, and no writer anywhere records a sync time or a repo count.
+		expect(body.auxiliary.resource_sync).toEqual({
+			pending_syncs_count: 0,
+			status: "ok",
+			synced_at: null,
+			repos_synced: null,
+		});
 		expect(body.auxiliary.migration.total_checked).toBe(21);
 		expect(body.auxiliary.dedup.seen_count).toBe(2);
 

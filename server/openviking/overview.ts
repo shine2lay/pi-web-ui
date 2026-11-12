@@ -11,7 +11,6 @@ import {
 	readChangelogRecords,
 	readMetricsRecords,
 	readMigrationState,
-	readResourceSyncState,
 	readRolloutState,
 	readSeenRoleMessages,
 	type OpenVikingChangelogRecord,
@@ -195,15 +194,15 @@ export async function buildOverview(
 	nowMs: number,
 	daemonBind: string,
 ): Promise<OpenVikingOverviewResponse> {
-	const [snapshot, metricsRecords, changelogRecords, rollout, resourceSync, migration, seen] = await Promise.all([
+	const [snapshot, metricsRecords, changelogRecords, rolloutReading, migration, seen] = await Promise.all([
 		readObserverSnapshot(http, tree, nowMs),
 		readMetricsRecords(paths),
 		readChangelogRecords(paths),
 		readRolloutState(paths),
-		readResourceSyncState(paths),
 		readMigrationState(paths),
 		readSeenRoleMessages(paths),
 	]);
+	const rollout = rolloutReading.state;
 	const metrics = summarizeMetrics(metricsRecords, nowMs);
 	const changelog = summarizeChangelog(changelogRecords, nowMs);
 	const degraded = isDegraded(rollout);
@@ -241,16 +240,17 @@ export async function buildOverview(
 		store_counts: snapshot.store_counts,
 	};
 	assertUnreachableIsConsistent(observer);
-	const pendingSyncs = rollout.pending_wt_land_syncs.length;
+	// Sync state is `rollout-state.json`'s `pending_wt_land_syncs` and nothing else (spec field table, G5): the
+	// list's length while the file reads, `null` while it does not — `0` would be a figure for a file nobody read,
+	// and it already means "looked, none pending". Nothing anywhere writes a sync time or a repo count.
+	const pendingSyncs = rolloutReading.present ? rollout.pending_wt_land_syncs.length : null;
 	const auxiliary: OpenVikingAuxiliaryState = {
 		rollout,
 		resource_sync: {
-			synced_at: resourceSync.synced_at,
-			repos_synced: resourceSync.repos_synced,
-			// No sync state file read, no count: `0 pending` under a `missing` status is a figure for something
-			// nobody measured (Backend #151, the same principle as #149's unmeasured roles).
-			pending_syncs_count: resourceSync.present ? pendingSyncs : null,
-			status: !resourceSync.present ? "missing" : pendingSyncs > 0 || resourceSync.status !== "ok" ? "pending" : "ok",
+			synced_at: null,
+			repos_synced: null,
+			pending_syncs_count: pendingSyncs,
+			status: pendingSyncs === null ? "missing" : pendingSyncs > 0 ? "pending" : "ok",
 		},
 		migration: {
 			verified_at: migration?.verified_at ?? null,
