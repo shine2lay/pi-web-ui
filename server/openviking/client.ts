@@ -4,7 +4,8 @@
  */
 import { buildAudit } from "./audit.js";
 import { OpenVikingDaemonHttp } from "./daemon-http.js";
-import { buildEntries, readContentTier } from "./entries.js";
+import { buildEntries, buildEntriesSnapshot, readContentTier } from "./entries.js";
+import { OpenVikingEntriesSnapshot } from "./entries-snapshot.js";
 import { OpenVikingMemoryTreeCache } from "./memory-tree-cache.js";
 import { buildOverview } from "./overview.js";
 import { resolveOpenVikingStatePaths, type OpenVikingStatePaths } from "./state-files.js";
@@ -13,6 +14,7 @@ import {
 	DEFAULT_OPENVIKING_DAEMON_URL,
 	DEFAULT_OPENVIKING_STATE_DIR,
 	DEFAULT_OPENVIKING_TIMEOUT_MS,
+	ENTRIES_CADENCE_MS,
 	type OpenVikingAuditQuery,
 	type OpenVikingAuditResponse,
 	type OpenVikingContentTierResult,
@@ -39,6 +41,10 @@ export class OpenVikingDaemonClient {
 	private readonly http: OpenVikingDaemonHttp;
 	/** One held store-count walk per server process, refreshed at the observer cadence (#147). */
 	private readonly tree = new OpenVikingMemoryTreeCache();
+	/** The Memory list, built in the background at the entries cadence and sliced per request (#155). */
+	private readonly entries = new OpenVikingEntriesSnapshot(() =>
+		buildEntriesSnapshot(this.http, this.statePaths, this.now),
+	);
 
 	constructor(options: OpenVikingDashboardOptions = {}) {
 		this.daemonUrl = (options.daemonUrl ?? DEFAULT_OPENVIKING_DAEMON_URL).replace(/\/+$/, "");
@@ -87,7 +93,17 @@ export class OpenVikingDaemonClient {
 
 	/** `GET /api/openviking/entries`. */
 	async getEntries(query: OpenVikingEntriesQuery = {}): Promise<OpenVikingEntriesResponse> {
-		return buildEntries(this.http, this.statePaths, query, this.now());
+		return buildEntries(this.http, this.entries, this.statePaths, query, this.now);
+	}
+
+	/** Server start: build the Memory list now and once per `cadenceMs`, never two builds at once (#155). */
+	startEntriesSnapshot(cadenceMs: number = ENTRIES_CADENCE_MS): void {
+		this.entries.start(cadenceMs);
+	}
+
+	/** One build of the Memory list, or the one already running; what the cadence timer runs. */
+	async refreshEntries(): Promise<void> {
+		await this.entries.refresh();
 	}
 
 	/** `GET /api/openviking/audit`. */

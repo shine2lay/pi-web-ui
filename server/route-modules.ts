@@ -6,8 +6,18 @@ import type { Express } from "express";
 import { registerFileTransferRoutes } from "./file-transfer-routes.js";
 import { registerOpenVikingRoutes } from "./openviking/index.js";
 
-export function registerRouteModules(app: Express, getCwd: (clientId: string) => string | undefined): void {
+/** `startBackgroundWork`: server start only — the OpenViking Memory list's background build (#155). */
+export interface RouteModuleOptions {
+	startBackgroundWork?: boolean;
+}
+
+export function registerRouteModules(
+	app: Express,
+	getCwd: (clientId: string) => string | undefined,
+	options: RouteModuleOptions = {},
+): void {
 	registerFileTransferRoutes(app, getCwd);
 	// OpenViking Memory Dashboard: read-only GET /api/openviking/{overview,entries,audit} (spec 6ec68dc).
-	registerOpenVikingRoutes(app);
+	const openViking = registerOpenVikingRoutes(app);
+	if (options.startBackgroundWork) openViking.startEntriesSnapshot();
 }

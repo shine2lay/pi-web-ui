@@ -13,6 +13,10 @@
  * and `unread_count` is how many of them did not answer, `entries_partial` exactly `unread_count > 0`. Both
  * are on every answer. A root answered `NOT_FOUND` is absent, not unread; a failed read inside a row that did
  * ship is not a unit, it nulls that one field.
+ *
+ * The listing is never read per request (#155, ruling rm-8e4a1631): `buildEntriesSnapshot` reads every scope and
+ * role in the background (`entries-snapshot.ts`), and a request slices that snapshot by scope and role. Only
+ * `/health` (reachability) and a `?uri=` detail read stay live, per request.
  */
 import { auditActionOf, guardVerdictOf } from "./activity.js";
 import { mapWithLimit, type OpenVikingDaemonHttp } from "./daemon-http.js";
@@ -25,12 +29,10 @@ import {
 	roleTreeReadFiles,
 	SHARED_MEMORIES_ROOT_URI,
 	walkRoleTrees,
-	type OpenVikingDirReading,
 	type OpenVikingLsItem,
 	type OpenVikingMemoryFile,
-	type OpenVikingRoleTree,
-	type OpenVikingTreeReading,
 } from "./memory-tree.js";
+import type { OpenVikingEntriesBuild, OpenVikingEntriesSnapshot } from "./entries-snapshot.js";
 import { panelHealth, pendingSyncCause } from "./overview.js";
 import { readChangelogRecords, readRolloutState, type OpenVikingStatePaths } from "./state-files.js";
 import {
@@ -188,36 +190,29 @@ async function fillSharedAbstracts(http: OpenVikingDaemonHttp, entries: OpenViki
 	});
 }
 
-/** How far one listing got: the rows it produced, and the read units that did not answer. */
-interface EntriesReading {
-	entries: OpenVikingExplorerEntry[];
-	/** Read units (§3a) the daemon would not answer; each may hide rows the list never shows. */
-	unreadUnits: number;
-}
+const wants = (req: EntriesRequest, s: "resources" | "user" | "agent") => req.scope === "all" || req.scope === s;
+const agentUnit = (role: string) => `agent:${role}`;
 
 /** Every read unit this scope covers: the `resources` root, the shared memories walk, each role tree (§3a). */
-function unitsInScope(req: EntriesRequest): number {
-	const want = (s: "resources" | "user" | "agent") => req.scope === "all" || req.scope === s;
-	const roles = req.role ? 1 : OPENVIKING_ROLES.length;
-	return (want("resources") ? 1 : 0) + (want("user") ? 1 : 0) + (want("agent") ? roles : 0);
+function unitsInScope(req: EntriesRequest): string[] {
+	const roles = req.role ? [req.role] : OPENVIKING_ROLES;
+	return [
+		...(wants(req, "resources") ? ["resources"] : []),
+		...(wants(req, "user") ? ["user"] : []),
+		...(wants(req, "agent") ? roles.map(agentUnit) : []),
+	];
 }
 
-const NO_DIR: OpenVikingDirReading = { items: [], unread: [] };
-const NO_TREE: OpenVikingTreeReading = { files: [], unread: [] };
-
-async function listEntries(
+/** One listing of every scope and role: the rows it produced, and the read units (§3a) that did not answer. */
+async function listAllEntries(
 	http: OpenVikingDaemonHttp,
-	req: EntriesRequest,
 	provenance: Map<string, OpenVikingEntryProvenance>,
-): Promise<EntriesReading> {
-	const want = (s: "resources" | "user" | "agent") => req.scope === "all" || req.scope === s;
+): Promise<{ entries: OpenVikingExplorerEntry[]; unread: Set<string> }> {
 	const shared = rewriteVikingUri(RESOURCES_ROOT_URI).headers;
 	const [repos, memories, roleTrees] = await Promise.all([
-		want("resources") ? readDir(http, RESOURCES_ROOT_URI, shared) : NO_DIR,
-		want("user") ? readMemoryTree(http, SHARED_MEMORIES_ROOT_URI, shared) : NO_TREE,
-		want("agent")
-			? walkRoleTrees(http, req.role ? [req.role] : OPENVIKING_ROLES)
-			: new Map<string, OpenVikingRoleTree>(),
+		readDir(http, RESOURCES_ROOT_URI, shared),
+		readMemoryTree(http, SHARED_MEMORIES_ROOT_URI, shared),
+		walkRoleTrees(http, OPENVIKING_ROLES),
 	]);
 	const fileEntry = (f: OpenVikingMemoryFile, role?: string) =>
 		toEntry(f, f.category, rewriteVikingUri(f.uri, role), provenance);
@@ -229,10 +224,34 @@ async function listEntries(
 	];
 	await fillSharedAbstracts(http, entries);
 	// One unit per source, however many listings inside it failed: a walk is all-or-nothing (§3a).
-	const unreadUnits =
-		(repos.unread.length > 0 ? 1 : 0) +
-		(memories.unread.length > 0 ? 1 : 0) +
-		trees.filter(([, tree]) => roleTreeIsUnread(tree)).length;
+	const unread = new Set([
+		...(repos.unread.length > 0 ? ["resources"] : []),
+		...(memories.unread.length > 0 ? ["user"] : []),
+		...trees.filter(([, tree]) => roleTreeIsUnread(tree)).map(([role]) => agentUnit(role)),
+	]);
+	return { entries, unread };
+}
+
+/**
+ * One background build of the whole listing (#155). `null` — a failed build, which keeps the last snapshot —
+ * when `/health` refuses at build time; otherwise every row that read, and the units that did not (§3a).
+ */
+export async function buildEntriesSnapshot(
+	http: OpenVikingDaemonHttp,
+	paths: OpenVikingStatePaths,
+	now: () => number,
+): Promise<OpenVikingEntriesBuild | null> {
+	if (!(await http.isHealthy(rewriteVikingUri(RESOURCES_ROOT_URI).headers))) return null;
+	const { entries, unread } = await listAllEntries(http, await provenanceByUri(paths));
+	return { entries, unread_units: unread, finished_at_ms: now() };
+}
+
+/** A request's scope and role cut out of the snapshot: its rows, and the unread units of that scope only. */
+function sliceSnapshot(build: OpenVikingEntriesBuild, req: EntriesRequest) {
+	const entries = build.entries.filter(
+		(e) => wants(req, e.scope) && (e.scope !== "agent" || !req.role || e.role === req.role),
+	);
+	const unreadUnits = unitsInScope(req).filter((unit) => build.unread_units.has(unit)).length;
 	return { entries, unreadUnits };
 }
 
@@ -281,28 +300,33 @@ function assertShortListSaysSo(res: OpenVikingEntriesResponse, unread: number): 
 
 export async function buildEntries(
 	http: OpenVikingDaemonHttp,
+	snapshot: OpenVikingEntriesSnapshot,
 	paths: OpenVikingStatePaths,
 	query: OpenVikingEntriesQuery,
-	nowMs: number,
+	now: () => number,
 ): Promise<OpenVikingEntriesResponse> {
 	const req = parseEntriesQuery(query);
-	const panel_updated_at = new Date(nowMs).toISOString();
-	const [provenance, rollout] = await Promise.all([provenanceByUri(paths), readRolloutState(paths)]);
-	const pendingSync = pendingSyncCause(rollout.state);
-	// The listing comes from `:1933` inside this request, so it has no age of its own: inside its `15m` cadence by
-	// construction, stale only while a `wt land` sync waits, and never a false `"> 15m"` (ruling rm-b5272a3e).
-	const health = (rows: number) => panelHealth(rows, nowMs, nowMs, ENTRIES_CADENCE_MS, "> 15m" as const, pendingSync);
+	const pendingSync = pendingSyncCause((await readRolloutState(paths)).state);
 	if (req.uri !== undefined) {
-		// `?uri=` is not a listing (§3a): one entry or an HTTP error, so there is no unit and no short list.
-		const entry = await readOneEntry(http, { ...req, uri: req.uri }, provenance);
-		return { panel_updated_at, ...health(1), entries_partial: false, unread_count: 0, entries: [entry] };
+		// `?uri=` is not a listing (§3a): one live entry or an HTTP error, so there is no unit and no short list.
+		const entry = await readOneEntry(http, { ...req, uri: req.uri }, await provenanceByUri(paths));
+		const nowMs = now();
+		const health = panelHealth(1, nowMs, nowMs, ENTRIES_CADENCE_MS, "> 15m" as const, pendingSync);
+		return {
+			panel_updated_at: new Date(nowMs).toISOString(),
+			...health,
+			entries_partial: false,
+			unread_count: 0,
+			entries: [entry],
+		};
 	}
-	// The one reachability verdict: `/health`. Nothing below it may turn the panel unreachable (§4, #147, #151).
+	// The one reachability verdict: `/health`, live on every request. Nothing below it may turn the panel
+	// unreachable (§4, #147, #151), and no snapshot, however fresh, overrides it.
 	if (!(await http.isHealthy(rewriteVikingUri(RESOURCES_ROOT_URI).headers))) {
 		// Not one unit of this scope was read, so every one of them is unread (§3a).
-		const unread = unitsInScope(req);
+		const unread = unitsInScope(req).length;
 		return {
-			panel_updated_at,
+			panel_updated_at: new Date(now()).toISOString(),
 			health_state: "server-unreachable",
 			stale_badge: null,
 			entries_partial: unread > 0,
@@ -310,14 +334,22 @@ export async function buildEntries(
 			entries: [],
 		};
 	}
-	const reading = await listEntries(http, req, provenance);
+	const build = await snapshot.read();
+	const nowMs = now();
+	// No build has ever succeeded (each found `/health` refused): nothing of this scope has been read (§3a).
+	const { entries, unreadUnits } = build
+		? sliceSnapshot(build, req)
+		: { entries: [], unreadUnits: unitsInScope(req).length };
+	const builtAtMs = build?.finished_at_ms ?? nowMs;
+	// The snapshot's age is its own: `"> 15m"` once past the cadence (failing builds keep the last good one), else
+	// `"pending sync"` while a `wt land` sync waits (ruling rm-b5272a3e).
 	const res: OpenVikingEntriesResponse = {
-		panel_updated_at,
-		...health(reading.entries.length),
-		entries_partial: reading.unreadUnits > 0,
-		unread_count: reading.unreadUnits,
-		entries: reading.entries,
+		panel_updated_at: new Date(builtAtMs).toISOString(),
+		...panelHealth(entries.length, builtAtMs, nowMs, ENTRIES_CADENCE_MS, "> 15m" as const, pendingSync),
+		entries_partial: unreadUnits > 0,
+		unread_count: unreadUnits,
+		entries,
 	};
-	assertShortListSaysSo(res, reading.unreadUnits);
+	assertShortListSaysSo(res, unreadUnits);
 	return res;
 }

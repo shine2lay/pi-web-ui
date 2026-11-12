@@ -469,7 +469,7 @@ const SERVICE_INFO = toServiceInfo(ORIGIN);
 /** PI_WEB_TABS: the tabs this instance offers. null = all of them, as before. */
 const TABS = parseTabs();
 
-registerRouteModules(app, (clientId) => service.get(clientId)?.cwd);
+registerRouteModules(app, (clientId) => service.get(clientId)?.cwd, { startBackgroundWork: true });
 
 app.get("/api/health", (_req, res) => {
 	// 审查 #352：该端点对未鉴权开放（监控探针需要），故只保留版本/引擎与 SDK
