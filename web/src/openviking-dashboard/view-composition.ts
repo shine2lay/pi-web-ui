@@ -14,7 +14,7 @@ import type {
 } from "../../../server/openviking/types.js";
 import { entryIsPersonal, type OpenVikingTierReadState } from "./drawer-view-model.js";
 import { formatAge, loadingValue, textValue } from "./format.js";
-import { buildStatePresentation } from "./state-presentation.js";
+import { buildStatePresentation, findSlot } from "./state-presentation.js";
 import { OPENVIKING_UNREACHABLE_TEXT, OPENVIKING_ZERO_ACTIVITY_TEXT } from "./text.js";
 import type {
 	OpenVikingContentError,
@@ -145,7 +145,7 @@ export function resolveDrawerSource(
 		const event = audit?.events.find((candidate) => candidate.id === address.rowKey);
 		return event ? { kind: "audit", rowKey: address.rowKey, event } : null;
 	}
-	const slot = overview?.slots.find((candidate) => candidate.slot_id === address.slotId);
+	const slot = findSlot(overview, address.slotId);
 	return slot ? { kind: "slot", rowKey: `slot-${address.slotId}`, slot } : null;
 }
 

@@ -8,7 +8,7 @@
 
 import type { OpenVikingOverviewResponse } from "../../../server/openviking/types.js";
 import { formatFigure, formatPanelAge, formatPercent, loadingValue, textValue } from "./format.js";
-import { buildStatePresentation } from "./state-presentation.js";
+import { buildStatePresentation, everySlotUnmeasured } from "./state-presentation.js";
 import {
 	guardRejectionsText,
 	OPENVIKING_CARD_TEXT,
@@ -105,9 +105,11 @@ function injectionCard(
 		formatFigure(metrics.avg_injected_tokens, F.avgInjectedTokens, { suffix: "avg tok" }),
 		formatFigure(metrics.turns_sampled_24h, F.turnsSampled, { suffix: "turns sampled (24h)" }),
 		formatFigure(metrics.mode1_lead_l0_injections_24h, F.mode1Injections, { suffix: "lead L0 injections" }),
-		// spec G3: nothing samples a single slot yet, so the per-slot row stays neutral.
-		formatFigure(null, F.slotHitRatePerSlot, { notMeasured: true, notMeasuredSuffix: "per slot" }),
 	];
+	// spec G3: said only while no slot is sampled; once any slot has figures, its row carries them (QA #136 F3).
+	if (everySlotUnmeasured(overview)) {
+		fields.push(formatFigure(null, F.slotHitRatePerSlot, { notMeasured: true, notMeasuredSuffix: "per slot" }));
+	}
 	return {
 		cardId: "context-injection",
 		title: OPENVIKING_CARD_TEXT["context-injection"].title,

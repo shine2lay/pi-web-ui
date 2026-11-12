@@ -6,7 +6,12 @@
 import type { OpenVikingOverviewResponse } from "../../../server/openviking/types.js";
 import { OPENVIKING_CONTEXT_SLOTS } from "../../../server/openviking/types.js";
 import { formatFigure, formatLastAnswered, formatPanelAge, formatPercent, loadingValue, textValue } from "./format.js";
-import { buildNotMeasuredPresentation, buildStatePresentation } from "./state-presentation.js";
+import {
+	buildNotMeasuredPresentation,
+	buildStatePresentation,
+	findSlot,
+	measuredSlotState,
+} from "./state-presentation.js";
 import { OPENVIKING_SOURCE_FIELDS, roleMemoryFolderCountText } from "./text.js";
 import type { OpenVikingRenderState, OpenVikingSlotRowModel, OpenVikingStatusHeaderModel } from "./view-model-types.js";
 
@@ -31,6 +36,7 @@ export function buildStatusHeader(
 			modeLabel: null,
 			roleMemoryFolders: loadingValue(fields.folderCount),
 			daemonBind: loadingValue(fields.daemonBind),
+			daemonCheck: "checking",
 			checkedAge: loadingValue(fields.checkedAt),
 			lastAnswered: null,
 		};
@@ -48,6 +54,7 @@ export function buildStatusHeader(
 		modeLabel: observer.mode_label,
 		roleMemoryFolders: folders,
 		daemonBind: textValue(observer.daemon_bind, fields.daemonBind),
+		daemonCheck: observer.health_state === "server-unreachable" ? "no-answer" : "answers",
 		checkedAge:
 			formatPanelAge("Checked", observer.checked_at, nowMs, fields.checkedAt) ?? loadingValue(fields.checkedAt),
 		// Best-effort context for an outage only; it gates nothing and is absent in every other state.
@@ -69,9 +76,9 @@ export function buildSlotRows(
 	const loading = overview === null || renderState === "loading";
 
 	return OPENVIKING_CONTEXT_SLOTS.map((definition): OpenVikingSlotRowModel => {
-		const found = overview?.slots.find((candidate) => candidate.slot_id === definition.slot_id) ?? null;
+		const found = findSlot(overview, definition.slot_id);
 		// A slot nothing samples yet has no figures at all: it is read as unmeasured, never as a zero.
-		const measuredState = found === null || found.state === "unmeasured-gap" ? null : found.state;
+		const measuredState = measuredSlotState(found);
 		const slot = measuredState === null ? null : found;
 		const hitRateMissing = slot === null || slot.hit_rate_pct === null;
 		const tokensMissing = slot === null || slot.avg_tokens === null;

@@ -131,6 +131,31 @@ export function sessionCommitsText(count: number): string {
 	return `${groupCount(count)} session commits`;
 }
 
+/**
+ * The header's sidecar sentence, around the `observer.daemon_bind` figure. It follows the health check:
+ * it never says the sidecar answers while the server is unreachable (QA #136 F4), nor before the first
+ * answer is in.
+ */
+export type OpenVikingDaemonCheck = "answers" | "no-answer" | "checking";
+export const OPENVIKING_DAEMON_CHECK_TEXT: Record<
+	OpenVikingDaemonCheck,
+	{ readonly before: string; readonly withBind: boolean; readonly after: string }
+> = {
+	answers: {
+		before: "The OpenViking sidecar at ",
+		withBind: true,
+		after: " answers the dashboard's health check.",
+	},
+	"no-answer": {
+		before: "The OpenViking sidecar at ",
+		withBind: true,
+		after: " does not answer the dashboard's health check.",
+	},
+	// Before the first answer the bind address is not known yet either.
+	checking: { before: "The dashboard is checking the OpenViking sidecar's health.", withBind: false, after: "" },
+};
+export const OPENVIKING_PANEL_SOURCES_TEXT = "Each panel below says when its own source was last read.";
+
 /** Thousands separators, so a four-figure count reads as one number next to the cards' other figures. */
 function groupCount(count: number): string {
 	return count.toLocaleString("en-US");

@@ -165,6 +165,27 @@ export function liveOverview(): OpenVikingOverviewResponse {
 	};
 }
 
+/**
+ * Per-slot telemetry present (spec.md `slots[]`: "per-slot telemetry if present") for the slots in
+ * `measured`; the rest stay `unmeasured-gap`. QA #136 F3: live rows read e.g. 76.4% / 184 tok.
+ */
+export function measuredSlotsOverview(measured: readonly number[] = [1, 2, 3, 4, 5]): OpenVikingOverviewResponse {
+	return {
+		...liveOverview(),
+		slots: unmeasuredSlots().map((slot) =>
+			measured.includes(slot.slot_id)
+				? {
+						...slot,
+						hit_rate_pct: 76.4,
+						avg_tokens: 184,
+						state: "healthy" as const,
+						last_sampled_at: minutesAgo(3),
+					}
+				: slot,
+		),
+	};
+}
+
 /** `/health` ok but past cadence (spec-states.md §4 `stale`). */
 export function staleOverview(): OpenVikingOverviewResponse {
 	const base = liveOverview();

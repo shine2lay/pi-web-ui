@@ -22,6 +22,7 @@ import type {
 	OpenVikingScreenState,
 	OpenVikingSlotSummary,
 } from "../../../server/openviking/types.js";
+import type { OpenVikingDaemonCheck } from "./text.js";
 
 /**
  * One API call's answer as the page holds it (frontend #273): each panel waits on, and fails with, its
@@ -93,6 +94,8 @@ export interface OpenVikingStatusHeaderModel {
 	/** "N role memory folders" — a folder count, never a liveness claim. */
 	readonly roleMemoryFolders: OpenVikingDisplayValue;
 	readonly daemonBind: OpenVikingDisplayValue;
+	/** Whether the sidecar answers the health check, which picks the header's sidecar sentence (QA #136 F4). */
+	readonly daemonCheck: OpenVikingDaemonCheck;
 	/** "Checked 4s ago" from `observer.checked_at` (request time). */
 	readonly checkedAge: OpenVikingDisplayValue;
 	/** Rendered in the `error` state only; null elsewhere. Gates nothing. */

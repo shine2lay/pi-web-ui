@@ -10,3 +10,4 @@
 import "../openviking-dashboard/openviking-dashboard-page.test.js";
 import "../openviking-dashboard/openviking-dashboard-drawer.test.js";
 import "../openviking-dashboard/openviking-dashboard-modal-tabs.test.js";
+import "../openviking-dashboard/openviking-dashboard-honest-wording.test.js";

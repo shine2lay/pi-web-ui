@@ -7,6 +7,7 @@
  */
 
 import type { ReactElement } from "react";
+import { OPENVIKING_DAEMON_CHECK_TEXT, OPENVIKING_PANEL_SOURCES_TEXT } from "./text.js";
 import { Figure, StatePill } from "./ui-primitives.js";
 import type { OpenVikingDisplayValue, OpenVikingStatusHeaderModel } from "./view-model-types.js";
 
@@ -19,6 +20,7 @@ export function StatusHeader({
 	readonly lastInjection: OpenVikingDisplayValue;
 	readonly lastCommit: OpenVikingDisplayValue;
 }): ReactElement {
+	const daemonCheck = OPENVIKING_DAEMON_CHECK_TEXT[model.daemonCheck];
 	return (
 		// A <header> here would be a second `banner` landmark next to the app's top bar (axe
 		// landmark-no-duplicate-banner + landmark-unique, measured on the live page in #259).
@@ -44,8 +46,9 @@ export function StatusHeader({
 				</dl>
 			</div>
 			<p className="ovk-status-subtitle">
-				The OpenViking sidecar at <Figure value={model.daemonBind} className="ovk-mono" /> answers the dashboard&apos;s
-				health check. Each panel below says when its own source was last read.
+				{daemonCheck.before}
+				{daemonCheck.withBind ? <Figure value={model.daemonBind} className="ovk-mono" /> : null}
+				{daemonCheck.after} {OPENVIKING_PANEL_SOURCES_TEXT}
 			</p>
 			{model.lastAnswered ? (
 				<p className="ovk-status-lastanswered" data-component="last-answered">

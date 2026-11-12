@@ -254,7 +254,8 @@
 	flex-direction: column;
 	gap: 4px;
 	width: max-content;
-	max-width: min(280px, 78vw);
+	/* Never wider than the screen less an 8px margin each side; the component shifts it inside (#280). */
+	max-width: min(280px, calc(100vw - 16px));
 	padding: 8px 10px;
 	border: 1px solid var(--border);
 	border-radius: 8px;
@@ -265,6 +266,11 @@
 	font-weight: 400;
 	text-align: left;
 	box-shadow: 0 6px 18px color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+.ovk-tooltip[data-placement="above"] {
+	top: auto;
+	bottom: calc(100% + 6px);
 }
 
 .ovk-tooltip-title {
@@ -425,11 +431,5 @@
 		border-width: 1px 0 0;
 		border-radius: var(--ovk-radius) var(--ovk-radius) 0 0;
 		box-shadow: 0 -8px 24px color-mix(in srgb, var(--bg) 60%, transparent);
-	}
-
-	.ovk-tooltip {
-		left: auto;
-		right: 0;
-		max-width: min(260px, 86vw);
 	}
 }

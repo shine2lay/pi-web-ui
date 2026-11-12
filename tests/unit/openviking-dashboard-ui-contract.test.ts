@@ -29,6 +29,8 @@ const FLOOR = {
 	"openviking-dashboard-drawer.test.ts": { tests: 11, assertions: 41 },
 	// Frontend #274 (Design PROD-SIGNOFF M2, #269 F4): the reader is a real modal, both tablists are whole.
 	"openviking-dashboard-modal-tabs.test.ts": { tests: 9, assertions: 43 },
+	// Frontend #280 (QA #136 F3 + F4): card 2's gap note and the header's sidecar sentence say what is known.
+	"openviking-dashboard-honest-wording.test.ts": { tests: 5, assertions: 9 },
 } as const;
 
 const read = (dir: string, name: string): string => readFileSync(join(dir, name), "utf8");

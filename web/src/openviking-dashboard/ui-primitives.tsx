@@ -6,7 +6,8 @@
  * `— (Unreachable)` instead of a zero (spec.md `A07`, `R-FAIL-1..3`).
  */
 
-import { useCallback, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { placeTooltip } from "./tooltip-placement.js";
 import type { OpenVikingDisplayValue, OpenVikingStatePresentation } from "./view-model-types.js";
 
 export function Figure({
@@ -72,7 +73,8 @@ export function StatePill({
 /**
  * Tier-2 progressive disclosure: a `(?)` trigger that reveals its explanation on hover and on
  * focus. The tip lives next to the trigger (no portal) so `aria-describedby` and the Escape key
- * work the same for a pointer and for a keyboard.
+ * work the same for a pointer and for a keyboard. Before it paints, it is moved inside the viewport
+ * (QA #136 F1: tips near a screen edge were cut off).
  */
 export function InfoTooltip({
 	label,
@@ -86,6 +88,29 @@ export function InfoTooltip({
 	const tipId = useId();
 	const [open, setOpen] = useState(false);
 	const triggerRef = useRef<HTMLButtonElement | null>(null);
+	const tipRef = useRef<HTMLSpanElement | null>(null);
+
+	useLayoutEffect(() => {
+		const tip = tipRef.current;
+		const trigger = triggerRef.current;
+		if (!open || !tip || !trigger) return;
+		const place = (): void => {
+			// Back to the stylesheet's anchor first, so each measure starts from the same place.
+			tip.style.removeProperty("left");
+			delete tip.dataset.placement;
+			const box = tip.getBoundingClientRect();
+			const placement = placeTooltip(
+				{ left: box.left, width: box.width, top: box.top, height: box.height },
+				{ top: trigger.getBoundingClientRect().top },
+				{ width: document.documentElement.clientWidth, height: window.innerHeight },
+			);
+			if (placement.shiftX !== 0) tip.style.left = `${placement.shiftX}px`;
+			if (placement.above) tip.dataset.placement = "above";
+		};
+		place();
+		window.addEventListener("resize", place);
+		return () => window.removeEventListener("resize", place);
+	}, [open]);
 
 	const onKeyDown = useCallback((event: { key: string; preventDefault(): void }) => {
 		if (event.key === "Escape") {
@@ -118,7 +143,7 @@ export function InfoTooltip({
 				<span className="ovk-sr-only">{badge ? " — what this means" : `${label} — what this means`}</span>
 			</button>
 			{open ? (
-				<span id={tipId} role="tooltip" className="ovk-tooltip ovk-tooltip-floating" data-floating="true">
+				<span ref={tipRef} id={tipId} role="tooltip" className="ovk-tooltip ovk-tooltip-floating" data-floating="true">
 					<span className="ovk-tooltip-title">{label}</span>
 					<span className="ovk-tooltip-body">{body}</span>
 				</span>

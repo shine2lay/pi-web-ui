@@ -6,6 +6,12 @@
  * verbatim: the browser never invents an age (ruling rm-b5272a3e).
  */
 
+import type {
+	OpenVikingOverviewResponse,
+	OpenVikingSlotState,
+	OpenVikingSlotSummary,
+} from "../../../server/openviking/types.js";
+import { OPENVIKING_CONTEXT_SLOTS } from "../../../server/openviking/types.js";
 import { OPENVIKING_LOADING_TEXT } from "./text.js";
 import type { OpenVikingStatePresentation } from "./view-model-types.js";
 
@@ -51,6 +57,28 @@ export function buildStatePresentation(
 		border: visuals.border,
 		staleBadge,
 	};
+}
+
+/** The slot's own `slots[]` entry, or null when the answer has none for it. */
+export function findSlot(overview: OpenVikingOverviewResponse | null, slotId: number): OpenVikingSlotSummary | null {
+	return overview?.slots.find((candidate) => candidate.slot_id === slotId) ?? null;
+}
+
+/**
+ * A slot's measured state, or null when nothing samples it yet (spec G3): absent from `slots[]` or
+ * `"unmeasured-gap"`. An unmeasured slot is never read as a zero.
+ */
+export function measuredSlotState(
+	slot: OpenVikingSlotSummary | null,
+): Exclude<OpenVikingSlotState, "unmeasured-gap"> | null {
+	return slot === null || slot.state === "unmeasured-gap" ? null : slot.state;
+}
+
+/** Every one of the five context slots is unmeasured: only then does a summary say "not measured per slot". */
+export function everySlotUnmeasured(overview: OpenVikingOverviewResponse): boolean {
+	return OPENVIKING_CONTEXT_SLOTS.every(
+		(definition) => measuredSlotState(findSlot(overview, definition.slot_id)) === null,
+	);
 }
 
 /** A slot row's pill while nothing samples it: neutral wording, its own glyph, no health claim. */
