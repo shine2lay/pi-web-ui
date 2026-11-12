@@ -491,7 +491,7 @@ export class DurableAddonBridge {
 		await this.flush();
 		if (result.action === "handled") return undefined;
 		const text = result.action === "transform" ? result.text : prompt;
-		const start = await this.runner.emitBeforeAgentStart(text, undefined, this.promptOptions());
+		const start = await this.runner.emitBeforeAgentStart({ messageType: "user", prompt: text }, this.promptOptions());
 		for (const message of start.messages) await this.appendBoundary({ type: "custom_message", ...message });
 		this.instructions = start?.systemPromptOptions?.forceSystemPrompt ?? this.options.instructions ?? "";
 		if (start?.systemPromptOptions?.selectedTools) this.active = new Set(start.systemPromptOptions.selectedTools);
@@ -545,7 +545,7 @@ export class DurableAddonBridge {
 		await this.runner.emit({ type: "agent_end", messages });
 		const continuation = await this.boundary({ type: "agent_before_settle", outcome });
 		// Pool failover is not final settlement: the queue must not finish the task yet.
-		if (!continuation) await this.runner.emit({ type: "agent_settled" });
+		if (!continuation) await this.runner.emit({ type: "agent_settled", aborted: outcome === "aborted" });
 		else this.running = true;
 		await this.flush();
 		return continuation;

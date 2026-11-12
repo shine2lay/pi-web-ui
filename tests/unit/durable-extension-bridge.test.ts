@@ -484,7 +484,7 @@ describe("Wave 3.2: durable-extension-bridge (SQLite hooks & custom entries, zer
 					turnStartsSeen.push(event.turnIndex);
 				});
 				pi.on("before_agent_start", async (event) => {
-					pi.appendEntry("custom-ext-marker", { promptSeen: event.prompt });
+					pi.appendEntry("custom-ext-marker", { promptSeen: event.messageType === "user" ? event.prompt : undefined });
 					return {
 						systemPrompt: `${event.systemPrompt}\n[ExtensionRunner Attached]`,
 					};

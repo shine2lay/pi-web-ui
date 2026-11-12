@@ -1446,11 +1446,14 @@ export function createDurableExtensionBridge(options: DurableExtensionBridgeOpti
 	const wireExtensionRunner = (runner: ExtensionRunner): void => {
 		baseBridge.onBeforeAgentStart(async (event) => {
 			if (!runner.hasHandlers("before_agent_start")) return undefined;
-			const res = await runner.emitBeforeAgentStart(event.prompt, undefined, {
-				cwd,
-				selectedTools: event.selectedTools ? [...event.selectedTools] : [],
-				forceSystemPrompt: event.systemPrompt ?? "",
-			});
+			const res = await runner.emitBeforeAgentStart(
+				{ messageType: "user", prompt: event.prompt },
+				{
+					cwd,
+					selectedTools: event.selectedTools ? [...event.selectedTools] : [],
+					forceSystemPrompt: event.systemPrompt ?? "",
+				},
+			);
 			if (!res) return undefined;
 			return {
 				systemPrompt: res.systemPromptOptions?.forceSystemPrompt ?? event.systemPrompt,
