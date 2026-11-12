@@ -800,9 +800,11 @@ button:focus-visible,
           <span id="tip-sidecar" role="tooltip" class="tooltip">Mode 1: lead chats get a folded “viking:// URIs + 1-sentence L0 .abstract.md headlines only” card from the sidecar on 127.0.0.1:1933. If it is down, workers read their on-disk notebook.md backup (R-PREF-RESIDUAL-1b) and lead chats keep pi-acp only (R-FAIL-3).</span>
         </span>
       </div>
-      <div class="metric" id="c1-metric" data-field="metric" data-figure="true" data-source-field="observer.daemon_bind" data-age="4s">127.0.0.1:1933</div>
+      <!-- #299 (product rm-c44149ef): the hero is the daemon's own moving measure; the bind is identity, so it sits beside the pill -->
+      <div class="metric" id="c1-metric" data-field="metric" data-figure="true" data-source-field="observer.retrieval_hit_rate_pct" data-age="4s">98.3% of reads found a match</div>
       <div class="status-row" data-field="status">
         <span id="c1-badge" class="badge badge-healthy" data-slot="state-badge" data-icon="circle-check" data-health-state="healthy"><span class="glyph" aria-hidden="true">●</span> Healthy</span>
+        <span class="meta" id="c1-bind" data-source-field="observer.daemon_bind">127.0.0.1:1933</span>
       </div>
       <div class="meta" id="c1-context" data-field="context" data-figure="true" data-source-field="observer.queue_depth" data-age="4s">Queue depth: unavailable · Shared layer + Role layer</div>
       <div class="age-footer" id="c1-age" data-field="age" data-age-label="true" data-panel-updated-label="true"><span data-source-field="observer.checked_at">Checked 4s ago</span> · 30s cadence</div>
@@ -1112,7 +1114,8 @@ button:focus-visible,
 (function () {
   var LIVE_FIGURES = {
     "hdr-folders": "15 role memory folders",
-    "c1-metric": "127.0.0.1:1933",
+    "c1-metric": "98.3% of reads found a match",
+    "c1-bind": "127.0.0.1:1933",
     "c1-context": "Queue depth: unavailable · Shared layer + Role layer",
     "c2-metric": "93.8% Hit Rate",
     "c2-context": "1,420 avg tok",
@@ -1413,6 +1416,8 @@ button:focus-visible,
       fill(c2Age, [["Checked 4s ago", "observer.checked_at"], " · 5m cadence"]);
       fill(c3Age, [["Checked 4s ago", "observer.checked_at"], " · 15m cadence"]);
       if (p1Upd) fill(p1Upd, [["Checked 4s ago", "observer.checked_at"], " · 0 turns in window · 5m cadence"]);
+      // #299: no turn ran in the window, so no read was matched; the hero says that instead of repeating the last rate
+      byId("c1-metric").textContent = "No memory reads in window";
       byId("c2-metric").textContent = "0 turns in window";
       // #290 S4-1: this figure is the turn count, not the hit rate (null with no turns), so it names its own field
       byId("c2-metric").setAttribute("data-source-field", "metrics.turns_sampled_24h");
@@ -1468,7 +1473,7 @@ button:focus-visible,
       c3Age.textContent = "Loading… · 15m cadence";
       if (p1Upd) p1Upd.textContent = "Loading slot telemetry… · 5m cadence";
       folders.textContent = "Loading role memory folders…";
-      byId("c1-metric").textContent = "Loading daemon status…";
+      byId("c1-metric").textContent = "Loading matched reads…";
       // #290 C4-2: plain words only; the reader is not shown an internal route
       byId("c1-context").textContent = "Loading the health check and queue depth…";
       byId("c2-metric").textContent = "Loading hit rate…";
