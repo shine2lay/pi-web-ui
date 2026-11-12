@@ -22,6 +22,7 @@ import {
 	type OpenVikingSlotSummary,
 	type OpenVikingStoreCounts,
 } from "../../server/openviking/types.js";
+import type { OpenVikingDashboardSnapshot } from "../../web/src/openviking-dashboard/OpenVikingDashboardView.js";
 
 export const NOW_ISO = "2026-11-12T12:00:00.000Z";
 export const NOW_MS = Date.parse(NOW_ISO);
@@ -415,3 +416,23 @@ export function auditResponse(): OpenVikingAuditResponse {
 		],
 	};
 }
+
+/** All three calls answered (frontend #273: each panel has its own slice). */
+export function readySnapshot(
+	overview: OpenVikingOverviewResponse = liveOverview(),
+	entries: OpenVikingEntriesResponse = entriesResponse(),
+	audit: OpenVikingAuditResponse = auditResponse(),
+): OpenVikingDashboardSnapshot {
+	return {
+		overview: { status: "ready", data: overview },
+		entries: { status: "ready", data: entries },
+		audit: { status: "ready", data: audit },
+	};
+}
+
+/** No call has answered yet. */
+export const LOADING_SNAPSHOT: OpenVikingDashboardSnapshot = {
+	overview: { status: "loading" },
+	entries: { status: "loading" },
+	audit: { status: "loading" },
+};

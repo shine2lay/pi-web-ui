@@ -37,6 +37,51 @@ export const OPENVIKING_LOADING_TEXT = "Loading…";
 /** A drawer tier whose deep read is still in flight: never "Not stored" before the answer is in (#259). */
 export const OPENVIKING_LOADING_CONTENT_TEXT = "Loading…";
 
+/**
+ * A listing the daemon only partly answered (`entries_partial`, spec §3a): the count of listing reads that
+ * did not answer, beside the panel age. `◐` is the cue that does not rely on colour (frontend #273, M1).
+ */
+export const OPENVIKING_UNREAD_GLYPH = "◐";
+export function unreadBadgeText(count: number): string {
+	return `${count.toLocaleString("en-US")} not read`;
+}
+export function unreadBadgeLabel(count: number): string {
+	const reads = count === 1 ? "1 listing read" : `${count.toLocaleString("en-US")} listing reads`;
+	return `Incomplete list: ${reads} did not answer, so this list may be missing entries.`;
+}
+
+/** A row whose L0 read did not answer (`l0_abstract: null`): never painted as a row with no abstract (M1). */
+export const OPENVIKING_ABSTRACT_NOT_READ_TEXT = "Abstract not read";
+
+/** An entries answer under an unreachable server (`health_state: "server-unreachable"`): no list, no fresh age. */
+export const OPENVIKING_ENTRIES_UNREACHABLE_TEXT =
+	"Memory entries can't be listed while the OpenViking server is unreachable.";
+/** The same answer while `/health` still answers: no age is printed for the listing that failed. */
+export const OPENVIKING_ENTRIES_LISTING_FAILED_TEXT =
+	"The OpenViking server did not answer this listing, though its health check still answers. The next refresh tries again.";
+
+/** A listing that answered with nothing while some reads failed: never "no entries" (M1). */
+export const OPENVIKING_ENTRIES_NONE_READ_TEXT = "No memory entries could be read in this view.";
+export const OPENVIKING_ENTRIES_EMPTY_TEXT = "No memory entries in this view.";
+
+/** Per-panel loading and failure (frontend #273, M4 / #269 F2): one call never holds or errors another panel. */
+export const OPENVIKING_PANEL_LOADING_TEXT = {
+	entries: "Loading memory entries…",
+	audit: "Loading audit events…",
+} as const;
+export function panelFailedText(what: "Memory entries" | "Audit events", reason: string): string {
+	return `${what} could not be read just now (${reason}). The next refresh tries again.`;
+}
+
+/** The Explorer paints a bounded first page; the rest arrive on request (Should S2, ~1,800 live rows). */
+export const OPENVIKING_EXPLORER_PAGE_SIZE = 100;
+export function explorerPageCountText(shown: number, total: number): string {
+	return `Showing ${shown.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} entries`;
+}
+export function explorerShowMoreText(count: number): string {
+	return `Show ${count.toLocaleString("en-US")} more`;
+}
+
 /** A tier the daemon really has no text for: said only after the content read answered (#259). */
 export const OPENVIKING_TIER_EMPTY_TEXT = "Not stored for this entry";
 

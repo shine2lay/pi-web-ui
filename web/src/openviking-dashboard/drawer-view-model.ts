@@ -11,6 +11,7 @@ import { ISOLATED_AGENT_MEMORY_ABSTRACT } from "../../../server/openviking/types
 import { formatDisplayUri } from "./format.js";
 import {
 	openVikingClampNote,
+	OPENVIKING_ABSTRACT_NOT_READ_TEXT,
 	OPENVIKING_ISOLATION_NOTICE_TEXT,
 	OPENVIKING_LAYER_LABELS,
 	OPENVIKING_LOADING_CONTENT_TEXT,
@@ -57,7 +58,13 @@ function buildTier(
 	const head = { tier, label: TIER_LABELS[tier], sourceUri };
 	if (tier === "L0") {
 		// L0 is the one line the server already redacted for a personal memory; it is safe to show.
-		return { ...head, body: isolated ? ISOLATED_AGENT_MEMORY_ABSTRACT : (body ?? ""), unavailableReason: null };
+		if (isolated) return { ...head, body: ISOLATED_AGENT_MEMORY_ABSTRACT, unavailableReason: null };
+		// A null L0 is a read that did not answer (spec §3a), never an empty abstract (frontend #273, M1).
+		if (body === null) {
+			const reason = read === "pending" ? OPENVIKING_LOADING_CONTENT_TEXT : OPENVIKING_ABSTRACT_NOT_READ_TEXT;
+			return { ...head, body: "", unavailableReason: reason };
+		}
+		return { ...head, body, unavailableReason: null };
 	}
 	// R-ISOLATION-1 first: another role's memory text is never painted, even when a payload carries it.
 	if (isolated) return { ...head, body: "", unavailableReason: OPENVIKING_ISOLATION_NOTICE_TEXT };

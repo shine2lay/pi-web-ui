@@ -23,6 +23,30 @@ import type {
 	OpenVikingSlotSummary,
 } from "../../../server/openviking/types.js";
 
+/**
+ * One API call's answer as the page holds it (frontend #273): each panel waits on, and fails with, its
+ * own call only, so the slowest call never holds the whole screen.
+ */
+export type OpenVikingSlice<T> =
+	| { readonly status: "loading" }
+	| { readonly status: "ready"; readonly data: T }
+	| { readonly status: "failed"; readonly message: string };
+
+/** `[data-panel-state]` of a list panel: what the panel can honestly say about its own call. */
+export type OpenVikingPanelStatus =
+	| { readonly kind: "loading" }
+	| { readonly kind: "failed"; readonly message: string }
+	/** `/health` says the daemon is down: no list and no fresh age, only when it last answered. */
+	| {
+			readonly kind: "unreachable";
+			/** When the daemon last answered `/health`; only while `/health` says it is down, never a fresh age. */
+			readonly lastAnswered: OpenVikingLastAnsweredLine | null;
+			/** `/health` still answers: only this listing failed. */
+			readonly healthAnswers: boolean;
+	  }
+	/** `unreadCount` > 0 when the listing is partial (`entries_partial`); 0 for a complete one. */
+	| { readonly kind: "ready"; readonly unreadCount: number };
+
 /** `[data-screen-state]`: the four server states plus the browser's own pre-first-response state. */
 export type OpenVikingRenderState = "loading" | OpenVikingScreenState;
 
@@ -119,6 +143,8 @@ export interface OpenVikingMemoryRowModel {
 	readonly tiers: readonly OpenVikingDisclosureTier[];
 	/** One-line L0 abstract; for another role's personal memory, the isolation placeholder. */
 	readonly l0Line: string;
+	/** `not-read`: the L0 read did not answer (`l0_abstract: null`), which is not an empty abstract (#273). */
+	readonly l0State: "read" | "not-read" | "isolated";
 	readonly age: OpenVikingDisplayValue;
 	readonly isolated: boolean;
 }

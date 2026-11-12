@@ -119,6 +119,33 @@ export function InfoTooltip({
 	);
 }
 
+/**
+ * A list panel's own call is still out (frontend #273, M4): placeholder bars, never an empty-list note
+ * and never a zero. `aria-busy` plus the visible words say it is loading.
+ */
+export function PanelSkeleton({ label }: { readonly label: string }): ReactElement {
+	return (
+		<div className="ovk-panel-skeleton" data-component="panel-skeleton" aria-busy="true">
+			<p className="ovk-empty-note">{label}</p>
+			{[0, 1, 2].map((bar) => (
+				<span key={bar} className="ovk-skeleton-row" aria-hidden="true" />
+			))}
+		</div>
+	);
+}
+
+/** A list panel's own call failed (#269 F2): said in that panel only; the rest of the page keeps painting. */
+export function PanelFailed({ text }: { readonly text: string }): ReactElement {
+	return (
+		<p className="ovk-panel-failed" data-component="panel-failed">
+			<span className="ovk-pill-glyph" aria-hidden="true">
+				✕
+			</span>{" "}
+			{text}
+		</p>
+	);
+}
+
 /** A panel's framing: title, its own freshness line, and the contract badges that explain it. */
 export function PanelHeader({
 	title,

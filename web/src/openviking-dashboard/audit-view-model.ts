@@ -17,8 +17,20 @@ import type {
 	OpenVikingAuditFilterSelection,
 	OpenVikingAuditRowModel,
 	OpenVikingFilterOption,
+	OpenVikingPanelStatus,
 	OpenVikingRenderState,
+	OpenVikingSlice,
 } from "./view-model-types.js";
+
+/**
+ * What the audit panel may say about its own call (frontend #273, #269 F2): its loading or failure is its
+ * own. The audit reads JSONL on this server, so an unreachable daemon does not empty it (spec-states §4).
+ */
+export function buildAuditStatus(audit: OpenVikingSlice<OpenVikingAuditResponse>): OpenVikingPanelStatus {
+	if (audit.status === "loading") return { kind: "loading" };
+	if (audit.status === "failed") return { kind: "failed", message: audit.message };
+	return { kind: "ready", unreadCount: 0 };
+}
 
 /**
  * The five contract actions (spec.md §3). A `role_memory_write` is a role writing its own memory —
@@ -69,10 +81,10 @@ function buildRow(event: OpenVikingAuditEvent, nowMs: number): OpenVikingAuditRo
 export function buildAuditRows(
 	audit: OpenVikingAuditResponse | null,
 	nowMs: number,
-	renderState: OpenVikingRenderState,
 	selection: OpenVikingAuditFilterSelection,
 ): readonly OpenVikingAuditRowModel[] {
-	if (audit === null || renderState === "loading") return [];
+	// Only this panel's own call gates its rows (frontend #273); the local log lists even while :1933 is down.
+	if (audit === null) return [];
 	return audit.events
 		.filter((event) => selection.action === "all" || event.action === selection.action)
 		.filter((event) => selection.role === "all" || event.role === selection.role)

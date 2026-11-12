@@ -6,15 +6,18 @@
  */
 
 import { useId, type ReactElement } from "react";
-import { Figure, PanelHeader } from "./ui-primitives.js";
+import { OPENVIKING_PANEL_LOADING_TEXT, panelFailedText } from "./text.js";
+import { Figure, PanelFailed, PanelHeader, PanelSkeleton } from "./ui-primitives.js";
 import type {
 	OpenVikingAuditFiltersModel,
 	OpenVikingAuditRowModel,
 	OpenVikingDisplayValue,
 	OpenVikingFilterOption,
+	OpenVikingPanelStatus,
 } from "./view-model-types.js";
 
 export function AuditPanel({
+	status,
 	rows,
 	filters,
 	panelAge,
@@ -25,6 +28,8 @@ export function AuditPanel({
 	onOpenRow,
 	openRowKey,
 }: {
+	/** This panel's own call (frontend #273): it loads and fails on its own. */
+	readonly status: OpenVikingPanelStatus;
 	readonly rows: readonly OpenVikingAuditRowModel[];
 	readonly filters: OpenVikingAuditFiltersModel;
 	readonly panelAge: OpenVikingDisplayValue | null;
@@ -35,14 +40,15 @@ export function AuditPanel({
 	readonly onOpenRow: (rowKey: string, opener: HTMLElement) => void;
 	readonly openRowKey: string | null;
 }): ReactElement {
+	const ready = status.kind === "ready";
 	return (
-		<div className="ovk-panel-body">
+		<div className="ovk-panel-body" data-panel-state={status.kind}>
 			<PanelHeader
 				title="Commit & Guardrail Audit"
 				meta={
 					<>
-						{panelAge ? <Figure value={panelAge} /> : null}
-						{stale ? (
+						{panelAge && ready ? <Figure value={panelAge} /> : null}
+						{stale && ready ? (
 							<span className="ovk-panel-stale" data-stale-badge="true">
 								Stale
 							</span>
@@ -56,7 +62,9 @@ export function AuditPanel({
 				<FilterSelect label="Action" options={filters.actions} onChange={onActionChange} />
 				<FilterSelect label="Role" options={filters.roles} onChange={onRoleChange} />
 			</div>
-			{rows.length === 0 ? (
+			{status.kind === "loading" ? <PanelSkeleton label={OPENVIKING_PANEL_LOADING_TEXT.audit} /> : null}
+			{status.kind === "failed" ? <PanelFailed text={panelFailedText("Audit events", status.message)} /> : null}
+			{!ready ? null : rows.length === 0 ? (
 				<p className="ovk-empty-note">No audit events match this filter.</p>
 			) : (
 				<ul className="ovk-row-list">

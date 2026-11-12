@@ -26,11 +26,34 @@ import type {
 	OpenVikingSummaryCardModel,
 } from "./view-model-types.js";
 
-/** Which row the reader drawer is open on. */
+/**
+ * Which row the reader drawer is open on. A memory row is addressed by its URI, not its list position,
+ * so a poll that reorders the list (or a reload of the address) reopens the same entry (frontend #273).
+ */
 export type OpenVikingRowAddress =
-	| { readonly kind: "memory"; readonly rowKey: string }
+	| { readonly kind: "memory"; readonly uri: string }
 	| { readonly kind: "audit"; readonly rowKey: string }
 	| { readonly kind: "slot"; readonly slotId: number };
+
+/** The open row as the address bar's `ovrow` value: `memory:<uri>`, `audit:<event id>`, `slot:<id>`. */
+export function formatRowAddress(address: OpenVikingRowAddress): string {
+	if (address.kind === "memory") return `memory:${address.uri}`;
+	if (address.kind === "audit") return `audit:${address.rowKey}`;
+	return `slot:${address.slotId}`;
+}
+
+/** The `ovrow` value read back; anything malformed opens nothing. */
+export function parseRowAddress(value: string | null): OpenVikingRowAddress | null {
+	if (!value) return null;
+	const cut = value.indexOf(":");
+	if (cut <= 0 || cut === value.length - 1) return null;
+	const kind = value.slice(0, cut);
+	const rest = value.slice(cut + 1);
+	if (kind === "memory") return { kind, uri: rest };
+	if (kind === "audit") return { kind, rowKey: rest };
+	if (kind === "slot" && /^\d+$/.test(rest)) return { kind, slotId: Number(rest) };
+	return null;
+}
 
 /**
  * May the page say "zero activity"? Only when the streams it is showing are empty as well. With
@@ -100,9 +123,9 @@ export function resolveDrawerSource(
 ): OpenVikingDrawerSource | null {
 	if (!address) return null;
 	if (address.kind === "memory") {
-		const index = Number.parseInt(address.rowKey.replace(/^mem-/, ""), 10) - 1;
+		const index = entries?.entries.findIndex((candidate) => candidate.uri === address.uri) ?? -1;
 		const entry = entries?.entries[index];
-		return entry ? { kind: "memory", rowKey: address.rowKey, entry } : null;
+		return entry ? { kind: "memory", rowKey: `mem-${index + 1}`, entry } : null;
 	}
 	if (address.kind === "audit") {
 		const event = audit?.events.find((candidate) => candidate.id === address.rowKey);

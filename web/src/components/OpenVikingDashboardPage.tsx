@@ -2,9 +2,14 @@
  * The OpenViking Memory Dashboard tab (frontend #258, Task 2).
  *
  * The only part of the feature that talks to the network: it polls
- * `/api/openviking/{overview,entries,audit}` while the tab is open and hands the answer to the
- * presentational view. Tab and audit filters live in the URL's search parameters, so a poll (or a
- * reload, or a shared link) never throws the reader back to the first tab.
+ * `/api/openviking/{overview,entries,audit}` while the tab is open and hands the answers to the
+ * presentational view. Each call is its own slice (frontend #273, M4 / #269 F2): overview paints the
+ * header and cards the moment it answers, and a slow or failed entries or audit call holds or errors only
+ * its own panel. A call still out when the next poll comes is left to finish, never restarted.
+ *
+ * The view, tab, open row and audit filters live in the URL's search parameters (#269 F6): while the tab
+ * is shown the address carries `view=openviking`, which the shell reads at startup, so a reload or a
+ * shared link opens the Memory tab on the same tab and row; leaving the tab takes `view` off again.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -25,9 +30,30 @@ import { OPENVIKING_TABS } from "../openviking-dashboard/text.js";
 import "../openviking-dashboard/openviking-dashboard.css";
 
 const POLL_MS = 30_000;
+const VIEW_PARAM = "view";
+const VIEW_VALUE = "openviking";
 const TAB_PARAM = "ovtab";
+const ROW_PARAM = "ovrow";
 const ACTION_PARAM = "ovaction";
 const ROLE_PARAM = "ovrole";
+
+type SliceName = keyof OpenVikingDashboardSnapshot;
+interface SliceData {
+	readonly overview: OpenVikingOverviewResponse;
+	readonly entries: OpenVikingEntriesResponse;
+	readonly audit: OpenVikingAuditResponse;
+}
+const SLICE_PATHS: Record<SliceName, string> = {
+	overview: "/api/openviking/overview",
+	entries: "/api/openviking/entries",
+	audit: "/api/openviking/audit",
+};
+const SLICES = Object.keys(SLICE_PATHS) as SliceName[];
+const LOADING: OpenVikingDashboardSnapshot = {
+	overview: { status: "loading" },
+	entries: { status: "loading" },
+	audit: { status: "loading" },
+};
 
 export interface OpenVikingDashboardPageProps {
 	/** The tab is shown; it polls the server only then. */
@@ -65,40 +91,57 @@ class ContentFetchError extends Error {
 }
 
 export function OpenVikingDashboardPage({ active }: OpenVikingDashboardPageProps) {
-	const [snapshot, setSnapshot] = useState<OpenVikingDashboardSnapshot>({ status: "loading" });
+	const [snapshot, setSnapshot] = useState<OpenVikingDashboardSnapshot>(LOADING);
 	const [nowMs, setNowMs] = useState(() => Date.now());
 	const [search, setSearch] = useState(() => readSearch());
 	const [deepReadUri, setDeepReadUri] = useState<string | null>(null);
 	const [entryContent, setEntryContent] = useState<OpenVikingEntryContent | null>(null);
-	const generation = useRef(0);
+	/** One AbortController per request still out, by slice; a slice with one out is not asked again. */
+	const inFlight = useRef(new Map<SliceName, AbortController>());
 
-	const load = useCallback(async (signal: AbortSignal) => {
-		const mine = ++generation.current;
+	const loadSlice = useCallback(async (name: SliceName) => {
+		if (inFlight.current.has(name)) return;
+		const controller = new AbortController();
+		inFlight.current.set(name, controller);
 		try {
-			const [overview, entries, audit] = await Promise.all([
-				getJson<OpenVikingOverviewResponse>("/api/openviking/overview", signal),
-				getJson<OpenVikingEntriesResponse>("/api/openviking/entries", signal),
-				getJson<OpenVikingAuditResponse>("/api/openviking/audit", signal),
-			]);
-			if (signal.aborted || mine !== generation.current) return;
-			setSnapshot({ status: "ready", overview, entries, audit });
+			const data = await getJson<SliceData[SliceName]>(SLICE_PATHS[name], controller.signal);
+			if (controller.signal.aborted) return;
+			setSnapshot((current) => ({ ...current, [name]: { status: "ready", data } }));
 		} catch (error) {
-			if (signal.aborted || mine !== generation.current) return;
-			setSnapshot({ status: "fetch-failed", message: error instanceof Error ? error.message : String(error) });
+			if (controller.signal.aborted) return;
+			const message = error instanceof Error ? error.message : String(error);
+			setSnapshot((current) => ({ ...current, [name]: { status: "failed", message } }));
+		} finally {
+			if (inFlight.current.get(name) === controller) inFlight.current.delete(name);
 		}
 		setNowMs(Date.now());
 	}, []);
 
 	useEffect(() => {
 		if (!active) return;
-		const controller = new AbortController();
-		void load(controller.signal);
-		const id = window.setInterval(() => void load(controller.signal), POLL_MS);
-		return () => {
-			controller.abort();
-			window.clearInterval(id);
+		const requests = inFlight.current;
+		const poll = () => {
+			for (const name of SLICES) void loadSlice(name);
 		};
-	}, [active, load]);
+		poll();
+		const id = window.setInterval(poll, POLL_MS);
+		return () => {
+			window.clearInterval(id);
+			for (const controller of requests.values()) controller.abort();
+			requests.clear();
+		};
+	}, [active, loadSlice]);
+
+	// While the tab is shown the address names it, so a reload lands here (#269 F6); leaving takes it off.
+	const activeRef = useRef(active);
+	activeRef.current = active;
+	useEffect(() => {
+		if (!active) return;
+		setUrlParams({ [VIEW_PARAM]: VIEW_VALUE });
+		return () => {
+			if (readSearch().get(VIEW_PARAM) === VIEW_VALUE) setUrlParams({ [VIEW_PARAM]: null });
+		};
+	}, [active]);
 
 	// The open row's L1/L2 (#259): the list request carries L0 only, so the drawer's deeper tiers are
 	// read per URI while the row is open, and dropped again when it closes.
@@ -140,10 +183,7 @@ export function OpenVikingDashboardPage({ active }: OpenVikingDashboardPageProps
 	}, []);
 
 	const writeParam = useCallback((key: string, value: string | null) => {
-		const url = new URL(window.location.href);
-		if (value === null) url.searchParams.delete(key);
-		else url.searchParams.set(key, value);
-		window.history.replaceState(window.history.state, "", url);
+		setUrlParams({ ...(activeRef.current ? { [VIEW_PARAM]: VIEW_VALUE } : {}), [key]: value });
 		setSearch(readSearch());
 	}, []);
 
@@ -168,6 +208,8 @@ export function OpenVikingDashboardPage({ active }: OpenVikingDashboardPageProps
 			onActiveTabChange={(tab) => writeParam(TAB_PARAM, tab === "mount-map" ? null : tab)}
 			entryContent={entryContent}
 			onDeepReadUriChange={setDeepReadUri}
+			openRow={search.get(ROW_PARAM)}
+			onOpenRowChange={(row) => writeParam(ROW_PARAM, row)}
 			auditFilter={auditFilter}
 			onAuditFilterChange={(next) => {
 				writeParam(ACTION_PARAM, next.action === "all" ? null : next.action);
@@ -179,6 +221,16 @@ export function OpenVikingDashboardPage({ active }: OpenVikingDashboardPageProps
 
 function readSearch(): URLSearchParams {
 	return new URLSearchParams(window.location.search);
+}
+
+/** Set (or, for null, delete) search parameters in place; the shell keeps its own history entry. */
+function setUrlParams(values: Record<string, string | null>): void {
+	const url = new URL(window.location.href);
+	for (const [key, value] of Object.entries(values)) {
+		if (value === null) url.searchParams.delete(key);
+		else url.searchParams.set(key, value);
+	}
+	if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
 }
 
 export default OpenVikingDashboardPage;

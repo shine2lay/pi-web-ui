@@ -28,6 +28,7 @@ import {
 	type MountedDashboard,
 } from "./openviking-dashboard-dom.js";
 import {
+	LOADING_SNAPSHOT,
 	NOW_MS,
 	auditResponse,
 	emptyOverview,
@@ -35,6 +36,7 @@ import {
 	liveOverview,
 	minutesAgo,
 	offlineOverview,
+	readySnapshot,
 	staleOverview,
 } from "./openviking-dashboard-fixtures.js";
 
@@ -44,7 +46,7 @@ const ready = (
 	overview = liveOverview(),
 	entries = entriesResponse(),
 	audit = auditResponse(),
-): OpenVikingDashboardSnapshot => ({ status: "ready", overview, entries, audit });
+): OpenVikingDashboardSnapshot => readySnapshot(overview, entries, audit);
 
 function render(snapshot: OpenVikingDashboardSnapshot, extra?: Partial<OpenVikingDashboardViewProps>): HTMLElement {
 	mounted = mountDashboard({ snapshot, nowMs: NOW_MS, ...extra });
@@ -141,7 +143,7 @@ describe("openviking dashboard page — summary cards", () => {
 	});
 
 	it("fakes no zero while loading", () => {
-		const container = render({ status: "loading" });
+		const container = render(LOADING_SNAPSHOT);
 		expect(container.querySelector('[data-screen-state="loading"]')).not.toBeNull();
 		for (const field of container.querySelectorAll("[data-field]")) {
 			expect(text(field)).not.toMatch(/\b0\b/);

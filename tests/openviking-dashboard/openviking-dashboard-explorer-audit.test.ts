@@ -29,7 +29,7 @@ const RAW_PATH = /\/(home|var|tmp|usr)\//;
 
 describe("openviking dashboard — memory explorer groups", () => {
 	it("groups entries by repo and by role instead of listing them flat", () => {
-		const groups = buildMemoryGroups(entriesResponse(), NOW_MS, "live");
+		const groups = buildMemoryGroups(entriesResponse(), NOW_MS);
 		expect(groups.length).toBeGreaterThan(1);
 		const keys = groups.map((g) => g.key);
 		expect(keys).toContain("repo:rollcall");
@@ -43,7 +43,7 @@ describe("openviking dashboard — memory explorer groups", () => {
 	});
 
 	it("keeps each group inside one repo or one role, on the right layer", () => {
-		const groups = buildMemoryGroups(entriesResponse(), NOW_MS, "live");
+		const groups = buildMemoryGroups(entriesResponse(), NOW_MS);
 		const rollcall = groups.find((g) => g.key === "repo:rollcall");
 		expect(rollcall?.kind).toBe("repo");
 		expect(rollcall?.layer).toBe("layer1_shared");
@@ -59,7 +59,7 @@ describe("openviking dashboard — memory explorer groups", () => {
 	});
 
 	it("names the two layers in words: L0/L1/L2 are content levels, not layers", () => {
-		const groups = buildMemoryGroups(entriesResponse(), NOW_MS, "live");
+		const groups = buildMemoryGroups(entriesResponse(), NOW_MS);
 		for (const group of groups) {
 			expect(group.title).not.toMatch(/\bL[12]\s+(shared|role|personal)/i);
 			for (const row of group.rows) {
@@ -69,7 +69,7 @@ describe("openviking dashboard — memory explorer groups", () => {
 	});
 
 	it("shows no 64-char hash and no on-disk path in a row", () => {
-		const groups = buildMemoryGroups(entriesResponse(), NOW_MS, "live");
+		const groups = buildMemoryGroups(entriesResponse(), NOW_MS);
 		for (const row of groups.flatMap((g) => g.rows)) {
 			const painted = [row.displayUri, row.title, row.l0Line, row.categoryLabel, row.scopeLabel].join(" ");
 			expect(painted).not.toMatch(HASH_64);
@@ -79,7 +79,7 @@ describe("openviking dashboard — memory explorer groups", () => {
 	});
 
 	it("keeps another role's personal memory to metadata only", () => {
-		const groups = buildMemoryGroups(entriesResponse(), NOW_MS, "live");
+		const groups = buildMemoryGroups(entriesResponse(), NOW_MS);
 		const personal = groups.filter((g) => g.layer === "layer2_personal").flatMap((g) => g.rows);
 		expect(personal.length).toBeGreaterThan(0);
 		for (const row of personal) {
@@ -90,7 +90,7 @@ describe("openviking dashboard — memory explorer groups", () => {
 });
 
 describe("openviking dashboard — audit stream", () => {
-	const allRows = () => buildAuditRows(auditResponse(), NOW_MS, "live", { action: "all", role: "all" });
+	const allRows = () => buildAuditRows(auditResponse(), NOW_MS, { action: "all", role: "all" });
 
 	it("lists the five contract actions in server order, each with its own badge", () => {
 		const rows = allRows();
@@ -116,9 +116,9 @@ describe("openviking dashboard — audit stream", () => {
 	});
 
 	it("filters by action and by role without computing anything", () => {
-		const rejected = buildAuditRows(auditResponse(), NOW_MS, "live", { action: "reject_noise", role: "all" });
+		const rejected = buildAuditRows(auditResponse(), NOW_MS, { action: "reject_noise", role: "all" });
 		expect(rejected.map((r) => r.key)).toEqual(["ev-4"]);
-		const design = buildAuditRows(auditResponse(), NOW_MS, "live", { action: "all", role: "design" });
+		const design = buildAuditRows(auditResponse(), NOW_MS, { action: "all", role: "design" });
 		expect(design.map((r) => r.key)).toEqual(["ev-2"]);
 	});
 
@@ -132,7 +132,8 @@ describe("openviking dashboard — audit stream", () => {
 	});
 
 	it("keeps listing the local audit log while :1933 is unreachable", () => {
-		const rows = buildAuditRows(auditResponse(), NOW_MS, "error", { action: "all", role: "all" });
+		// Audit rows depend on the audit call alone (frontend #273), so :1933 being down cannot empty them.
+		const rows = buildAuditRows(auditResponse(), NOW_MS, { action: "all", role: "all" });
 		expect(rows).toHaveLength(5);
 		for (const row of rows) {
 			expect(row.displayUri).not.toMatch(HASH_64);

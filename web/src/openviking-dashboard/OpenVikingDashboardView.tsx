@@ -14,10 +14,10 @@ import type {
 	OpenVikingOverviewResponse,
 } from "../../../server/openviking/types.js";
 import { AuditPanel } from "./AuditPanel.js";
-import { buildAuditFilters, buildAuditRows } from "./audit-view-model.js";
+import { buildAuditFilters, buildAuditRows, buildAuditStatus } from "./audit-view-model.js";
 import { buildDrawer } from "./drawer-view-model.js";
 import { ExplorerPanel, type OpenVikingLayerFilter } from "./ExplorerPanel.js";
-import { buildMemoryGroups } from "./explorer-view-model.js";
+import { buildExplorerStatus, buildMemoryGroups } from "./explorer-view-model.js";
 import { formatPanelAge } from "./format.js";
 import { MountMapPanel } from "./MountMapPanel.js";
 import { buildSlotRows, buildStatusHeader, buildSummaryCards } from "./overview-view-model.js";
@@ -35,8 +35,10 @@ import {
 	ageValue,
 	applyEntryContent,
 	deepReadUri,
+	formatRowAddress,
 	guardZeroActivityCards,
 	guardZeroActivityHeader,
+	parseRowAddress,
 	resolveDrawerSource,
 	type OpenVikingRowAddress,
 } from "./view-composition.js";
@@ -44,18 +46,21 @@ import type {
 	OpenVikingAuditFilterSelection,
 	OpenVikingEntryContent,
 	OpenVikingRenderState,
+	OpenVikingSlice,
 } from "./view-model-types.js";
 
-/** What the page knows right now. `loading` is the browser's own state; the rest come from the API. */
-export type OpenVikingDashboardSnapshot =
-	| { readonly status: "loading" }
-	| {
-			readonly status: "ready";
-			readonly overview: OpenVikingOverviewResponse;
-			readonly entries: OpenVikingEntriesResponse;
-			readonly audit: OpenVikingAuditResponse;
-	  }
-	| { readonly status: "fetch-failed"; readonly message: string };
+/**
+ * What the page knows right now: one slice per API call (frontend #273, M4 / #269 F2). The status header
+ * and the cards paint from `overview` alone; the Explorer and the audit wait on, and fail with, their own
+ * call only, so the slowest call never holds the whole screen.
+ */
+export interface OpenVikingDashboardSnapshot {
+	readonly overview: OpenVikingSlice<OpenVikingOverviewResponse>;
+	readonly entries: OpenVikingSlice<OpenVikingEntriesResponse>;
+	readonly audit: OpenVikingSlice<OpenVikingAuditResponse>;
+}
+
+const dataOf = <T,>(slice: OpenVikingSlice<T>): T | null => (slice.status === "ready" ? slice.data : null);
 
 export interface OpenVikingDashboardViewProps {
 	readonly snapshot: OpenVikingDashboardSnapshot;
@@ -72,20 +77,32 @@ export interface OpenVikingDashboardViewProps {
 	 */
 	readonly entryContent?: OpenVikingEntryContent | null;
 	readonly onDeepReadUriChange?: (uri: string | null) => void;
+	/** The open row as `ovrow` writes it (`memory:<uri>`, `audit:<id>`, `slot:<id>`); the container keeps it in the URL (#269 F6). */
+	readonly openRow?: string | null;
+	readonly onOpenRowChange?: (row: string | null) => void;
 }
 
 const ALL_FILTERS: OpenVikingAuditFilterSelection = { action: "all", role: "all" };
 
 export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): ReactElement {
-	const { snapshot, nowMs, onActiveTabChange, onAuditFilterChange } = props;
+	const { snapshot, nowMs, onActiveTabChange, onAuditFilterChange, onOpenRowChange } = props;
 	const [ownTab, setOwnTab] = useState<OpenVikingTabId>("mount-map");
 	const [ownFilter, setOwnFilter] = useState<OpenVikingAuditFilterSelection>(ALL_FILTERS);
 	const [layerFilter, setLayerFilter] = useState<OpenVikingLayerFilter>("all");
-	const [openRow, setOpenRow] = useState<OpenVikingRowAddress | null>(null);
+	const [ownOpenRow, setOwnOpenRow] = useState<string | null>(null);
 	const openerRef = useRef<HTMLElement | null>(null);
 
 	const activeTab = props.activeTab ?? ownTab;
 	const auditFilter = props.auditFilter ?? ownFilter;
+	const openRow = parseRowAddress(props.openRow !== undefined ? props.openRow : ownOpenRow);
+	const setOpenRow = useCallback(
+		(address: OpenVikingRowAddress | null) => {
+			const value = address ? formatRowAddress(address) : null;
+			setOwnOpenRow(value);
+			onOpenRowChange?.(value);
+		},
+		[onOpenRowChange],
+	);
 
 	const selectTab = useCallback(
 		(tab: OpenVikingTabId) => {
@@ -101,32 +118,38 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 		},
 		[onAuditFilterChange],
 	);
-	const openRowFrom = useCallback((address: OpenVikingRowAddress, opener: HTMLElement) => {
-		openerRef.current = opener;
-		setOpenRow(address);
-	}, []);
+	const openRowFrom = useCallback(
+		(address: OpenVikingRowAddress, opener: HTMLElement) => {
+			openerRef.current = opener;
+			setOpenRow(address);
+		},
+		[setOpenRow],
+	);
 	const closeDrawer = useCallback(() => {
 		setOpenRow(null);
 		openerRef.current?.focus();
-	}, []);
+	}, [setOpenRow]);
 
-	const loading = snapshot.status === "loading";
+	// Tier 1 (status header + cards) is overview's alone: it paints as soon as overview answers.
+	const loading = snapshot.overview.status === "loading";
 	const renderState: OpenVikingRenderState = loading
 		? "loading"
-		: snapshot.status === "fetch-failed"
+		: snapshot.overview.status === "failed"
 			? "error"
-			: snapshot.overview.screen_state;
-	const overview = snapshot.status === "ready" ? snapshot.overview : null;
-	const entries = snapshot.status === "ready" ? snapshot.entries : null;
-	const audit = snapshot.status === "ready" ? snapshot.audit : null;
+			: snapshot.overview.data.screen_state;
+	const overview = dataOf(snapshot.overview);
+	const entries = dataOf(snapshot.entries);
+	const audit = dataOf(snapshot.audit);
+	const explorerStatus = buildExplorerStatus(snapshot.entries, overview, nowMs);
+	const auditStatus = buildAuditStatus(snapshot.audit);
 
 	const header = guardZeroActivityHeader(buildStatusHeader(overview, nowMs, renderState), entries, audit);
 	const cards = guardZeroActivityCards(buildSummaryCards(overview, nowMs, renderState), entries, audit);
 	const slots = buildSlotRows(overview, nowMs, renderState);
-	const groups = buildMemoryGroups(entries, nowMs, renderState).filter(
+	const groups = buildMemoryGroups(entries, nowMs).filter(
 		(group) => layerFilter === "all" || group.layer === layerFilter,
 	);
-	const auditRows = buildAuditRows(audit, nowMs, renderState, auditFilter);
+	const auditRows = buildAuditRows(audit, nowMs, auditFilter);
 	const auditFilters = buildAuditFilters(audit, auditFilter);
 	const drawerSource = resolveDrawerSource(openRow, overview, entries, audit);
 	const drawerInput = applyEntryContent(drawerSource, props.entryContent ?? null);
@@ -134,9 +157,12 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 		? buildDrawer(drawerInput.source, nowMs, renderState, drawerInput.contentError, drawerInput.read)
 		: null;
 
+	// A row that is gone once its own call has answered closes; one whose call is still out (a reloaded
+	// address, ~60 s for entries) waits for it.
+	const rowCallOut = openRow !== null && snapshot[rowSlice(openRow)].status === "loading";
 	useEffect(() => {
-		if (openRow && !drawerSource) setOpenRow(null);
-	}, [openRow, drawerSource]);
+		if (openRow && !drawerSource && !rowCallOut) setOpenRow(null);
+	}, [openRow, drawerSource, rowCallOut, setOpenRow]);
 
 	const wantedUri = deepReadUri(drawerSource);
 	const { onDeepReadUriChange } = props;
@@ -209,6 +235,7 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 						className={panelClass(activeTab === "namespace-explorer")}
 					>
 						<ExplorerPanel
+							status={explorerStatus}
 							groups={groups}
 							panelAge={formatPanelAge(
 								"Updated",
@@ -220,8 +247,8 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 							badges={<ContractBadges ids={EXPLORER_BADGES} />}
 							layerFilter={layerFilter}
 							onLayerFilterChange={setLayerFilter}
-							onOpenRow={(rowKey, opener) => openRowFrom({ kind: "memory", rowKey }, opener)}
-							openRowKey={openRow?.kind === "memory" ? openRow.rowKey : null}
+							onOpenRow={(row, opener) => openRowFrom({ kind: "memory", uri: row.uri }, opener)}
+							openRowKey={drawerSource?.kind === "memory" ? drawerSource.rowKey : null}
 						/>
 					</section>
 					<section
@@ -231,6 +258,7 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 						className={panelClass(activeTab === "commit-audit")}
 					>
 						<AuditPanel
+							status={auditStatus}
 							rows={auditRows}
 							filters={auditFilters}
 							panelAge={formatPanelAge(
@@ -259,6 +287,11 @@ export function OpenVikingDashboardView(props: OpenVikingDashboardViewProps): Re
 const MOUNT_MAP_BADGES = ["mode-2-turn-1", "granularity"] as const;
 const EXPLORER_BADGES = ["granularity", "wt-land-sync"] as const;
 const AUDIT_BADGES = ["write-guard", "mode-1-l0"] as const;
+
+/** The call an open row's drawer reads from. */
+function rowSlice(address: OpenVikingRowAddress): keyof OpenVikingDashboardSnapshot {
+	return address.kind === "memory" ? "entries" : address.kind === "audit" ? "audit" : "overview";
+}
 
 function panelClass(active: boolean): string {
 	return active ? "ovk-panel" : "ovk-panel ovk-is-hidden";

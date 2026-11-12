@@ -33,6 +33,7 @@ import {
 	entriesResponse,
 	leakyAgentEntry,
 	liveOverview,
+	readySnapshot,
 } from "./openviking-dashboard-fixtures.js";
 import {
 	OPENVIKING_ISOLATION_NOTICE_TEXT,
@@ -44,12 +45,7 @@ import type { OpenVikingEntryContent } from "../../web/src/openviking-dashboard/
 let mounted: MountedDashboard | null = null;
 
 function renderExplorer(entries = entriesResponse()): HTMLElement {
-	const snapshot: OpenVikingDashboardSnapshot = {
-		status: "ready",
-		overview: liveOverview(),
-		entries,
-		audit: auditResponse(),
-	};
+	const snapshot: OpenVikingDashboardSnapshot = readySnapshot(liveOverview(), entries, auditResponse());
 	mounted = mountDashboard({ snapshot, nowMs: NOW_MS, activeTab: "namespace-explorer" });
 	requireSeamImplemented(mounted.container);
 	return mounted.container;
@@ -289,7 +285,7 @@ function rowIndexOf(uri: string): number {
 
 function renderDeep(extra: Record<string, unknown>): HTMLElement {
 	mounted = mountDashboard({
-		snapshot: { status: "ready", overview: liveOverview(), entries: listEntries(), audit: auditResponse() },
+		snapshot: readySnapshot(liveOverview(), listEntries(), auditResponse()),
 		nowMs: NOW_MS,
 		activeTab: "namespace-explorer",
 		...extra,
@@ -403,7 +399,7 @@ describe("openviking drawer — the L0 / L1 / L2 tabs actually switch (#259)", (
 		click(tierTab(container, "L2"));
 		expect(shownTier(container)).toBe("L2");
 		mounted!.rerender({
-			snapshot: { status: "ready", overview: liveOverview(), entries: listEntries(), audit: auditResponse() },
+			snapshot: readySnapshot(liveOverview(), listEntries(), auditResponse()),
 			nowMs: NOW_MS + 30_000,
 			activeTab: "namespace-explorer",
 			entryContent: readyContent(L1_TEXT, L2_TEXT),

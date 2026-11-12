@@ -9,6 +9,7 @@
  */
 
 @import "./openviking-dashboard-rows.css";
+@import "./openviking-dashboard-panel-states.css";
 
 .ovk-dashboard {
 	--ovk-gap: 16px;
