@@ -112,7 +112,12 @@ export interface OpenVikingSummaryCardModel {
 	readonly age: OpenVikingDisplayValue | null;
 	/** "from local audit log" / "from local metrics log" while `:1933` is down; null otherwise. */
 	readonly sourceNote: string | null;
-	/** At most five text fields per card (design.md Tier 1). */
+	/**
+	 * Identity beside the health pill, not a measure: card 1's `observer.daemon_bind` (design #299).
+	 * null on a card whose pill needs no address.
+	 */
+	readonly statusNote: OpenVikingDisplayValue | null;
+	/** At most five text fields per card (design.md Tier 1); `fields[0]` is the card's hero. */
 	readonly fields: readonly OpenVikingDisplayValue[];
 }
 

@@ -15,6 +15,19 @@ export const OPENVIKING_NOT_MEASURED_TEXT = "Not measured";
 /** `observer.queue_depth` is always null in v1 (spec G1, R-QUEUE-DEPTH-1): never `0`, never scraped. */
 export const OPENVIKING_QUEUE_DEPTH_TEXT = "Unavailable";
 
+/**
+ * Card 1's hero (design #299): `observer.retrieval_hit_rate_pct` in plain words, e.g. "98.3% of
+ * reads found a match". Never "hit rate" — card 2 leads with "93.8% Hit Rate" and two adjacent
+ * heroes with that phrase read as the same measure.
+ */
+export const OPENVIKING_MATCHED_READS_SUFFIX = "of reads found a match";
+
+/** Card 1's hero with nothing read in the window: a rate over zero reads is not a 0%. */
+export const OPENVIKING_NO_MATCHED_READS_TEXT = "No memory reads in window";
+
+/** Card 1's hero before the first answer: names what is loading, and paints no figure. */
+export const OPENVIKING_LOADING_MATCHED_READS_TEXT = "Loading matched reads…";
+
 /** `observer.last_reachable_at === null`: never a duration, `0`, "just now" or a recent-looking dash. */
 export const OPENVIKING_NO_CONTACT_TEXT = "No successful contact since the dashboard server started";
 

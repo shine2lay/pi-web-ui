@@ -33,7 +33,7 @@ import { ChatInput } from "./components/ChatInput";
 import { GoalBar } from "./components/GoalBar";
 import { FiRefreshCw } from "react-icons/fi";
 
-import { FooterBar } from "./components/FooterBar";
+import { StatusDock } from "./components/StatusDock";
 import { Dialog } from "./components/Dialog";
 import { DshQuestionDialog } from "./components/DshQuestionDialog";
 import { RoleGuardOwnerQuestions } from "./components/RoleGuardOwnerQuestions";
@@ -73,7 +73,6 @@ import { identityChoiceOf, identityMenuChildren } from "./identity-menu";
 import { getIdentityList } from "./identity-state";
 import { ContextMenu } from "./components/ContextMenu";
 import { BannerContainer } from "./components/BannerContainer";
-import { ReconnectingNote } from "./components/ReconnectingNote";
 import { showBanner, dismissBanner, dismissBannersWhere } from "./banner-notice";
 import { ensurePluginViewLoaded } from "./plugin-loader";
 import { insertTextAtCursor, removeMentionFromComposer } from "./composer-bridge";
@@ -2092,7 +2091,6 @@ export function App() {
 				reloadThemes={reloadThemes}
 			/>
 			{chat.protocolMismatch && <div className="protocol-banner">⚠ {t("protocolMismatch")}</div>}
-			<ReconnectingNote />
 			<div className="notices">
 				{chat.notices.map((n) => (
 					<NoticeToast key={n.id} notice={n} onDismiss={dismissNotice} />
@@ -2711,7 +2709,7 @@ export function App() {
 					/>
 				)}
 			</div>
-			<FooterBar chat={chat} bottombarItems={uiSlots["bottombar"]} onUiAction={onUiAction} />
+			<StatusDock chat={chat} bottombarItems={uiSlots["bottombar"]} onUiAction={onUiAction} />
 			{previewFile && (
 				<FilePreview
 					file={previewFile}

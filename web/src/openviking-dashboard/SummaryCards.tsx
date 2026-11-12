@@ -53,26 +53,29 @@ function SummaryCard({ card }: { readonly card: OpenVikingSummaryCardModel }): R
 		>
 			<div className="ovk-card-top">
 				{/* h2 under the page's h1 (axe heading-order, #259); the size stays .ovk-card-title's. */}
-				<h2 className="ovk-card-title">{card.title}</h2>
+				<h2 className="ovk-card-title" data-field="title">
+					{card.title}
+				</h2>
 				<span className="ovk-card-caption">
 					<span className="ovk-card-caption-text">{text.caption}</span>
 					<InfoTooltip label={tip.label} body={tip.body} />
 				</span>
 			</div>
-			{headline ? (
-				<p className="ovk-card-headline" data-field={headline.sourceField}>
-					<Figure value={headline} />
-				</p>
-			) : null}
-			<StatePill presentation={presentation} className="ovk-card-pill" />
-			<ul className="ovk-card-fields">
+			{/* The hero is the card's leading measure; its own element carries the field it cites. */}
+			{headline ? <Figure value={headline} className="ovk-card-headline" field="metric" isHero /> : null}
+			<div className="ovk-card-status" data-field="status">
+				<StatePill presentation={presentation} className="ovk-card-pill" />
+				{/* Identity beside the pill (design #299): which daemon answered, never the card's hero. */}
+				{card.statusNote ? <Figure value={card.statusNote} className="ovk-card-status-note" /> : null}
+			</div>
+			<ul className="ovk-card-fields" data-field="context">
 				{rest.map((field) => (
-					<li key={`${field.sourceField}:${field.text}`} className="ovk-card-field" data-field={field.sourceField}>
+					<li key={`${field.sourceField}:${field.text}`} className="ovk-card-field">
 						<Figure value={field} />
 					</li>
 				))}
 			</ul>
-			<footer className="ovk-card-foot">
+			<footer className="ovk-card-foot" data-field="age">
 				{card.age ? <Figure value={card.age} className="ovk-card-age" /> : null}
 				<span className="ovk-card-cadence">{text.cadence}</span>
 				{card.sourceNote ? <span className="ovk-card-source-note">{card.sourceNote}</span> : null}

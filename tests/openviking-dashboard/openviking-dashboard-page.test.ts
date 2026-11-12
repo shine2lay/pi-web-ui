@@ -103,6 +103,69 @@ describe("openviking dashboard page — status header", () => {
 	});
 });
 
+/**
+ * Card 1's hero is a measure that moves (design #299, frontend #271). The bind address is constant
+ * identity: it answers nothing in a five-second read, so it sits beside the health pill while the
+ * hero carries `observer.retrieval_hit_rate_pct` in Design's words, verbatim.
+ */
+describe("openviking dashboard page — card 1 hero", () => {
+	const healthCard = (container: HTMLElement): HTMLElement => {
+		const card = parts(container, "summary-card").find((c) => c.getAttribute("data-card-id") === "system-health");
+		if (!card) throw new Error("no system-health card rendered");
+		return card;
+	};
+	const hero = (container: HTMLElement): Element | null => healthCard(container).querySelector('[data-field="metric"]');
+	const bind = (container: HTMLElement): Element | null =>
+		healthCard(container).querySelector('[data-field="status"] [data-source-field="observer.daemon_bind"]');
+
+	it("leads with the matched reads and keeps the bind beside the pill", () => {
+		const container = render(ready());
+		const lead = hero(container);
+		expect(text(lead)).toBe("94.2% of reads found a match");
+		expect(lead?.getAttribute("data-source-field")).toBe("observer.retrieval_hit_rate_pct");
+		expect(lead?.getAttribute("data-figure")).toBe("true");
+		// Two adjacent heroes reading "hit rate" would look like one measure painted twice.
+		expect(text(lead)).not.toMatch(/hit rate/i);
+		// The address never leads the card again.
+		expect(text(lead)).not.toMatch(/\d{1,3}(\.\d{1,3}){3}/);
+		expect(text(bind(container))).toBe("127.0.0.1:1933");
+	});
+
+	it("keeps the same hero and bind while the panel is stale", () => {
+		const container = render(ready(staleOverview()));
+		expect(text(hero(container))).toBe("94.2% of reads found a match");
+		expect(text(bind(container))).toBe("127.0.0.1:1933");
+	});
+
+	it("says no memory reads in an empty window, never a 0%", () => {
+		const container = render(ready(emptyOverview()));
+		const lead = hero(container);
+		expect(text(lead)).toBe("No memory reads in window");
+		expect(text(lead)).not.toMatch(/%|\b0\b/);
+		expect(text(bind(container))).toBe("127.0.0.1:1933");
+	});
+
+	it("degrades with the daemon: unreachable, never a last-known percentage", () => {
+		const container = render(ready(offlineOverview()));
+		const lead = hero(container);
+		expect(text(lead)).toBe("— (Unreachable)");
+		expect(lead?.getAttribute("data-unreachable-value")).toBe("true");
+		expect(lead?.getAttribute("data-source-field")).toBe("observer.retrieval_hit_rate_pct");
+		expect(text(lead)).not.toMatch(/\d/);
+		// The address is still known from the last answer, and still beside the pill.
+		expect(text(bind(container))).toBe("127.0.0.1:1933");
+	});
+
+	it("names what is loading and paints no figure before the first answer", () => {
+		const container = render(LOADING_SNAPSHOT);
+		const lead = hero(container);
+		expect(text(lead)).toBe("Loading matched reads…");
+		expect(text(lead)).not.toMatch(/\d/);
+		expect(lead?.getAttribute("data-source-field")).toBe("observer.retrieval_hit_rate_pct");
+		expect(lead?.getAttribute("data-unreachable-value")).toBeNull();
+	});
+});
+
 describe("openviking dashboard page — summary cards", () => {
 	it("shows three cards, each with at most five text fields and its own panel age", () => {
 		const container = render(ready());

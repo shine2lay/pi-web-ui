@@ -11,6 +11,22 @@
 @import "./openviking-dashboard-rows.css";
 @import "./openviking-dashboard-panel-states.css";
 
+/* The page's own scroll box (frontend #276, QA rm-1c193552).
+
+   The shell is one column: the view's pane, then the bottom `.statusbar` (`flex-shrink: 0`). The pane
+   (`.view-pane`: `flex: 1; min-height: 0`) is only as tall as the space above the bar, and this page
+   had no scroll box inside it, so everything past that height simply overflowed the pane and painted
+   over the bar — and could not be scrolled to at all: at 1440 the tab bar sat below the window with
+   nothing to scroll, and at 320/390 the bar covered a card's title, its hint and the tabs.
+
+   So the pane scrolls within its own box, the way the Initiatives page does (`.initiatives-view`).
+   Then the page's last line stops where the bar begins at every width, and everything below the fold
+   is reachable. `overscroll-behavior: contain` keeps a flick at the end of the list off the shell. */
+.openviking-pane {
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
 .ovk-dashboard {
 	--ovk-gap: 16px;
 	--ovk-pad: 16px;
@@ -249,14 +265,31 @@
 }
 
 .ovk-card-headline {
+	display: block;
 	margin: 0;
 	font-size: 20px;
 	font-weight: 650;
 	line-height: 1.25;
 }
 
+/* The pill's own row: the health state, and beside it the identity that produced it. */
+.ovk-card-status {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
 .ovk-card-pill {
 	align-self: flex-start;
+}
+
+.ovk-card-status-note {
+	font-size: 12px;
+	color: var(--text-dim);
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 
 .ovk-card-fields {
@@ -422,7 +455,8 @@
 
 @media (max-width: 360px) {
 	.ovk-card-headline {
-		font-size: 18px;
+		/* Still comfortably above .ovk-card-title's 13px, so the hero leads the card at every width. */
+		font-size: 19px;
 	}
 
 	.ovk-status-title {

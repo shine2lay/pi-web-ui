@@ -7200,24 +7200,38 @@ body.panel-resizing .scm-divider::after {
 	white-space: nowrap;
 }
 
-/* mobile-fixes: "Reconnecting…" while a lost connection is replaced and the chat catches up. */
+/* #271: the shell's band for transient status — a zero-height dock between the view and the status
+   bar. The note is absolute inside it, so it is painted above the page without ever taking a page's
+   own space: no layout shift when a lost connection appears (a shift nobody asked for), and no page
+   title under it at any width (the old fixed top: 52px sat exactly on the title band at 320/390). */
+.app-status-dock {
+	position: relative;
+	flex: none;
+}
+
+/* mobile-fixes: "Reconnecting…" while a lost connection is replaced and the chat catches up.
+   #271: it lives in the status bar's own band, over the bar's left group (connection and usage
+   readings, stale while the connection is lost), never over a page: the old fixed top: 52px sat on
+   the phone's page titles. Absolute inside the dock, so it shows and goes without moving anything. */
 .reconnecting-note {
-	position: fixed;
-	top: 52px;
-	left: 50%;
-	transform: translateX(-50%);
-	z-index: 61;
+	position: absolute;
+	/* Inside the bar's top border, down to its bottom edge (which already carries the window inset). */
+	top: 1px;
+	bottom: 0;
+	left: 0;
+	max-width: 50%;
+	z-index: 2;
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	padding: 6px 14px;
-	border-radius: 999px;
-	background: var(--bg-elev2);
-	border: 1px solid var(--border);
+	padding: 0 16px;
+	/* Opaque: the bar itself is see-through (wallpaper), and the readings under the note must not
+	   show through its words. */
+	background: var(--bg-elev);
 	color: var(--text-dim);
 	font-size: 12px;
 	white-space: nowrap;
-	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+	overflow: hidden;
 	pointer-events: none;
 }
 .reconnecting-note-spin {

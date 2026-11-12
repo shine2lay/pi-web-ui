@@ -12,8 +12,11 @@ import { buildStatePresentation } from "./state-presentation.js";
 import {
 	guardRejectionsText,
 	OPENVIKING_CARD_TEXT,
+	OPENVIKING_LOADING_MATCHED_READS_TEXT,
 	OPENVIKING_LOCAL_AUDIT_SOURCE_TEXT,
 	OPENVIKING_LOCAL_METRICS_SOURCE_TEXT,
+	OPENVIKING_MATCHED_READS_SUFFIX,
+	OPENVIKING_NO_MATCHED_READS_TEXT,
 	OPENVIKING_QUEUE_DEPTH_TEXT,
 	OPENVIKING_SOURCE_FIELDS,
 	OPENVIKING_ZERO_ACTIVITY_TEXT,
@@ -39,18 +42,41 @@ function loadingCards(): readonly OpenVikingSummaryCardModel[] {
 		panelUpdatedAt: null,
 		age: null,
 		sourceNote: null,
-		fields: [loadingValue(cardId === "system-health" ? F.checkedAt : F.metricsRecordedAt)],
+		// The bind address is a figure the daemon answers with: before the first answer there is none.
+		statusNote: null,
+		fields:
+			cardId === "system-health"
+				? // Card 1's hero names what is loading instead of a bare "Loading…" (design #299).
+					[textValue(OPENVIKING_LOADING_MATCHED_READS_TEXT, F.retrievalHitRate)]
+				: [loadingValue(F.metricsRecordedAt)],
 	}));
+}
+
+/**
+ * Card 1's hero: how many memory reads found a match (design #299). The daemon owns the number, so
+ * when `:1933` is silent the hero degrades with it — never a last-known percentage, never a `0`.
+ * A window with nothing read has no rate at all, which is said in words rather than as `0%`.
+ */
+function matchedReadsHero(observer: OpenVikingOverviewResponse["observer"]): OpenVikingDisplayValue {
+	if (observer.health_state === "server-unreachable") {
+		return formatPercent(null, F.retrievalHitRate);
+	}
+	if (observer.health_state === "zero-activity" || observer.retrieval_hit_rate_pct === null) {
+		return textValue(OPENVIKING_NO_MATCHED_READS_TEXT, F.retrievalHitRate);
+	}
+	return formatPercent(observer.retrieval_hit_rate_pct, F.retrievalHitRate, {
+		suffix: OPENVIKING_MATCHED_READS_SUFFIX,
+	});
 }
 
 function healthCard(overview: OpenVikingOverviewResponse, nowMs: number): OpenVikingSummaryCardModel {
 	const observer = overview.observer;
 	const store = observer.store_counts;
 	const fields: OpenVikingDisplayValue[] = [
-		textValue(observer.daemon_bind, F.daemonBind),
+		// The hero leads the card: a measure that moves, not the constant bind address (design #299).
+		matchedReadsHero(observer),
 		// R-QUEUE-DEPTH-1: null in v1. "Unavailable" is the truth; a 0 would read as an idle queue.
 		textValue(`Queue depth: ${OPENVIKING_QUEUE_DEPTH_TEXT}`, F.queueDepth),
-		formatPercent(observer.retrieval_hit_rate_pct, F.retrievalHitRate, { suffix: "retrieval hit rate" }),
 		formatFigure(store.layer1_shared.total_count, F.layer1Total, { suffix: "shared items" }),
 		formatFigure(store.layer2_personal.total_count, F.layer2Total, { suffix: "personal items" }),
 	];
@@ -62,6 +88,8 @@ function healthCard(overview: OpenVikingOverviewResponse, nowMs: number): OpenVi
 		age: formatPanelAge("Checked", observer.checked_at, nowMs, F.checkedAt),
 		// The daemon card has no local fallback: when `:1933` is down its figures are simply absent.
 		sourceNote: null,
+		// Which daemon answered: identity, so it sits beside the health pill, not in the hero.
+		statusNote: textValue(observer.daemon_bind, F.daemonBind),
 		fields,
 	};
 }
@@ -87,6 +115,7 @@ function injectionCard(
 		panelUpdatedAt: metrics.last_recorded_at,
 		age: formatPanelAge("Last turn", metrics.last_recorded_at, nowMs, F.metricsRecordedAt),
 		sourceNote: offline ? OPENVIKING_LOCAL_METRICS_SOURCE_TEXT : null,
+		statusNote: null,
 		fields,
 	};
 }
@@ -113,6 +142,7 @@ function governanceCard(
 		panelUpdatedAt: changelog.last_event_at,
 		age: formatPanelAge("Updated", changelog.last_event_at, nowMs, F.changelogEventAt),
 		sourceNote: offline ? OPENVIKING_LOCAL_AUDIT_SOURCE_TEXT : null,
+		statusNote: null,
 		fields,
 	};
 }

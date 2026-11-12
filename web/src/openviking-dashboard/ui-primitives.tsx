@@ -12,14 +12,22 @@ import type { OpenVikingDisplayValue, OpenVikingStatePresentation } from "./view
 export function Figure({
 	value,
 	className,
+	field,
+	isHero = false,
 }: {
 	readonly value: OpenVikingDisplayValue;
 	readonly className?: string;
+	/** `data-field` slot name when this figure is the slot itself, e.g. a card's `metric` hero. */
+	readonly field?: string;
+	/** `data-figure="true"`: this text is the card's leading measure, not a label. */
+	readonly isHero?: boolean;
 }): ReactElement {
 	return (
 		<span
 			className={className ? `ovk-figure ${className}` : "ovk-figure"}
 			data-source-field={value.sourceField}
+			{...(field === undefined ? {} : { "data-field": field })}
+			{...(isHero ? { "data-figure": "true" } : {})}
 			{...(value.unreachable ? { "data-unreachable-value": "true" } : {})}
 			{...(value.notMeasured ? { "data-not-measured": "true" } : {})}
 			{...(value.ariaLabel ? { "aria-label": value.ariaLabel } : {})}
