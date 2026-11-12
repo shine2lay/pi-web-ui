@@ -188,6 +188,8 @@ describe("task-chat-start (H-LAUNCH-ONCE-1)", () => {
 		f.session.dispose();
 	});
 
+	// Ops #857 (pi 1.5.2 acceptance): pi 1.2.0+ marks the chat busy before it calls preflightResult, so the gate's
+	// refusal must also leave the chat idle. A chat left busy takes no later prompt (a queued task's chat stuck).
 	it("(c) a start reported failed never runs a turn afterwards (a prompt pi put off, taken later)", async () => {
 		const f = await fixture();
 		const inner = f.session as unknown as Internals;
@@ -198,6 +200,8 @@ describe("task-chat-start (H-LAUNCH-ONCE-1)", () => {
 		await new Promise((r) => setTimeout(r, SLOW_HOOK_MS));
 		inner._isEmittingAgentSettled = false;
 		for (const action of inner._deferredSettledActions.splice(0)) await action().catch(() => {});
+		// pi has fully handled the put-off prompt (the action is awaited): the refused start left nothing running.
+		expect(f.session.isIdle, "a start reported failed must not leave the chat busy").toBe(true);
 		await settled(f.session);
 		expect(f.requests()).toBe(0);
 		expect(userMessages(f.session)).toBe(0);
