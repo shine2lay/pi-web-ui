@@ -20,7 +20,7 @@ Parts (split by architecture #531; text moved byte-identically, section numbers 
 
 ### 3. Endpoints
 - **`GET /api/openviking/overview` (`200`):** `{ screen_state: "live"|"stale"|"empty"|"error", observer, metrics, changelog, slots, auxiliary: { rollout, resource_sync, migration, dedup } }`; `observer.stale_badge: "> 30s"|"pending sync"|null` (§4).
-- **`GET /api/openviking/entries?scope=all|resources|user|agent&role=<role>` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|"pending sync"|null, entries_partial, unread_count, entries }` (`updated_at`, `provenance`); §3a.
+- **`GET /api/openviking/entries?scope=all|resources|user|agent&role=<role>` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|"pending sync"|null, entries_partial, unread_count, entries }` (`updated_at`, `provenance`); §3a; snapshot §4a.
 - **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|"pending sync"|null, events }` (`action`: `"commit"|"role_memory_write"|"promote_shared"|"reject_noise"|"sidecar_timeout"`, `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
 
 ### 3a. Short Listings Are Flagged (`entries_partial`, `unread_count`)
@@ -32,7 +32,7 @@ Parts (split by architecture #531; text moved byte-identically, section numbers 
 - **`?uri=` is not a listing:** one entry or an HTTP error, never a short list: `entries_partial: false`, `unread_count: 0`.
 
 ### 4. Operational States (Never Conflated)
-In [spec-states.md](spec-states.md).
+In [spec-states.md](spec-states.md), with §4a Entries Snapshot.
 
 ## Canonical State and Formula Owners
 
