@@ -35,7 +35,13 @@ pi-web-ui install <repo>/plugins/legado-web --force   # 覆盖安装（插件目
 
 ## 结构
 
-```
+<!-- doc-check: paths-illustrative -->
+
+> 这棵树的根是 `plugins/legado-web/`，树里的每一行都是**相对这个根**的（比如 `src/core/`
+> 实际是 `plugins/legado-web/app/src/core/`），不是相对仓库根的路径；所以代码块标了
+> `no-path-check`，doc-check 不会把树里的层级当成本仓库的路径断言。
+
+```text no-path-check
 plugins/legado-web/
 ├── manifest.json      # id/name/icon 📖，permissions: http（host.route）+ net（出站抓取）+ tools（AI 工具）
 ├── index.mjs          # 服务端入口：/proxy、/store，并注册四个 AI 工具

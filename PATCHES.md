@@ -8663,3 +8663,13 @@ on, backtest, cost and result: `docs/stall-watch.md`.
 - Sync cost: five one-line HTML comments, three of them in files upstream also edits; a conflict only if upstream changes the line directly above those blocks. Checks: `doc-check`'s own marker suite in `agent-tools` plus the repo-wide measurement, which drops these 52 findings and adds none.
 - Undo: revert this commit (docs only; no deploy needed).
 
+## doc-check-illustrative-blocks: the plugin SDK how-to and the legado tree write the reader's paths, not ours
+
+- `local` (Ops #847; Architecture `rm-81e733d6`, rule `D-MARKED-4` in `/home/shinelay/architecture-dept/conventions/deliverable-checks/definition-d-measured-rulings.md`). Two of the four classes it ruled on live here: a path in the READER's own project in a how-to, and a path inside an ASCII tree whose root is not the repo root. Architecture refused a new pattern rule for either — "nothing distinguishes them structurally from a real claim — only the author knows" — so the author says it with `D-EXAMPLE-1`'s marker.
+- `plugin-sdk/README.md`: the three `js` sample blocks get the `no-path-check` info string, and a marked paragraph above the first one says why — the SDK import and the test file the samples name are files in the READER's plugin directory after step 1 copies the SDK there, never files in this repo.
+- `plugins/legado-web/README.md`: the structure tree gets `text no-path-check`, and a marked paragraph says the tree's root is `plugins/legado-web/`, so its engine line resolves to `plugins/legado-web/app/src/core/` (which exists) and not to a repo-root path.
+- Both explanations are marked too (`<!-- doc-check: paths-illustrative -->` before the paragraph): a paragraph that names the illustrative path is making the same non-claim the block does, and leaving it unmarked would trade four findings for four others.
+- Checked before marking (`D-COVER-1`: a marker is not a cover): neither block names a file this repo was ever meant to contain, so neither is rot wearing a marker.
+- Sync cost: none in practice — both files are this fork's own (`plugin-sdk/`, `plugins/legado-web/`), so upstream never touches them. Checks: `doc-check`'s marker suite in `agent-tools` plus the repo-wide measurement, which drops these 5 findings and adds none.
+- Undo: revert this commit (docs only; no deploy needed).
+

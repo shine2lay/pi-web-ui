@@ -24,7 +24,13 @@ pi-web-ui plugin create my-plugin --template renderer   # view:false + renderers
 1. 把 `index.mjs`（和要补全就把 `index.d.ts`）拷进你的插件目录（如 `my-plugin/sdk/`）；
 2. 服务端入口：
 
-```js
+<!-- doc-check: paths-illustrative -->
+
+> 下面的示例代码里的 `./sdk/index.mjs`、`my-plugin/index.test.mjs` 都是**你自己插件目录里的**
+> 文件（照第 1 步拷过去之后才有），不是本仓库的文件；所以这些代码块标了 `no-path-check`，
+> doc-check 不会把它们当成本仓库的路径断言。
+
+```js no-path-check
 import { definePlugin, selectOptions } from "./sdk/index.mjs";
 
 export default definePlugin({
@@ -50,7 +56,7 @@ export default definePlugin({
 
 3. 客户端视图（`client/entry.mjs`）：
 
-```js
+```js no-path-check
 import { defineView, onUiAction } from "./sdk/index.mjs";
 
 export default defineView({
@@ -74,7 +80,7 @@ export default defineView({
 
 插件作者不用起服务就能测 `activate`：SDK 自带 `createMockHost(overrides?)`（零依赖纯 ESM，`node --test` / vitest 均可）：
 
-```js
+```js no-path-check
 // my-plugin/index.test.mjs —— 跑法：node --test index.test.mjs
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
