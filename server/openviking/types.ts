@@ -255,7 +255,6 @@ export interface OpenVikingPendingWtLandSync {
 export interface OpenVikingAuxiliaryState {
 	rollout: {
 		stage: string | null;
-		phase: string | null;
 		notebook_retired: boolean | null;
 		cutover_ts: string | null;
 		updated_at: string | null;

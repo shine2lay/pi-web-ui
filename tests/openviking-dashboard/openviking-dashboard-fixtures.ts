@@ -55,7 +55,6 @@ const storeCounts = (present: boolean): OpenVikingStoreCounts => ({
 const auxiliary = (pendingSyncs = 0): OpenVikingAuxiliaryState => ({
 	rollout: {
 		stage: null,
-		phase: null,
 		notebook_retired: null,
 		cutover_ts: null,
 		updated_at: minutesAgo(12),

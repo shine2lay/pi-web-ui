@@ -437,6 +437,8 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 			}),
 		);
 		expect(old.auxiliary.rollout).toMatchObject({ stage: null, updated_at: minutesAgo(600) });
+		// `phase` has no writer (frozen rollout marker): never exposed, even when the file carries it (backend #154).
+		expect(old.auxiliary.rollout).not.toHaveProperty("phase");
 		expect(old.auxiliary.migration).toMatchObject({ verified_at: minutesAgo(90), total_checked: 21 });
 	});
 

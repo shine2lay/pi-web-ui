@@ -283,7 +283,6 @@ export async function readChangelogRecords(paths: OpenVikingStatePaths): Promise
 
 export interface OpenVikingRolloutState {
 	stage: string | null;
-	phase: string | null;
 	notebook_retired: boolean | null;
 	fallback_roles: string[];
 	cutover_ts: string | null;
@@ -311,7 +310,6 @@ export async function readRolloutState(paths: OpenVikingStatePaths): Promise<Ope
 	const cutover = str(o.cutover_ts);
 	return {
 		stage: str(o.stage),
-		phase: str(o.phase),
 		notebook_retired: typeof o.notebook_retired === "boolean" ? o.notebook_retired : null,
 		fallback_roles: Array.isArray(o.fallback_roles)
 			? o.fallback_roles.filter((r): r is string => typeof r === "string")
