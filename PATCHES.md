@@ -8010,10 +8010,13 @@ scan and the result: `docs/prompt-start-race.md`.
 - `server/prompt-start-guard.ts` (new): `installPromptStartGuard(session)` wraps the session's own
   `prompt` and `sendCustomMessage` (so UI prompts, extension `sendUserMessage` and `triggerTurn` messages):
   one start at a time; a start that arrives while another is under way, or with a run going and no
-  `deliverAs`/`streamingBehavior`, follows that run. Backstop: a start that still reaches `_runAgentPrompt`
-  while a run is active is queued as a follow-up, so a refused start never clears the running flag or emits
-  `agent_settled` early. Idle prompts, UI steer/followUp, Stop, nextTurn asides and no-turn notes pass
-  through unchanged.
+  `deliverAs`/`streamingBehavior`, follows that run. Idle prompts, UI steer/followUp, Stop, nextTurn asides
+  and no-turn notes pass through unchanged.
+- pi 1.5.2 upgrade (Ops #858): the backstop around SDK 1.0.1's `_runAgentPrompt` (a start that still
+  reached the run step mid-run was queued as a follow-up) is gone. pi 1.2.0 starts a run synchronously
+  (`_startRun`, upstream PR #10739), so it had nothing left to catch. The follow-up conversion stays: two
+  back-to-back sends without `deliverAs` still fail in pi alone (the canary). Test: "a start racing a run
+  still becomes a follow-up, and the guard leaves pi's run step alone (no backstop)".
 - `server/agent-service.ts`: installed next to `installRoleMailBoundary` (new conversation, bindSession)
   and on a reopened conversation's runtime.
 - Tests: `tests/unit/prompt-start-race.test.ts` (new; real SDK session, faux model).
@@ -8033,10 +8036,9 @@ scan and the result: `docs/prompt-start-race.md`.
 ### Undo and syncing
 
 - Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing stored changes.
-- Drop this patch when the SDK goes to `@earendil-works/pi-coding-agent` 1.2.0 or later (upstream PR
-  #10739 counts the session busy from the start of a run); the canary test failing after the upgrade is the
-  signal. It leans on SDK 1.0.1 internals (`_runAgentPrompt`, `_isAgentRunActive`,
-  `_isEmittingAgentSettled`); a test fails loudly if they go.
+- Drop this patch once the canary "the SDK alone still has the race" fails: on pi 1.5.2 it still passes
+  (pi refuses a second send without `deliverAs` during a run), so the follow-up conversion stays. It leans
+  on SDK internals `_isEmittingAgentSettled` and `_pendingNextTurnMessages`; a test fails loudly if they go.
 - The terminal notices (`notifyTerminalBashDone`, `notifyTerminalIdle`) no longer go through the prompt
   path (patch `terminal-notes`), so dropping this guard doesn't drop them.
 

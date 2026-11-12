@@ -75,13 +75,18 @@ the upgrade to 1.2.0 or later: the canary test ("the SDK alone still has the rac
 signal. Differences until then: `ctx.isIdle()` still reads true during a start's gap (the guard makes that
 harmless), and an extension send without `deliverAs` during a run becomes a follow-up instead of failing.
 
+**pi 1.5.2 (Ops #858, 2026-11-12).** The race is gone in pi, but the canary still passes: two back-to-back
+`sendUserMessage` without `deliverAs` still fail in pi alone. So the follow-up conversion stays and only the
+backstop around `_runAgentPrompt` (renamed `_startRun`, run marked active synchronously) is removed.
+
 ## Test (sealed, faux model, no real chat)
 
 `tests/unit/prompt-start-race.test.ts`, real SDK session with an inline extension:
 
 - the #106 race: two `pi.sendUserMessage` back to back on an idle chat, then a `triggerTurn:false` note
   while the first run's tool runs;
-- a `triggerTurn` message racing an extension start; three queued sends in order; the backstop;
+- a `triggerTurn` message racing an extension start; three queued sends in order; a start racing a run
+  still follows it while the guard leaves pi's run step alone (the 1.0.1 backstop test, replaced in Ops #857);
 - kept behaviour: idle single prompt, UI steer and followUp while streaming, extension send mid-run,
   Stop mid-run (flag held to the real end), nextTurn aside, installing twice;
 - canary: without the guard the race still happens; the SDK internals the guard leans on are there.
