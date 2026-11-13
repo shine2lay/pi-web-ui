@@ -272,12 +272,14 @@ async function runCurrentSessionCases() {
 		"自动新建空白对话",
 	);
 	check("唯一会话被删后自动新建空白对话", blank.state.conversationId !== convId2, blank.state.conversationId);
-	check("旧会话文件从磁盘消失", !existsSync(sessOld), sessOld);
 	// 删除管线的收尾（rm 后的 sessions 刷新）也到达 —— 证明整条链路跑完、服务未崩
 	await c.next(
 		(m) => m.type === "sessions" && !(m.sessions ?? []).some((x) => x.path === sessOld),
 		"sessions（B 删后刷新）",
 	);
+	// Checked after the refresh, as in part A: the server switches first and removes the file after
+	// (deleteSession), so the switch's snapshot can arrive before the rm (ws-deflate-off, ops #870).
+	check("旧会话文件从磁盘消失", !existsSync(sessOld), sessOld);
 
 	// C) 后台对话持有目标文件 → 拒绝删除（wake 订阅让切走时保留运行时）
 	const sessBg = seedSession(null, "cur-bg", workDir2, "后台占用的对话", 1722700803000, agentDir2);
