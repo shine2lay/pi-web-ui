@@ -30,6 +30,8 @@ export interface UiEffortLevelRow {
 export interface UiEffortLevels {
 	/** The department (pi-identity id) whose table the chat runs on. */
 	role?: string;
+	/** The department's display title, from the shared identity registry (absent when no identity exists). */
+	title?: string;
 	/** A lead's home chat, or a queued task's chat. */
 	kind?: "lead" | "task";
 	/** The level without a pick: the table's lead tier, or the task's tier (else everyday). */

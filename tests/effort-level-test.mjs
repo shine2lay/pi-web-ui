@@ -45,6 +45,7 @@ const SHOT = process.env.EFFORT_SHOT ?? "";
 // ops #879: the chip's aria-label is now "Department effort level: <level>"; the old name is its prefix.
 const BUTTON = '[aria-label^="Department effort level: "]';
 const MODEL_CHIP = ".composer-tools .chip-model";
+const MODEL_BUTTON = ".composer-tools .dropdown:has(.chip-model) > button";
 let failures = 0;
 function check(name, ok, detail = "") {
 	console.log(`${ok ? "✓" : "✗ FAIL:"} ${name}${!ok && detail ? ` (${detail})` : ""}`);
@@ -221,7 +222,10 @@ function seed({ root, agentDir, workdir }) {
 
 	idDir = join(agentDir, "memory", "identities");
 	mkdirSync(join(idDir, "ops"), { recursive: true });
-	writeFileSync(join(idDir, "ops", "identity.json"), JSON.stringify({ id: "ops", title: "Ops", homeChat: files.ops }));
+	writeFileSync(
+		join(idDir, "ops", "identity.json"),
+		JSON.stringify({ id: "ops", title: "ops/tooling", homeChat: files.ops }),
+	);
 	writeFileSync(join(idDir, "ops", "about.md"), "# Ops\n\n**Focus:** tools for the test company.\n");
 	writeFileSync(join(idDir, "ops", "notebook.md"), "rules\n");
 }
@@ -438,6 +442,39 @@ try {
 		);
 		await shot(page, "lead-menu");
 		await page.keyboard.press("Escape");
+
+		// ops #880: G1b and G3, real keyboard interaction; no pick or model call.
+		await page.locator(BUTTON).first().focus();
+		await page.keyboard.press("Enter");
+		await page.locator('.effort-menu [aria-checked="true"]').waitFor();
+		const focusedLevel = await page.evaluate(
+			() => document.activeElement?.querySelector(".effort-row-level")?.textContent,
+		);
+		check(
+			"G1b: Enter opens with focus on the checked row (Extra high)",
+			focusedLevel === "Extra high",
+			String(focusedLevel),
+		);
+		await page.keyboard.press("Escape");
+		check(
+			"G3: Escape closes effort menu and returns focus to its trigger",
+			(await page
+				.locator(BUTTON)
+				.first()
+				.evaluate((el) => document.activeElement === el)) && (await page.locator(".effort-menu").count()) === 0,
+		);
+		await page.locator(MODEL_BUTTON).first().focus();
+		await page.keyboard.press("Enter");
+		await page.locator(".dd-menu-model input").first().waitFor();
+		await page.locator(".dd-menu-model input").first().focus();
+		await page.keyboard.press("Escape");
+		check(
+			"G3 model: Escape closes model menu and returns focus to its trigger",
+			(await page
+				.locator(MODEL_BUTTON)
+				.first()
+				.evaluate((el) => document.activeElement === el)) && (await page.locator(".dd-menu-model").count()) === 0,
+		);
 	}
 
 	// ---- 2. picking High switches the model menu's shown model -------------------------------------------------

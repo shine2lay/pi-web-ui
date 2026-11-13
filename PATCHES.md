@@ -8853,7 +8853,11 @@ selector"; then "A new button beside it", "Lead and task chats", "Until you chan
    <Department>" (ops #879; was "<Department> table"), five rows "<level> · <model> @ <thinking>", ✓ on the current row, "(default)" on the department
    default, notes ("raised to Medium for a lead chat", "uses spare ChatGPT allowance", a row's problem), a
    table problem as a warning, the busy/failed status, last item "Back to department default".
-   `Dropdown` gained optional `menuRole` / `menuLabel`. Today's model and Effort menus are unchanged.
+   `Dropdown` gained optional `menuRole` / `menuLabel`. Ops #880: the server adds the title from the shared
+   `identityRegistry` (the Roles page's reader); the header uses that spelling only when title = id ignoring
+   case (QA, RollCall, COO, Design, temper); otherwise the capitalised id (Ops, Frontend, Data), also without
+   a title. Opening focuses the checked row before the first row. Shared `Dropdown` returns focus to its
+   trigger on Escape, including today's model and Effort menus; no other behaviour of those menus changes.
    On a phone the menu is the usual bottom sheet, but stacked above Send/Stop (z-index 110 over the right
    group's 100; ops #879, Design rm-866a7f1a: the send button covered the Low row), and a row with no note
    keeps its text centred in the 44px touch height (`align-content: center`).
@@ -8861,6 +8865,10 @@ selector"; then "A new button beside it", "Lead and task chats", "Until you chan
 ### How it was checked
 
 - `tests/unit/effort-level.test.ts`: 11 cases; #876's `notBuilt` cases turned into `it`, no assertion changed.
+- Ops #880: `tests/unit/effort-level-header.test.ts` (10 cases) renders the real header for the names above
+  and the missing-title fallback, and checks the canonical title on get/set/refused-set replies. Sealed E2E
+  adds G1b (Enter focuses checked Extra high), G3 (Escape restores effort trigger), G3 model (same for model
+  menu). All three keyboard checks and QA/RollCall/COO/temper + server-title unit checks failed before the fix.
 - `tests/effort-level-test.mjs` (sealed: own server, temp HOME, pi-queue from its checkout, a fixture
   Ops table, models that can't be reached, no model call): 19 checks pass (axe on the open menu in dark and White added after the live look: White's
   faint "(default)" on the checked row was 4.24:1, now `--text-dim`). #878 completed the fixture table

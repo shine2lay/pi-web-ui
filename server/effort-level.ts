@@ -7,6 +7,7 @@
  *
  * Built by ops #878 (task 2b). EFFORT_LEVELS_NOT_BUILT stays exported: #876's seam test names it.
  */
+import { identityRegistry } from "./identities.js";
 import type {
 	EffortLevelClientMessage,
 	EffortLevelServerMessage,
@@ -94,13 +95,19 @@ export function effortLevelDeps(
 
 const HIDDEN: UiEffortLevels = { rows: [] };
 
+/** Reuse the Roles page's canonical identity reader; pi-queue owns routing, not display names. */
+function withDepartmentTitle(levels: UiEffortLevels): UiEffortLevels {
+	const title = levels.role ? identityRegistry().identities.find((role) => role.id === levels.role)?.title : undefined;
+	return title ? { ...levels, title } : levels;
+}
+
 /** A chat's levels for the button and the server's push; `{ rows: [] }` (hidden) for a chat of no table. */
 export function effortLevelsFor(conversationId: string, deps: EffortLevelDeps): UiEffortLevels {
 	const chat = deps.chat(conversationId);
 	const api = (deps.routeApi ?? effortRouteApi)();
 	if (!chat || !api) return { ...HIDDEN };
 	try {
-		return api.effortLevels({ sessionFile: chat.sessionFile });
+		return withDepartmentTitle(api.effortLevels({ sessionFile: chat.sessionFile }));
 	} catch (err) {
 		// pi-queue failing to read its files: no button, and the reason in the server log.
 		console.error(`[effort-level] effortLevels(${chat.sessionFile}) failed:`, err);
@@ -127,7 +134,8 @@ export async function handleEffortLevelMessage(msg: EffortLevelClientMessage, de
 	} catch (err) {
 		return answer({ levels: effortLevelsFor(conversationId, deps), error: message(err) });
 	}
-	const { apply, ...levels } = picked;
+	const { apply, ...table } = picked;
+	const levels = withDepartmentTitle(table);
 	// Busy: pi-queue's turn-start hook switches it before the next turn, never mid-turn.
 	if (chat.isStreaming) return answer({ levels, applied: "next-turn" });
 	if (!apply) return answer({ levels });

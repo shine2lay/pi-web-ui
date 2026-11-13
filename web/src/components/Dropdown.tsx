@@ -92,6 +92,7 @@ export function Dropdown({
 	menuLabel,
 }: DropdownProps) {
 	const ref = useRef<HTMLDivElement>(null);
+	const triggerRef = useRef<HTMLButtonElement>(null);
 	const internalMenuRef = useRef<HTMLDivElement | null>(null);
 	const [shift, setShift] = useState(0);
 
@@ -151,11 +152,15 @@ export function Dropdown({
 	// 外部点击与触屏关闭
 	useClickOutside(ref, () => onOpenChange(false), { enabled: open });
 	// Esc 键栈调度（优先消费，避免误关外层 Modal）
-	useEscapeKey(() => onOpenChange(false), open);
+	useEscapeKey(() => {
+		onOpenChange(false);
+		triggerRef.current?.focus();
+	}, open);
 
 	return (
 		<div className={`dropdown ${align} ${fit ? "fit" : ""} ${direction === "up" ? "dd-up" : ""}`} ref={ref}>
 			<button
+				ref={triggerRef}
 				type="button"
 				className={triggerClassName ?? "chip"}
 				onClick={() => onOpenChange(!open)}

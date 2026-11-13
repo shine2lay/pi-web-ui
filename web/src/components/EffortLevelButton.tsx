@@ -18,8 +18,9 @@ import "../effort-level.css";
 
 type T = ReturnType<typeof useT>;
 
-/** "ops" -> "Ops": the table's name in the menu header. */
-const departmentName = (role: string) => role.charAt(0).toUpperCase() + role.slice(1);
+/** Preserve a department's spelling (QA, RollCall), not a longer title (ops/tooling -> Ops). */
+const departmentName = (role: string, title?: string) =>
+	title?.toLowerCase() === role.toLowerCase() ? title : role.charAt(0).toUpperCase() + role.slice(1);
 
 /** The model part of a row: "Claude Opus 5.5 @ high", or why the level can't run. */
 function rowModel(row: UiEffortLevelRow, t: T): string {
@@ -69,13 +70,17 @@ export const EffortLevelButton = memo(function EffortLevelButton({
 	const view = useEffortLevels(conversationId);
 	useEffect(() => setOpen(false), [conversationId, connected]);
 	useEffect(() => {
-		if (open) menu.current?.querySelector<HTMLButtonElement>("[aria-checked='true'], [role^='menuitem']")?.focus();
+		if (open) {
+			const checked = menu.current?.querySelector<HTMLButtonElement>("[aria-checked='true']");
+			const first = menu.current?.querySelector<HTMLButtonElement>("[role^='menuitem']");
+			(checked ?? first)?.focus();
+		}
 	}, [open]);
 	const levels = view?.levels;
 	if (!conversationId || !view || !levels?.role || levels.rows.length === 0) return null;
 	const current = levels.pickedTier ?? levels.defaultTier;
 	const currentLabel = levels.rows.find((r) => r.tier === current)?.label ?? "—";
-	const table = t("effortLevelTable", { department: departmentName(levels.role) });
+	const table = t("effortLevelTable", { department: departmentName(levels.role, levels.title) });
 	const pick = (tier: UiEffortLevelRow["tier"] | null) => {
 		if (pickEffortLevel(conversationId, tier)) setOpen(false);
 	};
