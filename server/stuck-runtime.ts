@@ -14,6 +14,16 @@
  */
 import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 
+/** A promise (`done`) that resolves once `open()` is called: interruptRun races session.abort()
+ *  against the end of the force-reset, since the old session's abort() may never return. */
+export function latch(): { done: Promise<void>; open: () => void } {
+	let open: () => void = () => {};
+	const done = new Promise<void>((r) => {
+		open = r;
+	});
+	return { done, open };
+}
+
 export async function disposeStuckRuntime(runtime: AgentSessionRuntime): Promise<void> {
 	const session = runtime.session;
 	// Signal the abort; its wait for idle may never resolve, so nothing awaits it.

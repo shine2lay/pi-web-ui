@@ -215,7 +215,7 @@ import {
 	findTailDanglingToolCalls,
 	healDanglingToolCallFile,
 } from "./dangling-tools.js";
-import { disposeStuckRuntime } from "./stuck-runtime.js";
+import { disposeStuckRuntime, latch } from "./stuck-runtime.js";
 import { contextMessagesOf, openScannedSession, scanTranscriptFile, type TranscriptScan } from "./transcript-scan.js";
 import { removeQueuedByIndexOrText } from "./queue-utils.js";
 import type {
@@ -13715,29 +13715,23 @@ export class ClientSession {
 				ended = true;
 			}
 		});
-		// stuck-runtime: the old session's abort() waits for a stuck run that never goes idle, so the
-		// wait below also ends once the force-reset is over (else Stop never returns).
-		let forcedOver: () => void = () => {};
-		const forceDone = new Promise<void>((r) => {
-			forcedOver = r;
-		});
+		const forceDone = latch(); // stuck-runtime: Stop's wait for abort() also ends with the force-reset
 		const force = () => {
 			if (forced) return;
 			forced = true;
 			void this.forceResetConversation(
 				conv,
 				`${reason}: the run did not stop, so the current conversation was force-reset`,
-			).finally(forcedOver);
+			).finally(forceDone.open);
 		};
 		// 1) abort itself hangs (model stream ignores the signal) → hard kill.
 		const abortTimer = setTimeout(() => {
 			if (!ended) force();
 		}, ClientSession.HARD_ABORT_TIMEOUT_MS);
 		abortTimer.unref?.();
-		// 2) abort itself (Stop semantics: kills the process tree, emits
-		//    agent_end with stopReason "aborted" on the normal path).
+		// 2) abort itself (Stop: kills the process tree, emits agent_end "aborted" on the normal path).
 		try {
-			await Promise.race([conv.runtime.session.abort(), forceDone]);
+			await Promise.race([conv.runtime.session.abort(), forceDone.done]);
 		} catch (err) {
 			this.emit({
 				type: "notice",
@@ -13746,8 +13740,7 @@ export class ClientSession {
 				textEn: `Abort failed: ${(err as Error).message}`,
 			});
 		}
-		// 3) abort returned but no agent_end within the settle window:
-		//    仅在 session 依然处于非 idle 状态（即真正卡住）时才等待并强制重置
+		// 3) abort returned but no agent_end within the settle window: wait and force only if still not idle.
 		if (!ended && !conv.session.isIdle) {
 			await new Promise((r) => setTimeout(r, ClientSession.HARD_ABORT_SETTLE_MS));
 		}
@@ -13780,8 +13773,7 @@ export class ClientSession {
 			this.clearAllToolWatchdogs(conv);
 			conv.toolStartTimes.clear();
 			disposeEvalSession(conv.id);
-			// stuck-runtime: plain dispose() waits for the stuck run to go idle, which it never does.
-			await disposeStuckRuntime(conv.runtime);
+			await disposeStuckRuntime(conv.runtime); // stuck-runtime: plain dispose() waits for idle forever
 			// force-reset-rebind: the stuck run is over, and its agent_end never comes (unsubscribed above),
 			// so the chat leaves the working list here; otherwise it would look busy until a restart, and
 			// role messages and the queue would wait on it for good.
