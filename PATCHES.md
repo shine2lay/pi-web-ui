@@ -8019,6 +8019,15 @@ scan and the result: `docs/prompt-start-race.md`.
   (`_startRun`, upstream PR #10739), so it had nothing left to catch. The follow-up conversion stays: two
   back-to-back sends without `deliverAs` still fail in pi alone (the canary). Test: "a start racing a run
   still becomes a follow-up, and the guard leaves pi's run step alone (no backstop)".
+- Ops #860: an extension command (`/name ...` naming a registered command, templates on) skips the line:
+  pi runs it at once, even mid-run, and it starts no run. Held, it deadlocked: the owner's browser answer
+  woke a stuck task's chat, pi-queue's input hook for those words awaited the host's question commit, and
+  the host sent `/queue question-commit` into that same chat, which queued behind the start waiting for it.
+  The commit lane stayed held, so the lead's later `queue_reply` relay hung until a restart (Ops lead 2 h,
+  Design lead 20 min, 2026-11-12). Latent since Ops #671 (2026-10-31), not a pi 1.5.2 change. Tests: "an
+  input hook that waits for an extension command sent into the same chat gets it at once" (fails without
+  it), its SDK-alone canary, and "a slash line that names no extension command still takes its turn".
+  Details: `~/ops-checks/pi-1-5-upgrade-2026-11-12/relay-hang.md`.
 - `server/agent-service.ts`: installed next to `installRoleMailBoundary` (new conversation, bindSession)
   and on a reopened conversation's runtime.
 - Tests: `tests/unit/prompt-start-race.test.ts` (new; real SDK session, faux model).

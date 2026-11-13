@@ -54,7 +54,7 @@ const textOf = (m: { content?: unknown }): string =>
 /** Words that make the faux model call the slow tool once, on the first request carrying them. */
 const TOOL_WORD = "use-the-tool";
 
-async function fixture(guard: boolean): Promise<Fixture> {
+async function fixture(guard: boolean, extend?: (api: ExtensionAPI) => void): Promise<Fixture> {
 	const faux = fauxProvider({ provider: "faux-race", models: [{ id: "m" }] });
 	const modelRuntime = await ModelRuntime.create({
 		authPath: join(root, "auth.json"),
@@ -94,6 +94,7 @@ async function fixture(guard: boolean): Promise<Fixture> {
 		extensionFactories: [
 			(api: ExtensionAPI) => {
 				pi = api;
+				extend?.(api);
 			},
 		],
 		noSkills: true,
@@ -275,6 +276,75 @@ describe("prompt-start-race (H-PROMPT-RACE-1)", () => {
 		await settled(f.session);
 		expect(f.errors).toEqual([]);
 		expect(shape(f.session).filter((s) => s.startsWith("user:"))).toEqual(["user:one", "user:two", "user:three"]);
+		f.session.dispose();
+	});
+});
+
+// Ops #860: an owner's answer woke a stuck task's chat; pi-queue's input hook for those words waited for the
+// host's question commit, and the host sends that commit into the same chat as an extension command. The
+// command queued behind the very start whose input hook waited for it: the chat and the queue's commit
+// lane hung until a restart (two lead chats froze in queue_reply on 2026-11-12).
+/** Lets the event loop turn `n` times (a count, not a clock: a busy machine doesn't change it). */
+async function turns(n: number): Promise<void> {
+	for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r));
+}
+
+/** The relay's shape: an input hook sends an extension command into its own chat and waits for the command's
+ *  acknowledgement (as the host's question commit does). The hook gives up after 200 loop turns, so a held
+ *  command shows as `acknowledged: false` instead of hanging the test. */
+async function commandFromInputHook(guard: boolean) {
+	let session!: AgentSession;
+	let acknowledged!: () => void;
+	const ran: string[] = [];
+	let acked = false;
+	const f = await fixture(guard, (api) => {
+		api.registerCommand("commit", {
+			description: "Fixture: the host's synchronous commit acknowledgement.",
+			handler: async (args) => {
+				ran.push(args);
+				acknowledged();
+			},
+		});
+		api.on("input", async (event) => {
+			if (!event.text.includes("owner words")) return;
+			const ack = new Promise<void>((r) => {
+				acknowledged = r;
+			});
+			// As the host's dispatch: send the command, wait for its acknowledgement, not for the prompt call.
+			void session.prompt("/commit token-1");
+			acked = await Promise.race([ack.then(() => true), turns(200).then(() => false)]);
+		});
+	});
+	session = f.session;
+	await f.session.prompt("the owner words");
+	await settled(f.session);
+	const outcome = { acknowledged: acked, ran, errors: f.errors, requests: f.requests };
+	f.session.dispose();
+	return outcome;
+}
+
+describe("prompt-start-race: an extension command is never held behind a start (Ops #860)", () => {
+	it("an input hook that waits for an extension command sent into the same chat gets it at once", async () => {
+		const o = await commandFromInputHook(true);
+		expect(o.acknowledged, "the command ran while the start's input hook waited for it").toBe(true);
+		expect(o.ran).toEqual(["token-1"]);
+		expect(o.errors).toEqual([]);
+		expect(o.requests).toEqual(["the owner words"]);
+	});
+
+	it("canary: the SDK alone runs the command at once too", async () => {
+		const o = await commandFromInputHook(false);
+		expect(o.acknowledged).toBe(true);
+		expect(o.ran).toEqual(["token-1"]);
+	});
+
+	it("a slash line that names no extension command still takes its turn in the line", async () => {
+		const f = await fixture(true);
+		f.pi.sendUserMessage("one");
+		await f.session.prompt("/not-a-command two");
+		await settled(f.session);
+		expect(f.errors).toEqual([]);
+		expect(shape(f.session).filter((s) => s.startsWith("user:"))).toEqual(["user:one", "user:/not-a-command two"]);
 		f.session.dispose();
 	});
 });

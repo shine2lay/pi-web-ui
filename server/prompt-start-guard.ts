@@ -18,6 +18,10 @@
  *    and then, with the run going, becomes a follow-up of that run;
  * 2. an extension send without deliverAs that finds a run going becomes a follow-up instead of
  *    failing with "Agent is already processing".
+ * 3. an extension command ("/name ..." naming a registered command) never waits in the line: pi runs it at once,
+ *    even mid-run, and it starts no run itself (Ops #860). Held, it deadlocked: a start's input hook (pi-queue's
+ *    owner-answer admission) waited for the host's "/queue question-commit" sent into the same chat, which
+ *    waited for that very start.
  * pi's own run step is left alone. Everything else (idle prompts, UI steer/followUp, Stop, nextTurn asides, no-turn notes) passes
  * straight through to the SDK.
  */
@@ -40,7 +44,16 @@ interface SessionInternals {
 	_preparePromptAndToolLoadout?: (...args: unknown[]) => unknown;
 }
 
-type GuardedSession = Pick<AgentSession, "prompt" | "sendCustomMessage" | "isStreaming" | "agent">;
+type GuardedSession = Pick<AgentSession, "prompt" | "sendCustomMessage" | "isStreaming" | "agent"> & {
+	readonly extensionRunner?: { getCommand(name: string): unknown } | undefined;
+};
+
+/** The line pi runs as an extension command before anything else (its own prompt() check, same parse). */
+function isExtensionCommand(session: GuardedSession, text: string, options: PromptOptions | undefined): boolean {
+	if ((options?.expandPromptTemplates ?? true) === false || !text.startsWith("/")) return false;
+	const space = text.indexOf(" ");
+	return !!session.extensionRunner?.getCommand(space === -1 ? text.slice(1) : text.slice(1, space));
+}
 
 const installed = new WeakSet<object>();
 const pendingStarts = new WeakMap<object, () => boolean>();
@@ -133,6 +146,7 @@ export function installPromptStartGuard(session: GuardedSession): void {
 			throw new Error(BUSY_PROMPT_REASON);
 		// While agent_settled is being emitted the SDK defers the call and replays it through here.
 		if (inner._isEmittingAgentSettled) return prompt(text, options);
+		if (isExtensionCommand(session, text, options)) return prompt(text, options);
 		if (!starting && session.isStreaming) return prompt(text, asFollowUp(options));
 		const turn = enter();
 		await turn.ready;
