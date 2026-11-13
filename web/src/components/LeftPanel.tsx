@@ -72,8 +72,6 @@ interface LeftPanelProps {
 			| { type: "dismiss_conversation"; id: string; withFinishedSubagents?: boolean; force?: boolean }
 			| { type: "dismiss_finished_subagents"; parentId?: string }
 			| { type: "persist_conversation"; id: string }
-			| { type: "take_over_conversation"; owner: string; id: string }
-			| { type: "peek_elsewhere_question"; owner: string; id: string }
 			| { type: "remove_recent_chat"; path: string }
 			| { type: "set_chat_identity"; conversationId?: string; sessionPath?: string; identity: string | null },
 	) => boolean;
@@ -111,12 +109,11 @@ function formatModified(ts: number): string {
 }
 
 /** 打开 `contextmenu.session` 菜单时的被右键对象（kind 决定操作范围：见 showSessionMenu）。
- *  elsewhere = 「另一处」行：id 即对方会话内的 convId，owner 标识持有方（过户目标）。 */
+ *  elsewhere = DSH read-only awareness row (synthetic display id, no ownership actions). */
 type SessionMenuTarget = {
 	id: string;
 	kind: "running" | "history" | "section" | "elsewhere";
 	label: string;
-	owner?: string;
 };
 
 /** 右键落点是不是「输入类」元素：重命名输入框里的右键要留给浏览器（复制 / 粘贴 /
@@ -228,7 +225,6 @@ export const LeftPanel = memo(function LeftPanel({
 	const showIdentityTags =
 		!isDsh && (uiLeftSessions ? uiLeftSessions.some((e) => e.id === LP_IDENTITY_ENTRY_ID) : true);
 	const [confirmDel, setConfirmDel] = useState<string | null>(null);
-	const [confirmTakeover, setConfirmTakeover] = useState<string | null>(null);
 	const [renaming, setRenaming] = useState<string | null>(null);
 	const [renameDraft, setRenameDraft] = useState("");
 	const [collapseConvs, toggleConvs] = useCollapsed(LS_COLLAPSE_CONVS, false);
@@ -395,9 +391,6 @@ export const LeftPanel = memo(function LeftPanel({
 				// （与悬停 ✎ 铅笔同一套内嵌输入框，见 dispatchHostSessionEntry）。
 				if (entry.id === "host:conv-rename")
 					return target.kind === "running" || target.kind === "history" ? entry : { ...entry, hidden: true };
-				// 过户：只在「另一处」行出现（无 owner/convId 的旧条目同样隐藏）。
-				if (entry.id === "host:conv-takeover")
-					return isElsewhere && takeId && target.owner ? entry : { ...entry, hidden: true };
 				// 关闭类是本会话口径，「另一处」行不适用。
 				if (isElsewhere && (entry.id === "host:conv-dismiss-subagents" || entry.id === "host:conv-force-dismiss"))
 					return { ...entry, hidden: true };
@@ -475,12 +468,6 @@ export const LeftPanel = memo(function LeftPanel({
 				if (scopeId) panelSend({ type: "set_chat_identity", conversationId: scopeId, identity: identityChoice });
 				else if (target.kind === "history" && target.id)
 					panelSend({ type: "set_chat_identity", sessionPath: target.id, identity: identityChoice });
-				return;
-			}
-			if (entry.id === "host:conv-takeover") {
-				if (target.kind === "elsewhere" && takeId && target.owner) {
-					panelSend({ type: "take_over_conversation", owner: target.owner, id: takeId });
-				}
 				return;
 			}
 			if (entry.id === "host:conv-dismiss-subagents") {
@@ -649,7 +636,7 @@ export const LeftPanel = memo(function LeftPanel({
 		[sessionMenuAvailable, showSessionMenu],
 	);
 
-	type RowConv = ConversationSummary & { elsewhere?: boolean; owner?: string; convId?: string; hasQuestion?: boolean };
+	type RowConv = ConversationSummary & { elsewhere?: boolean };
 	const panelRef = useRef<HTMLElement>(null);
 	const [weights, setWeights] = useState<LpWeights>(() => loadLpWeights());
 	useEffect(() => {
@@ -668,9 +655,6 @@ export const LeftPanel = memo(function LeftPanel({
 		isStreaming: w.isStreaming,
 		isSubagent: false as const,
 		elsewhere: true as const,
-		// 过户目标定位（无则沿用旧行为：只读行，无过户入口）。
-		...(w.owner && w.convId ? { owner: w.owner, convId: w.convId } : {}),
-		...(w.hasQuestion ? { hasQuestion: true as const } : {}),
 		// left-task-status: a parked queued task's chat says how its task stands.
 		...(w.queueStatus ? { queueStatus: w.queueStatus } : {}),
 	});
@@ -812,81 +796,40 @@ export const LeftPanel = memo(function LeftPanel({
 		inLeads,
 	}: ConvRow & { inLeads?: boolean }): React.ReactNode => {
 		if ((c as RowConv).elsewhere) {
-			const elseOwner = (c as RowConv).owner;
-			const elseConvId = (c as RowConv).convId;
-			// issue #290：可过户（有 owner + convId）时本行可点击，两段确认。
-			const canTakeover = Boolean(elseOwner && elseConvId);
-			const confirming = confirmTakeover === c.id;
-			const elseStatus = confirming ? undefined : shownQueueStatus(c as RowConv);
+			// DSH alone emits these read-only rows (title/cwd/isStreaming, no owner or convId).
+			const elseStatus = shownQueueStatus(c as RowConv);
 			return (
 				<div
 					className={`lp-row${depth > 0 ? " lp-sub lp-queue-task" : ""}`}
 					key={c.id}
 					style={depth > 0 ? { marginLeft: depth * 18 } : undefined}
-					onMouseLeave={() => setConfirmTakeover((k) => (k === c.id ? null : k))}
-					// 「另一处」行右键：过户到本页（含等答复的问卷）。
+					// DSH read-only row: plugin context actions remain available.
 					onContextMenu={(e) =>
 						openSessionMenu(e, {
-							id: elseConvId ?? c.id,
+							id: c.id,
 							kind: "elsewhere",
 							label: c.title,
-							...(elseOwner ? { owner: elseOwner } : {}),
 						})
 					}
 				>
-					{/* 「另一处」行本体：可过户时当按钮用（第一次点 = 确认，第二次点 = 过户）。
-    不可过户（旧条目无 owner/convId）时保持只读，无 onClick。 */}
 					<button
 						type="button"
-						className={`session-item elsewhere-item${canTakeover ? "" : " elsewhere-static"}${confirming ? " confirm" : ""}`}
-						title={confirming ? t("takeoverConfirm") : `${t("elsewhereTip")}\n${c.cwd}`}
-						tabIndex={canTakeover ? 0 : -1}
-						onClick={
-							canTakeover
-								? () => {
-										if (!confirming) {
-											setConfirmTakeover(c.id);
-											return;
-										}
-										setConfirmTakeover(null);
-										panelSend({
-											type: "take_over_conversation",
-											owner: elseOwner as string,
-											id: elseConvId as string,
-										});
-									}
-								: undefined
-						}
+						className="session-item elsewhere-item elsewhere-static"
+						title={`${t("elsewhereTip")}\n${c.cwd}`}
+						tabIndex={-1}
 					>
 						<FiMessageSquare className="session-icon" />
 						<span className="session-info">
 							<span className="session-title">
 								<span className="elsewhere-badge">{t("elsewhereBadge")}</span>
-								{c.hasQuestion && elseOwner && elseConvId && (
-									<span
-										className="question-badge clickable"
-										title={t("takeoverHasQuestion")}
-										onClick={(e) => {
-											e.stopPropagation();
-											// 点 `?` 直接把问卷拉到本页作答（不搬迁对话）。
-											panelSend({
-												type: "peek_elsewhere_question",
-												owner: elseOwner,
-												id: elseConvId,
-											});
-										}}
-									>
-										?
-									</span>
-								)}
-								{confirming ? t("takeoverConfirm") : c.title}
+								{c.title}
 							</span>
 							{elseStatus && <span className="session-sub lp-task-status-line">{taskStatusChip(elseStatus)}</span>}
 						</span>
 						{c.isStreaming && <span className="conv-streaming" title={t("streaming")} />}
 					</button>
 					{/* 触屏没有右键（contextmenu 不可靠）：给「另一处」行一个可见的操作钮，点开与右键同一个会话菜单
-															（过户 / 抢答问卷 / 复制 id）；槽位暂无可显示条目时不渲染（同右键路径的让路口径）。 */}
+															（插件操作 / 复制 id）；槽位暂无可显示条目时不渲染（同右键路径的让路口径）。 */}
 					{sessionMenuAvailable && (
 						<button
 							type="button"
@@ -898,10 +841,9 @@ export const LeftPanel = memo(function LeftPanel({
 								// 坐标按按钮矩形锚定（触屏 click 的 clientX/Y 不可靠），clampMenuPosition 会自行钳进视口。
 								const r = e.currentTarget.getBoundingClientRect();
 								showSessionMenu(r.left, r.bottom + 4, {
-									id: elseConvId ?? c.id,
+									id: c.id,
 									kind: "elsewhere",
 									label: c.title,
-									...(elseOwner ? { owner: elseOwner } : {}),
 								});
 							}}
 						>

@@ -1956,11 +1956,8 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
   页面」）。改为：正开着这条对话的在线浏览器 → 任一在线浏览器（都取最新接入的）→
   任一浏览器 → 上游口径（新增 `ClientSession.isViewing()`）。问卷本来就是广播 + 进程
   共享登记表，挑谁都一样。回归：`tests/unit/conversation-home.test.ts`。
-- 上游 v0.94 的手动过户 `takeOverConversation()` 把 runtime 从 owner 摘下来（detach）再塞进
-  目标（insert）。共享表上那会把对话从**所有**窗口摘掉再塞回来（可能还换 id），源窗口还收到
-  「已过户到另一处」的假通知。改为：目标已持有这条对话 → 一律退化为普通切换（单 owner
-  口径下目标不会持有别人的对话，行为不变）。入口本来就不会出现（`listExternalRunning()`
-  恒为空），这是防御。回归：`tests/unit/takeover-shared-table.test.ts`。
+- 上游 v0.94 的手动过户曾防御性退化为普通切换；ops #874 已删掉整条不可达路径和
+  `tests/unit/takeover-shared-table.test.ts`，见下文 Dead ownership cleanup。
 - **看客也要实时**（2026-09-24 修）：SDK 事件只订阅在「开这条对话的那个窗口」（订阅方）上。
   `onEvent` 原先只在订阅方**自己**正看着这条对话时才发增量、安排快照。订阅方一切走
   （或那次页面加载早就刷新没了，client-per-load 之后很常见），这条对话的增量就谁都不发了：
@@ -1984,6 +1981,36 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
   0 条增量、回答最后整段到（失败）；新构建：问题 51ms、增量 9 条、切走的 0 条**。
 - `tests/cross-client-session-test.mjs` 按新口径改写：原来断言「必须拒绝」的两处
   改为「必须能订阅同一条」，并发发送改为断言「排队而非拦截」
+
+### Dead ownership cleanup (ops #874, 2026-11-12)
+
+Hypothesis before editing: the six unreachable rows in ops #870's `e2e-six.md` are leftovers of
+server-owned-chats (`4eedb89a`), not missing features. Removing the pi-only ownership paths and their
+exclusive helpers should leave the sealed 77-test owner-facing contract unchanged. Measure with
+`git grep`, `check.sh`, sealed E2E and `wt check`; any owner-facing regression disproves this.
+
+DSH reachability checked separately: `DshAgentService.attach()` wires its real `listExternalRunning()`;
+`DshClientSession.streamingSummariesAll()` emits streaming rows with title/cwd/isStreaming only, and
+`emitConversations()` pushes them. Keep that engine's `elsewhere` field, shared protocol type, client
+state and **read-only** Elsewhere rows. DSH never supplies owner/convId/hasQuestion and implements
+neither takeover nor question peek: their actions/senders are dead in both engines.
+
+Disposition of every `e2e-six.md` row:
+
+| Row | Disposition |
+|---|---|
+| pi `resumeSkipped` notices/guard | Removed; its only guard read the always-empty pi list. |
+| `takeOverConversation()` / `take_over_conversation` | Removed, including exclusive runtime-transfer helpers and obsolete tests; neither engine needs them. |
+| `peekElsewhereQuestion()` / `peek_elsewhere_question` | Removed, including its exclusive question-preview helpers and sender. |
+| `findAdoptableOrphan()` / `pickAdoptableOrphan()` | Removed with exclusive candidate readers/tests; reload-adopt uses `pickAdoptTarget`. |
+| pi conversations `elsewhere` + client rows | Removed pi construction/stub; retained DSH's live read-only rows and shared field/state only (reason above). Removed takeover/peek controls from those rows. |
+| `releaseSchedulerClient()` stale comment | Corrected to shared-list semantics; release itself unchanged. |
+
+Keep `findSessionOwner()` for delete, and keep shared-list refreshes. Protocol **51 → 52** on both
+ends because the two client message types and their unused `elsewhere_question` reply are removed.
+Keep the explicit `question_answer.owner` route and isolation guard (not an Elsewhere-row action);
+removing that separate protocol surface is outside this cleanup. Keep ops #870's rewritten E2E files byte-for-byte.
+Undo: revert this cleanup commit and deploy with `pi-web-deploy` (or `pi-web-deploy rollback`).
 
 ### 上游冒烟按新口径改写（ops #870，2026-11-12）
 

@@ -34,8 +34,6 @@ interface DshQuestionDialogProps {
 		/** owner-question routing (Ops #685): which way it came (absent while the switch is off). */
 		route?: unknown;
 	};
-	/** 跨页作答时持有方会话 id：答案转交过去（question_answer 带 owner）。 */
-	owner?: string;
 	/** 备用对话标题（当 question 中未携带时兜底使用）。 */
 	conversationTitle?: string;
 	/**
@@ -60,12 +58,7 @@ interface DshQuestionDialogProps {
  * 文本渲染：question/detail/description/preview 统一走 Markdown（rawHtml），
  * 模型可自由写 markdown 或 HTML —— 由模型自选、信任模型。
  */
-export function DshQuestionDialog({
-	question,
-	owner,
-	conversationTitle,
-	escapeEnabled = true,
-}: DshQuestionDialogProps) {
+export function DshQuestionDialog({ question, conversationTitle, escapeEnabled = true }: DshQuestionDialogProps) {
 	const t = useT();
 	const convTitle = question.conversationTitle || conversationTitle;
 	const [selections, setSelections] = useState<Record<string, string[]>>({});
@@ -92,10 +85,9 @@ export function DshQuestionDialog({
 				id: question.id,
 				answers: [],
 				cancelled: true,
-				...(owner ? { owner } : {}),
 			});
 		}
-	}, [question.id, question.deadline, owner]);
+	}, [question.id, question.deadline]);
 
 	useEffect(() => {
 		if (!question.deadline) return;
@@ -109,7 +101,6 @@ export function DshQuestionDialog({
 						id: question.id,
 						answers: [],
 						cancelled: true,
-						...(owner ? { owner } : {}),
 					});
 				}
 				return next;
@@ -121,7 +112,7 @@ export function DshQuestionDialog({
 
 	/** 取消提问：✕ / Esc / 底部「取消」与自动取消共用同一出口。 */
 	const cancel = () => {
-		appSend({ type: "question_answer", id: question.id, answers: [], cancelled: true, ...(owner ? { owner } : {}) });
+		appSend({ type: "question_answer", id: question.id, answers: [], cancelled: true });
 	};
 
 	// 审查 #12：Esc 改走 shortcut-stack 分层栈（与 Modal 同一调度）——
@@ -152,11 +143,10 @@ export function DshQuestionDialog({
 				id: question.id,
 				answers: [],
 				cancelled: true,
-				...(owner ? { owner } : {}),
 			});
 		}, 1500);
 		return () => clearTimeout(id);
-	}, [question.id, question.questions.length, total, owner]);
+	}, [question.id, question.questions.length, total]);
 	const currentStep = Math.min(step, Math.max(0, total - 1));
 	const q = visibleQuestions[currentStep];
 	if (!q) {
@@ -202,7 +192,7 @@ export function DshQuestionDialog({
 			const custom = (customs[qq.id] ?? "").trim();
 			return { id: qq.id, selected, ...(custom ? { custom } : {}) };
 		});
-		appSend({ type: "question_answer", id: question.id, answers, ...(owner ? { owner } : {}) });
+		appSend({ type: "question_answer", id: question.id, answers });
 	};
 
 	const toggleOption = (qid: string, label: string) => {

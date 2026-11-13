@@ -34,7 +34,6 @@ import type {
 	UiPluginInfo,
 	UiPluginUpdateInfo,
 	UiProviderConfig,
-	UiQuestion,
 	UiServiceInfo,
 	UiSettingsState,
 	UiState,
@@ -357,16 +356,6 @@ export interface ChatState {
 	/** 待用户回答的模型提问（ask_user_question）——两个引擎共用。服务端是事实源：
 	 *  即时通道（question_pending）+ 快照（UiState.pendingQuestion，见 syncPendingQuestion）。 */
 	question: UiPendingQuestion | null;
-	/** 跨页作答预告（peek_elsewhere_question 的回包）：别处会话问卷的原文。
-	 *  与本地 question 独立共存（id 各会话作用域，不进 answered 集合）；
-	 *  提交带 owner 由持有方 resolve，本页只负责展示/关闭。 */
-	remoteQuestion: {
-		owner: string;
-		convId: string;
-		id: string;
-		questions: UiQuestion[];
-		conversationTitle?: string;
-	} | null;
 	/** User command list from .pi/commands.json (terminal left panel). */
 	commands: CommandDef[];
 	commandsPath: string;
@@ -699,16 +688,6 @@ type Action =
 			/** telegram-answers: one permission prompt was answered (here, in another window or on Telegram). */
 			type: "tool_approval_resolved";
 			id: string;
-	  }
-	| {
-			type: "remote_question";
-			question: {
-				owner: string;
-				convId: string;
-				id: string;
-				questions: UiQuestion[];
-				conversationTitle?: string;
-			} | null;
 	  }
 	| { type: "commands"; commands: CommandDef[]; path: string }
 	| { type: "slash_commands"; commands: SlashCommandInfo[] }
@@ -1217,8 +1196,6 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return { ...state, dialog: action.dialog };
 		case "question":
 			return { ...state, question: action.question };
-		case "remote_question":
-			return { ...state, remoteQuestion: action.question };
 		case "commands":
 			return {
 				...state,
@@ -1554,7 +1531,6 @@ export function useChat() {
 		dialog: null,
 		approval: null,
 		question: null,
-		remoteQuestion: null,
 		commands: [],
 		commandsPath: "",
 		slashCommands: [],
@@ -1876,8 +1852,7 @@ export function useChat() {
 						: msg.type === "switch_conversation"
 							? { kind: "conversation", id: msg.id }
 							: null;
-				if (msg.type === "new_chat" || msg.type === "set_cwd" || msg.type === "take_over_conversation")
-					recovery.invalidateTarget();
+				if (msg.type === "new_chat" || msg.type === "set_cwd") recovery.invalidateTarget();
 				if (switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state))
 					recovery.beginSwitch(switchTarget);
 				let out: ClientMessage = msg;
@@ -1889,7 +1864,6 @@ export function useChat() {
 					dispatch({ type: "startup", event: { type: "new_chat", reqId } });
 				} else if (
 					msg.type === "set_cwd" ||
-					msg.type === "take_over_conversation" ||
 					(switchTarget &&
 						(!switchAlreadyShown(switchTarget, chatApi.current.chat.state) ||
 							// opening the chat New chat is leaving (still shown until the new one arrives)
@@ -1900,7 +1874,6 @@ export function useChat() {
 				if (
 					msg.type === "new_chat" ||
 					msg.type === "set_cwd" ||
-					msg.type === "take_over_conversation" ||
 					(switchTarget && !switchAlreadyShown(switchTarget, chatApi.current.chat.state))
 				)
 					earlierPagesRef.current.cancel();
@@ -1928,12 +1901,7 @@ export function useChat() {
 				// 不会发任何回执清除前端面板（否则会出现“回答后不消失、取消无效”）。
 				// 模型再次 ask_user_question 时会重新 question_pending，面板自动回来。
 				if (msg.type === "question_answer") {
-					if (msg.owner) {
-						// 跨页作答：只收跨页对话框。id 是对方会话作用域，绝不进 answered
-						// 集合 —— 否则会误杀本会话未来同号问卷（两边计数器都从 q1 起）。
-						const cur = chatApi.current.chat.remoteQuestion;
-						if (cur && cur.id === msg.id) dispatch({ type: "remote_question", question: null });
-					} else {
+					if (!msg.owner) {
 						// 记住这个 id：快照恢复时跳过它（回答消息与快照在途时会交错，服务端
 						// 删除 pending 之前生成的快照仍带着这张问卷）。
 						answeredQuestionsRef.current.add(msg.id);
@@ -2708,7 +2676,7 @@ export function useChat() {
 					dispatch({ type: "tool_approval_resolved", id: msg.id });
 					break;
 				case "question_retracted": {
-					// 问卷被搬走/取消（手动过户到另一会话）：源页面正在展示该 id 即立即收起。
+					// 问卷已解决/取消：正在展示该 id 的页面立即收起。
 					// 快照为 null 收不掉 live 面板（见 pending-question.ts 规则 3），必须显式撤回；
 					// 记入 answered，迟到的旧快照也不会把它复活。
 					const cur = chatApi.current.chat.question;
@@ -2723,20 +2691,6 @@ export function useChat() {
 					}
 					break;
 				}
-				case "elsewhere_question":
-					// 跨页作答预告（peek 的回包）：别处问卷原文直接弹框，提交带 owner
-					// 由持有方 resolve。与本地问卷独立共存，id 不进 answered 集合。
-					dispatch({
-						type: "remote_question",
-						question: {
-							owner: msg.owner,
-							convId: msg.convId,
-							id: msg.id,
-							questions: msg.questions,
-							...(msg.conversationTitle !== undefined ? { conversationTitle: msg.conversationTitle } : {}),
-						},
-					});
-					break;
 				case "page_request": {
 					// 模型要操作浏览器里的页面（browser_page 工具）：转给扩展，再把结果回给服务端。
 					// 服务端的工具正阻塞等这个 page_response —— 任何一条路径（宿主桥缺失、

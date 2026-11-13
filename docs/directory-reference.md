@@ -27,7 +27,7 @@ pi-web-ui/
 │   │                           #   插件设置（声明式 schema / select 候选值）：plugin-settings / plugin-setting-options
 │   ├── *-test.mjs              # 手写 Playwright E2E / WS 协议测试
 │   │                           #   ⚠ 需 Chrome 的浏览器 E2E **不入 run-smoke**，手动 `node tests/<name>.mjs` 跑（缺 Chrome 自动 SKIP）：
-│   │                           #     context-menu-ui-test（右键菜单槽位）/ ui-layout-ui-test（布局页 ↔ 界面一致性）/ plugin-settings-page-test（插件设置页）/ plugin-settings-select-ui-test（插件设置下拉）/ plugin-topbar-ui-test（顶栏条目 + 面板内后台卸载）/ elsewhere-click-takeover-ui-test（「另一处」行左键两段确认过户）
+│   │                           #     context-menu-ui-test（右键菜单槽位）/ ui-layout-ui-test（布局页 ↔ 界面一致性）/ plugin-settings-page-test（插件设置页）/ plugin-settings-select-ui-test（插件设置下拉）/ plugin-topbar-ui-test（顶栏条目 + 面板内后台卸载）
 │   └── scratch/                # 一次性调试脚本（gitignore，不入库）
 ├── scripts/check-protocol-sync.mjs  # 守护 types.ts shim 单源机制 + protocol.ts 纯类型约束
 ├── .github/workflows/ci.yml    # CI：协议同步 → typecheck → build → vitest → 冒烟

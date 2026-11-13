@@ -49,18 +49,16 @@ import { loadMarkdownExtras } from "../../web/src/components/Markdown.js";
 import { resetEscapeStack } from "../../web/src/shortcut-stack.js";
 
 type View = "chat" | "roles" | "initiatives" | "plugin:scheduler" | "terminal";
-type Ask = "the model's question" | "another chat's question" | "an extension's ask";
+type Ask = "the model's question" | "an extension's ask";
 
 const QUESTION = {
 	id: "q-wait",
 	questions: [{ id: "c1", question: "Which one?", options: [{ label: "A" }, { label: "B" }] }],
 };
-const OTHER_CHAT = "/home/owner/.pi/agent/sessions/other.jsonl";
 const EXTENSION_ASK = { id: 7, kind: "confirm" as const, title: "Approve the plan?", args: ["Run it?"] };
 /** What Escape sends for each ask in the chat view, as it always has. */
 const CANCEL: Record<Ask, object> = {
 	"the model's question": { type: "question_answer", id: "q-wait", answers: [], cancelled: true },
-	"another chat's question": { type: "question_answer", id: "q-wait", answers: [], cancelled: true, owner: OTHER_CHAT },
 	"an extension's ask": { type: "dialog_response", id: 7, value: null },
 };
 const ASKS = Object.keys(CANCEL) as Ask[];
@@ -82,8 +80,6 @@ function Panes({ view, ask, modal }: { view: View; ask: Ask; modal: boolean }) {
 			{ className: `view-pane ${chatOn ? "" : "hidden"}` },
 			ask === "an extension's ask" && createElement(Dialog, { dialog: EXTENSION_ASK, escapeEnabled: chatOn }),
 			ask === "the model's question" && createElement(DshQuestionDialog, { question: QUESTION, escapeEnabled: chatOn }),
-			ask === "another chat's question" &&
-				createElement(DshQuestionDialog, { question: QUESTION, owner: OTHER_CHAT, escapeEnabled: chatOn }),
 		),
 		createElement("div", { className: `view-pane roles-pane ${view === "roles" ? "" : "hidden"}` }),
 		createElement(
@@ -175,11 +171,8 @@ describe("escape-hidden-question: Escape answers a chat's ask only while the cha
 			const at = found.index ?? -1;
 			return app.slice(at, app.indexOf("/>", at));
 		});
-		expect(mounts.map((mount) => mount.split(/\s/)[0])).toEqual([
-			"<Dialog",
-			"<DshQuestionDialog",
-			"<DshQuestionDialog",
-		]);
+		// The obsolete remote-preview dialog was removed with the Elsewhere peek path.
+		expect(mounts.map((mount) => mount.split(/\s/)[0])).toEqual(["<Dialog", "<DshQuestionDialog"]);
 		for (const mount of mounts) expect(mount).toContain('escapeEnabled={view === "chat"}');
 	});
 });

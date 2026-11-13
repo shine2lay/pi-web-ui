@@ -212,8 +212,7 @@ const NOT_FOR_THIS_FORK = {
 		"server-owned-chats: a second window opens the same shared chat; there is no idle takeover or elsewhere row",
 	"remote-answer-test":
 		"server-owned-chats: a question is answered in the shared chat itself; there is no elsewhere row with a question mark",
-	"elsewhere-lifecycle-test": "server-owned-chats: no 'running elsewhere' rows (listExternalRunning() is always empty)",
-	"elsewhere-click-takeover-ui-test": "server-owned-chats: no 'running elsewhere' rows to click",
+	"elsewhere-lifecycle-test": "server-owned-chats: shared chat list instead of pi 'running elsewhere' rows",
 	"orphan-adopt-test":
 		"reload-adopt: a reloaded page goes back to its own chat (pickAdoptTarget) instead of adopting an orphan (findAdoptableOrphan)",
 	"model-config-ui-test":

@@ -484,7 +484,6 @@ import type {
 	CachedWindow,
 	CommandDef,
 	ConversationSummary,
-	ElsewhereRunning,
 	GoalStatus,
 	MessageAnchor,
 	ProjectSummary,
@@ -560,7 +559,6 @@ import {
 } from "./queue-host.js";
 import { startTaskChat, type TaskStartHooks } from "./task-chat-start.js";
 import {
-	applyElsewhereQueueHomes,
 	applyQueueHomes,
 	type LoadedQueue,
 	queueHomesFrom,
@@ -2319,7 +2317,7 @@ export { workspacePath };
  * OWN AgentSessionRuntime, so starting a new chat or switching between chats
  * never interrupts another conversation's in-flight run.
  *
- * 导出给过户载荷类型（TakeoverPayload）用：对话对象本身在会话之间整体搬迁。
+ * One process-owned conversation runtime, shared by all subscribing windows.
  */
 export interface Conversation {
 	id: string;
@@ -2921,82 +2919,6 @@ export interface ProjectRunnerInfo {
 	clientId: string;
 	title: string;
 	sessionFile?: string;
-}
-
-/**
- * 浏览器重启认领（orphan adoption）的候选快照 —— 纯数据，决策逻辑见
- * pickAdoptableOrphan（纯函数，可单测）。live = 还有浏览器连着（sinkCount>0）；
- * pseudo = 插件/调度伪客户端（sink 常驻，不能按浏览器存活判断，永远不参与认领）。
- */
-export interface OrphanCandidate {
-	id: string;
-	live: boolean;
-	pseudo: boolean;
-	/** 正在跑的对话数（主对话 + 子代理都算）。 */
-	streaming: number;
-	/** 是否有值得认领的内容（跑着 / 后台挂着 / 有消息历史；纯空白会话不算）。 */
-	adoptable: boolean;
-	/** 最近活跃时间（各对话 lastActiveAt/lastSdkEventAt 的最大值）。 */
-	activity: number;
-}
-
-/**
- * 选一个断开的残留会话给新标签认领（纯函数）：
- * - 还有别的在线浏览器（非伪客户端且 live）→ 不认领（新标签是第二块屏，
- *   issue #10 的隔离必须保留，跑着的对话继续走 elsewhere 只读感知）。
- * - 否则在断开 + 非伪 + 有内容的候选中按（streaming 多 → 最近活跃）取最优；
- *   没有返回 null（调用方走正常新建流程）。
- */
-export function pickAdoptableOrphan(cands: OrphanCandidate[]): string | null {
-	if (cands.some((c) => !c.pseudo && c.live)) return null;
-	let best: OrphanCandidate | null = null;
-	for (const c of cands) {
-		if (c.pseudo || c.live || !c.adoptable) continue;
-		if (!best || c.streaming > best.streaming || (c.streaming === best.streaming && c.activity > best.activity)) {
-			best = c;
-		}
-	}
-	return best?.id ?? null;
-}
-
-/** 手动过户时跟着对话一起搬走的等答复问卷（id 在目标会话重排）. */
-export interface TakeoverQuestion {
-	resolve: (value: QuestionAnswer[] | null) => void;
-	questions: UiQuestion[];
-	conversationId: string;
-	/** telegram-answers: its id in the list of asks, kept across the move. */
-	askId?: string;
-	nativeSource?: PendingQuestionEntry["nativeSource"];
-}
-
-/** 手动过户时跟着对话一起搬走的页调用（id/计时器在目标会话重建）. */
-export interface TakeoverPageCall {
-	resolve: (r: PageCallResult) => void;
-	req: PageCallRequest;
-	timeoutMs: number;
-	conversationId: string;
-}
-
-/** 手动过户时跟着对话一起搬走的待审批（id 在目标会话重排）. */
-export interface TakeoverApproval {
-	resolve: (res: ToolApprovalResolution) => void;
-	toolCallId: string;
-	toolName: string;
-	params: Record<string, unknown> | unknown;
-	reason?: string;
-	reasonEn?: string;
-	category?: UiApprovalCategory;
-	conversationId: string;
-	conversationTitle?: string;
-	createdAt: number;
-}
-
-/** 手动过户载荷：对话对象（含 runtime/终端/队列/缓存）整体搬迁 + 桥接中的问卷/页调用/待审批. */
-export interface TakeoverPayload {
-	convs: Conversation[];
-	questions: TakeoverQuestion[];
-	pageCalls: TakeoverPageCall[];
-	approvals: TakeoverApproval[];
 }
 
 /** 同项目判定（纯函数）：调度视口回退与 id 唤醒的 cwd 护栏用。
@@ -10540,17 +10462,6 @@ export class ClientSession {
 		return Promise.resolve();
 	}
 
-	/** 取某对话的等答复问卷原文（跨页作答的 peek 用；只读，不改变状态）。 */
-	peekPendingQuestion(convId: string): { id: string; questions: UiQuestion[]; conversationTitle?: string } | undefined {
-		for (const [id, p] of this.pendingQuestions) {
-			if (p.conversationId === convId) {
-				const conv = this.convs.get(convId);
-				return { id, questions: p.questions, conversationTitle: conv?.title };
-			}
-		}
-		return undefined;
-	}
-
 	/** 取某对话的等答复问卷简要信息（用于会话列表与横幅展示）。 */
 	private getPendingQuestionForConv(convId: string): { id: string; title?: string } | undefined {
 		for (const [id, p] of this.pendingQuestions) {
@@ -10563,22 +10474,6 @@ export class ClientSession {
 			}
 		}
 		return undefined;
-	}
-
-	/** 跨页作答：把别处问卷的原文推给本页弹框（回答经 answerElsewhereQuestion 回去）。 */
-	pushElsewhereQuestion(
-		owner: string,
-		convId: string,
-		q: { id: string; questions: UiQuestion[]; conversationTitle?: string },
-	): void {
-		this.emit({
-			type: "elsewhere_question",
-			owner,
-			convId,
-			id: q.id,
-			questions: q.questions,
-			...(q.conversationTitle ? { conversationTitle: q.conversationTitle } : {}),
-		});
 	}
 
 	// -----------------------------------------------------------------------
@@ -11163,30 +11058,17 @@ export class ClientSession {
 	 *  attach 时由 AgentService 接到全局 onClientCwdChanged —— 编辑器等
 	 *  工作区跟随型插件借此把根目录切到用户当前项目。 */
 	onCwdChanged: ((abs: string, roots: string[]) => void) | undefined = undefined;
-	/** 过户后的桥接投递解析（attach 时由 AgentService 接线）：给一个 SDK 会话（＝
-	 *  一个 runtime 的身份），返回**当前**持有它的客户端会话 + 该对话**当前** id。
-	 *
-	 *  为什么需要它：runtime 创建时把 `this`（当时的 ClientSession）与当时的
-	 *  conversationId 闭包进桥接工具（ask_user_question / browser_page），而
-	 *  `take_over_conversation` 只搬对话（runtime/终端/订阅/看门狗/在途问卷与页
-	 *  调用），搬不动闭包里的会话引用。过户后模型再提问/截图，用捕获的 `this` 就会把
-	 *  question_pending / page_request 推给过户前那台设备 —— 持有方收不到，问卷还会
-	 *  挂在老设备的注册表里（且不进它的快照：该 conv 已不在它名下）→ 刷新即丢，
-	 *  而 pi 引擎问卷不超时，那一轮 run 就永远挂住。
-	 *
-	 *  用 SDK 会话对象（稳定标识）而不是建时的 conversationId：过户遇到 id 撞车会把
-	 *  对话改名（c1→c2），那时旧 id 要么查不到、要么查到老会话里的另一条对话，都会
-	 *  投错。（注意不能用 runtime 对象比：SDK 会把工厂返回值包成新的 AgentSessionRuntime
-	 *  实例，而 `runtime.session` 与本工厂的 `created.session` 是同一个对象。） */
+	/** Resolve bridge delivery by SDK session identity at call time. Shared chats outlive the
+	 *  window that created the runtime; findConversationHome picks a current live viewer rather
+	 *  than sending page requests to the captured, possibly disconnected ClientSession. */
 	findConversationHome:
 		((sdkSession: AgentSession) => { session: ClientSession; convId: string } | undefined) | undefined = undefined;
 	/** issue #145 跨客户端同会话感知 —— attach 时由 AgentService 接线：
 	 *  - findSessionOwner：别处是否已持有同一 session 文件（查重建第二个 writer 用）；
 	 *  - listProjectRunners：别处在同一 cwd 下正在跑的对话（同项目并行感知用）；
-	 *  - listExternalRunning：别处所有正在跑的对话（左栏「另一处正在运行」用）；
 	 *  - notifyExternalClients：向其他客户端广播一条 notice（并行打开时互相通告）；
 	 *  - onRunningChanged：本实例流式集合变化时触发，AgentService 借此让其他
-	 *    客户端重推 conversations（elsewhere 列表近实时）。 */
+	 *    客户端重推共享 conversations 列表。 */
 	findSessionOwner: ((targetPath: string) => SessionOwnerInfo | null) | undefined = undefined;
 	/** 插件 steer 跨客户端兜底钩子：attach 时由 AgentService 接线（见 steerElsewhere），
 	 *  在其他客户端的 conversations 里找对话并由持有方执行 steer，未持有回 undefined。 */
@@ -11197,7 +11079,6 @@ export class ClientSession {
 	listProjectRunners: ((cwd: string) => ProjectRunnerInfo[]) | undefined = undefined;
 	/** issue #145 同款接线：全局认领表（AgentService 级单例，attach 时由 AgentService 接线）。 */
 	getClaimStore: (() => ClaimStore) | undefined = undefined;
-	listExternalRunning: (() => ElsewhereRunning[]) | undefined = undefined;
 	notifyExternalClients:
 		| ((msg: { type: "notice"; level: "info" | "warning" | "error"; text: string; textEn?: string }) => void)
 		| undefined = undefined;
@@ -12603,103 +12484,7 @@ export class ClientSession {
 		return out;
 	}
 
-	/** issue #145：本实例别处可见的对话摘要（elsewhere 列表的本机一半 +
-	 *  手动过户的目标定位：convId + 是否有等答复问卷）。
-	 *
-	 *  口径 = 运行中 + 已结束但本会话仍持有的可见对话（shownInRunningList：
-	 *  listed 或当前有内容的对话；空白新对话不入列）。只推 running 时，对话
-	 *  一结束 elsewhere 行就消失，另一处想过户查看只能趁运行中动手 —— 跑完
-	 *  即失联。空闲行带 isStreaming:false + sessionFile，照样可过户（搬 runtime
-	 *  本体，单 writer 不变；takeoverBriefs 本来就含空闲对话）。子代理不单列
-	 *  （随主对话一起搬）。 */
-	streamingSummariesAll(): {
-		title: string;
-		cwd: string;
-		isStreaming: boolean;
-		convId: string;
-		hasQuestion: boolean;
-		questionTitle?: string;
-		sessionFile?: string;
-	}[] {
-		const out: {
-			title: string;
-			cwd: string;
-			isStreaming: boolean;
-			convId: string;
-			hasQuestion: boolean;
-			questionTitle?: string;
-			sessionFile?: string;
-		}[] = [];
-		for (const conv of this.convs.values()) {
-			if (conv.isSubagent) continue;
-			const streaming = this.conversationStreaming(conv);
-			if (!streaming && !this.shownInRunningList(conv)) continue;
-			const pq = this.getPendingQuestionForConv(conv.id);
-			let sessionFile: string | undefined;
-			try {
-				sessionFile = conv.session.sessionFile ?? undefined;
-			} catch {
-				sessionFile = undefined;
-			}
-			out.push({
-				title: conv.title,
-				cwd: conv.cwd,
-				isStreaming: streaming,
-				convId: conv.id,
-				hasQuestion: !!pq,
-				...(pq?.title ? { questionTitle: pq.title } : {}),
-				...(sessionFile ? { sessionFile } : {}),
-			});
-		}
-		return out;
-	}
-
-	/**
-	 * 浏览器重启认领用：本会话是否有值得新标签接管的内容。
-	 * 跑着的（主对话/子代理都算）、后台挂着的（listed）、有消息历史的都算；
-	 * 纯空白会话（刚建就关了标签）不算 —— 认领它与新建无异，不如走新建流程。
-	 * 零 token 冒烟测试的残留会话永远是空白的，因此认领逻辑不会改变它们的行为。
-	 */
-	hasAdoptableContent(): boolean {
-		for (const c of this.convs.values()) {
-			try {
-				if (c.session.isStreaming) return true;
-			} catch {
-				// 会话替换中 —— 按未跑处理
-			}
-			if (c.isSubagent) continue;
-			if (c.listed) return true;
-			try {
-				if (messageCountOf(c.session) > 0) return true;
-			} catch {
-				// 会话替换中 —— 按无消息处理
-			}
-		}
-		return false;
-	}
-
-	/** 各对话最近活跃时间的最大值（认领时多个残留按此排序，新的优先）。 */
-	latestActivity(): number {
-		let at = 0;
-		for (const c of this.convs.values()) {
-			at = Math.max(at, c.lastActiveAt || 0, c.lastSdkEventAt || 0);
-		}
-		return at;
-	}
-
-	/** 被新标签认领后首帧即被告之（pendingNotices 随 attachSink 下发）。 */
-	noteAdopted(): void {
-		this.pendingNotices.push({
-			type: "notice",
-			level: "info",
-			text: "Restored the workspace session from before the browser was closed, including its running conversations — pick up right where you left off.",
-			textEn:
-				"Restored the workspace session from before the browser was closed, including its running conversations — pick up right where you left off.",
-		});
-	}
-
-	/** issue #145：让其他客户端重推 conversations（elsewhere 刷新用；
-	 *  流式集合签名驱动，外层循环安全）。 */
+	/** Refresh this window's view of the shared running list. */
 	refreshExternalRunning(): void {
 		if (this.disposed) return;
 		this.emitConversations();
@@ -14800,209 +14585,6 @@ export class ClientSession {
 		return this.activeId === convId;
 	}
 
-	/** 过户用的对话摘要（AgentService 拼移动集合 + 容量检查用）。 */
-	takeoverBriefs(): {
-		id: string;
-		title: string;
-		cwd: string;
-		parentId?: string;
-		isSubagent: boolean;
-		isEphemeral?: boolean;
-		/** chat-slots: takes one of its project's slots (not a subagent, throwaway or blank chat). */
-		countsTowardCap: boolean;
-	}[] {
-		return [...this.convs.values()].map((c) => ({
-			id: c.id,
-			title: c.title,
-			cwd: c.cwd,
-			...(c.parentId ? { parentId: c.parentId } : {}),
-			isSubagent: c.isSubagent,
-			isEphemeral: !!c.isEphemeral,
-			countsTowardCap: this.countsTowardCap(c),
-		}));
-	}
-
-	/**
-	 * 过户转出：把指定对话（含事件订阅/看门狗计时器/等答复问卷/页调用）从本会话摘除。
-	 * - 先修 active：active 被搬且还有剩余 → 切过去（优先主对话）；active 被搬且掏空 →
-	 *   建空白兜底，建不出来（quiesce）则拒绝搬出（ok:false），绝不留悬空 active。
-	 * - 看门狗计时器清掉（toolStartTimes 保留，目标按剩余时间重布）。
-	 * - 只搬归属被搬对话的问卷/页调用（conversationId 对得上的；未记归属的留在源会话）。
-	 */
-	async detachTakeoverConversations(
-		ids: string[],
-	): Promise<{ ok: true; payload: TakeoverPayload } | { ok: false; reason: "missing" | "empty" }> {
-		const set = new Set(ids);
-		const convs = [...this.convs.values()].filter((c) => set.has(c.id));
-		if (convs.length === 0) return { ok: false, reason: "missing" };
-		if (set.has(this.activeId)) {
-			const remaining =
-				[...this.convs.values()].find((c) => !set.has(c.id) && !c.isSubagent) ??
-				[...this.convs.values()].find((c) => !set.has(c.id));
-			if (remaining) {
-				await this.switchConversation(remaining.id);
-			} else if (!(await this.newChat())) {
-				return { ok: false, reason: "empty" };
-			}
-		}
-		for (const conv of convs) {
-			this.convs.delete(conv.id);
-			this.clearAllToolWatchdogs(conv);
-			conv.unsubscribe?.();
-			conv.unsubscribe = undefined;
-		}
-		const questions: TakeoverQuestion[] = [];
-		for (const [qid, p] of this.pendingQuestions) {
-			if (p.conversationId !== undefined && set.has(p.conversationId)) {
-				this.pendingQuestions.delete(qid);
-				questions.push({
-					resolve: p.resolve,
-					questions: p.questions,
-					conversationId: p.conversationId,
-					askId: p.askId ?? qid,
-					nativeSource: p.nativeSource,
-				});
-				// 源页面的对话框可能是即时通道弹出的（live），快照为 null 收不掉它 ——
-				// 明确撤回，让源页面立即收起（目标页主对话由转入方重推 question_pending 或快照呈现）。
-				this.emit({ type: "question_retracted", id: qid });
-			}
-		}
-		const pageCalls: TakeoverPageCall[] = [];
-		for (const [pid, p] of this.pendingPageCalls) {
-			if (p.conversationId !== undefined && set.has(p.conversationId)) {
-				this.pendingPageCalls.delete(pid);
-				clearTimeout(p.timer);
-				pageCalls.push({ resolve: p.resolve, req: p.req, timeoutMs: p.timeoutMs, conversationId: p.conversationId });
-			}
-		}
-		// 待审批跟对话走：留在源会话就是幽灵弹窗（id 失效点不动，runtime 已搬走，
-		// 永远等不到答复）。只搬归属明确的（conversationId 对得上，与问卷/页调用
-		// 同一规则）；目标侧按新 id 重发弹窗，等待中的 Promise 原样过户不 resolve。
-		// telegram-answers: permission prompts are process-wide now (sharedApprovals). They stay where
-		// they are, with the same id; every window shows them, so nothing needs moving.
-		const approvals: TakeoverApproval[] = [];
-		this.emitConversations();
-		this.flushSnapshot();
-		return { ok: true, payload: { convs, questions, pageCalls, approvals } };
-	}
-
-	/**
-	 * 过户转入：把另一会话摘除的对话整体接过来，返回主对话的新 id。
-	 * - id 冲突（两边计数器都从 c1 开始，大概率撞上）→ 给搬入方分配新 id，move
-	 *   集合内的 parentId/问卷归属同步改写。模型手里旧 runId 的后续子代理工具调用
-	 *   会报 unknown（可经列表查新 id）；定时唤醒的旧 id 同理回落无头执行。
-	 * - 事件订阅/终端投递/问卷/页调用全部重接到本会话，迁入的主对话立即触发弹窗
-	 *   （子代理待答问卷通过角标与快照呈现）。看门狗按剩余时间重布（已逾期的立即触发）。
-	 */
-	insertTakeoverConvs(payload: TakeoverPayload): string {
-		const remap = new Map<string, string>();
-		for (const conv of payload.convs) {
-			if (this.convs.has(conv.id)) {
-				remap.set(conv.id, this.nextConversationId());
-			}
-		}
-		const fix = (id: string): string => remap.get(id) ?? id;
-		let mainId = "";
-		for (const conv of payload.convs) {
-			conv.id = fix(conv.id);
-			if (conv.parentId) conv.parentId = fix(conv.parentId);
-			if (!conv.isSubagent && !mainId) mainId = conv.id;
-			conv.lastActiveAt = Date.now();
-			conv.terminals.rebindEmit((msg) => this.emitTerminal(conv.id, msg));
-			conv.terminals.onAgentIdle = (terminalId, idleMs, title, lastLines) =>
-				this.notifyTerminalIdle(conv.id, terminalId, idleMs, title, lastLines);
-			conv.unsubscribe?.();
-			conv.unsubscribe = conv.session.subscribe((event) => this.onEvent(conv, event));
-			for (const [toolCallId, start] of conv.toolStartTimes) {
-				if (!conv.toolWatchdogs.has(toolCallId)) {
-					const baseMs = this.getBaseToolWatchdogTimeoutMs();
-					if (baseMs > 0) {
-						this.rearmToolWatchdog(conv, toolCallId, baseMs - (Date.now() - start), baseMs);
-					}
-				}
-			}
-			this.convs.set(conv.id, conv);
-		}
-		if (!mainId) mainId = payload.convs[0]?.id ?? "";
-		for (const q of payload.questions) {
-			const nid = `q-${++ClientSession.questionSeq}`;
-			const qConvId = fix(q.conversationId);
-			this.pendingQuestions.set(nid, {
-				resolve: q.resolve,
-				questions: q.questions,
-				conversationId: qConvId,
-				...(q.askId ? { askId: q.askId } : {}),
-				nativeSource: q.nativeSource,
-			});
-			// 迁入的主对话立即触发弹窗（子代理问卷留在后台，由角标与切换会话呈现）。
-			if (qConvId === mainId) {
-				const conv = this.convs.get(qConvId);
-				this.emit({
-					type: "question_pending",
-					id: nid,
-					questions: q.questions,
-					conversationId: qConvId,
-					...(conv?.title ? { conversationTitle: conv.title } : {}),
-					// owner-question routing (Ops #685): its line, as its chat's page shows it (nothing while off).
-					...routeOfAsk(askHub.get(q.askId ?? nid)),
-				});
-			}
-		}
-		for (const p of payload.pageCalls) {
-			const nid = `p-${++this.pageSeq}`;
-			const timer = this.armPageCallTimeout(nid, p.resolve, p.timeoutMs);
-			this.pendingPageCalls.set(nid, {
-				resolve: p.resolve,
-				timer,
-				conversationId: fix(p.conversationId),
-				req: p.req,
-				timeoutMs: p.timeoutMs,
-			});
-			this.emit({
-				type: "page_request",
-				id: nid,
-				op: p.req.op,
-				args: p.req.args,
-				target: p.req.target,
-				timeoutMs: p.timeoutMs,
-			});
-		}
-		// 迁入的待审批按新 id 重新挂上（等待中的 Promise 未动，模型还在等）。
-		// 主对话的立即弹窗（子代理的靠角标与快照呈现，与问卷同一口径）。
-		for (const a of payload.approvals) {
-			const nid = `appr-${++ClientSession.approvalSeq}`;
-			const aConvId = fix(a.conversationId);
-			this.pendingApprovals.set(nid, {
-				id: nid,
-				toolCallId: a.toolCallId,
-				toolName: a.toolName,
-				params: a.params,
-				reason: a.reason,
-				reasonEn: a.reasonEn,
-				...(a.category ? { category: a.category } : {}),
-				conversationId: aConvId,
-				...(a.conversationTitle ? { conversationTitle: a.conversationTitle } : {}),
-				resolve: a.resolve,
-				createdAt: a.createdAt,
-			});
-			if (aConvId === mainId) {
-				this.emit({
-					type: "tool_approval_pending",
-					id: nid,
-					toolCallId: a.toolCallId,
-					toolName: a.toolName,
-					params: a.params as Record<string, unknown>,
-					reason: a.reason,
-					reasonEn: a.reasonEn,
-					...(a.category ? { category: a.category } : {}),
-					conversationId: aConvId,
-					...(a.conversationTitle ? { conversationTitle: a.conversationTitle } : {}),
-				});
-			}
-		}
-		return mainId;
-	}
-
 	/**
 	 * 切到新工作目录后的“跟随面”刷新（roots / 插件钩子 / 最近项目 / 历史列表 /
 	 * 文件树 / 命令目录）。调用方先把 this.cwd 改好再调本函数。
@@ -15404,7 +14986,6 @@ export class ClientSession {
 		} catch {
 			// 会话替换中——跳过本轮签名比较
 		}
-		const elsewhere = this.listExternalRunning?.() ?? [];
 		// recent-chats：活着的行之后拼上磁盘上的常驻历史行。
 		for (const recent of this.recentHistoryRows(livePaths, waiting)) conversations.push(recent);
 		// queue-grouping: an open task's chat goes under the queue chat it came from when both are listed. The
@@ -15413,10 +14994,9 @@ export class ClientSession {
 		// chats that aren't rows at all go along as queueTasks, for the left bar's leads view only.
 		const homes = ClientSession.knownQueueHomes();
 		applyQueueHomes(conversations, homes);
-		applyElsewhereQueueHomes(elsewhere, homes);
 		// left-task-status: an open task chat that is parked says how its task stands (from the cached queues).
 		const queueStatuses = ClientSession.queueStatusesForOwner();
-		applyQueueChatStatuses(conversations, elsewhere, queueStatuses);
+		applyQueueChatStatuses(conversations, [], queueStatuses);
 		// (Optional chaining: stand-in windows in the unit tests don't list saved chats.)
 		const byFile = this.sessionsByFile as ReadonlyMap<string, SessionSummary> | undefined;
 		const queueTasks = queueTaskRows(
@@ -15431,8 +15011,6 @@ export class ClientSession {
 			conversations,
 			activeId: this.activeId,
 			...(queueTasks.length > 0 ? { queueTasks } : {}),
-			// 为空时缺省（老快照字节一致）
-			...(elsewhere.length > 0 ? { elsewhere } : {}),
 		});
 	}
 
@@ -17986,14 +17564,7 @@ export class ClientSession {
 					textEn: `Switching to directory: ${abs}`,
 				});
 				this.flushSnapshot();
-				// First visit to this project: resume its most recent session —
-				// unless that transcript is still held on another client (#145):
-				// default-opening it would strand the tab on a conversation it
-				// cannot use (the prompt guard refuses while streaming) with a
-				// stale leaf that forks history once both sides send (idle-held
-				// files fork the same way — 第二个写者不只跑着时才危险). Land
-				// blank instead.
-				let resumeSkipped: SessionOwnerInfo | null = null;
+				// First visit to this project: resume its most recent session.
 				// queue-back-owed (Ops #393): a scheduler's or plugin's client doesn't reopen a queued task's chat the owner
 				// paused (or one owed "Back to task") to send there; it lands in a new chat instead.
 				// The file checked is the one opened (`picked`), so a newer one can't slip in between.
@@ -18008,27 +17579,13 @@ export class ClientSession {
 						// can't tell: as before
 					}
 				}
-				// 别处无可见行时不扫目录（首访切项目的常见情形零开销）。
-				if ((this.listExternalRunning?.() ?? []).length > 0) {
-					try {
-						// recent-chat-pick: the file continueRecentRegular below would reopen.
-						const file = recentRegularFile(abs);
-						const recent = file ? resolve(file) : undefined;
-						const owner = recent ? this.findSessionOwner?.(recent) : null;
-						if (owner && (owner.connected || owner.isStreaming)) {
-							resumeSkipped = owner;
-						}
-					} catch {
-						// 列表失败不挡正常恢复
-					}
-				}
 				const conversationId = this.nextConversationId();
 				const terminals = this.makeTerminalManager(conversationId, abs);
 				// #235：manager＋runtime 一起建，转录链损坏时修最近文件后重试一次
-				// （见 openManagerAndRuntime）。blank（别处在跑）是全新空会话，不会坏。
+				// （见 openManagerAndRuntime）。
 				const opened = await this.openManagerAndRuntime(
 					() =>
-						resumeSkipped || pausedRecent || (pseudo && openHere)
+						pausedRecent || (pseudo && openHere)
 							? SessionManager.create(abs)
 							: picked
 								? openPickedRegular(abs, picked.file)
@@ -18055,23 +17612,6 @@ export class ClientSession {
 					}
 				}
 				await this.bindSession();
-				if (resumeSkipped) {
-					this.emit(
-						resumeSkipped.isStreaming
-							? {
-									type: "notice",
-									level: "info",
-									text: `The most recent conversation ("${resumeSkipped.title}") is running in another window, so you landed on a new chat instead — opening it here would create a second writer. It is listed under Running chats (tagged "Elsewhere"); open it after it finishes.`,
-									textEn: `The most recent conversation ("${resumeSkipped.title}") is running in another window, so you landed on a new chat instead — opening it here would create a second writer. It is listed under Running chats (tagged "Elsewhere"); open it after it finishes.`,
-								}
-							: {
-									type: "notice",
-									level: "info",
-									text: `The most recent conversation ("${resumeSkipped.title}") is still open in another window (currently idle), so you landed on a blank chat instead — take it over from Running chats (tagged "Elsewhere") or reopen it from History (send new messages from only one place, or the history will fork).`,
-									textEn: `The most recent conversation ("${resumeSkipped.title}") is still open in another window (currently idle), so you landed on a blank chat instead — take it over from Running chats (tagged "Elsewhere") or reopen it from History (send new messages from only one place, or the history will fork).`,
-								},
-					);
-				}
 			}
 
 			this.pushTerminals();
@@ -20938,15 +20478,7 @@ export class AgentService {
 		return viewer ?? live ?? browser ?? first;
 	}
 
-	/** issue #145 的「另一处正在运行」在 server-owned-chats 之后已无意义：对话表是
-	 *  进程共享的，别处在跑的对话**本来就在**每个客户端的 conversations 列表里。
-	 *  再补一份 elsewhere 只会让左栏出现重复行，所以这里恒为空（wire 字段保留，
-	 *  老客户端拿到空数组即可）。 */
-	listExternalRunning(_excludeClientId: string): ElsewhereRunning[] {
-		return [];
-	}
-
-	/** issue #291：删除定时任务后回收对应伪客户端，避免残留在 elsewhere 列表。 */
+	/** 删除定时任务后回收对应伪客户端，让其对话离开共享列表。 */
 	releaseSchedulerClient(taskId: string): void {
 		const safe = String(taskId ?? "").replace(/[^A-Za-z0-9_-]/g, "") || "task";
 		const clientId = `scheduler:${safe}`;
@@ -20966,7 +20498,7 @@ export class AgentService {
 			.catch(() => {
 				// 回收失败不拦主流程：尽力而为，进程退出时 OS 兜底
 			});
-		// 通知其他客户端刷新 elsewhere 列表。
+		// 通知其他客户端刷新共享对话列表。
 		this.pokeExternalRunning(clientId);
 	}
 
@@ -20975,7 +20507,7 @@ export class AgentService {
 	private readonly pokedClients = new Set<string>();
 	private pokeTimer: ReturnType<typeof setImmediate> | null = null;
 
-	/** Every other window rebuilds its running list (their Elsewhere rows changed).
+	/** Every other window rebuilds its shared running list.
 	 *  list-freeze: the rebuilds wait for the end of the current turn of the event loop, and a window
 	 *  poked several times meanwhile rebuilds once. Each window's rebuild used to poke all the others
 	 *  straight away, so one change cost windows-times-windows rebuilds and froze the server with big chats. */
@@ -21283,213 +20815,18 @@ export class AgentService {
 		return id.startsWith("plugin:") || id.startsWith("scheduler:") || id.startsWith(CARRY_ON_CLIENT_PREFIX);
 	}
 
-	/**
-	 * 浏览器重启认领：给 fresh clientId 找一个可接管的断开残留会话（返回旧 id）。
-	 * 有别的在线浏览器时返回 null（issue #10 隔离优先）。
-	 * 全同步：attach 里的认领段不含 await，并发的新标签后到者看到 sinkCount>0，
-	 * 不会抢走同一个残留。
-	 */
-	private findAdoptableOrphan(excludeClientId: string): { oldId: string; cs: ClientSession } | null {
-		const cands: OrphanCandidate[] = [];
-		for (const [id, cs] of this.clients) {
-			if (id === excludeClientId) continue;
-			const pseudo = AgentService.isPseudoClientId(id);
-			let live = false;
-			let streaming = 0;
-			let adoptable = false;
-			let activity = 0;
-			try {
-				live = cs.sinkCount() > 0;
-			} catch {
-				live = false;
-			}
-			if (!pseudo && !live) {
-				try {
-					streaming = cs.activeConversations();
-				} catch {
-					streaming = 0;
-				}
-				try {
-					adoptable = cs.hasAdoptableContent();
-				} catch {
-					adoptable = false;
-				}
-				try {
-					activity = cs.latestActivity();
-				} catch {
-					activity = 0;
-				}
-			}
-			cands.push({ id, live, pseudo, streaming, adoptable, activity });
-		}
-		const picked = pickAdoptableOrphan(cands);
-		if (!picked) return null;
-		const cs = this.clients.get(picked);
-		return cs ? { oldId: picked, cs } : null;
-	}
-
-	/**
-	 * 跨客户端感知接线（同会话查重 / 同项目并行 / elsewhere 列表 / 跨端 steer）。
-	 * attach 尾部与认领分支共用 —— 认领换了 map 键，必须在首帧推送（attachSink）
-	 * 前就按新 id 重接，否则 self-exclusion 失效：把自己当成“另一处”（elsewhere
-	 * 误报 + prompt/switch 自拦）。尾部会再调一次，幂等。
-	 */
+	/** Wire session lookup, project awareness, shared-list refresh and cross-window steer
+	 *  before the first attachSink frame. Repeated wiring for the same client is idempotent. */
 	private wireClient(cs: ClientSession, clientId: string): void {
 		cs.findSessionOwner = (targetPath) => this.findSessionOwner(targetPath, clientId);
 		cs.hasStreamingElsewhere = () => this.hasStreamingElsewhere(clientId);
 		cs.listProjectRunners = (cwd) => this.listProjectRunners(cwd, clientId);
 		cs.getClaimStore = () => this.claimStore;
 		cs.findConversationHome = (sdkSession) => this.findConversationHome(sdkSession);
-		cs.listExternalRunning = () => this.listExternalRunning(clientId);
 		cs.notifyExternalClients = (msg) => this.notifyClientsExcept(clientId, msg);
 		cs.onRunningChanged = () => this.pokeExternalRunning(clientId);
 		cs.steerConversationElsewhere = (id, text) => this.steerElsewhere(clientId, id, text);
 		cs.schedulerStore = this.schedulerStore;
-	}
-
-	/**
-	 * 手动过户（take_over_conversation）：把 owner 会话的某主对话（含子代理后代、
-	 * 等答复问卷/页调用）整体搬到 target 会话并切过去。搬的是 runtime 本体不是
-	 * 副本，单 writer 不变 —— 从在线标签页手里接管也是安全的；源会话修好 active
-	 * 并推全量刷新，双方都收到去向通知。quiesce 排空期也放行（重连既有工作）。
-	 */
-	async takeOverConversation(targetId: string, ownerId: string, convId: string): Promise<void> {
-		const target = this.clients.get(targetId);
-		if (!target) return;
-		const fail = (text: string, textEn: string): void => {
-			target.sendNotice({ type: "notice", level: "warning", text, textEn });
-		};
-		if (!ownerId || !convId) {
-			fail(
-				"Takeover target unclear (missing owner/id), please retry.",
-				"Takeover target unclear (missing owner/id), please retry.",
-			);
-			return;
-		}
-		// server-owned-chats：对话表进程共享，目标手里本来就有这条对话 → 也只是切过去。
-		// 下面搬 runtime 的路径（detach + insert）在共享表上会把它从所有窗口摘掉再塞回来。
-		// 见 tests/unit/takeover-shared-table.test.ts。
-		if (ownerId === targetId || target.takeoverBriefs().some((b) => b.id === convId)) {
-			// 自己的对话 → 退化为普通切换。
-			try {
-				await target.switchConversation(convId);
-			} catch {
-				/* switch 内部已用 notice 报错 */
-			}
-			return;
-		}
-		if (AgentService.isPseudoClientId(ownerId)) {
-			fail("Scheduler/plugin sessions cannot be taken over.", "Scheduler/plugin sessions cannot be taken over.");
-			return;
-		}
-		const source = this.clients.get(ownerId);
-		if (!source) {
-			fail(
-				"The source session is gone; reopen it from History instead.",
-				"The source session is gone; reopen it from History instead.",
-			);
-			target.refreshExternalRunning();
-			return;
-		}
-		const briefs = source.takeoverBriefs();
-		const main = briefs.find((b) => b.id === convId);
-		if (!main) {
-			fail(
-				"That conversation is gone on the other side; the list refreshes shortly.",
-				"That conversation is gone on the other side; the list refreshes shortly.",
-			);
-			target.refreshExternalRunning();
-			return;
-		}
-		if (main.isSubagent) {
-			fail(
-				"Only main conversations can be taken over (subagents move with their parent).",
-				"Only main conversations can be taken over (subagents move with their parent).",
-			);
-			return;
-		}
-		const moveIds = [convId, ...collectSubagentDescendantIds(briefs, convId)];
-		const moveSet = new Set(moveIds);
-		// 容量：与 switchSession 同口径（目标项目非子代理且非临时会话 8 个）。
-		// chat-slots: blank chats don't take a slot (countsTowardCap).
-		const movedMains = briefs.filter((b) => moveSet.has(b.id) && b.countsTowardCap).length;
-		const openInProject =
-			target.takeoverBriefs().filter((b) => b.cwd === main.cwd && b.countsTowardCap).length + movedMains;
-		if (openInProject > MAX_OPEN_CONVERSATIONS) {
-			fail(OPEN_CHATS_FULL_MESSAGE, OPEN_CHATS_FULL_MESSAGE);
-			return;
-		}
-		try {
-			const detached = await source.detachTakeoverConversations(moveIds);
-			if (!detached.ok) {
-				fail(
-					detached.reason === "empty"
-						? "The source session only has this conversation and the server is draining; try later."
-						: "That conversation is gone on the other side; the list refreshes shortly.",
-					detached.reason === "empty"
-						? "The source session only has this conversation and the server is draining; try later."
-						: "That conversation is gone on the other side; the list refreshes shortly.",
-				);
-				if (detached.reason === "missing") target.refreshExternalRunning();
-				return;
-			}
-			const newMainId = target.insertTakeoverConvs(detached.payload);
-			// 源会话修好 active（detach 内部已处理）→ 推全量刷新 + 告知去向；
-			// 无 sink 时 emit 即丢，无需判断。
-			source.sendNotice({
-				type: "notice",
-				level: "info",
-				text: `"${main.title}" was taken over by another page and is no longer held here.`,
-				textEn: `"${main.title}" was taken over by another page and is no longer held here.`,
-			});
-			target.sendNotice({
-				type: "notice",
-				level: "info",
-				text: `"${main.title}" was moved to this page — pick up right where it left off.`,
-				textEn: `"${main.title}" was moved to this page — pick up right where it left off.`,
-			});
-			await target.switchConversation(newMainId);
-		} catch (err) {
-			fail(`Takeover failed: ${(err as Error).message}`, `Takeover failed: ${(err as Error).message}`);
-		}
-	}
-
-	/**
-	 * 跨页作答预告（peek_elsewhere_question）：把 owner 会话里某对话的等答复问卷
-	 *  原文取回 target 页展示。只读，不搬迁对话；问卷已不在则直说（并刷新左栏）。
-	 */
-	async peekElsewhereQuestion(targetId: string, ownerId: string, convId: string): Promise<void> {
-		const target = this.clients.get(targetId);
-		if (!target) return;
-		const fail = (text: string, textEn: string): void => {
-			target.sendNotice({ type: "notice", level: "warning", text, textEn });
-		};
-		if (!ownerId || !convId) {
-			fail(
-				"Question target unclear (missing owner/id), please retry.",
-				"Question target unclear (missing owner/id), please retry.",
-			);
-			return;
-		}
-		if (ownerId === targetId) return; // 自己的问卷走本地通道，不需要预告
-		if (AgentService.isPseudoClientId(ownerId)) {
-			fail(
-				"Scheduler/plugin session questions cannot be answered cross-page.",
-				"Scheduler/plugin session questions cannot be answered cross-page.",
-			);
-			return;
-		}
-		const source = this.clients.get(ownerId);
-		const q = source?.peekPendingQuestion(convId);
-		if (!q) {
-			fail(
-				"That question is gone (just answered/cancelled there, or the run ended).",
-				"That question is gone (just answered/cancelled there, or the run ended).",
-			);
-			target.refreshExternalRunning();
-			return;
-		}
-		target.pushElsewhereQuestion(ownerId, convId, q);
 	}
 
 	/**
@@ -21531,7 +20868,7 @@ export class AgentService {
 			if (inflight) {
 				cs = await inflight;
 			} else {
-				// reload-adopt：不走上游 v0.94 的「浏览器重启认领」（findAdoptableOrphan）。
+				// reload-adopt：不走上游 v0.94 的「浏览器重启认领」。
 				// 那套按「clientId 存 sessionStorage、刷新不换 id」设计，只在关掉浏览器重开时触发；
 				// 本 fork 的 client-per-load 让每次刷新都是新 id，它会在每次单标签刷新时触发。
 				// 而 server-owned-chats 之后 convs 是进程共享的：每个残留会话的「有内容 / 在跑 /
@@ -21830,9 +21167,8 @@ export class AgentService {
 	detach(clientId: string, send: (msg: ServerMessage) => void): void {
 		const cs = this.clients.get(clientId);
 		cs?.detachSink(send);
-		// issue #291：最后一个 sink 断开 = 该客户端不再在线 → 它的对话不该再出现在
-		// 别人的 elsewhere 列表（listExternalRunning 已跳过 sinkCount=0 的非伪客户端，
-		// 但列表是推过去的，得让其他客户端重推一次才能立刻消失）。
+		// A disconnected window no longer keeps an unlisted chat visible through viewedElsewhere.
+		// Refresh the other windows' shared lists immediately; the runtime itself stays alive.
 		if (cs && !AgentService.isPseudoClientId(clientId) && cs.sinkCount() === 0) {
 			this.pokeExternalRunning(clientId);
 		}

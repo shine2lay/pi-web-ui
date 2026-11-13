@@ -1575,10 +1575,7 @@ export interface EngineService {
 	/** Browser UI locale report (hello.locale / set_locale) — persist per
 	 *  client and refresh lang-aware prompts (streaming-safe). */
 	setLocale(clientId: string, locale: string): Promise<void>;
-	/** 手动过户（pi 引擎实现；DSH 未实现 → dispatch 回落提示）。 */
-	takeOverConversation?(targetId: string, ownerId: string, convId: string): Promise<void>;
-	/** 跨页作答预告 + 答案转交（pi 引擎实现；DSH 未实现 → dispatch 回落提示）。 */
-	peekElsewhereQuestion?(targetId: string, ownerId: string, convId: string): Promise<void>;
+	/** 跨页答案转交（pi 引擎实现）。 */
 	answerElsewhereQuestion?(
 		targetId: string,
 		ownerId: string,
@@ -3399,30 +3396,6 @@ wss.on("connection", (ws, req) => {
 				break;
 			case "switch_conversation":
 				void cs.switchConversation(msg.id, msg.have);
-				break;
-			case "take_over_conversation":
-				if (typeof service.takeOverConversation === "function") {
-					void service.takeOverConversation(clientId, msg.owner, msg.id);
-				} else {
-					send({
-						type: "notice",
-						level: "error",
-						text: "Takeover is not supported by the current engine; use the pi engine.",
-						textEn: "Takeover is not supported by the current engine; use the pi engine.",
-					});
-				}
-				break;
-			case "peek_elsewhere_question":
-				if (typeof service.peekElsewhereQuestion === "function") {
-					void service.peekElsewhereQuestion(clientId, msg.owner, msg.id);
-				} else {
-					send({
-						type: "notice",
-						level: "error",
-						text: "Cross-page answering is not supported by the current engine; use the pi engine.",
-						textEn: "Cross-page answering is not supported by the current engine; use the pi engine.",
-					});
-				}
 				break;
 			case "list_files":
 				void cs.listFiles(msg.path, msg.requestId);

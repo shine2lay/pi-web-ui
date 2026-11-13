@@ -1367,15 +1367,10 @@ export function App() {
 	useEffect(() => {
 		// owner-question routing (Ops #685): a question held for COO first shows quietly; it sounds once let through.
 		const qid = cueIdOf(chat.question);
-		const rid = chat.remoteQuestion ? `${chat.remoteQuestion.owner}:${chat.remoteQuestion.id}` : null;
 		let shouldCue = false;
 
 		if (qid !== null && !notifiedQuestionIds.current.has(qid)) {
 			notifiedQuestionIds.current.add(qid);
-			shouldCue = true;
-		}
-		if (rid !== null && !notifiedQuestionIds.current.has(rid)) {
-			notifiedQuestionIds.current.add(rid);
 			shouldCue = true;
 		}
 
@@ -1403,7 +1398,7 @@ export function App() {
 			void notify(t("notifyQuestionTitle"), t("notifyQuestionBody"));
 			if (tts.enabled && tts.announce && !shouldSuppressNotify(currentPresence())) speak(t("ttsAnnounceQuestion"), tts);
 		}
-	}, [chat.question, chat.remoteQuestion, chat.conversations, sound, tts, t]);
+	}, [chat.question, chat.conversations, sound, tts, t]);
 
 	// Tool-approval cue (issue #288)：高危操作等待用户批准 —— 此前是唯一静默的
 	// 拦截事件（done/question/error 都有提示音 + 桌面通知，唯独审批没有），AI 会
@@ -2554,18 +2549,6 @@ export function App() {
 								conversationTitle={
 									chat.question.conversationTitle ||
 									chat.conversations.find((c) => c.id === (chat.question?.conversationId || activeConvId))?.title
-								}
-							/>
-						)}
-						{/* 跨页作答：别处会话的问卷在本页弹框（id 对方会话作用域，提交带 owner）。 */}
-						{chat.remoteQuestion && (
-							<DshQuestionDialog
-								question={chat.remoteQuestion}
-								owner={chat.remoteQuestion.owner}
-								escapeEnabled={view === "chat"}
-								conversationTitle={
-									chat.remoteQuestion.conversationTitle ||
-									chat.conversations.find((c) => c.id === chat.remoteQuestion?.convId)?.title
 								}
 							/>
 						)}

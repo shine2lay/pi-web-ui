@@ -93,4 +93,6 @@
 // 51: initiatives-plan-data - work_page_watch / work_page_unwatch and their work_page answer: the whole work
 //     registry (initiatives, projects, done-when marks, linked tasks, activity) for the Initiatives page. An old
 //     server never answers work_page_watch.
-export const PROTOCOL_VERSION = 51;
+// 52: server-owned-chats cleanup — remove takeover/elsewhere-question preview messages.
+//     DSH keeps its read-only Elsewhere rows; old pages must refresh before sending removed actions.
+export const PROTOCOL_VERSION = 52;
