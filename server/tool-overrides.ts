@@ -43,9 +43,9 @@ export interface ToolOverrideSpec {
 	name: string;
 	/**
 	 * 没有第三方扩展提供同名工具时用的**完整实现**（pi-web-ui 自己的覆盖，
-	 * 行为与改动前逐字一致）。
+	 * 行为与改动前逐字一致）。省掉它 = 没有扩展提供时什么都不装（如 tool-time-limit 只叠在扩展工具上）。
 	 */
-	fallback: () => AnyToolDefinition;
+	fallback?: () => AnyToolDefinition;
 	/**
 	 * 有第三方扩展提供同名工具时的装饰器：以扩展实现为基底，保留它的一切，
 	 * 只叠加 pi-web-ui 的能力（行为仍委托基底）。省掉它 = 该名字直接让给扩展
@@ -82,13 +82,18 @@ export function installToolOverrides(
 	const injected: AnyToolDefinition[] = [];
 	for (const spec of specs) {
 		const extensionTool = extensionToolDefinition(session, spec.name);
+		// 既无扩展同名工具又无 fallback：这个名字不归本模块管，既有同名 customTools 原样保留。
+		if (!extensionTool && !spec.fallback) {
+			names.delete(spec.name);
+			continue;
+		}
 		if (extensionTool) {
 			// 有扩展同名工具：只能叠（composeWith）；没给装饰器就整个让给它 ——
 			// **绝不**用 fallback 顶掉它（那就又是本模块存在要防的那个问题）。
 			if (spec.composeWith) injected.push(spec.composeWith(extensionTool));
 			continue;
 		}
-		injected.push(spec.fallback());
+		if (spec.fallback) injected.push(spec.fallback());
 	}
 	// 同名项先剔除再前置：重复调用幂等（不会层层叠加），且插件工具仍然后写赢。
 	session._customTools = [...injected, ...session._customTools.filter((t) => !names.has(t.name))];

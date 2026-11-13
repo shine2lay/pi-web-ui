@@ -8725,3 +8725,46 @@ No new timeouts: Stop's existing 15 s abort window and the existing hang guard d
   plain `dispose()` first.
 - Undo: revert this commit, then `pi-web-deploy`.
 
+## tool-time-limit
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at f2a40754; on top of `stuck-runtime`), pi 1.5.2
+
+**Why** (ops #863, 2026-11-12): google_search (three lead chats) and queue_reply (two lead chats)
+never returned, for 21 min to 2h17m, and each chat's turn stayed busy. The owner picked "Yes,
+2-minute limit" (COO rm-625df2d1): "A frozen search or reply errors out after 2 minutes and the chat
+carries on; a rare slow-but-working search could be cut off." This is the safety net on top of
+`stuck-runtime` (Stop and the hang guard) and ops #860 (the relay's own cause).
+
+### Changes
+
+1. `server/tool-time-limit.ts`: `TOOL_TIME_LIMITS` = {google_search, queue_reply} at 120 s with the
+   owner-approved error words; `withTimeLimit` races the tool's run, and past the limit fires the
+   tool's own abort signal and returns an error tool result (only that call fails; the turn goes on).
+   Stop still reaches the tool; late progress and a late failure are dropped.
+   `PI_WEB_TOOL_TIME_LIMIT_MS` sets the limits for tests.
+2. `server/agent-service.ts` lays `toolTimeLimitSpecs()` over the add-ons' tools of those names
+   through `installToolOverrides` (composeWith), so no add-on carries a copy of the limit.
+3. `server/tool-overrides.ts`: a spec with no add-on tool of that name and no fallback adds and
+   removes nothing (`fallback` is optional).
+
+No other tool gets a limit (rule 21); the 20-minute hang guard is unchanged.
+
+### How it was checked
+
+- `tests/tool-time-limit-test.mjs` (sealed, scripted model, fake google_search / queue_reply that
+  never settle, limit 3 s): each returns the owner's words as an error at ~3.1 s, its abort signal
+  fires, and the turn goes on to the next model step. Without the wiring 12 of 16 checks fail (chat
+  still working after 13.2 s / 43.1 s).
+- `tests/coupled/queue-reply-time-limit-native.test.ts` (real pi-queue): a hung relay ends at the
+  limit; the late relay lands once and a retry is refused as a duplicate ("Already replied"); a retry
+  while the relay is still out sends the same decision, never a second one.
+- `tests/unit/tool-time-limit.test.ts` (limits, words, abort, Stop, late results, the override).
+- check.sh and the sealed E2E suite.
+
+### When syncing
+
+- If pi-agent-core starts racing `tool.execute` against its abort or gains per-tool timeouts, check
+  whether this is still needed; rerun the sealed test first.
+- Undo: revert this commit, then `pi-web-deploy`.
+

@@ -76,7 +76,7 @@ interface NativeState {
 	queueId?: string;
 	tasks: NativeTask[];
 }
-interface NativeTool {
+export interface NativeTool {
 	name: string;
 	execute(id: string, params: Data, signal: undefined, update: undefined, ctx: unknown): unknown;
 }
@@ -135,9 +135,11 @@ export interface NativeWorldShape {
 	role?: string;
 	homeAt?: "lead" | "parent";
 	others?: string[];
+	/** Lays something over each production tool as it registers (ops #863: pi-web-ui's time limit). */
+	wrapTool?: (tool: NativeTool) => NativeTool;
 }
 
-export async function nativeQueueWorld({ role = "frontend", homeAt = "lead", others = [] }: NativeWorldShape = {}) {
+export async function nativeQueueWorld({ role = "frontend", homeAt = "lead", others = [], wrapTool }: NativeWorldShape = {}) {
 	const agentDir = process.env.PI_CODING_AGENT_DIR;
 	assert.ok(
 		agentDir && agentDir.includes("question-coupled-"),
@@ -177,7 +179,8 @@ export async function nativeQueueWorld({ role = "frontend", homeAt = "lead", oth
 	const sessions = new Map<string, AgentSession>();
 	const commands: Array<{ file: string; action: string }> = [];
 	const cardResults: Array<{ tag: string; status: string }> = [];
-	const control: { beforeCommit?: () => Promise<void> } = {};
+	// beforeCommand: held before every host command (ops #863: a relay that hangs).
+	const control: { beforeCommit?: () => Promise<void>; beforeCommand?: (line: string) => Promise<void> } = {};
 	let serial = 0;
 
 	const createChat = (name: string, reopen?: string, chatRole = role): NativeChat => {
@@ -241,7 +244,7 @@ export async function nativeQueueWorld({ role = "frontend", homeAt = "lead", oth
 			},
 		};
 		native.load({
-			registerTool: (tool: NativeTool) => tools.set(tool.name, tool),
+			registerTool: (tool: NativeTool) => tools.set(tool.name, wrapTool ? wrapTool(tool) : tool),
 			registerCommand: (key: string, command: NativeQuestionCommand) => registered.set(key, command),
 			on: (key: string, handler: (event: unknown, context: unknown) => unknown) =>
 				events.set(key, [...(events.get(key) ?? []), handler]),
@@ -284,6 +287,7 @@ export async function nativeQueueWorld({ role = "frontend", homeAt = "lead", oth
 		track(
 			(async () => {
 				commands.push({ file, action: line.split(" ")[1] });
+				await control.beforeCommand?.(line);
 				if (line.startsWith("/queue question-commit ")) {
 					const before = control.beforeCommit;
 					control.beforeCommit = undefined;

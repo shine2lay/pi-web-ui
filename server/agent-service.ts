@@ -352,6 +352,7 @@ import {
 	type OverrideSessionLike,
 	type ToolOverrideSpec,
 } from "./tool-overrides.js";
+import { toolTimeLimitSpecs } from "./tool-time-limit.js";
 // 展示文件给用户（present_files）：图片/视频内联、文本开预览弹窗、本地打开按钮。
 import { makePresentFilesTool } from "./present-files-tool.js";
 // 主动压缩上下文工具（compact_context）：AI 主动根据当前问题精简上下文并自主控制范围。
@@ -6735,12 +6736,11 @@ export class ClientSession {
 			bridgeAnchor.session = created.session;
 			this.sessionPluginMeta.set(created.session, { ownerId, cwd: effectiveCwd });
 			// read / write / edit 三处覆盖在会话建好后注入（见 tool-overrides.ts）：SDK 的合并链是
-			// [...扩展工具, ...customTools] 后写赢 ⇒ 创建时塞进 customTools 会**恒定顶掉**第三方
-			// 扩展注册的同名工具（官方 docs/extensions.md 明写扩展可覆盖 read/write/edit）。
-			installToolOverrides(
-				created.session as unknown as OverrideSessionLike,
-				this.toolOverrideSpecs(ownerId, effectiveCwd),
-			);
+			// [...扩展工具, ...customTools] 后写赢 ⇒ 创建时塞进 customTools 会**恒定顶掉**第三方扩展注册的同名工具。
+			installToolOverrides(created.session as unknown as OverrideSessionLike, [
+				...this.toolOverrideSpecs(ownerId, effectiveCwd),
+				...toolTimeLimitSpecs(), // ops #863: the owner's 2-minute limit on google_search / queue_reply
+			]);
 			// 终端工具开关与预设门控从创建起就生效（工具始终注册进注册表，只调活跃集）。
 			this.applyToolGating(created.session, targetPreset);
 			// All foreground, task, subagent and restored runtimes pass this factory. Attach before
