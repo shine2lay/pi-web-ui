@@ -95,4 +95,6 @@
 //     server never answers work_page_watch.
 // 52: server-owned-chats cleanup — remove takeover/elsewhere-question preview messages.
 //     DSH keeps its read-only Elsewhere rows; old pages must refresh before sending removed actions.
-export const PROTOCOL_VERSION = 52;
+// 53: effort-level-button - get_effort_levels / set_effort_level and the effort_levels answer and push: the
+//     composer's "Department effort level" button. An old page shows no button; an old server never answers.
+export const PROTOCOL_VERSION = 53;

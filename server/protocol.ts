@@ -824,13 +824,9 @@ export interface UiState {
 	 *  null / 缺省 = 没有待答提问。
 	 */
 	pendingQuestion?: UiPendingQuestion | null;
-	/**
-	 * 待用户审批的高危工具调用（Edit & Run 人机协同）。当前对话有待审批时携带，切会话/刷新恢复。
-	 */
+	/** 待用户审批的高危工具调用（Edit & Run 人机协同）。当前对话有待审批时携带，切会话/刷新恢复。 */
 	pendingApproval?: UiToolApproval | null;
-	/**
-	 * 子代理同行交接协同关系链（Peer-to-Peer Handoff relationships: fromRunId -> toRunId）。
-	 */
+	/** 子代理同行交接协同关系链（Peer-to-Peer Handoff relationships: fromRunId -> toRunId）。 */
 	subagentHandoffs?: Array<{ fromRunId: string; toRunId: string; timestamp: number }>;
 	/**
 	 * 当前对话的未发送输入框草稿（issue #166，单中心文件方案）。
@@ -1508,6 +1504,7 @@ export type ClientCommand =
 	/** Clear the default thinking/effort level (fall back to model default). */
 	| { type: "clear_default_thinking" }
 	| { type: "set_thinking"; level: string }
+	| import("./effort-level-protocol.js").EffortLevelClientMessage
 	/** fast-mode: turn the chat's "⚡ Fast" on/off (ChatGPT fast-mode models; pi chats only). */
 	| { type: "set_fast_mode"; mode: ChatSpeed; conversationId: string }
 	| { type: "set_cwd"; path: string }
@@ -5115,6 +5112,7 @@ export interface UiSettingsState {
 }
 export type ServerMessage =
 	| CommandDispositionMsg
+	| import("./effort-level-protocol.js").EffortLevelServerMessage
 	| { type: "session_initialized"; connectionGeneration: string }
 	/** reconnect-trace: runtime capture flag only; separate from heartbeat/connection health. */
 	| { type: "conn_trace_config"; on: boolean }

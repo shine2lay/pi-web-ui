@@ -8818,3 +8818,44 @@ No other tool gets a limit (rule 21); the 20-minute hang guard is unchanged.
   whether this is still needed; rerun the sealed test first.
 - Undo: revert this commit, then `pi-web-deploy`.
 
+## effort-level-button
+
+**Status**: `local` (seam only: ops #876; built by ops task 2b)
+**Baseline**: v0.96.1 (`mine` at a3c9a576), pi 1.5.2
+
+**Why** (owner, Ops home chat 2026-11-13, m93253): "I need a button to change the effort per chat based
+on that department's table . So I can choose effort for the leads without going to the actual model
+selector"; then "A new button beside it", "Lead and task chats", "Until you change it".
+
+### Changes
+
+1. `server/effort-level-protocol.ts`: the wire types. Client `get_effort_levels` / `set_effort_level`
+   (`tier` null = "Back to department default"); server `effort_levels` (the open chat's levels, `applied`
+   "now" | "next-turn", `error`). Carried in `server/protocol.ts`'s unions. Protocol 52 → 53.
+2. `server/effort-level.ts`: `handleEffortLevelMessage` and `effortLevelsFor` over pi-queue's route channel
+   (`globalThis[Symbol.for("pi-queue.model-route")].api.effortLevels / setEffortLevel`, pi-queue
+   docs/model-table-format.md "Effort levels"). An idle chat switches at once through the server's
+   set-model and thinking path, after `api.routedSwitch` (so it isn't a hand pick); a busy chat at its
+   next turn start (pi-queue). Seam only for now: both throw `effort levels: not built (ops task 2b)`.
+3. To wire (ops task 2b): one `server/index.ts` case for both messages, calling into `server/effort-level.ts`
+   with the chat's session; `server/index.ts` and `server/protocol.ts` are past 500 lines, so wt check's
+   ratchet wants their line count not to grow (this seam's two union lines were offset in `protocol.ts`).
+4. To build (ops task 2b): the composer button beside the model and Effort menus, only in chats with a
+   department table, showing the level's name ("Extra high"), aria-label "Department effort level";
+   its menu: header "<Department> table", five rows "Extra high · Opus 5.5 @ xhigh", ✓ on the current row,
+   "(default)" on the department default, notes ("raised to High for this task", "uses spare ChatGPT
+   allowance"), last item "Back to department default"; fits at 320px. Today's model and Effort menus
+   are unchanged.
+
+### How it was checked
+
+- `tests/unit/effort-level.test.ts`: the seam's cases, marked `notBuilt` (pass only while the stub
+  throws; task 2b turns each into `it` and never weakens one).
+- `tests/effort-level-test.mjs` (sealed: own server, temp HOME, pi-queue from its checkout, a fixture
+  Ops table, models that can't be reached, no model call): fails "not built" until task 2b.
+
+### When syncing
+
+- Needs pi-queue's effort-level seam (pi-queue 7d854a4 or later).
+- Undo: revert this entry's commits, then `pi-web-deploy`.
+
