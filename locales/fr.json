@@ -2466,6 +2466,18 @@
 		"identityOwnerCancel": "Annuler",
 		"identityOwnerSaving": "Enregistrement…",
 		"identityOwnerBadFile": "Son identity.json n’est pas un seul objet JSON, on ne peut donc pas modifier ceci ici. Corrigez-le d’abord dans Réglages.",
-		"identityOwnerFix": "Corrigez d’abord ceci :"
+		"identityOwnerFix": "Corrigez d’abord ceci :",
+		"effortLevelName": "Niveau d’effort du service",
+		"effortLevelTip": "Niveau d’effort du service : {level} ({table})",
+		"effortLevelTable": "Table {department}",
+		"effortLevelDefault": "(par défaut)",
+		"effortLevelRaisedTask": "relevé à {level} pour cette tâche",
+		"effortLevelRaisedLead": "relevé à {level} pour un chat de responsable",
+		"effortLevelForced": "utilise le quota libre {allowance}",
+		"effortLevelCantRun": "impossible pour l’instant : {why}",
+		"effortLevelBack": "Revenir au défaut du service",
+		"effortLevelSaving": "Changement…",
+		"effortLevelNextTurn": "Le chat est occupé : il changera au prochain tour.",
+		"effortLevelFailed": "Pas modifié : {why}"
 	}
 }

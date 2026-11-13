@@ -1,0 +1,83 @@
+/* effort-level-button (PATCHES.md): the composer's "Department effort level" button and its menu. */
+
+/* The button keeps its level name at every width (the model and Effort chips go icon-only at ≤560px; this one is
+   the level the owner picked, so its name is the point). Long names shorten with an ellipsis. */
+.composer-tools .chip.effort-level-chip > span.effort-level-name {
+	display: inline;
+	max-width: 96px;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+}
+.chip.effort-level-chip.picked {
+	color: var(--accent-text);
+	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+@media (max-width: 560px) {
+	.composer-tools .chip.effort-level-chip > span.effort-level-name {
+		max-width: 72px;
+	}
+}
+
+.dd-menu.effort-menu {
+	min-width: 300px;
+	max-width: min(440px, calc(100vw - 16px));
+}
+.effort-menu .effort-menu-head {
+	text-transform: none;
+	letter-spacing: 0;
+	font-size: 12px;
+}
+
+/* One level: "<level> · <model> @ <thinking> (default)" with ✓ on the right, its notes on a second line. */
+.dd-item.effort-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: start;
+	gap: 2px 10px;
+}
+/* The ✓ is real text (screen readers and copy get it), so the generic active tick is dropped. */
+.dd-item.effort-row.active::after {
+	content: none;
+}
+.effort-row-main {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.effort-row-level {
+	font-weight: 600;
+	color: var(--text);
+}
+.effort-row-default {
+	color: var(--text-faint);
+}
+.effort-row-check {
+	color: var(--accent-text);
+	font-size: 12px;
+	min-width: 1em;
+	text-align: right;
+}
+.effort-row-note {
+	grid-column: 1 / -1;
+	font-size: 12px;
+	color: var(--text-faint);
+	overflow-wrap: anywhere;
+}
+
+.effort-menu-problem,
+.effort-menu-status {
+	margin: 4px 6px;
+	padding: 6px 8px;
+	border-radius: 6px;
+	font-size: 12px;
+	color: var(--text-dim);
+	background: var(--bg-elev);
+	overflow-wrap: anywhere;
+}
+.effort-menu-problem,
+.effort-menu-status.error {
+	color: var(--amber-text);
+	background: color-mix(in srgb, var(--amber) 14%, transparent);
+}

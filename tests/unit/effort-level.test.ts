@@ -3,9 +3,8 @@
  * the composer's "Department effort level" button, over stand-in deps (pi-queue's route channel api, the open chat,
  * the set-model path). No model call, no files.
  *
- * Each case runs through `notBuilt`: it passes only while the handler throws "effort levels: not built (ops task 2b)",
- * and fails as soon as the code is built, so ops task 2b must turn every `notBuilt(` into `it(`. Task 2b never weakens
- * or deletes an assertion.
+ * Ops #876 wrote each case as `notBuilt(` (passing only while the stub threw); ops #878 (task 2b) built the handler
+ * and turned every `notBuilt(` into `it(`, with no assertion weakened or deleted.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -20,23 +19,6 @@ import {
 	ROUTE_CHANNEL_KEY,
 } from "../../server/effort-level.js";
 import type { EffortLevelServerMessage, EffortTier, UiEffortLevels } from "../../server/effort-level-protocol.js";
-
-/** Passes only while the seam is a stub; built, it fails and names what to do. */
-function notBuilt(name: string, fn: () => unknown | Promise<unknown>): void {
-	it(`[not built] ${name}`, async () => {
-		let error: unknown;
-		try {
-			await fn();
-		} catch (e) {
-			error = e;
-		}
-		if (!(error instanceof Error) || error.message !== EFFORT_LEVELS_NOT_BUILT) {
-			throw new Error(
-				`effort levels are built (or failed otherwise): turn this notBuilt( into it( (ops task 2b); got ${String(error)}`,
-			);
-		}
-	});
-}
 
 const LABELS: Record<EffortTier, string> = {
 	max: "Max",
@@ -123,13 +105,13 @@ describe("effort-level seam (passes now)", () => {
 });
 
 describe("get_effort_levels", () => {
-	notBuilt("answers with the open chat's levels", async () => {
+	it("answers with the open chat's levels", async () => {
 		const f = fake();
 		await handleEffortLevelMessage({ type: "get_effort_levels", conversationId: "c1" }, f.deps);
 		expect(f.sent).toEqual([{ type: "effort_levels", conversationId: "c1", levels: levels("xhigh") }]);
 		expect(f.applied).toEqual([]);
 	});
-	notBuilt("a chat of no table, no open chat or no pi-queue: rows [] (the button is hidden), no error", async () => {
+	it("a chat of no table, no open chat or no pi-queue: rows [] (the button is hidden), no error", async () => {
 		for (const f of [
 			fake({ api: { effortLevels: () => ({ rows: [] }) } }),
 			fake({ chat: null }),
@@ -139,13 +121,13 @@ describe("get_effort_levels", () => {
 			expect(f.sent).toEqual([{ type: "effort_levels", conversationId: "c1", levels: { rows: [] } }]);
 		}
 	});
-	notBuilt("effortLevelsFor asks the channel with the chat's session file", () => {
+	it("effortLevelsFor asks the channel with the chat's session file", () => {
 		const seen: string[] = [];
 		const f = fake({ api: { effortLevels: ({ sessionFile }) => (seen.push(sessionFile), levels("xhigh")) } });
 		expect(effortLevelsFor("c1", f.deps)).toEqual(levels("xhigh"));
 		expect(seen).toEqual(["/s/ops-lead.jsonl"]);
 	});
-	notBuilt("a broken chat-levels.json comes through as a problem (shown as a warning), not an error", async () => {
+	it("a broken chat-levels.json comes through as a problem (shown as a warning), not an error", async () => {
 		const broken = { ...levels("xhigh"), problems: ["/a/model-routing/chat-levels.json: Unexpected token"] };
 		const f = fake({ api: { effortLevels: () => broken } });
 		await handleEffortLevelMessage({ type: "get_effort_levels", conversationId: "c1" }, f.deps);
@@ -155,7 +137,7 @@ describe("get_effort_levels", () => {
 });
 
 describe("set_effort_level", () => {
-	notBuilt("idle chat: marks routedSwitch, then switches at once through the set-model path", async () => {
+	it("idle chat: marks routedSwitch, then switches at once through the set-model path", async () => {
 		const f = fake();
 		await handleEffortLevelMessage({ type: "set_effort_level", conversationId: "c1", tier: "high" }, f.deps);
 		expect(f.sets).toEqual([{ sessionFile: "/s/ops-lead.jsonl", tier: "high" }]);
@@ -166,7 +148,7 @@ describe("set_effort_level", () => {
 			{ type: "effort_levels", conversationId: "c1", levels: levels("xhigh", "high"), applied: "now" },
 		]);
 	});
-	notBuilt("busy chat: records the pick, never switches mid-turn (the next turn start does)", async () => {
+	it("busy chat: records the pick, never switches mid-turn (the next turn start does)", async () => {
 		const f = fake({ chat: { isStreaming: true } });
 		await handleEffortLevelMessage({ type: "set_effort_level", conversationId: "c1", tier: "medium" }, f.deps);
 		expect(f.sets).toHaveLength(1);
@@ -174,36 +156,33 @@ describe("set_effort_level", () => {
 		expect(f.routed).toEqual([]);
 		expect(f.sent[0]).toMatchObject({ type: "effort_levels", applied: "next-turn", levels: { pickedTier: "medium" } });
 	});
-	notBuilt("back to department default (tier null) switches to the default's model", async () => {
+	it("back to department default (tier null) switches to the default's model", async () => {
 		const f = fake({ picked: "high" });
 		await handleEffortLevelMessage({ type: "set_effort_level", conversationId: "c1", tier: null }, f.deps);
 		expect(f.sets).toEqual([{ sessionFile: "/s/ops-lead.jsonl", tier: null }]);
 		expect(f.applied).toEqual([{ conversationId: "c1", choice: CELLS.xhigh }]);
 		expect(f.sent[0]?.levels.pickedTier).toBeUndefined();
 	});
-	notBuilt(
-		"a refused pick (unknown tier, no table, broken file) answers with the error; nothing switches",
-		async () => {
-			const f = fake({
-				api: {
-					setEffortLevel: () => {
-						throw new Error("/a/model-routing/chat-levels.json is broken: fix or delete it");
-					},
+	it("a refused pick (unknown tier, no table, broken file) answers with the error; nothing switches", async () => {
+		const f = fake({
+			api: {
+				setEffortLevel: () => {
+					throw new Error("/a/model-routing/chat-levels.json is broken: fix or delete it");
 				},
-			});
-			await handleEffortLevelMessage({ type: "set_effort_level", conversationId: "c1", tier: "high" }, f.deps);
-			expect(f.applied).toEqual([]);
-			expect(f.sent).toEqual([
-				{
-					type: "effort_levels",
-					conversationId: "c1",
-					levels: levels("xhigh"),
-					error: "/a/model-routing/chat-levels.json is broken: fix or delete it",
-				},
-			]);
-		},
-	);
-	notBuilt("no open chat or no pi-queue: refused with an error, nothing recorded", async () => {
+			},
+		});
+		await handleEffortLevelMessage({ type: "set_effort_level", conversationId: "c1", tier: "high" }, f.deps);
+		expect(f.applied).toEqual([]);
+		expect(f.sent).toEqual([
+			{
+				type: "effort_levels",
+				conversationId: "c1",
+				levels: levels("xhigh"),
+				error: "/a/model-routing/chat-levels.json is broken: fix or delete it",
+			},
+		]);
+	});
+	it("no open chat or no pi-queue: refused with an error, nothing recorded", async () => {
 		for (const f of [fake({ chat: null }), fake({ api: null })]) {
 			await handleEffortLevelMessage({ type: "set_effort_level", conversationId: "c1", tier: "high" }, f.deps);
 			expect(f.sets).toEqual([]);

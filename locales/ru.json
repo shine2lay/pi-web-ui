@@ -2466,6 +2466,18 @@
 		"identityOwnerCancel": "Отмена",
 		"identityOwnerSaving": "Сохранение…",
 		"identityOwnerBadFile": "Её identity.json — не один JSON-объект, поэтому здесь это изменить нельзя. Сначала исправьте его в Настройках.",
-		"identityOwnerFix": "Сначала исправьте:"
+		"identityOwnerFix": "Сначала исправьте:",
+		"effortLevelName": "Уровень усилий отдела",
+		"effortLevelTip": "Уровень усилий отдела: {level} ({table})",
+		"effortLevelTable": "Таблица {department}",
+		"effortLevelDefault": "(по умолчанию)",
+		"effortLevelRaisedTask": "повышен до {level} для этой задачи",
+		"effortLevelRaisedLead": "повышен до {level} для чата лида",
+		"effortLevelForced": "использует свободную квоту {allowance}",
+		"effortLevelCantRun": "сейчас не может работать: {why}",
+		"effortLevelBack": "Вернуть стандарт отдела",
+		"effortLevelSaving": "Переключение…",
+		"effortLevelNextTurn": "Чат занят: переключится на следующем ходу.",
+		"effortLevelFailed": "Не изменено: {why}"
 	}
 }

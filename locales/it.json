@@ -2466,6 +2466,18 @@
 		"identityOwnerCancel": "Annulla",
 		"identityOwnerSaving": "Salvataggio\u2026",
 		"identityOwnerBadFile": "Il suo identity.json non \u00e8 un unico oggetto JSON, quindi qui non si pu\u00f2 cambiare. Correggilo prima nelle Impostazioni.",
-		"identityOwnerFix": "Correggi prima questo:"
+		"identityOwnerFix": "Correggi prima questo:",
+		"effortLevelName": "Livello di impegno del reparto",
+		"effortLevelTip": "Livello di impegno del reparto: {level} ({table})",
+		"effortLevelTable": "Tabella {department}",
+		"effortLevelDefault": "(predefinito)",
+		"effortLevelRaisedTask": "alzato a {level} per questa attività",
+		"effortLevelRaisedLead": "alzato a {level} per una chat lead",
+		"effortLevelForced": "usa la quota libera di {allowance}",
+		"effortLevelCantRun": "non può partire ora: {why}",
+		"effortLevelBack": "Torna al predefinito del reparto",
+		"effortLevelSaving": "Cambio in corso…",
+		"effortLevelNextTurn": "La chat è occupata: cambierà al prossimo turno.",
+		"effortLevelFailed": "Non cambiato: {why}"
 	}
 }

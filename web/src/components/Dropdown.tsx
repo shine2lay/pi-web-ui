@@ -37,6 +37,9 @@ interface DropdownProps {
 	/** Inline style for the menu panel — used to LOCK a measured width/height
 	 * so the panel doesn't resize as its content changes (e.g. filtering). */
 	menuStyle?: CSSProperties;
+	/** ARIA for a panel that is a real menu (role "menu" + its name), e.g. the effort-level button's. */
+	menuRole?: "menu";
+	menuLabel?: string;
 }
 
 export interface DropdownShiftParams {
@@ -85,6 +88,8 @@ export function Dropdown({
 	triggerClassName,
 	menuRef,
 	menuStyle,
+	menuRole,
+	menuLabel,
 }: DropdownProps) {
 	const ref = useRef<HTMLDivElement>(null);
 	const internalMenuRef = useRef<HTMLDivElement | null>(null);
@@ -155,6 +160,7 @@ export function Dropdown({
 				className={triggerClassName ?? "chip"}
 				onClick={() => onOpenChange(!open)}
 				aria-expanded={open}
+				aria-haspopup={menuRole}
 				aria-label={ariaLabel}
 				data-tip={tip}
 			>
@@ -165,6 +171,8 @@ export function Dropdown({
 				<div
 					className={`dd-menu ${menuClassName ?? ""}`}
 					ref={setMenuNode}
+					role={menuRole}
+					aria-label={menuLabel}
 					style={
 						shift !== 0
 							? {

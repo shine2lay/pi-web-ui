@@ -2466,7 +2466,19 @@
 		"identityOwnerCancel": "キャンセル",
 		"identityOwnerSaving": "保存中…",
 		"identityOwnerBadFile": "この identity.json は 1 つの JSON オブジェクトではないため、ここでは変更できません。先に設定で直してください。",
-		"identityOwnerFix": "先にこれを直してください:"
+		"identityOwnerFix": "先にこれを直してください:",
+		"effortLevelName": "部門の作業レベル",
+		"effortLevelTip": "部門の作業レベル: {level}（{table}）",
+		"effortLevelTable": "{department} の表",
+		"effortLevelDefault": "（既定）",
+		"effortLevelRaisedTask": "このタスクでは {level} に引き上げ",
+		"effortLevelRaisedLead": "リードチャットでは {level} に引き上げ",
+		"effortLevelForced": "{allowance} の余り枠を使用",
+		"effortLevelCantRun": "今は実行できません: {why}",
+		"effortLevelBack": "部門の既定に戻す",
+		"effortLevelSaving": "切り替え中…",
+		"effortLevelNextTurn": "チャットは処理中です。次のターンで切り替わります。",
+		"effortLevelFailed": "変更されませんでした: {why}"
 	},
 	"serverStrings": {
 		"agent.subagent.stop.user": "ユーザーがサブエージェントを停止しました",

@@ -2466,7 +2466,19 @@
 		"identityOwnerCancel": "Cancelar",
 		"identityOwnerSaving": "Salvando…",
 		"identityOwnerBadFile": "O identity.json dela não é um único objeto JSON, então isto não pode ser mudado aqui. Corrija-o antes em Configurações.",
-		"identityOwnerFix": "Corrija isto primeiro:"
+		"identityOwnerFix": "Corrija isto primeiro:",
+		"effortLevelName": "Nível de esforço do departamento",
+		"effortLevelTip": "Nível de esforço do departamento: {level} ({table})",
+		"effortLevelTable": "Tabela de {department}",
+		"effortLevelDefault": "(padrão)",
+		"effortLevelRaisedTask": "elevado para {level} nesta tarefa",
+		"effortLevelRaisedLead": "elevado para {level} num chat de líder",
+		"effortLevelForced": "usa a cota livre de {allowance}",
+		"effortLevelCantRun": "não pode rodar agora: {why}",
+		"effortLevelBack": "Voltar ao padrão do departamento",
+		"effortLevelSaving": "Trocando…",
+		"effortLevelNextTurn": "O chat está ocupado: troca no próximo turno.",
+		"effortLevelFailed": "Não alterado: {why}"
 	},
 	"serverStrings": {
 		"agent.subagent.template.unavailable": "Template de subagente indisponível: {templateName} (ausente ou desativado)",

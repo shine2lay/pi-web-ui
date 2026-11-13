@@ -75,8 +75,7 @@ import { createBoardSourceCheckpoints } from "./recovery-board";
 import { createBoardDraftIndexedDB } from "./board-draft-store";
 import { requiresRecoveryAdmission } from "./recovery-policy";
 import type { AdmissionBinding } from "./recovery-admission";
-// 工具定义说明弹窗（工具卡右键 → 「显示工具详细信息」）：应答直接回模块级 store，
-// 不进 ChatState（弹窗挂在 App 上，消息列表里几十张卡片不必为此各拿一份数据）。
+// 工具定义说明弹窗（工具卡右键 → 「显示工具详细信息」）：应答直接回模块级 store，不进 ChatState（弹窗挂在 App 上，消息列表里几十张卡片不必为此各拿一份数据）。
 import { receiveToolInfo } from "./tool-info-state";
 import {
 	receiveIdentities,
@@ -97,6 +96,7 @@ import {
 	resendNotebookWatch,
 } from "./notebook-state";
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
+import { receiveEffortLevels } from "./effort-level-state";
 import { receiveRoleGuard, requestRoleGuard } from "./role-guard-state";
 import {
 	getBoardAdmissionSource,
@@ -894,8 +894,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 				status: action.status,
 				// A new socket is not ready until its hello/ready round-trip completes.
 				ready: action.status === "open" ? state.ready : false,
-				// PTYs are conversation-owned and survive socket reconnects. Clear only
-				// the browser views so xterm writers remount when the server replays them.
+				// PTYs are conversation-owned and survive socket reconnects. Clear only the browser views so xterm writers remount when the server replays them.
 				terminals: action.status === "closed" ? [] : state.terminals,
 				hostMetrics: action.status === "closed" ? null : state.hostMetrics,
 			};
@@ -919,8 +918,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 				preview: null,
 				// optimistic-send: sends still waiting for an answer are asked about again on this socket.
 				pendingSends: onReconnect(state.pendingSends),
-				// Old page + new server (or the reverse) after an in-place update:
-				// WS handling on either side may be stale — banner asks for refresh.
+				// Old page + new server (or the reverse) after an in-place update: WS handling on either side may be stale — banner asks for refresh.
 				protocolMismatch: action.protocolVersion !== undefined && action.protocolVersion !== PROTOCOL_VERSION,
 			};
 		case "snapshot": {
@@ -936,8 +934,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 				activeConversationId: next.conversationId,
 				liveOutputs: pruneLiveOutputs(state.liveOutputs, next),
 				toolStatuses: pruneToolStatuses(state.toolStatuses, next),
-				// optimistic-send: the faded copies this snapshot shows the real message of go now, in the
-				// same render that draws it (no gap, no duplicate).
+				// optimistic-send: the faded copies this snapshot shows the real message of go now, in the same render that draws it (no gap, no duplicate).
 				pendingSends: reconcilePending(state.pendingSends, next),
 				// switch-loading 保险信号：要的那条已经显示出来了就撤遮罩（主信号是 switch_done）。
 				...settled,
@@ -2522,6 +2519,9 @@ export function useChat() {
 				// subs-limits-box: every subscription's limits, for the Limits box (subs-limits-state.ts).
 				case "subs_limits":
 					receiveSubsLimits(msg);
+					break;
+				case "effort_levels": // effort-level-button: answered or pushed (effort-level-state.ts)
+					receiveEffortLevels(msg);
 					break;
 				// identities: the identity list and the Settings editor (identity-state.ts).
 				case "identities":

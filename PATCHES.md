@@ -8820,7 +8820,7 @@ No other tool gets a limit (rule 21); the 20-minute hang guard is unchanged.
 
 ## effort-level-button
 
-**Status**: `local` (seam only: ops #876; built by ops task 2b)
+**Status**: `local` (seam: ops #876; built: ops #878)
 **Baseline**: v0.96.1 (`mine` at a3c9a576), pi 1.5.2
 
 **Why** (owner, Ops home chat 2026-11-13, m93253): "I need a button to change the effort per chat based
@@ -8836,26 +8836,37 @@ selector"; then "A new button beside it", "Lead and task chats", "Until you chan
    (`globalThis[Symbol.for("pi-queue.model-route")].api.effortLevels / setEffortLevel`, pi-queue
    docs/model-table-format.md "Effort levels"). An idle chat switches at once through the server's
    set-model and thinking path, after `api.routedSwitch` (so it isn't a hand pick); a busy chat at its
-   next turn start (pi-queue). Seam only for now: both throw `effort levels: not built (ops task 2b)`.
-3. To wire (ops task 2b): one `server/index.ts` case for both messages, calling into `server/effort-level.ts`
-   with the chat's session; `server/index.ts` and `server/protocol.ts` are past 500 lines, so wt check's
-   ratchet wants their line count not to grow (this seam's two union lines were offset in `protocol.ts`).
-4. To build (ops task 2b): the composer button beside the model and Effort menus, only in chats with a
-   department table, showing the level's name ("Extra high"), aria-label "Department effort level";
-   its menu: header "<Department> table", five rows "Extra high · Opus 5.5 @ xhigh", ✓ on the current row,
-   "(default)" on the department default, notes ("raised to High for this task", "uses spare ChatGPT
-   allowance"), last item "Back to department default"; fits at 320px. Today's model and Effort menus
-   are unchanged.
+   next turn start (pi-queue). `effortLevelDeps` adapts a window's open chat (only the chat it shows),
+   `switchModelOrThrow` + `setThinking`, and its emit.
+3. Wiring: `server/index.ts` one case for both messages → `ClientSession.effortLevel`
+   (`server/agent-service.ts`); `fanOutToViewers` also passes `effort_levels`, so a pick reaches every window
+   showing that chat without a reload. `server/index.ts` and `server/agent-service.ts` are past 500 lines:
+   wt check's ratchet wants their line count not to grow (comments folded to offset the new lines).
+4. Client: `web/src/effort-level-state.ts` (per-chat store; asks on chat open and reconnect, takes answers
+   and pushes from `use-chat.ts`), `web/src/components/EffortLevelButton.tsx` + `web/src/effort-level.css`,
+   strings in `web/src/i18n-effort-level.ts`. The button sits after the Effort menu (both composer layouts,
+   not DSH), only when the chat has a department table; it shows the level's name ("Extra high") at every
+   width, aria-label "Department effort level". Its menu (`role="menu"`, arrow keys): header "<Department>
+   table", five rows "<level> · <model> @ <thinking>", ✓ on the current row, "(default)" on the department
+   default, notes ("raised to Medium for a lead chat", "uses spare ChatGPT allowance", a row's problem), a
+   table problem as a warning, the busy/failed status, last item "Back to department default".
+   `Dropdown` gained optional `menuRole` / `menuLabel`. Today's model and Effort menus are unchanged.
+   On a phone the menu is the usual bottom sheet; Send/Stop stay above it, as with the other composer menus.
 
 ### How it was checked
 
-- `tests/unit/effort-level.test.ts`: the seam's cases, marked `notBuilt` (pass only while the stub
-  throws; task 2b turns each into `it` and never weakens one).
+- `tests/unit/effort-level.test.ts`: 11 cases; #876's `notBuilt` cases turned into `it`, no assertion changed.
 - `tests/effort-level-test.mjs` (sealed: own server, temp HOME, pi-queue from its checkout, a fixture
-  Ops table, models that can't be reached, no model call): fails "not built" until task 2b.
+  Ops table, models that can't be reached, no model call): 17 checks pass. #878 completed the fixture table
+  (every column has a cell, every row order lists each column, as pi-queue's table check requires) and made
+  `pick` match the row by its level ("High" had matched "Max … @ xhigh"). `EFFORT_HOLD=<file>` keeps the
+  seeded server up for ui-check (`?chat=` addresses in that file).
+- `tests/lib/overflow-finder.mjs`: invisible boxes (a closed drawer, `visibility: hidden`) no longer count
+  as cut off.
+- ui-check PASS at 320/390/1440 light and dark on the lead, task and plain chats (ops #878 evidence).
 
 ### When syncing
 
-- Needs pi-queue's effort-level seam (pi-queue 7d854a4 or later).
+- Needs pi-queue's built effort levels (pi-queue 81079ca, ops #877, or later); older pi-queue: no button.
 - Undo: revert this entry's commits, then `pi-web-deploy`.
 

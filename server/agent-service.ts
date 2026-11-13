@@ -172,6 +172,7 @@ import {
 } from "./model-all-chats.js";
 import { moveThinkingInMemory, moveThinkingInSettingsFile } from "./thinking-level-settings.js";
 import { defaultThinking, prepareLaunch, profileChoices, QueueLaunchRefused } from "./queue-profile.js";
+import { effortLevelDeps, handleEffortLevelMessage } from "./effort-level.js";
 import type { ThinkingAllChatsResult, UiDecisionRecordView, UiDecisionsPage, UiTaskLaunch } from "./protocol.js";
 import {
 	checkAll as checkAllUpdates,
@@ -343,8 +344,7 @@ import {
 import { pruneContextHierarchically } from "./context-budget.js";
 import { decodeText } from "./text-sniff.js";
 import { makeEditSoftTool } from "./edit-soft-tool.js";
-// 覆盖 SDK 内置 read：路径是目录时列出目录条目（行为开关 readDirEnabled，默认开）。
-// 覆盖定义与「与扩展同名工具共存」的注入辅助分在两个文件（后者的依据见 tool-overrides.ts）。
+// 覆盖 SDK 内置 read：路径是目录时列出目录条目（行为开关 readDirEnabled，默认开）。覆盖定义与「与扩展同名工具共存」的注入辅助分在两个文件（后者的依据见 tool-overrides.ts）。
 import { makeReadDirTool, withReadDirSupport, type ReadDirToolOptions } from "./read-tool.js";
 import {
 	installToolOverrides,
@@ -752,8 +752,7 @@ export class QuiesceRejectedError extends Error {
 // Preview kind classification. The preview panel only opens image / video /
 // text-editable files; everything else (exe, jar, archives, …) is refused so
 // it is never read or sent to the browser. Media files are served over the
-// /api/file HTTP endpoint instead of the WebSocket, so they are classified
-// here but never read into the snapshot path.
+// /api/file HTTP endpoint instead of the WebSocket, so they are classified here but never read into the snapshot path.
 // ---------------------------------------------------------------------------
 
 /** 自家内联扩展名（组合模板渲染，见 prompt-composer.ts）。SDK 以其
@@ -1221,9 +1220,7 @@ function wrapWriteToolWithPermission(
 	} as ToolDefinition;
 }
 
-/**
- * 为 edit 工具包装会话级权限沙箱与人机协同审批（基底语义同 write）。
- */
+/** 为 edit 工具包装会话级权限沙箱与人机协同审批（基底语义同 write）。 */
 function wrapEditToolWithPermission(
 	cwd: string,
 	getPermission: () => string,
@@ -1455,9 +1452,7 @@ function wrapBashToolWithPermission(
 	};
 }
 
-/**
- * 任务列表只读查询工具（todo_list）— 读操作仍走真工具。
- */
+/** 任务列表只读查询工具（todo_list）— 读操作仍走真工具。 */
 function makeMarkersListTool(
 	getActiveId: () => string,
 	markerSvc: {
@@ -7561,7 +7556,7 @@ export class ClientSession {
 	 * 所以它自己就能生成一份对得上的快照来对账。
 	 */
 	private fanOutToViewers(msg: ServerMessage): void {
-		if (msg.type !== "message_delta" && msg.type !== "tool_delta") return;
+		if (msg.type !== "message_delta" && msg.type !== "tool_delta" && msg.type !== "effort_levels") return;
 		const convId = msg.conversationId;
 		if (!convId) return;
 		for (const other of ClientSession.liveSessions) {
@@ -11131,9 +11126,7 @@ export class ClientSession {
 	private notifiedPluginUpdates = new Set<string>();
 	private lastPluginUpdates: UiPluginUpdateInfo[] = [];
 
-	/**
-	 * 主动检查已安装界面插件（<dataDir>/plugins）的更新状态并向客户端推送。
-	 */
+	/** 主动检查已安装界面插件（<dataDir>/plugins）的更新状态并向客户端推送。 */
 	async checkPluginUpdates(manual = false): Promise<void> {
 		const lang = () => this.getLang();
 		try {
@@ -18302,6 +18295,12 @@ export class ClientSession {
 		this.flushSnapshot();
 	}
 
+	/** effort-level-button (PATCHES.md): the composer's level button for this window's chat (fanOutToViewers pushes it). */
+	effortLevel(msg: Parameters<typeof handleEffortLevelMessage>[0]): Promise<void> {
+		const conv = (id: string) => (id === this.activeId ? this.convs.get(id) : undefined);
+		const deps = effortLevelDeps(conv, (m) => this.emit(m), this);
+		return handleEffortLevelMessage(msg, deps);
+	}
 	/** Per-chat speed for the next request, like model/thinking; never alters an in-flight request. */
 	setFastMode(mode: unknown, conversationId: unknown): void {
 		const conv = this.conv;

@@ -1,13 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
+import { effortLevelEn } from "./i18n-effort-level";
 import { pageTabsEn } from "./i18n-page-tabs";
 import { queueAnswerEn } from "./i18n-queue-answer";
 
 /** Locale code. pi-web-ui speaks English only, so it is always "en". */
 export type Locale = string;
 
-/* ------------------------------------------------------------------ */
-/* en (the only language)                                              */
-/* ------------------------------------------------------------------ */
+/* en (the only language) -------------------------------------------- */
 
 export const en = {
 	/* common */
@@ -367,6 +366,7 @@ export const en = {
 	taskQueueStatusPausedByYou: "Paused by you: nothing starts, pokes or asks until you resume the queue.",
 	queuePausedNoteLabel: "Kept for after the pause",
 	...queueAnswerEn, // the Queue tab's answer card (hints, errors, retry), i18n-queue-answer.ts
+	...effortLevelEn, // the composer's department effort level button, i18n-effort-level.ts
 	taskQueueStatusLane: "Running · #{id} is working in its own chat",
 	taskQueueStatusLanes: "Running · {n} tasks working in their own chats",
 	taskQueueInChats: "Working in their own chats",

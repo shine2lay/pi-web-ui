@@ -2466,6 +2466,18 @@
 		"identityOwnerCancel": "취소",
 		"identityOwnerSaving": "저장하는 중…",
 		"identityOwnerBadFile": "이 identity.json은 하나의 JSON 객체가 아니어서 여기서 바꿀 수 없어요. 먼저 설정에서 고쳐 주세요.",
-		"identityOwnerFix": "먼저 이것을 고쳐 주세요:"
+		"identityOwnerFix": "먼저 이것을 고쳐 주세요:",
+		"effortLevelName": "부서 작업 수준",
+		"effortLevelTip": "부서 작업 수준: {level} ({table})",
+		"effortLevelTable": "{department} 표",
+		"effortLevelDefault": "(기본값)",
+		"effortLevelRaisedTask": "이 작업에서는 {level}(으)로 상향",
+		"effortLevelRaisedLead": "리드 채팅에서는 {level}(으)로 상향",
+		"effortLevelForced": "남은 {allowance} 사용량 사용",
+		"effortLevelCantRun": "지금은 실행할 수 없음: {why}",
+		"effortLevelBack": "부서 기본값으로 되돌리기",
+		"effortLevelSaving": "전환 중…",
+		"effortLevelNextTurn": "채팅이 작업 중입니다. 다음 턴에 전환됩니다.",
+		"effortLevelFailed": "변경되지 않음: {why}"
 	}
 }

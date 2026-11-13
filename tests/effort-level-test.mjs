@@ -22,6 +22,8 @@
  * the fixture setup but never weakens or deletes a check.
  *
  * Usage: npm run build && node tests/effort-level-test.mjs   (EFFORT_SHOT=/tmp/el saves /tmp/el-*.png)
+ * EFFORT_HOLD=<file>: after the checks, write the page addresses of the three chats (JSON) there and keep the
+ * server up until that file is deleted, so ui-check can look at each one (`?chat=<chat file>`).
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
@@ -58,12 +60,24 @@ const TABLE = {
 	everyday: "high",
 	lead: "xhigh",
 	order: ["anthropic", "antigravity", "openai"],
+	// Every column needs a cell and every row order lists each column once (pi-queue model-table.ts; "none" when
+	// there's no clean option).
 	rows: {
-		max: { anthropic: "claude-fable-5-2@xhigh *", openai: "gpt-6-astra@xhigh" },
-		xhigh: { anthropic: "claude-fable-5-2@high *", openai: "gpt-6-astra@high" },
-		high: { anthropic: "claude-opus-5-5@high *", openai: "gpt-6-astra@medium" },
-		medium: { anthropic: "claude-sonnet-5-5@medium", openai: "gpt-6.1-sol@high *", order: ["openai", "anthropic"] },
-		low: { anthropic: "claude-haiku-5-5@low", openai: "gpt-6.1-sol@low *", order: ["openai", "anthropic"] },
+		max: { anthropic: "claude-fable-5-2@xhigh *", antigravity: "none", openai: "gpt-6-astra@xhigh" },
+		xhigh: { anthropic: "claude-fable-5-2@high *", antigravity: "none", openai: "gpt-6-astra@high" },
+		high: { anthropic: "claude-opus-5-5@high *", antigravity: "none", openai: "gpt-6-astra@medium" },
+		medium: {
+			anthropic: "claude-sonnet-5-5@medium",
+			antigravity: "none",
+			openai: "gpt-6.1-sol@high *",
+			order: ["openai", "anthropic", "antigravity"],
+		},
+		low: {
+			anthropic: "claude-haiku-5-5@low",
+			antigravity: "none",
+			openai: "gpt-6.1-sol@low *",
+			order: ["openai", "anthropic", "antigravity"],
+		},
 	},
 	floors: [{ tags: ["spec"], min: "high" }],
 	exclusions: [],
@@ -263,7 +277,10 @@ const menuRows = (page) =>
 async function pick(page, label) {
 	await openMenu(page);
 	await page
-		.locator('[role="menu"][aria-label="Department effort level"] [role="menuitemradio"]', { hasText: label })
+		// The row whose level IS `label` ("High" must not match "Max · … @ xhigh").
+		.locator('[role="menu"][aria-label="Department effort level"] [role="menuitemradio"]', {
+			hasText: new RegExp(`^${label} · `),
+		})
 		.first()
 		.click();
 }
@@ -277,6 +294,15 @@ async function backToDefault(page) {
 }
 const shot = async (page, name) => SHOT && (await page.screenshot({ path: `${SHOT}-${name}@2x.png`, scale: "device" }));
 const notBuilt = (detail) => `${NOT_BUILT}${detail ? `; ${detail}` : ""}`;
+
+async function holdForLooks() {
+	const hold = process.env.EFFORT_HOLD;
+	if (!hold) return;
+	const at = (f) => `${srv.http}/?chat=${encodeURIComponent(f)}`;
+	writeFileSync(hold, JSON.stringify({ ops: at(files.ops), task: at(files.task), plain: at(files.plain) }));
+	console.log(`holding the server for looks until ${hold} is deleted`);
+	while (existsSync(hold)) await new Promise((r) => setTimeout(r, 500));
+}
 
 try {
 	browser = await chromium.launch({ executablePath: CHROME_PATH });
@@ -415,6 +441,7 @@ try {
 	check("the test ran to the end", false, String(e?.stack ?? e).slice(0, 500));
 } finally {
 	await browser?.close().catch(() => {});
+	await holdForLooks();
 	await srv.stop();
 }
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");

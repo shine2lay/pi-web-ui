@@ -505,10 +505,7 @@ app.get("/api/open-chats", (_req, res) => {
 	res.json(service.openChatCounts());
 });
 
-/**
- * 基于 SHA-256 内容寻址的附件静态服务：
- * 永久强缓存（immutable），支持图片和文件读取。
- */
+/** 基于 SHA-256 内容寻址的附件静态服务：永久强缓存（immutable），支持图片和文件读取。 */
 app.get("/api/attachment/:hash", async (req, res) => {
 	try {
 		const hash = String(req.params.hash ?? "").trim();
@@ -1290,8 +1287,9 @@ export interface DispatchSession {
 	setDefaultThinking?(level: string): void;
 	clearDefaultThinking?(): void;
 	setThinking(level: string): void;
-	/** fast-mode: the chat's Fast button (pi chats only; DSH has none). */
+	/** fast-mode and effort-level-button: the chat's Fast and level buttons (pi chats only; DSH has none). */
 	setFastMode?(mode: unknown, conversationId: unknown): void;
+	effortLevel?(msg: import("./effort-level-protocol.js").EffortLevelClientMessage): Promise<void>;
 	setCwd(path: string): Promise<void>;
 	/** 设置当前项目的额外工作区根（宿主侧多根，见 protocol 的 set_workspace_roots）。 */
 	setWorkspaceRoots(roots?: string[]): Promise<void>;
@@ -2085,8 +2083,7 @@ service.toolGuard = {
 service.onRunEvent = (ev) => pluginMgr.emitRunEvent(ev);
 // 插件扩展点：对话切换通知（轨迹视图切会话后即重拉；dsh 引擎暂无）。
 service.onConversationChanged = () => pluginMgr.emitConversationChanged();
-// 插件扩展点：当前打开对话的快照（轨迹视图直接显示打开对话的时间线；
-// dsh 引擎无此方法时回退 null，插件显示空态）。
+// 插件扩展点：当前打开对话的快照（轨迹视图直接显示打开对话的时间线；dsh 引擎无此方法时回退 null，插件显示空态）。
 pluginMgr.conversationProvider = () => service.readConversationForPlugins?.() ?? null;
 // 插件扩展点：无头调用 agent（微信通道等经 host.chat 投递外部消息，无浏览器也能跑）。
 pluginMgr.chatProvider = (pluginId, req) =>
@@ -3348,8 +3345,7 @@ wss.on("connection", (ws, req) => {
 				break;
 			case "get_tool_info":
 				// 工具卡右键菜单的「显示工具详细信息」：按需取一次工具定义（不进快照）。
-				// 引擎没实现（或旧版服务端）时回一条 unsupported，前端据此显示「不支持」
-				// 而不是永远转圈。
+				// 引擎没实现（或旧版服务端）时回一条 unsupported，前端据此显示「不支持」而不是永远转圈。
 				if (typeof cs.getToolInfo === "function") {
 					void cs.getToolInfo(msg.name);
 				} else {
@@ -3492,6 +3488,10 @@ wss.on("connection", (ws, req) => {
 				break;
 			case "set_fast_mode":
 				cs.setFastMode?.(msg.mode, msg.conversationId);
+				break;
+			case "get_effort_levels":
+			case "set_effort_level":
+				void cs.effortLevel?.(msg);
 				break;
 			case "set_cwd":
 				void cs.setCwd(msg.path);

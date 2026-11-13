@@ -41,6 +41,7 @@ import { showPermissionControls } from "../url-flags";
 
 import { ModelThinking } from "./ModelThinking";
 import { FastModeButton } from "./FastModeButton";
+import { EffortLevelButton } from "./EffortLevelButton";
 import { DshPresetBar, type DshPresetInfo } from "./DshPresetBar";
 import { DshPermissionBar } from "./DshPermissionBar";
 import type { DshPermissionOption, UiAgentPreset } from "../types";
@@ -712,8 +713,7 @@ export const ChatInput = memo(function ChatInput({
 			setMenu(null);
 			return;
 		}
-		// 查询作业 = 插件注册表 + 内置文件提供方（宿主自带，零插件也可用；
-		// 空 query 不走文件搜索，裸 @ 不刷全量）。
+		// 查询作业 = 插件注册表 + 内置文件提供方（宿主自带，零插件也可用；空 query 不走文件搜索，裸 @ 不刷全量）。
 		let ids: { id: string; label: string }[] = [];
 		try {
 			ids = listPluginComposerProviders();
@@ -1062,8 +1062,7 @@ export const ChatInput = memo(function ChatInput({
 	// composerH 是手动拉出的**保底高度**：没拖过走老逻辑（贴合内容，上限 220）；
 	// 拖过之后高度 = max(内容高度, 保底)，上探到 720 才滚——内容少时手动拉高可见，
 	// 内容多时照样自适应长高。maxHeight 写行内：样式表写死的 220px 会盖掉拖拽值，
-	// 这里覆盖它（styles.css 那边另有改动在飞，不碰它；null 分支要写回 220，
-	// 不然之前拖过的行内 720 会残留）。
+	// 这里覆盖它（styles.css 那边另有改动在飞，不碰它；null 分支要写回 220，不然之前拖过的行内 720 会残留）。
 	// Pin the anchor row: the composer sits BELOW the message list, so its
 	// growth shrinks the list box from the bottom. Hold the row above the
 	// composer stationary by scrolling down the exact grown amount, pre-paint.
@@ -1152,8 +1151,7 @@ export const ChatInput = memo(function ChatInput({
 		const hasRawAttach = submittedAttachments.some((a) => a.imageData || a.fileData || a.mode === "conversation");
 		if (!trimmed && !hasRawAttach) return;
 		if (!connected) {
-			// 输入框在断连时不禁用（只有发送按钮禁用），Enter 仍进 submit：
-			// 别静默吞掉，文本保留并给出可见提示供重连后重发。
+			// 输入框在断连时不禁用（只有发送按钮禁用），Enter 仍进 submit：别静默吞掉，文本保留并给出可见提示供重连后重发。
 			onNotice("error", t("netDisconnected"));
 			return;
 		}
@@ -1192,8 +1190,7 @@ export const ChatInput = memo(function ChatInput({
 		// settles, skipping remaining tool calls — the pi CLI Enter semantic)
 		// and the agent immediately responds to it — see AgentService.prompt()
 		// in agent-service.ts. 运行中发送位那颗「对半胶囊」的右半（插队）走这条；
-		// 左半（排队）传 queue=true，服务端改走 followUp —— 整轮跑完才发
-		// ("AI 生成结束才发送")。
+		// 左半（排队）传 queue=true，服务端改走 followUp —— 整轮跑完才发 ("AI 生成结束才发送")。
 		const submitted = { ...latestSubmissionDraftRef.current, text: textRef.current, attachments: submittedAttachments };
 		const submittedRevision = textRevision.current;
 		submitInFlightRef.current = true;
@@ -1537,8 +1534,7 @@ export const ChatInput = memo(function ChatInput({
 
 	// Send / stop / steer+queue — rendered once inside the composer toolbar
 	// (ChatInput .composer-tools-right). 运行中发送位与停止位二选一互斥：
-	// 空输入（含无附件）时只显示停止键（蓝圆），插队/排队胶囊隐藏；
-	// 一旦有可发送内容（canSubmit）则胶囊出现、停止键隐藏。
+	// 空输入（含无附件）时只显示停止键（蓝圆），插队/排队胶囊隐藏；一旦有可发送内容（canSubmit）则胶囊出现、停止键隐藏。
 	// 胶囊：左半 = 排队（followUp，整轮结束才发），右半 = 插队（steer，回车语义，
 	// 本回合立刻响应）；两半同宽、中间一条细分隔线。DSH 引擎没有 mid-run
 	// steering（prompt 一律 followUp），所以那里只留下左半（.single 收成 38px）。
@@ -1607,16 +1603,19 @@ export const ChatInput = memo(function ChatInput({
 			/>
 		),
 		"host:composer-thinking": (
-			<ModelThinking
-				only="thinking"
-				state={modelState}
-				models={models}
-				modelsLoading={modelsLoading}
-				onManageModels={onManageModels}
-				providerKeys={providerKeys}
-				defaultThinking={defaultThinking}
-				compact
-			/>
+			<>
+				<ModelThinking
+					only="thinking"
+					state={modelState}
+					models={models}
+					modelsLoading={modelsLoading}
+					onManageModels={onManageModels}
+					providerKeys={providerKeys}
+					defaultThinking={defaultThinking}
+					compact
+				/>
+				{!isDsh && <EffortLevelButton conversationId={conversationId} connected={connected} />}
+			</>
 		),
 		"host:composer-fast":
 			fastMode && !isDsh ? (
@@ -1924,6 +1923,7 @@ export const ChatInput = memo(function ChatInput({
 									defaultThinking={defaultThinking}
 									compact
 								/>
+								{!isDsh && <EffortLevelButton conversationId={conversationId} connected={connected} />}
 								{fastMode && !isDsh && (
 									<FastModeButton fast={fastMode} conversationId={conversationId} disabled={!connected} />
 								)}

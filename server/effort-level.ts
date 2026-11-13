@@ -5,7 +5,7 @@
  * `api.routedSwitch` first so pi-queue doesn't take it for a hand pick; a busy chat switches at its next turn start
  * (pi-queue's own hook). Pure over its deps: no model call, no chat file written.
  *
- * Seam only (ops #876): the handler throws EFFORT_LEVELS_NOT_BUILT until ops task 2b builds it.
+ * Built by ops #878 (task 2b). EFFORT_LEVELS_NOT_BUILT stays exported: #876's seam test names it.
  */
 import type {
 	EffortLevelClientMessage,
@@ -59,12 +59,83 @@ export function effortRouteApi(): EffortRouteApi | undefined {
 		: undefined;
 }
 
-/** A chat's levels for the button and the server's push; `{ rows: [] }` (hidden) for a chat of no table. */
-export function effortLevelsFor(_conversationId: string, _deps: EffortLevelDeps): UiEffortLevels {
-	throw new Error(EFFORT_LEVELS_NOT_BUILT);
+/** The part of an open pi chat the button reads (agent-service's Conversation). */
+export interface EffortLevelConv {
+	session: { sessionFile?: string; isStreaming: boolean; sessionManager: { getSessionId(): string } };
 }
 
+/** The window's set-model and thinking path (agent-service's ClientSession; both act on the chat it shows). */
+export interface EffortLevelSwitcher {
+	switchModelOrThrow(modelId: string): Promise<void>;
+	setThinking(level: string): void;
+}
+
+/** A window's deps: `conv` finds the chat only while that window shows it, `emit` reaches it and its viewers. */
+export function effortLevelDeps(
+	conv: (conversationId: string) => EffortLevelConv | undefined,
+	emit: (msg: EffortLevelServerMessage) => void,
+	switcher: EffortLevelSwitcher,
+): EffortLevelDeps {
+	return {
+		chat(conversationId) {
+			const session = conv(conversationId)?.session;
+			if (!session?.sessionFile) return undefined;
+			const sessionId = session.sessionManager.getSessionId();
+			return { sessionFile: session.sessionFile, sessionId, isStreaming: session.isStreaming };
+		},
+		async applyModel(conversationId, { model, thinking }) {
+			if (!conv(conversationId)) throw new Error("the chat is no longer open in this window");
+			await switcher.switchModelOrThrow(model);
+			switcher.setThinking(thinking);
+		},
+		send: emit,
+	};
+}
+
+const HIDDEN: UiEffortLevels = { rows: [] };
+
+/** A chat's levels for the button and the server's push; `{ rows: [] }` (hidden) for a chat of no table. */
+export function effortLevelsFor(conversationId: string, deps: EffortLevelDeps): UiEffortLevels {
+	const chat = deps.chat(conversationId);
+	const api = (deps.routeApi ?? effortRouteApi)();
+	if (!chat || !api) return { ...HIDDEN };
+	try {
+		return api.effortLevels({ sessionFile: chat.sessionFile });
+	} catch (err) {
+		// pi-queue failing to read its files: no button, and the reason in the server log.
+		console.error(`[effort-level] effortLevels(${chat.sessionFile}) failed:`, err);
+		return { ...HIDDEN };
+	}
+}
+
+const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
 /** get_effort_levels and set_effort_level; always answers with one effort_levels. */
-export async function handleEffortLevelMessage(_msg: EffortLevelClientMessage, _deps: EffortLevelDeps): Promise<void> {
-	throw new Error(EFFORT_LEVELS_NOT_BUILT);
+export async function handleEffortLevelMessage(msg: EffortLevelClientMessage, deps: EffortLevelDeps): Promise<void> {
+	const { conversationId } = msg;
+	const answer = (rest: Omit<EffortLevelServerMessage, "type" | "conversationId">) =>
+		deps.send({ type: "effort_levels", conversationId, ...rest });
+	if (msg.type === "get_effort_levels") return answer({ levels: effortLevelsFor(conversationId, deps) });
+
+	const chat = deps.chat(conversationId);
+	const api = (deps.routeApi ?? effortRouteApi)();
+	if (!chat) return answer({ levels: { ...HIDDEN }, error: "This chat isn't open here; open it and try again." });
+	if (!api) return answer({ levels: { ...HIDDEN }, error: "pi-queue isn't loaded, so there is no department table." });
+	let picked: ReturnType<EffortRouteApi["setEffortLevel"]>;
+	try {
+		picked = api.setEffortLevel({ sessionFile: chat.sessionFile, tier: msg.tier });
+	} catch (err) {
+		return answer({ levels: effortLevelsFor(conversationId, deps), error: message(err) });
+	}
+	const { apply, ...levels } = picked;
+	// Busy: pi-queue's turn-start hook switches it before the next turn, never mid-turn.
+	if (chat.isStreaming) return answer({ levels, applied: "next-turn" });
+	if (!apply) return answer({ levels });
+	try {
+		api.routedSwitch?.(chat.sessionId, apply.model);
+		await deps.applyModel(conversationId, apply);
+	} catch (err) {
+		return answer({ levels, error: `Level kept, but the switch failed: ${message(err)}` });
+	}
+	return answer({ levels, applied: "now" });
 }

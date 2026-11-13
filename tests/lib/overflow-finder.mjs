@@ -162,7 +162,10 @@ export function overflowProbe({
 		/** Elements past the edge, each with "box" (its own box is) and/or "text" (text right in it is). */
 		const past = new Map();
 		const fixed = [];
+		// Nothing invisible counts: a closed drawer parked past the edge is visibility: hidden (inherited by
+		// everything in it), so it is neither cut off nor overflow.
 		for (const el of top.querySelectorAll("*")) {
+			if (style(el).visibility === "hidden") continue;
 			const r = rect(el);
 			if (r.width === 0 && r.height === 0) continue;
 			if (r.right <= edge) continue;
@@ -180,7 +183,7 @@ export function overflowProbe({
 		const range = document.createRange();
 		for (let n = walker.nextNode(); n; n = walker.nextNode()) {
 			const parent = n.parentElement;
-			if (!parent || !n.nodeValue || !n.nodeValue.trim()) continue;
+			if (!parent || !n.nodeValue || !n.nodeValue.trim() || style(parent).visibility === "hidden") continue;
 			range.selectNodeContents(n);
 			const r = range.getBoundingClientRect();
 			if (r.width === 0 || r.right <= edge) continue;
