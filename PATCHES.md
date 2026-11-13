@@ -8842,8 +8842,10 @@ selector"; then "A new button beside it", "Lead and task chats", "Until you chan
    (`server/agent-service.ts`); `fanOutToViewers` also passes `effort_levels`, so a pick reaches every window
    showing that chat without a reload. `server/index.ts` and `server/agent-service.ts` are past 500 lines:
    wt check's ratchet wants their line count not to grow (comments folded to offset the new lines).
-4. Client: `web/src/effort-level-state.ts` (per-chat store; asks on chat open and reconnect, takes answers
-   and pushes from `use-chat.ts`), `web/src/components/EffortLevelButton.tsx` + `web/src/effort-level.css`,
+4. Client: `web/src/effort-level-state.ts` (per-chat store; asks on chat open and once each socket's session is
+   initialized: `use-chat.ts` calls `effortLevelsSession(false)` at `ready` and `(true)` in `finishReady`, since
+   the server refuses an ask sent while it replays a new socket's startup commands and the button then never
+   showed; test `tests/unit/effort-level-state.test.ts`; takes answers and pushes from `use-chat.ts`), `web/src/components/EffortLevelButton.tsx` + `web/src/effort-level.css`,
    strings in `web/src/i18n-effort-level.ts`. The button sits after the Effort menu (both composer layouts,
    not DSH), only when the chat has a department table; it shows the level's name ("Extra high") at every
    width, aria-label "Department effort level". Its menu (`role="menu"`, arrow keys): header "<Department>

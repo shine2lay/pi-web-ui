@@ -66,7 +66,7 @@ export const EffortLevelButton = memo(function EffortLevelButton({
 	const t = useT();
 	const [open, setOpen] = useState(false);
 	const menu = useRef<HTMLDivElement>(null);
-	const view = useEffortLevels(conversationId, connected);
+	const view = useEffortLevels(conversationId);
 	useEffect(() => setOpen(false), [conversationId, connected]);
 	useEffect(() => {
 		if (open) menu.current?.querySelector<HTMLButtonElement>("[aria-checked='true'], [role^='menuitem']")?.focus();

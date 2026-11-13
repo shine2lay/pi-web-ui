@@ -96,7 +96,7 @@ import {
 	resendNotebookWatch,
 } from "./notebook-state";
 import { receiveSubsLimits, requestSubsLimits } from "./subs-limits-state";
-import { receiveEffortLevels } from "./effort-level-state";
+import { effortLevelsSession, receiveEffortLevels } from "./effort-level-state";
 import { receiveRoleGuard, requestRoleGuard } from "./role-guard-state";
 import {
 	getBoardAdmissionSource,
@@ -2000,6 +2000,7 @@ export function useChat() {
 	 * must not re-dispatch "ready" and wipe a ?chat= link's pendingSwitch or preview. */
 	const finishReady = useCallback((ws: WebSocket, msg: Extract<ServerMessage, { type: "ready" }>) => {
 		ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
+		effortLevelsSession(true);
 		resendNotebookWatch();
 		resendRolesWatch();
 		resendInitiativesWatch();
@@ -2112,10 +2113,9 @@ export function useChat() {
 				}
 				case "ready": {
 					setFilesReady(false);
-					// Stale-build self-reload: the server reports the entry-chunk hash
-					// of the index.html it serves now; ours is the hash in the entry
-					// <script> of the index.html this page was served. Mismatch =
-					// rebuilt since this page loaded → reload once for the fresh bundle.
+					effortLevelsSession(false); // effort-level-button: no ask until finishReady (startup replay refuses it)
+					// Stale-build self-reload: the server reports the entry-chunk hash of the index.html it serves now; ours
+					// is the hash in the entry <script> of the index.html this page was served. Mismatch = rebuilt since this page loaded → reload once for the fresh bundle.
 					// single-load：上游拿 Vite 编进 bundle 的 __BUILD_ID__（构建时间戳）跟这个 hash 比，
 					// 永远对不上，每个新标签页都白刷一次；改成读页面自己的入口 <script>，和服务端
 					// buildId() 读的是同一个东西。

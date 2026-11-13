@@ -476,6 +476,31 @@ try {
 		);
 		await shot(p, `menu-${tag}`);
 	}
+	// ---- 8. a link straight to the chat (reload, a ?chat= link): the page's first ask must not be refused ----------
+	// The window opens its last chat first, then the link's; asking while the server is still replaying the
+	// page's startup commands got the ask refused ("A startup command was not processed") and no button.
+	for (let round = 1; round <= 3; round++) {
+		const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+		await ctx.addInitScript(() => localStorage.setItem("pi-web-ui:lang", "en"));
+		const p = await ctx.newPage();
+		p.on("pageerror", (e) => pageErrors.push(String(e)));
+		const refused = [];
+		p.on("websocket", (ws) =>
+			ws.on("framereceived", ({ payload }) => {
+				if (String(payload).includes("A startup command was not processed")) refused.push(round);
+			}),
+		);
+		// Round 1 lands on the plain chat first, so the link's chat is a switch.
+		await p.goto(`${srv.http}/?chat=${encodeURIComponent(round === 1 ? files.plain : files.task)}`);
+		await p.goto(`${srv.http}/?chat=${encodeURIComponent(files.ops)}`);
+		const ok = await until(async () => (await buttonText(p)) === "Extra high", 15_000);
+		check(
+			`link straight to ops's home chat (round ${round}): the button shows, no ask refused`,
+			ok && refused.length === 0,
+			`button: ${await buttonText(p)}; refused notices: ${refused.length}`,
+		);
+		await ctx.close();
+	}
 	check("no page errors", pageErrors.length === 0, pageErrors.join(" | ").slice(0, 300));
 } catch (e) {
 	check("the test ran to the end", false, String(e?.stack ?? e).slice(0, 500));
