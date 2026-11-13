@@ -331,7 +331,18 @@ export interface TaskQueueAnswerRequest {
 	readonly text: string;
 }
 
-export type TaskQueueAnswerResult = (request: TaskQueueAnswerRequest) => Promise<boolean>;
+/** frontend #286: why an answer didn't go through, so the card can say it in plain words. */
+export type TaskQueueAnswerFailureKind = "no-reply" | "refused" | "offline" | "stale" | "moved-on";
+export interface TaskQueueAnswerFailure {
+	readonly applied: false;
+	readonly why: TaskQueueAnswerFailureKind;
+	/** The server's own words for a refusal. */
+	readonly reason?: string;
+}
+/** Only `true` means the answer was applied; `false` is a failure with no known reason. */
+export type TaskQueueAnswerOutcome = boolean | TaskQueueAnswerFailure;
+
+export type TaskQueueAnswerResult = (request: TaskQueueAnswerRequest) => Promise<TaskQueueAnswerOutcome>;
 
 export function answerBinding(
 	bindings: readonly TaskQueueAnswerBinding[] | undefined,

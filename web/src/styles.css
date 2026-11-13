@@ -3585,6 +3585,47 @@ button.rolemsg-fold:focus-visible {
 	display: flex;
 	gap: 4px;
 }
+/* frontend #286: an answer that didn't go through says why, with a retry; never silent. */
+.task-queue-answer-error {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+	padding: 4px 6px;
+	border-left: 2px solid var(--red);
+	border-radius: 2px;
+	background: var(--red-soft);
+	color: var(--red-text);
+	font-size: 12px;
+}
+.task-queue-answer-error-text {
+	flex: 1 1 12em;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.task-queue-answer-retry {
+	min-height: 24px;
+	padding: 2px 10px;
+	border: 1px solid var(--red);
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text);
+	font-size: 12px;
+	cursor: pointer;
+}
+.task-queue-answer-retry:hover:not(:disabled) {
+	background: var(--red-soft);
+}
+.task-queue-answer-retry:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.task-queue-answer-retry:focus-visible,
+.task-queue-choice:focus-visible,
+.task-queue-answer-send:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
 .task-queue-answer-input {
 	flex: 1;
 	min-width: 0;

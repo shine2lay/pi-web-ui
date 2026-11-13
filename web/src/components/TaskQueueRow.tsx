@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { UiModelInfo, UiProfilePatch, UiTaskQueue, UiTaskQueueTask } from "../types";
 import { effectiveProfile, ProfileEditor, ProfileSummary } from "./QueueProfile";
 import { OwnerCardBrief } from "./OwnerCardBrief";
@@ -20,130 +20,9 @@ import {
 	type TaskQueueAnswerRequest,
 	type TaskQueueAnswerResult,
 } from "./TaskQueueLines";
+import { StuckAnswer } from "./TaskQueueAnswer";
 
 export type { TaskQueueAnswerBinding, TaskQueueAnswerRequest, TaskQueueAnswerResult };
-
-function StuckAnswer({
-	task,
-	conversationId,
-	queueId,
-	binding,
-	onAnswerResult,
-}: {
-	task: UiTaskQueueTask;
-	conversationId?: string;
-	queueId?: string;
-	binding?: TaskQueueAnswerBinding;
-	onAnswerResult?: TaskQueueAnswerResult;
-}) {
-	const t = useT();
-	const [text, setText] = useState("");
-	const revision = useRef(0);
-	const [phase, setPhase] = useState<"idle" | "pending" | "applied" | "unconfirmed">("idle");
-	const key = JSON.stringify([
-		conversationId,
-		queueId,
-		task.id,
-		binding?.questionId,
-		task.question,
-		task.choices ?? [],
-		task.detail,
-		!!onAnswerResult,
-	]);
-	const owner = useRef<{ live: boolean; pending?: object; applied: boolean }>({ live: false, applied: false });
-	useLayoutEffect(() => {
-		const lifetime = { live: true, applied: false };
-		owner.current = lifetime;
-		setPhase("idle");
-		return () => {
-			lifetime.live = false;
-		};
-	}, [key]);
-	const send = async (value: string, typed: boolean) => {
-		const lifetime = owner.current;
-		if (!value.trim() || !binding || !onAnswerResult || !lifetime.live || lifetime.pending || lifetime.applied) return;
-		const request: TaskQueueAnswerRequest = Object.freeze({
-			binding: Object.freeze({ ...binding, choices: Object.freeze([...binding.choices]) }),
-			text: value,
-		});
-		const submittedRevision = revision.current;
-		const attempt = {};
-		lifetime.pending = attempt;
-		setPhase("pending");
-		let applied = false;
-		try {
-			const result = onAnswerResult(request);
-			if (result && typeof result.then === "function") applied = (await result) === true;
-		} catch {
-			// Refused, failed or unknown: keep the original words; never resend automatically.
-		}
-		if (!lifetime.live || owner.current !== lifetime || lifetime.pending !== attempt) return;
-		lifetime.pending = undefined;
-		lifetime.applied = applied;
-		setPhase(applied ? "applied" : "unconfirmed");
-		if (applied && typed && revision.current === submittedRevision) setText("");
-	};
-	const disabled = !binding || !onAnswerResult || phase === "pending" || phase === "applied";
-	return (
-		<div className="task-queue-answer" data-answer-state={phase} aria-busy={phase === "pending"}>
-			{task.choices && task.choices.length > 0 && (
-				<div className="task-queue-choices">
-					{task.choices.map((c) => (
-						<button
-							key={c}
-							type="button"
-							className="task-queue-choice"
-							disabled={disabled}
-							onClick={() => void send(c, false)}
-						>
-							{c}
-						</button>
-					))}
-				</div>
-			)}
-			<form
-				className="task-queue-answer-form"
-				onSubmit={(e) => {
-					e.preventDefault();
-					void send(text, true);
-				}}
-			>
-				<input
-					className="task-queue-answer-input"
-					value={text}
-					placeholder={t("taskQueueAnswerPlaceholder")}
-					aria-label={t("taskQueueAnswerPlaceholder")}
-					onChange={(e) => {
-						revision.current++;
-						setText(e.target.value);
-					}}
-				/>
-				<button type="submit" className="task-queue-answer-send" disabled={disabled || !text.trim()}>
-					{t(phase === "pending" ? "sendingTag" : phase === "applied" ? "done" : "taskQueueAnswerSend")}
-				</button>
-			</form>
-			<span
-				className="task-queue-hint"
-				role="status"
-				title={t(task.lane ? "taskQueueAnswerGoesToTaskChat" : "taskQueueAnswerGoesHere")}
-			>
-				{t(
-					phase === "pending"
-						? "sendingTag"
-						: phase === "applied"
-							? "done"
-							: !binding || !onAnswerResult || phase === "unconfirmed"
-								? task.lane
-									? "taskQueueAnswerInChat"
-									: "taskQueueAnswerHint"
-								: task.lane
-									? "taskQueueAnswerGoesToTaskChat"
-									: "taskQueueAnswerGoesHere",
-				)}
-			</span>
-		</div>
-	);
-}
 
 export function renderTaskQueueRow({
 	task,

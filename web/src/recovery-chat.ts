@@ -15,7 +15,8 @@ import type {
 	SwitchTarget,
 	UiState,
 } from "./types";
-import type { TaskQueueAnswerBinding, TaskQueueAnswerRequest } from "./components/TaskQueuePanel";
+import type { TaskQueueAnswerOutcome, TaskQueueAnswerRequest } from "./components/TaskQueueLines";
+import { createQueueAnswerWaiters } from "./queue-answer-waiter";
 
 export interface ReferenceVerifierDeps {
 	clientId(): string;
@@ -178,15 +179,13 @@ export function createRecoveryChatTransport(options: RecoveryChatOptions) {
 		string,
 		{ socket: Socket; binding: AdmissionBinding; id: string; resolve(value: "negative" | "handled" | "unknown"): void }
 	>();
-	const queueAnswerWaiters = new Map<
-		string,
-		{
-			socket: Socket;
-			binding: AdmissionBinding;
-			occ: TaskQueueAnswerBinding;
-			resolve(value: boolean): void;
-		}
-	>();
+	// The Queue tab's answers in flight: each one settles (reply, deadline + recheck, or close), frontend #286.
+	const queueAnswers = createQueueAnswerWaiters({
+		socket: () => socket,
+		captureBinding: () => api.captureBinding(),
+		isCurrent: (binding) => current(binding),
+		view: () => options.view(),
+	});
 	const lifetimeKeys = new WeakMap<object, string>();
 	let lifetimeSequence = 0;
 	const report = (text: string) => {
@@ -201,10 +200,7 @@ export function createRecoveryChatTransport(options: RecoveryChatOptions) {
 		waiters.clear();
 		for (const lookup of statusLookups.values()) lookup.resolve("unknown");
 		statusLookups.clear();
-		for (const qa of queueAnswerWaiters.values()) {
-			qa.resolve(false);
-		}
-		queueAnswerWaiters.clear();
+		queueAnswers.settleAll();
 	}
 	function current(binding: AdmissionBinding): boolean {
 		if (
@@ -409,13 +405,17 @@ export function createRecoveryChatTransport(options: RecoveryChatOptions) {
 			initialized = true;
 			return true;
 		},
-		bindSnapshot(owner: Socket, state: Pick<UiState, "conversationId" | "sessionId" | "cwd">): void {
+		bindSnapshot(
+			owner: Socket,
+			state: Pick<UiState, "conversationId" | "sessionId" | "cwd"> & Partial<Pick<UiState, "taskQueue">>,
+		): void {
 			if (socket !== owner) return;
 			const next = frame(state, options.view().engine);
 			if (actual?.workspace !== next.workspace) workspaceLifetime = {};
 			if (!sameFrame(actual, next)) sessionLifetime = {};
 			actual = next;
 			if (opening?.preview && samePreviewFrame(opening.preview, next)) sessionLifetime = opening.lifetime;
+			if ("taskQueue" in state) queueAnswers.snapshot(owner, state);
 		},
 		beginSwitch(target: SwitchTarget): void {
 			cancelHolds("You left the original opening target before it was transmitted.");
@@ -583,107 +583,15 @@ export function createRecoveryChatTransport(options: RecoveryChatOptions) {
 					: "unknown",
 			);
 		},
-		answerQueueTask(req: TaskQueueAnswerRequest): Promise<boolean> {
-			const occ = req?.binding;
-			if (
-				!req ||
-				!occ ||
-				typeof occ.conversationId !== "string" ||
-				!occ.conversationId.trim() ||
-				typeof occ.queueId !== "string" ||
-				!occ.queueId.trim() ||
-				!Number.isInteger(occ.taskId) ||
-				occ.taskId <= 0 ||
-				typeof occ.questionId !== "string" ||
-				!occ.questionId.trim() ||
-				typeof req.text !== "string" ||
-				!req.text.trim() ||
-				typeof occ.question !== "string" ||
-				!Array.isArray(occ.choices) ||
-				!occ.choices.every((c: unknown) => typeof c === "string") ||
-				(occ.detail !== undefined && typeof occ.detail !== "string")
-			) {
-				return Promise.resolve(false);
-			}
-			const binding = api.captureBinding();
-			const state = options.view().state;
-			const queue = state?.taskQueue;
-			const boundOccurrence = queue?.answerBindings?.find(
-				(b) =>
-					b.conversationId === occ.conversationId &&
-					b.queueId === occ.queueId &&
-					b.taskId === occ.taskId &&
-					b.questionId === occ.questionId,
-			);
-			const task = queue?.tasks?.find((t) => t.id === occ.taskId);
-			if (
-				!socket ||
-				socket.readyState !== 1 ||
-				!binding ||
-				binding.conversationId !== occ.conversationId ||
-				state?.conversationId !== occ.conversationId ||
-				!queue ||
-				queue.queueId !== occ.queueId ||
-				!boundOccurrence ||
-				!task ||
-				task.status !== "stuck" ||
-				(task.question ?? "") !== occ.question ||
-				JSON.stringify(task.choices ?? []) !== JSON.stringify(occ.choices) ||
-				(task.detail ?? undefined) !== (occ.detail ?? undefined)
-			) {
-				return Promise.resolve(false);
-			}
-			const owner = socket;
-			const reqId = `qa-${newPromptId()}`;
-			const snapshotOcc: TaskQueueAnswerBinding = {
-				conversationId: occ.conversationId,
-				queueId: occ.queueId,
-				taskId: occ.taskId,
-				questionId: occ.questionId,
-				question: occ.question,
-				choices: [...occ.choices],
-				...(occ.detail !== undefined ? { detail: occ.detail } : {}),
-			};
-			const textSnapshot = req.text;
-			return new Promise((resolve) => {
-				queueAnswerWaiters.set(reqId, { socket: owner, binding, occ: snapshotOcc, resolve });
-				try {
-					owner.send(
-						JSON.stringify({
-							type: "task_queue_answer",
-							reqId,
-							conversationId: snapshotOcc.conversationId,
-							queueId: snapshotOcc.queueId,
-							taskId: snapshotOcc.taskId,
-							questionId: snapshotOcc.questionId,
-							text: textSnapshot,
-							question: snapshotOcc.question,
-							choices: [...snapshotOcc.choices],
-							...(snapshotOcc.detail !== undefined ? { detail: snapshotOcc.detail } : {}),
-						} satisfies ClientMessage),
-					);
-				} catch {
-					queueAnswerWaiters.delete(reqId);
-					resolve(false);
-				}
-			});
+		/** The Queue tab's answer; settles with true or a failure saying why (queue-answer-waiter.ts). */
+		answerQueueTask(req: TaskQueueAnswerRequest): Promise<TaskQueueAnswerOutcome> {
+			return queueAnswers.answer(req);
 		},
 		receiveTaskQueueAnswerResult(
 			owner: Socket,
 			message: Extract<ServerMessage, { type: "task_queue_answer_result" }>,
 		): void {
-			if (!message.reqId) return;
-			const waiter = queueAnswerWaiters.get(message.reqId);
-			if (!waiter || waiter.socket !== owner) return;
-			queueAnswerWaiters.delete(message.reqId);
-			const matched =
-				current(waiter.binding) &&
-				message.applied === true &&
-				message.conversationId === waiter.occ.conversationId &&
-				message.queueId === waiter.occ.queueId &&
-				message.taskId === waiter.occ.taskId &&
-				message.questionId === waiter.occ.questionId;
-			waiter.resolve(matched);
+			queueAnswers.receive(owner, message);
 		},
 		cancelWait(identity: PreparedIdentity): void {
 			for (const [key, waiter] of waiters)

@@ -584,7 +584,7 @@ describe("createReferenceVerifier & AskHub #592 occurrence transport & draft rel
 			},
 			text: "Staged rollout",
 		});
-		expect(badOccurrence).toBe(false);
+		expect(badOccurrence).toEqual({ applied: false, why: "stale" });
 		expect(sent).toHaveLength(0);
 
 		// Valid bound occurrence transmits with generated reqId and resolves true only on matching result
@@ -647,7 +647,7 @@ describe("createReferenceVerifier & AskHub #592 occurrence transport & draft rel
 			text: "Keep my typed answer",
 		});
 		transport.disconnect(socket);
-		expect(await interrupted).toBe(false);
+		expect(await interrupted).toEqual({ applied: false, why: "offline" });
 	});
 
 	it("protects unsaved composer drafts across reload/restart via L1/server newer-timestamp selection and watermark fencing", () => {

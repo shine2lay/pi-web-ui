@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
 import { pageTabsEn } from "./i18n-page-tabs";
+import { queueAnswerEn } from "./i18n-queue-answer";
 
 /** Locale code. pi-web-ui speaks English only, so it is always "en". */
 export type Locale = string;
@@ -365,12 +366,7 @@ export const en = {
 	taskQueueWaitClockStopped: "its give-up time moves later by as long as it stays paused",
 	taskQueueStatusPausedByYou: "Paused by you: nothing starts, pokes or asks until you resume the queue.",
 	queuePausedNoteLabel: "Kept for after the pause",
-	taskQueueAnswerHint: "Answer in the chat and it carries on.",
-	taskQueueAnswerInChat: "Answer in its own chat and it carries on.",
-	taskQueueAnswerPlaceholder: "Or type your answer",
-	taskQueueAnswerSend: "Send",
-	taskQueueAnswerGoesHere: "Your answer goes into this chat and the task carries on.",
-	taskQueueAnswerGoesToTaskChat: "Your answer goes into the task's own chat and it carries on.",
+	...queueAnswerEn, // the Queue tab's answer card (hints, errors, retry), i18n-queue-answer.ts
 	taskQueueStatusLane: "Running · #{id} is working in its own chat",
 	taskQueueStatusLanes: "Running · {n} tasks working in their own chats",
 	taskQueueInChats: "Working in their own chats",

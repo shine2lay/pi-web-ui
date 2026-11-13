@@ -201,7 +201,7 @@ describe("actual TaskQueuePanel: answer result, not dispatch", () => {
 			await settle(() => d.resolve(result));
 			expect(input(p.host).value).toBe(WORDS);
 			expect(input(p.host).disabled).toBe(false);
-			expect(state(p.host)).toBe("unconfirmed");
+			expect(state(p.host)).toBe("error");
 			expect(enabled(p.host)).toBe(true);
 			p.rerender({ queue: queue() });
 			act(() => vi.advanceTimersByTime(60_000));
@@ -217,7 +217,7 @@ describe("actual TaskQueuePanel: answer result, not dispatch", () => {
 		submit(p.host);
 		await settle(() => d.reject(new Error("synthetic result unavailable")));
 		expect(input(p.host).value).toBe(WORDS);
-		expect(state(p.host)).toBe("unconfirmed");
+		expect(state(p.host)).toBe("error");
 		expect(d.callback).toHaveBeenCalledTimes(1);
 		submit(p.host, 2);
 		await settle(() => {});
@@ -240,7 +240,7 @@ describe("actual TaskQueuePanel: answer result, not dispatch", () => {
 			submit(p.host);
 			await settle(() => {});
 			expect(input(p.host).value).toBe(WORDS);
-			expect(state(p.host)).toBe("unconfirmed");
+			expect(state(p.host)).toBe("error");
 			expect(callback.mock.calls).toEqual([[{ binding: binding(), text: WORDS }]]);
 		},
 	);
@@ -268,7 +268,7 @@ describe("actual TaskQueuePanel: answer result, not dispatch", () => {
 		expect(state(p.host)).toBe("pending");
 		await settle(() => d.resolve(result));
 		expect(input(p.host).value).toBe(CHOICES[0]);
-		expect(state(p.host)).toBe(result ? "applied" : "unconfirmed");
+		expect(state(p.host)).toBe(result ? "applied" : "error");
 	});
 
 	it("does not send whitespace-only input or choices", () => {
@@ -364,7 +364,7 @@ describe("actual TaskQueuePanel: answer result, not dispatch", () => {
 			expect(state(p.host)).toBe("pending");
 			await settle(() => next.resolve(false));
 			expect(input(p.host).value).toBe("Current synthetic editor");
-			expect(state(p.host)).toBe("unconfirmed");
+			expect(state(p.host)).toBe("error");
 			expect(old.callback.mock.calls).toEqual([[{ binding: binding(), text: WORDS }]]);
 		},
 	);
@@ -453,7 +453,7 @@ describe("actual RightPanel plumbing", () => {
 		expect(state(p.host)).toBe("pending");
 		await settle(() => d.resolve(false));
 		expect(input(p.host).value).toBe(WORDS);
-		expect(state(p.host)).toBe("unconfirmed");
+		expect(state(p.host)).toBe("error");
 		expect(settings.panelSend).not.toHaveBeenCalled();
 	});
 

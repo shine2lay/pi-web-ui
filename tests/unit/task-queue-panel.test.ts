@@ -98,7 +98,8 @@ describe("TaskQueuePanel", () => {
 		expect(html).toContain('class="task-queue-answer"');
 		expect([...html.matchAll(/class="task-queue-choice"[^>]*>([^<]+)</g)].map((m) => m[1])).toEqual(["8080", "9090"]);
 		expect(html).toContain('class="task-queue-answer-input"');
-		expect(html).toContain("into this chat");
+		// No answer binding from the server (frontend #286): it says so instead of showing dead buttons.
+		expect(html).toContain("can&#x27;t take an answer right now. Answer in the chat.");
 		// A lane task's answer goes into its own chat.
 		const lane = render(q([task(2, "stuck", { lane: true, question: "Q?", chat: { file: "/t.jsonl" } })]), {
 			onAnswer: noop,
