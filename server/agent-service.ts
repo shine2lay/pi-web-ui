@@ -15274,11 +15274,11 @@ export class ClientSession {
 	 *  只影响「列表里推什么」：listed 本身的语义、以及 displaceActive /
 	 *  shouldRetainActive / MAX_OPEN_CONVERSATIONS 那套「什么算运行中」的规则
 	 *  完全不变（换走时该释放的仍然释放，不会被这次展示口径改动永久钉在列表里）。
-	 *  Display-only: retention and disposal rules are deliberately untouched. */
+	 *  Display-only; retention untouched. ops #870: also chats other windows have open, unless taken off (✕ / done task). */
 	private shownInRunningList(conv: Conversation): boolean {
 		if (conv.listed) return true;
-		if (conv.id !== this.activeId) return false;
-		// 首条提示词给对话命名 = 用户真的开始聊了（此刻消息可能还没落进会话统计）。
+		const off = () => this.stateStore.getRecentRemoved().some((p) => sameSessionRef(p, conv.session.sessionFile));
+		if (conv.id !== this.activeId && (!this.viewedElsewhere(conv.id) || off())) return false;
 		if (!isUntitledTitle(conv.title)) return true;
 		try {
 			return messageCountOf(conv.session) > 0;

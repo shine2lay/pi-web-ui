@@ -1985,6 +1985,29 @@ clientId 建 ClientSession，同 id = 同一个会话。上游把 clientId 从 l
 - `tests/cross-client-session-test.mjs` 按新口径改写：原来断言「必须拒绝」的两处
   改为「必须能订阅同一条」，并发发送改为断言「排队而非拦截」
 
+### 上游冒烟按新口径改写（ops #870，2026-11-12）
+
+本补丁当初只改写了 `cross-client-session-test`，另外 5 个上游冒烟（`orphan-adopt`、`takeover`、`idle-takeover`、
+`remote-answer`、`elsewhere-lifecycle`）一直等「另一处」行（`elsewhere` + `owner`/`convId`），而本补丁让它恒为空：
+从 4eedb89a 起 6 个里 5 个超时（父提交 a49992f7 全过）。Ops 决定（rule 15）按共享表口径改写，场景和用户能看到的检查全部
+保留：B 在自己的列表里看到 A 正在跑的对话（同 convId、hasQuestion）、打开它、作答（广播）、steer；A 的对话框收起；
+关浏览器不杀 run；删除定时任务后它的对话离开列表。删掉的只有被本补丁有意去掉的所有权检查：
+
+| 测试 | 删掉的检查 | 原因 |
+|---|---|---|
+| takeover | `take_over_conversation` 过户、「was moved to this page」/「was taken over by another page」通知、A 页对话消失、新问卷「没有误发给过户前的 A」 | 没有所有权就没有过户：两页看同一条对话，问卷本来就广播给每台在线设备（`page_request` 仍只送最新在看的那页，保留断言） |
+| remote-answer | `peek_elsewhere_question`/`elsewhere_question`、`question_answer` 带 `owner`、「That question is gone」通知 | 问卷进程共享，每页都直接收到 `question_pending`，按 id 作答即可 |
+| idle-takeover | B 空白落地 + 「still open in another window」提示、过户成功通知、A 页对话搬走 | reload-adopt：新标签接管同项目最近那条，不再停在空白；打开即普通切换 |
+| orphan-adopt | 「before the browser was closed」认领通知；有在线标签时 C 走空白 + 「landed on a new chat」+ elsewhere 只读行 | reload-adopt 不调上游的 `findAdoptableOrphan`；C 直接在自己的列表里看到同一条 |
+| elsewhere-lifecycle | 按 `owner` 字段找行 | 改按 convId / 新出现的对话找；断开后「没有只读残骸」并能打开它 |
+
+改写时测出一个真 bug（product 修复）：`shownInRunningList()` 只列 `listed` 的和**本窗口在看的**对话。另一窗口新开
+并正在跑的对话、定时任务跑的对话，在别的窗口里都看不到（「两页都能看同一条」只对已经换走、被留下的对话成立）。
+现在也列别的在线窗口正在看的对话（`viewedElsewhere()`，伪客户端的空 sink 也算），但被移出列表的
+（✕ 或已完成任务的对话，`getRecentRemoved()`）除外 —— 否则 `queue-done-hidden`「完成任务的对话只留给正在看它的窗口」
+会被打破（check.sh 单测抓到）。`remote-answer` 第 4 段和
+`elsewhere-lifecycle` 场景 2 修复前失败、修复后通过。
+
 ---
 
 ## no-cwd-restore

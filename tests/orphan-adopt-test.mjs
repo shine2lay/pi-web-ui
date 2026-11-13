@@ -5,9 +5,10 @@
 // 会变成左栏“另一处”只读行，既看不了也操作不了（switch/prompt 守卫按
 // owner.isStreaming 照拦，不看 owner 是否还连着）。
 //
-// 期望：无其他在线浏览器时，新标签整体认领最近断开的残留会话 ——
-// 同 conversationId、有历史消息、streaming 继续可见、收到认领 notice、
-// steer 照常工作；而有其他在线标签时不认领（issue #10 隔离保留）。
+// 期望（server-owned-chats 口径，ops #870 改写；删掉的上游「认领 notice / 有在线标签时不认领、
+// 走空白 + elsewhere」断言及原因见 PATCHES.md server-owned-chats）：关浏览器不杀 run；新标签
+// 落在同一 conversationId 上、有历史消息、streaming 继续可见、steer 照常工作；另一个在线
+// 标签也在自己的列表里看到这条正在跑的对话。
 //
 // 零 token：mock SSE 模型（SLOW 分支盖住“关闭→认领”窗口），纯 WS 协议。
 // Usage: npm run build && node tests/orphan-adopt-test.mjs [port]
@@ -256,19 +257,18 @@ try {
 	clientA.ws.terminate();
 	await sleep(1000); // 等服务端 detach，把残留记成“断开”
 
-	// B：全新 clientId（新浏览器），无人在线 → 应整体认领 A 的残留会话。
+	// B：全新 clientId（新浏览器），无人在线 → 直接落在 A 还在跑的那条对话上（reload-adopt：
+	// 接管同项目最近那条，而不是从磁盘再恢复一份或停在空白）。
 	clientB = await openClient("orphan-B", false);
-	await clientB.waitForType("notice", (m) => noticeText(m).includes("before the browser was closed"), 15000);
-	console.log("✓ B 收到认领 notice");
 	if (clientB.state.conversationId !== convA)
-		throw new Error(`B 没有认领 A 的会话（${clientB.state.conversationId} ≠ ${convA}）——仍是“另一处”`);
+		throw new Error(`B 没有落在 A 的会话上（${clientB.state.conversationId} ≠ ${convA}）`);
 	console.log("✓ B 落在 A 的同一对话上（同 conversationId）");
 	const rowB = clientB.conversations.find((c) => c.id === convA);
 	if (!rowB || rowB.messageCount < 2) throw new Error("B 的运行列表里没有 A 的对话（含历史消息）");
-	if (!rowB.isStreaming) throw new Error("B 看不到该对话正在跑");
-	console.log("✓ B 的运行列表里有该对话（含历史、streaming 中）");
+	if (!rowB.isStreaming) throw new Error("B 看不到该对话正在跑（关浏览器把 run 杀了？）");
+	console.log("✓ B 的运行列表里有该对话（含历史、streaming 中：关浏览器没杀掉 run）");
 	if (clientB.elsewhere.length !== 0)
-		throw new Error(`B 还有 elsewhere 行（${JSON.stringify(clientB.elsewhere)}）——认领后不应再有“另一处”`);
+		throw new Error(`B 还有 elsewhere 行（${JSON.stringify(clientB.elsewhere)}）——对话归服务端，不应有「另一处」`);
 	console.log("✓ B 没有 elsewhere 行（不是只读感知，是真接管）");
 	if (!clientB.messages.some((m) => JSON.stringify(m.content ?? "").includes("orphan seed hello")))
 		throw new Error("B 看不到 A 的历史消息");
@@ -276,13 +276,17 @@ try {
 	if (clientB.state.model?.id !== "orphan-mock") throw new Error("B 没继承 A 的模型（会话不连续）");
 	console.log("✓ B 继承了 A 的模型（同一会话对象）");
 
-	// C：全新 clientId，但 B 还在线 → 不认领（issue #10 隔离保留），走空白 + elsewhere 感知。
+	// C：全新 clientId，B 还在线 → 也看到这条正在跑的对话（同一个 convId，不是只读副本）。
 	clientC = await openClient("orphan-C", false);
-	await clientC.waitForType("notice", (m) => noticeText(m).includes("landed on a new chat"), 15000);
-	console.log("✓ C（B 在线时上线）走空白新对话，不抢认领");
-	if (clientC.messages.length !== 0) throw new Error("C 的默认对话不是空白的");
-	if (!clientC.elsewhere.some((w) => w.isStreaming)) throw new Error("C 的 elsewhere 看不到 B 正在跑（跨端感知缺失）");
-	console.log("✓ C 在 elsewhere 只读看到 B 正在跑（issue #145 行为保留）");
+	{
+		const started = Date.now();
+		while (!clientC.conversations.some((c) => c.id === convA && c.isStreaming)) {
+			if (Date.now() - started > 15000) throw new Error("C 的列表里看不到 B 正在跑的对话（跨端感知缺失）");
+			await sleep(100);
+		}
+	}
+	if (clientC.elsewhere.length !== 0) throw new Error(`C 有 elsewhere 行（${JSON.stringify(clientC.elsewhere)}）`);
+	console.log("✓ C（B 在线时上线）在自己的列表里看到同一条正在跑的对话");
 	clientC.ws.close();
 	clientC.ws.terminate();
 	await sleep(500);

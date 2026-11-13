@@ -173,20 +173,22 @@ const check = (name, ok, extra = "") => {
 	if (!ok) failures++;
 };
 
-/** 等 elsewhere 出现/消失某 owner 的行（conversations 推送驱动）。 */
-const waitElsewhere = async (c, pred, what, timeout = 15000) => {
+/** 等 B 的对话列表出现符合谓词的行 / 不再有（conversations 推送驱动）。 */
+const waitRow = async (c, pred, what, timeout = 15000) => {
 	const started = Date.now();
 	while (Date.now() - started < timeout) {
-		const row = c.elsewhere.find(pred);
+		const row = c.conversations.find(pred);
 		if (row) return row;
 		await sleep(100);
 	}
-	throw new Error(`[${c.name}] timeout waiting for elsewhere row: ${what}`);
+	throw new Error(
+		`[${c.name}] timeout waiting for row: ${what}; rows=${JSON.stringify(c.conversations.map((r) => ({ id: r.id, title: r.title, live: r.live, n: r.messageCount })))}`,
+	);
 };
-const waitElsewhereGone = async (c, pred, what, timeout = 15000) => {
+const waitRowGone = async (c, pred, timeout = 15000) => {
 	const started = Date.now();
 	while (Date.now() - started < timeout) {
-		if (!c.elsewhere.some(pred)) return true;
+		if (!c.conversations.some(pred)) return true;
 		await sleep(100);
 	}
 	return false;
@@ -228,26 +230,32 @@ try {
 	// B：先上线的观察者（有 sink → 其他客户端的对话在它这里是 elsewhere 行）。
 	clientB = await openClient("observer-b");
 
-	// --- 场景 1：断连残骸不入 elsewhere ---
+	// --- 场景 1：关掉的页面不留只读残骸 ---
 	const deadId = "probe-dead-1790000000000";
 	clientA = await openClient(deadId);
 	clientA.send({ type: "prompt", text: "残骸测试：只回复 OK" });
 	await clientA.waitForState((s) => s.isStreaming === true, 20000).catch(() => {});
-	// 正向对照：A 在线时，B 必须能看到 A 的行。
-	const liveRow = await waitElsewhere(clientB, (w) => w.owner === deadId, "A live row");
-	check("A 在线时 B 能看到其 elsewhere 行（正向对照）", !!liveRow, `owner=${liveRow.owner}`);
+	const convA = clientA.state.conversationId;
+	// 正向对照：A 在线时，B 必须在自己的列表里看到 A 的对话（证明测试真的在读这张列表）。
+	const liveRow = await waitRow(clientB, (c) => c.id === convA && (c.messageCount ?? 0) > 0, "A live row");
+	check("A 在线时 B 的列表里有 A 的对话（正向对照）", !!liveRow, `id=${liveRow.id}`);
 	await clientA.waitForState((s) => s.isStreaming === false, 30000).catch(() => {});
 
-	// 断开 A（不 detach 回收 → 模拟「关浏览器留下的残骸」）。
+	// 断开 A（不 detach 回收 → 模拟「关浏览器」）。对话归服务端：它留在 B 的列表里，是一条
+	// B 能打开的普通对话，而不是打不开的「另一处」只读残骸（#291 的症状）。
 	clientA.ws.close();
-	const gone = await waitElsewhereGone(clientB, (w) => w.owner === deadId, "A row gone");
-	check(
-		"A 断连后其行从 B 的 elsewhere 消失（#291 修复点）",
-		gone,
-		`elsewhere=${JSON.stringify(clientB.elsewhere.map((w) => w.owner))}`,
-	);
+	await sleep(1500);
+	check("A 断连后 B 没有只读残骸行（#291 修复点）", clientB.elsewhere.length === 0, JSON.stringify(clientB.elsewhere));
+	clientB.send({ type: "switch_conversation", id: convA });
+	await clientB.waitForState((s) => s.conversationId === convA, 15000);
+	// 这个客户端只记完整快照（不合并增量）：要一份新的再看内容。
+	clientB.send({ type: "get_state" });
+	const opened = await clientB
+		.waitForState((s) => (s.messages ?? []).some((m) => JSON.stringify(m.content ?? "").includes("残骸测试")), 15000)
+		.catch(() => null);
+	check("A 断连后 B 能打开那条对话、看到内容", !!opened, `msgs=${(clientB.state.messages ?? []).length}`);
 
-	// --- 场景 2：删除定时任务回收伪客户端 ---
+	// --- 场景 2：删除定时任务回收它的对话 ---
 	const taskId = "task-lifecycle-291";
 	clientB.send({
 		type: "schedule_save",
@@ -264,23 +272,19 @@ try {
 	});
 	await clientB.waitForType("scheduler_tasks", (m) => (m.tasks ?? []).some((t) => t.id === taskId), 15000);
 
+	const before = new Set(clientB.conversations.map((c) => c.id));
 	clientB.send({ type: "schedule_run", id: taskId });
-	// 正向对照：伪客户端跑起来后应出现在 elsewhere。
-	const schedRow = await waitElsewhere(clientB, (w) => w.owner === `scheduler:${taskId}`, "scheduler row", 30000);
-	check("定时任务伪客户端出现在 elsewhere（正向对照）", !!schedRow, `owner=${schedRow.owner}`);
+	// 正向对照：任务跑起来后它的对话出现在 B 的列表里。
+	const schedRow = await waitRow(clientB, (c) => !before.has(c.id) && !c.isSubagent, "scheduler row", 30000);
+	check("定时任务的对话出现在列表里（正向对照）", !!schedRow, `id=${schedRow.id} title=${schedRow.title}`);
 
-	// 删除任务 → 伪客户端应被回收。
+	// 删除任务 → 它的对话应被回收。
 	clientB.send({ type: "schedule_delete", id: taskId });
-	const schedGone = await waitElsewhereGone(
-		clientB,
-		(w) => w.owner === `scheduler:${taskId}`,
-		"scheduler row gone",
-		20000,
-	);
+	const schedGone = await waitRowGone(clientB, (c) => c.id === schedRow.id, 20000);
 	check(
-		"删除定时任务后伪客户端从 elsewhere 消失（#291 修复点）",
+		"删除定时任务后它的对话从列表消失（#291 修复点）",
 		schedGone,
-		`elsewhere=${JSON.stringify(clientB.elsewhere.map((w) => w.owner))}`,
+		`rows=${JSON.stringify(clientB.conversations.map((c) => c.id))}`,
 	);
 } catch (err) {
 	console.error(`\nFAIL: ${err.message}`);

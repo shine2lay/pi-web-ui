@@ -1,17 +1,16 @@
-// 跨页作答 remote-answer（零 token）：别处会话的问卷在本页直接回答，不搬迁对话。
+// 跨页作答 remote-answer（零 token）：另一页上等答复的问卷，本页不切过去直接回答。
 //
 // 假模型（question-bridge 同款）：第 1 回合固定回 ask_user_question 工具调用，
 // 第 2 回合把工具结果回显成 assistant 文本。
 //
-// 验证：
-//   1. A 提问挂起时，B（全新页面，A 还在线）点 elsewhere 行的 `?`
-//      （peek_elsewhere_question）→ B 收到 elsewhere_question（同题目），
-//      本页弹框；A 的对话原地不动（未被过户）；
-//   2. B 跨页提交（question_answer 带 owner）→ A 的 run 继续（回显含答案），
-//      A 页问卷收起（question_retracted），B 页 elsewhere 角标消失；
-//   3. 问卷已不在时再 peek → 明确通知（答案不吞不丢）；
-//   4. 本页 answered 集合不受跨页 id 污染（回归：两边计数器都从 q1 起）。
-//
+// 验证（server-owned-chats 口径，ops #870 改写；删掉的上游断言及原因见 PATCHES.md
+// server-owned-chats「上游冒烟按新口径改写」）：
+//   1. A 提问挂起时，已打开的 B 页实时在**自己的列表**里看到 A 那条
+//      （同 convId、带 hasQuestion/questionId），并收到同一张问卷（本页弹框）；
+//   2. B 在本页提交 → A 的 run 继续（回显含答案），A 页问卷收起（question_retracted），
+//      B 页列表角标消失；
+//   3. 对话原地不动：A 仍在那条上，B 所在的对话不变；
+//   4. 两页各在各的对话上时，A 新开并提问的对话也实时进 B 的列表，B 不切过去就能作答。
 // Usage: npm run build && node tests/remote-answer-test.mjs [port]
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
@@ -241,99 +240,113 @@ try {
 		return c;
 	};
 
-	// A 先上线待命；B 全新页面先看着（A 还空闲，elsewhere 应为空）。
+	const until = async (pred, timeout = 15000) => {
+		const started = Date.now();
+		while (Date.now() - started < timeout) {
+			if (pred()) return true;
+			await sleep(100);
+		}
+		return false;
+	};
+	const assistantText = (c) =>
+		(c.messages ?? [])
+			.filter((m) => m.role === "assistant")
+			.flatMap((m) => m.content ?? [])
+			.map((b) => b.text ?? "")
+			.join("\n");
+
+	// A 先上线待命；B 全新页面先看着，停在自己的对话上。
 	clientA = await openClient("remote-A");
 	clientB = await openClient("remote-B", false);
 	await clientB.waitForType("conversations", () => true, 15000); // 首推到达
-	check("A 空闲时 B 看不到 elsewhere", clientB.elsewhere.length === 0, JSON.stringify(clientB.elsewhere));
+	// 新标签会接管同项目最近那条（reload-adopt），此刻就是 A 的空白对话；空白对话不重复新建
+	// （new_chat 复用它），所以 B 就停在这里；下面只断言作答不改变 B 所在的对话。
+	const convB = clientB.state.conversationId;
+	check("没有另一处只读列表（对话归服务端）", clientB.elsewhere.length === 0, JSON.stringify(clientB.elsewhere));
 
-	// A 提问挂起（run 阻塞在等人类回答）→ 已打开的 B 页必须实时看到 `?`。
-	// 回归：问卷挂起/解决不改变流式集合，签名不变就不推，别处页面永远看不到。
+	// A 提问挂起（run 阻塞在等人类回答）→ 已打开的 B 页必须实时在自己的列表里看到 `?`。
+	// 回归：问卷挂起/解决不改变流式集合，签名不变就不推，别的页面永远看不到。
 	clientA.send({ type: "prompt", text: "先问我几个问题" });
 	const pendingA = await clientA.waitForType("question_pending", () => true, 40000);
 	check("A 问卷挂起", pendingA.questions?.length === 2, `id=${pendingA.id}`);
 	await clientA.waitForState((s) => s.isStreaming === true, 15000);
 	const convA = clientA.state.conversationId;
 	let row = null;
-	{
-		const started = Date.now();
-		while (Date.now() - started < 15000) {
-			row = clientB.elsewhere.find((w) => w.isStreaming && w.owner && w.convId && w.hasQuestion);
-			if (row) break;
-			await sleep(100);
-		}
-	}
-	check("已打开的 B 页实时看到 elsewhere 问卷标记", !!row, `hasQuestion=${row?.hasQuestion}`);
-	clientB.send({ type: "peek_elsewhere_question", owner: row.owner, id: row.convId });
-	const preview = await clientB.waitForType(
-		"elsewhere_question",
-		(m) => m.convId === row.convId && m.questions?.length === 2,
-		15000,
-	);
-	check("B 收到问卷原文（本页弹框）", preview.id === pendingA.id, `id=${preview.id} owner=${preview.owner}`);
-	check("对话没被搬走（仍在 A 手里）", clientA.state.conversationId === convA, clientA.state.conversationId);
+	await until(() => {
+		row = clientB.conversations.find((c) => c.id === convA && c.isStreaming && c.hasQuestion);
+		return !!row;
+	});
+	check("已打开的 B 页实时在列表里看到 A 那条的问卷标记", !!row, `hasQuestion=${row?.hasQuestion}`);
+	check("列表行带问卷 id（本页可直接作答）", row?.questionId === pendingA.id, `questionId=${row?.questionId}`);
+	// 问卷属于对话、每台在线设备都能看到：B 也收到同一张问卷。
+	const atB = await clientB.waitForType("question_pending", (m) => m.id === pendingA.id, 15000);
+	check("B 收到问卷原文（本页弹框）", atB.questions?.length === 2, `id=${atB.id}`);
 
-	// B 跨页提交 → A 的 run 继续，A 页问卷收起，B 页角标消失。
+	// B 在本页提交（不切过去）→ A 的 run 继续，A 页问卷收起，B 页角标消失。
 	clientB.send({
 		type: "question_answer",
-		id: preview.id,
-		owner: row.owner,
+		id: pendingA.id,
 		answers: [
 			{ id: "scope", selected: ["完整实现"] },
 			{ id: "note", selected: [], custom: "别动图标" },
 		],
 	});
-	{
-		const started = Date.now();
-		let echoed = "";
-		while (Date.now() - started < 30000) {
-			const texts = (clientA.messages ?? [])
-				.filter((m) => m.role === "assistant")
-				.flatMap((m) => m.content ?? [])
-				.map((b) => b.text ?? "")
-				.join("\n");
-			if (texts.includes("ANSWERED:") && texts.includes("完整实现")) {
-				echoed = texts;
-				break;
-			}
-			await sleep(100);
-		}
-		check("A 的模型收到跨页答案并继续", echoed.includes("别动图标"), echoed.slice(-160));
-	}
-	{
-		const started = Date.now();
-		let retracted = false;
-		while (Date.now() - started < 15000) {
-			if (clientA.received.some((m) => m.type === "question_retracted" && m.id === pendingA.id)) {
-				retracted = true;
-				break;
-			}
-			await sleep(100);
-		}
-		check("A 页旧对话框同步收起", retracted);
-	}
-	{
-		const started = Date.now();
-		let cleared = false;
-		while (Date.now() - started < 30000) {
-			const r = clientB.elsewhere.find((w) => w.convId === row.convId);
-			if (!r || !r.hasQuestion) {
-				cleared = true;
-				break;
-			}
-			await sleep(100);
-		}
-		check("B 页 elsewhere 角标消失", cleared);
-	}
 	check(
-		"A 仍持有对话（无过户发生）",
+		"A 的模型收到 B 的答案并继续",
+		await until(
+			() => assistantText(clientA).includes("ANSWERED:") && assistantText(clientA).includes("别动图标"),
+			30000,
+		),
+		assistantText(clientA).slice(-160),
+	);
+	check(
+		"A 页旧对话框同步收起",
+		await until(() => clientA.received.some((m) => m.type === "question_retracted" && m.id === pendingA.id)),
+	);
+	check(
+		"B 页列表角标消失",
+		await until(() => {
+			const r = clientB.conversations.find((c) => c.id === convA);
+			return !!r && !r.hasQuestion;
+		}, 30000),
+	);
+	check("对话没被搬走（A 仍在这条上）", clientA.state.conversationId === convA, clientA.state.conversationId);
+	check(
+		"A 的列表里仍有它",
 		clientA.conversations.some((c) => c.id === convA),
 	);
+	check("B 作答不切对话（仍在自己那条上）", clientB.state.conversationId === convB, clientB.state.conversationId);
 
-	// 问卷已不在时再 peek → 明确通知，不静默。
-	clientB.send({ type: "peek_elsewhere_question", owner: row.owner, id: row.convId });
-	const gone = await clientB.waitForType("notice", (m) => (m.text ?? "").includes("That question is gone"), 15000);
-	check("问卷消失后 peek 给出明确通知", !!gone);
+	// 场景 2：两页各在各的对话上（常见情形）。B 开新对话，A 也开新对话再提问 —— A 这条 B 从没
+	// 打开过，也必须实时出现在 B 的列表里（带 `?`），B 不切过去就能作答。
+	// 回归（ops #870）：只列「自己在看的」和「换走时留下的」对话，别的窗口新开的对话谁都看不到。
+	await until(() => !clientA.state?.isStreaming, 30000);
+	clientB.send({ type: "new_chat" });
+	await clientB.waitForState((s) => s.conversationId !== convA, 15000);
+	const convB2 = clientB.state.conversationId;
+	clientA.send({ type: "new_chat" });
+	await clientA.waitForState((s) => s.conversationId !== convA && s.conversationId !== convB2, 15000);
+	clientA.send({ type: "prompt", text: "再问一次" });
+	const pendingA2 = await clientA.waitForType("question_pending", (m) => m.id !== pendingA.id, 40000);
+	const convA2 = clientA.state.conversationId;
+	let row2 = null;
+	await until(() => {
+		row2 = clientB.conversations.find((c) => c.id === convA2 && c.isStreaming && c.hasQuestion);
+		return !!row2;
+	});
+	check(
+		"B 在自己的对话上，列表里实时出现 A 新开的对话（带问卷标记）",
+		!!row2,
+		JSON.stringify(clientB.conversations.map((c) => c.id)),
+	);
+	await clientB.waitForType("question_pending", (m) => m.id === pendingA2.id, 15000);
+	clientB.send({ type: "question_answer", id: pendingA2.id, answers: [{ id: "scope", selected: ["最小可用"] }] });
+	check(
+		"A 新对话的模型收到 B 的答案并继续",
+		await until(() => assistantText(clientA).includes("最小可用"), 30000),
+		assistantText(clientA).slice(-160),
+	);
+	check("B 作答后仍在自己的对话上", clientB.state.conversationId === convB2, clientB.state.conversationId);
 
 	console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 } catch (err) {

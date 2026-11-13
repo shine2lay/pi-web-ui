@@ -1,7 +1,7 @@
-// 已结束对话的过户（零 token）：A 的 run 跑完后，B（全新页面，A 还在线）
-// 仍能在 elsewhere 看到空闲行并过户查看完整转录；且 B 上线时不会自动恢复
-// A 仍持有的会话（第二个 writer），而是空白落地 + 提示去向。
-// 回归：elsewhere 只推 running 时，对话一结束行就消失，只能趁运行中过户。
+// 已结束的对话在另一页打开（零 token）：A 的 run 跑完后，B（全新页面，A 还在线）
+// 仍在自己的列表里看到那条空闲对话，打开就能看完整转录。server-owned-chats 口径
+// （ops #870 改写；删掉的上游「空白落地 / 过户」断言及原因见 PATCHES.md server-owned-chats）。
+// 回归：列表只推 running 时，对话一结束行就消失，只能趁运行中打开。
 // Usage: npm run build && node tests/idle-takeover-test.mjs [port]
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
@@ -213,35 +213,25 @@ try {
 	}
 	const convA = clientA.state.conversationId;
 
-	// B：A 结束后才上线。B 不得自动恢复 A 仍持有的会话（第二个 writer），
-	// 应空白落地 + 收到去向提示。
+	// B：A 结束后才上线（A 还在线）。对话归服务端：结束后 A 那条仍在 B 的列表里
+	// （空闲、同一 convId），不是跑完即消失；只此一行，没有另一处只读副本。
 	clientB = await openClient("idle-takeover-B");
-	check(
-		"B 没有自动恢复别处的会话（空白落地）",
-		(clientB.messages ?? []).length === 0 && !clientB.conversations.some((c) => (c.messageCount ?? 0) > 0),
-		`msgs=${clientB.messages.length} convs=${JSON.stringify(clientB.conversations.map((c) => ({ id: c.id, n: c.messageCount })))}`,
-	);
-	check(
-		"B 收到空闲持有提示（指路 elsewhere/历史）",
-		clientB.notices().some((m) => (m.text ?? "").includes("still open in another window")),
-	);
-
-	// 结束后 elsewhere 仍保留空闲行（可过户），而不是跑完即消失。
 	let row = null;
 	{
 		const started = Date.now();
 		while (Date.now() - started < 15000) {
-			row = clientB.elsewhere.find((w) => w.convId === convA);
+			row = clientB.conversations.find((c) => c.id === convA);
 			if (row) break;
 			await sleep(100);
 		}
 	}
-	check("结束后 B 仍看到 elsewhere 行", !!row, JSON.stringify(row ?? clientB.elsewhere));
+	check("结束后 B 的列表里仍有 A 那条", !!row, JSON.stringify(row ?? clientB.conversations));
 	check("结束的行标为空闲（非 running）", row?.isStreaming === false, `isStreaming=${row?.isStreaming}`);
-	check("空闲行带过户定位", !!(row?.owner && row?.convId), `owner=${row?.owner} convId=${row?.convId}`);
+	check("没有另一处只读副本", clientB.elsewhere.length === 0, JSON.stringify(clientB.elsewhere));
 
-	// B 过户已结束的对话 → 切过去并看到完整转录（提问 + 回答都在）。
-	clientB.send({ type: "take_over_conversation", owner: row.owner, id: row.convId });
+	// B 打开已结束的对话 → 看到完整转录（提问 + 回答都在）。
+	if (clientB.state.conversationId !== convA) clientB.send({ type: "switch_conversation", id: convA });
+	await clientB.waitForState((s) => s.conversationId === convA, 15000);
 	{
 		const started = Date.now();
 		let seen = false;
@@ -256,24 +246,14 @@ try {
 			}
 			await sleep(100);
 		}
-		check("B 过户后看到完整转录", seen);
+		check("B 打开后看到完整转录", seen);
 	}
+	// A 没丢任何东西：仍在这条对话上、列表里仍有它。
+	check("A 仍在同一条对话上", clientA.state?.conversationId === convA, clientA.state?.conversationId);
 	check(
-		"B 收到过户成功通知",
-		clientB.notices().some((m) => (m.text ?? "").includes("was moved to this page")),
+		"A 的列表里仍有这条对话",
+		clientA.conversations.some((c) => c.id === convA),
 	);
-	{
-		const started = Date.now();
-		let gone = false;
-		while (Date.now() - started < 15000) {
-			if (!clientA.conversations.some((c) => c.id === convA)) {
-				gone = true;
-				break;
-			}
-			await sleep(100);
-		}
-		check("A 页该对话已搬走", gone);
-	}
 
 	console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 } catch (err) {
