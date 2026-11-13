@@ -1,6 +1,6 @@
 /**
  * OpenViking Memory Dashboard — the client behind the three read-only endpoints: one `:1933`
- * transport (GET only, 2000 ms deadline) and the `/home/shinelay/.pi/openviking/` state files.
+ * transport (GET only, 2000 ms deadline) and the `<HOME>/.pi/openviking/` state files.
  */
 import { buildAudit } from "./audit.js";
 import { OpenVikingDaemonHttp } from "./daemon-http.js";
@@ -8,11 +8,10 @@ import { buildEntries, buildEntriesSnapshot, readContentTier } from "./entries.j
 import { OpenVikingEntriesSnapshot } from "./entries-snapshot.js";
 import { OpenVikingMemoryTreeCache } from "./memory-tree-cache.js";
 import { buildOverview } from "./overview.js";
-import { resolveOpenVikingStatePaths, type OpenVikingStatePaths } from "./state-files.js";
+import { defaultOpenVikingStateDir, resolveOpenVikingStatePaths, type OpenVikingStatePaths } from "./state-files.js";
 import {
 	DEFAULT_OPENVIKING_DAEMON_BIND,
 	DEFAULT_OPENVIKING_DAEMON_URL,
-	DEFAULT_OPENVIKING_STATE_DIR,
 	DEFAULT_OPENVIKING_TIMEOUT_MS,
 	ENTRIES_CADENCE_MS,
 	type OpenVikingAuditQuery,
@@ -49,7 +48,7 @@ export class OpenVikingDaemonClient {
 	constructor(options: OpenVikingDashboardOptions = {}) {
 		this.daemonUrl = (options.daemonUrl ?? DEFAULT_OPENVIKING_DAEMON_URL).replace(/\/+$/, "");
 		this.daemonBind = options.daemonBind ?? DEFAULT_OPENVIKING_DAEMON_BIND;
-		this.stateDir = options.stateDir ?? DEFAULT_OPENVIKING_STATE_DIR;
+		this.stateDir = options.stateDir ?? defaultOpenVikingStateDir();
 		this.statePaths = resolveOpenVikingStatePaths(this.stateDir);
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_OPENVIKING_TIMEOUT_MS;
 		if (!Number.isInteger(this.timeoutMs) || this.timeoutMs <= 0) {

@@ -11,7 +11,6 @@
 export const DEFAULT_OPENVIKING_DAEMON_URL = "http://127.0.0.1:1933";
 export const DEFAULT_OPENVIKING_DAEMON_BIND = "127.0.0.1:1933";
 export const DEFAULT_OPENVIKING_TIMEOUT_MS = 2_000;
-export const DEFAULT_OPENVIKING_STATE_DIR = "/home/shinelay/.pi/openviking";
 
 export const OPENVIKING_ACCOUNT_HEADER = "X-OpenViking-Account";
 export const OPENVIKING_USER_HEADER = "X-OpenViking-User";

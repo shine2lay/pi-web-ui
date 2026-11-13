@@ -1,5 +1,5 @@
 /**
- * OpenViking Memory Dashboard — the one canonical reader per state file in `/home/shinelay/.pi/openviking/`.
+ * OpenViking Memory Dashboard — the one canonical reader per state file in `<HOME>/.pi/openviking/`.
  *
  * History lines are never rewritten, so each reader accepts the contract names (Ops #808-#810)
  * first and the older live names second (G2, G4, G5, G6, G7). JSONL envelopes are read by the contract's key names
@@ -7,8 +7,9 @@
  * Read-only: nothing here writes.
  */
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_OPENVIKING_STATE_DIR, type OpenVikingPendingWtLandSync } from "./types.js";
+import type { OpenVikingPendingWtLandSync } from "./types.js";
 import { isSessionUri } from "./uri.js";
 
 export interface OpenVikingStatePaths {
@@ -20,7 +21,12 @@ export interface OpenVikingStatePaths {
 	readonly seenRoleMessagesJsonPath: string;
 }
 
-export function resolveOpenVikingStatePaths(stateDir = DEFAULT_OPENVIKING_STATE_DIR): OpenVikingStatePaths {
+/** `<HOME>/.pi/openviking`, read when asked (ops #871): a sealed run's temp HOME points it into the sandbox. */
+export function defaultOpenVikingStateDir(env: NodeJS.ProcessEnv = process.env): string {
+	return join(env.HOME || homedir(), ".pi", "openviking");
+}
+
+export function resolveOpenVikingStatePaths(stateDir = defaultOpenVikingStateDir()): OpenVikingStatePaths {
 	return {
 		stateDir,
 		metricsJsonlPath: join(stateDir, "metrics.jsonl"),
