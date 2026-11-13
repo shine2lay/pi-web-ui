@@ -8687,3 +8687,41 @@ on, backtest, cost and result: `docs/stall-watch.md`.
 - Sync cost: none in practice — both files are this fork's own (`plugin-sdk/`, `plugins/legado-web/`), so upstream never touches them. Checks: `doc-check`'s marker suite in `agent-tools` plus the repo-wide measurement, which drops these 5 findings and adds none.
 - Undo: revert this commit (docs only; no deploy needed).
 
+## stuck-runtime
+
+**Status**: `local`
+**Baseline**: v0.96.1 (`mine` at 4e65b96f; on top of `force-reset-rebind`), pi 1.5.2
+
+**Why** (ops #861, 2026-11-12, right after the pi 1.5.2 upgrade): five lead chats hung in a tool
+call that never returned (queue_reply, google_search) for 21 min to 2h17m. Stop did nothing and the
+20-minute hang guard never freed them; only a restart did. Both end in `forceResetConversation`,
+which disposes the stuck runtime. In pi 1.5.2 `AgentSessionRuntime.dispose()` first awaits
+`session.abort()`, and that waits for the run to go idle. A run stuck in a tool that ignores the
+abort never goes idle (pi-agent-core awaits `tool.execute` with no race against the abort), so the
+force-reset hung at its first step: the chat stayed busy, and `interruptRun` (Stop) never returned.
+
+### Changes
+
+1. `server/stuck-runtime.ts` `disposeStuckRuntime(runtime)`: signals the abort (the tool's signal
+   fires, bash process trees die) without waiting for idle, then runs the SDK's own `dispose()`
+   (session_shutdown to add-ons, session invalidated). The force-reset uses it.
+2. `interruptRun` waits for `session.abort()` or the end of the force-reset, whichever comes first.
+
+No new timeouts: Stop's existing 15 s abort window and the existing hang guard decide when to reset.
+
+### How it was checked
+
+- `tests/stop-hung-tool-test.mjs` (sealed, scripted model, a test tool that never ends and ignores
+  the abort): Stop frees the chat (15.0 s) and the hang guard with a 4 s deadline frees it (18.1 s);
+  each time the chat then takes the next message and answers it. Without the fix all four "free" and
+  "next message" checks fail (still working after 25 s / 29 s).
+- `tests/force-reset-rebind-test.mjs` failed 6 of 14 on pi 1.5.2 without the fix; passes with it.
+- check.sh and the sealed E2E suite.
+
+### When syncing
+
+- If pi's `AgentSessionRuntime.dispose()` stops awaiting an idle run (or `session.abort()` stops
+  waiting for idle), `disposeStuckRuntime` can go back to plain `dispose()`: rerun both tests on
+  plain `dispose()` first.
+- Undo: revert this commit, then `pi-web-deploy`.
+

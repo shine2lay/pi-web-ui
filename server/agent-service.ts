@@ -215,6 +215,7 @@ import {
 	findTailDanglingToolCalls,
 	healDanglingToolCallFile,
 } from "./dangling-tools.js";
+import { disposeStuckRuntime } from "./stuck-runtime.js";
 import { contextMessagesOf, openScannedSession, scanTranscriptFile, type TranscriptScan } from "./transcript-scan.js";
 import { removeQueuedByIndexOrText } from "./queue-utils.js";
 import type {
@@ -13714,13 +13715,19 @@ export class ClientSession {
 				ended = true;
 			}
 		});
+		// stuck-runtime: the old session's abort() waits for a stuck run that never goes idle, so the
+		// wait below also ends once the force-reset is over (else Stop never returns).
+		let forcedOver: () => void = () => {};
+		const forceDone = new Promise<void>((r) => {
+			forcedOver = r;
+		});
 		const force = () => {
 			if (forced) return;
 			forced = true;
 			void this.forceResetConversation(
 				conv,
 				`${reason}: the run did not stop, so the current conversation was force-reset`,
-			);
+			).finally(forcedOver);
 		};
 		// 1) abort itself hangs (model stream ignores the signal) → hard kill.
 		const abortTimer = setTimeout(() => {
@@ -13730,7 +13737,7 @@ export class ClientSession {
 		// 2) abort itself (Stop semantics: kills the process tree, emits
 		//    agent_end with stopReason "aborted" on the normal path).
 		try {
-			await conv.runtime.session.abort();
+			await Promise.race([conv.runtime.session.abort(), forceDone]);
 		} catch (err) {
 			this.emit({
 				type: "notice",
@@ -13773,7 +13780,8 @@ export class ClientSession {
 			this.clearAllToolWatchdogs(conv);
 			conv.toolStartTimes.clear();
 			disposeEvalSession(conv.id);
-			await conv.runtime.dispose();
+			// stuck-runtime: plain dispose() waits for the stuck run to go idle, which it never does.
+			await disposeStuckRuntime(conv.runtime);
 			// force-reset-rebind: the stuck run is over, and its agent_end never comes (unsubscribed above),
 			// so the chat leaves the working list here; otherwise it would look busy until a restart, and
 			// role messages and the queue would wait on it for good.
