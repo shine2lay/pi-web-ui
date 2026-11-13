@@ -17,6 +17,8 @@
  *  4. "Back to department default" restores Extra high and its model;
  *  5. the task chat shows the button with its task's tier as default; the plain chat shows no button;
  *  6. 320px: the button and its menu fit (no overflow, no overlap with the model and Effort chips).
+ *  7. axe finds nothing serious or critical in the open menu, in dark and in White (ops #878's live look: White's
+ *     faint "(default)" on the checked row was 4.24:1).
  *
  * Until ops task 2b builds it every step fails with "effort levels: not built (ops task 2b)". Task 2b may extend
  * the fixture setup but never weakens or deletes a check.
@@ -246,9 +248,12 @@ async function until(fn, timeout = 8000) {
 	}
 	return false;
 }
-async function openPage(width = 1440) {
+async function openPage(width = 1440, theme = null) {
 	const ctx = await browser.newContext({ viewport: { width, height: 900 }, deviceScaleFactor: 1 });
-	await ctx.addInitScript(() => localStorage.setItem("pi-web-ui:lang", "en"));
+	await ctx.addInitScript((t) => {
+		localStorage.setItem("pi-web-ui:lang", "en");
+		if (t) localStorage.setItem("pi-web-ui:theme", t);
+	}, theme);
 	const page = await ctx.newPage();
 	page.on("pageerror", (e) => pageErrors.push(String(e)));
 	await page.goto(srv.http);
@@ -293,6 +298,22 @@ async function backToDefault(page) {
 		.click();
 }
 const shot = async (page, name) => SHOT && (await page.screenshot({ path: `${SHOT}-${name}@2x.png`, scale: "device" }));
+const AXE = process.env.PI_AXE_JS ?? join(userInfo().homedir, "temper-ai/configs/design/bin/vendor/axe-4.13.0.min.js");
+async function menuAxe(page) {
+	if (!existsSync(AXE)) return { error: `axe-core not found at ${AXE} (set PI_AXE_JS)` };
+	await page.addScriptTag({ path: AXE });
+	return page.evaluate(async () => {
+		const menu = document.querySelector('[role="menu"][aria-label="Department effort level"]');
+		const r = await window.axe.run(menu, { resultTypes: ["violations"] });
+		const at = (n) =>
+			`${n.target.join(" ")}${n.any?.[0]?.data?.contrastRatio ? ` ${n.any[0].data.contrastRatio}:1` : ""}`;
+		return {
+			bad: r.violations
+				.filter((v) => v.impact === "serious" || v.impact === "critical")
+				.map((v) => `${v.id}: ${v.nodes.slice(0, 3).map(at).join(", ")}`),
+		};
+	});
+}
 const notBuilt = (detail) => `${NOT_BUILT}${detail ? `; ${detail}` : ""}`;
 
 async function holdForLooks() {
@@ -435,6 +456,25 @@ try {
 			describeOverflow(over, { fixed: true }),
 		);
 		await shot(narrow, "320-menu");
+	}
+
+	// ---- 7. the open menu is readable (axe, dark and White) ------------------------------------------------------
+	for (const theme of [null, "white"]) {
+		const tag = theme ?? "dark";
+		const p = await openPage(1440, theme);
+		await openChat(p, T.ops, "EFFORT-OPS");
+		if (!(await until(async () => (await buttonText(p)) !== null))) {
+			check(`${tag}: axe finds nothing serious or critical in the open menu`, false, notBuilt());
+			continue;
+		}
+		await openMenu(p);
+		const axe = await menuAxe(p);
+		check(
+			`${tag}: axe finds nothing serious or critical in the open menu`,
+			!axe.error && axe.bad.length === 0,
+			axe.error ?? axe.bad.join("; "),
+		);
+		await shot(p, `menu-${tag}`);
 	}
 	check("no page errors", pageErrors.length === 0, pageErrors.join(" | ").slice(0, 300));
 } catch (e) {

@@ -8857,7 +8857,8 @@ selector"; then "A new button beside it", "Lead and task chats", "Until you chan
 
 - `tests/unit/effort-level.test.ts`: 11 cases; #876's `notBuilt` cases turned into `it`, no assertion changed.
 - `tests/effort-level-test.mjs` (sealed: own server, temp HOME, pi-queue from its checkout, a fixture
-  Ops table, models that can't be reached, no model call): 17 checks pass. #878 completed the fixture table
+  Ops table, models that can't be reached, no model call): 19 checks pass (axe on the open menu in dark and White added after the live look: White's
+  faint "(default)" on the checked row was 4.24:1, now `--text-dim`). #878 completed the fixture table
   (every column has a cell, every row order lists each column, as pi-queue's table check requires) and made
   `pick` match the row by its level ("High" had matched "Max … @ xhigh"). `EFFORT_HOLD=<file>` keeps the
   seeded server up for ui-check (`?chat=` addresses in that file).

@@ -50,8 +50,9 @@
 	font-weight: 600;
 	color: var(--text);
 }
+/* --text-dim, not --text-faint: on the checked row's tint White's faint was 4.24:1 (ops #878 live look). */
 .effort-row-default {
-	color: var(--text-faint);
+	color: var(--text-dim);
 }
 .effort-row-check {
 	color: var(--accent-text);
@@ -62,7 +63,7 @@
 .effort-row-note {
 	grid-column: 1 / -1;
 	font-size: 12px;
-	color: var(--text-faint);
+	color: var(--text-dim);
 	overflow-wrap: anywhere;
 }
 
