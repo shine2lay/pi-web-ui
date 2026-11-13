@@ -6,8 +6,10 @@
  */
 export const effortLevelEn = {
 	effortLevelName: "Department effort level",
-	effortLevelTip: "Department effort level: {level} ({table})",
-	effortLevelTable: "{department} table",
+	// The chip's aria-label and tip: reads apart from the Thinking chip (ops #879, Design rm-866a7f1a).
+	effortLevelTip: "Department effort level: {level}",
+	// The menu's header, "Effort level · <Department>" (ops #879, Design rm-866a7f1a; was "<Department> table").
+	effortLevelTable: "Effort level · {department}",
 	effortLevelDefault: "(default)",
 	effortLevelRaisedTask: "raised to {level} for this task",
 	effortLevelRaisedLead: "raised to {level} for a lead chat",

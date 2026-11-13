@@ -95,8 +95,8 @@ export const EffortLevelButton = memo(function EffortLevelButton({
 				</>
 			}
 			triggerClassName={`chip effort-level-chip${levels.pickedTier ? " picked" : ""}`}
-			ariaLabel={t("effortLevelName")}
-			tip={t("effortLevelTip", { level: currentLabel, table })}
+			ariaLabel={t("effortLevelTip", { level: currentLabel })}
+			tip={t("effortLevelTip", { level: currentLabel })}
 			open={open}
 			onOpenChange={setOpen}
 			align="left"

@@ -9,14 +9,17 @@
  * agent folder, and models that can't be reached (no model is ever called: nothing here sends a prompt). Roles:
  * ops (a home chat and one task chat its queue started) and a plain chat of no role.
  *
- *  1. ops's home chat: the button shows "Extra high" (the table's lead tier), aria-label "Department effort level";
- *     its menu: header "Ops table", five rows "Max · …" to "Low · …", ✓ and "(default)" on Extra high, last
+ *  1. ops's home chat: the button shows "Extra high" (the table's lead tier), aria-label and tip "Department effort
+ *     level: Extra high" (ops #879, Design rm-866a7f1a: reads apart from the Thinking chip); its menu: header
+ *     "Effort level · Ops" (ops #879: was "Ops table"), five rows "Max · …" to "Low · …", ✓ and "(default)" on Extra high, last
  *     item "Back to department default";
  *  2. picking High switches the model menu's shown model to the High row's model; the button shows "High";
  *  3. after a reload the chat is still on High (the pick is kept until changed);
  *  4. "Back to department default" restores Extra high and its model;
  *  5. the task chat shows the button with its task's tier as default; the plain chat shows no button;
- *  6. 320px: the button and its menu fit (no overflow, no overlap with the model and Effort chips).
+ *  6. 320px: the button and its menu fit (no overflow, no overlap with the model and Effort chips); at 320 and 390
+ *     (ops #879, Design rm-866a7f1a) the send button covers no menu row, and a row with no note hugs its text
+ *     (under 60px, text centred).
  *  7. axe finds nothing serious or critical in the open menu, in dark and in White (ops #878's live look: White's
  *     faint "(default)" on the checked row was 4.24:1).
  *
@@ -39,7 +42,8 @@ import { ownServer } from "./lib/own-server.mjs";
 const NOT_BUILT = "effort levels: not built (ops task 2b)";
 const PKG = process.env.PI_QUEUE_PKG || join(userInfo().homedir, "projects/pi-queue");
 const SHOT = process.env.EFFORT_SHOT ?? "";
-const BUTTON = '[aria-label="Department effort level"]';
+// ops #879: the chip's aria-label is now "Department effort level: <level>"; the old name is its prefix.
+const BUTTON = '[aria-label^="Department effort level: "]';
 const MODEL_CHIP = ".composer-tools .chip-model";
 let failures = 0;
 function check(name, ok, detail = "") {
@@ -315,6 +319,48 @@ async function menuAxe(page) {
 	});
 }
 const notBuilt = (detail) => `${NOT_BUILT}${detail ? `; ${detail}` : ""}`;
+/** The open menu on a phone (ops #879, Design rm-866a7f1a): what sits at each row's right end, and how each row
+ * without a note holds its text. */
+const phoneMenuLayout = (page) =>
+	page.evaluate(() => {
+		const rows = [
+			...document.querySelectorAll('[role="menu"][aria-label="Department effort level"] [role="menuitemradio"]'),
+		];
+		return rows.map((row) => {
+			const r = row.getBoundingClientRect();
+			// The row's right half, every 8px (the round send button sits 20-60px in from the edge at 320).
+			let at = null;
+			for (let x = r.right - 4; x > r.left + r.width / 2; x -= 8) {
+				at = document.elementFromPoint(x, r.top + r.height / 2);
+				if (!row.contains(at)) break;
+			}
+			const main = row.querySelector(".effort-row-main")?.getBoundingClientRect();
+			return {
+				level: row.querySelector(".effort-row-level")?.textContent ?? "?",
+				covered: !row.contains(at),
+				by: at ? `${at.tagName.toLowerCase()}.${[...at.classList].join(".")}` : "nothing",
+				note: Boolean(row.querySelector(".effort-row-note")),
+				height: Math.round(r.height),
+				offCentre: main ? Math.abs(main.top + main.height / 2 - (r.top + r.height / 2)) : 99,
+			};
+		});
+	});
+async function phoneMenuChecks(page, width) {
+	const rows = await phoneMenuLayout(page);
+	const covered = rows.filter((r) => r.covered);
+	check(
+		`at ${width}px no menu row is covered (the send button stays under the menu)`,
+		rows.length === 5 && covered.length === 0,
+		covered.map((r) => `${r.level} under ${r.by}`).join("; ") || `${rows.length} rows`,
+	);
+	const plain = rows.filter((r) => !r.note);
+	const tall = plain.filter((r) => r.height >= 60 || r.offCentre > 2);
+	check(
+		`at ${width}px a row with no note hugs its text (under 60px, text centred)`,
+		plain.length > 0 && tall.length === 0,
+		tall.map((r) => `${r.level}: ${r.height}px, ${r.offCentre.toFixed(1)}px off centre`).join("; "),
+	);
+}
 
 async function holdForLooks() {
 	const hold = process.env.EFFORT_HOLD;
@@ -343,7 +389,28 @@ try {
 			.locator('[role="menu"][aria-label="Department effort level"] .effort-menu-head')
 			.textContent()
 			.catch(() => "");
-		check("the menu's header names the department's table", head?.trim() === "Ops table", String(head));
+		check(
+			"the menu's header names the department's table, \"Effort level · Ops\"",
+			head?.trim() === "Effort level · Ops",
+			String(head),
+		);
+		const names = await page.evaluate((sel) => {
+			const b = document.querySelector(sel);
+			const thinking = document.querySelector('.composer-tools [aria-label^="Thinking: "]');
+			return {
+				label: b?.getAttribute("aria-label"),
+				tip: b?.getAttribute("data-tip"),
+				thinking: thinking?.getAttribute("aria-label") ?? null,
+			};
+		}, BUTTON);
+		check(
+			"the chip's aria-label and tip are \"Department effort level: Extra high\", apart from the Thinking chip's",
+			names.label === "Department effort level: Extra high" &&
+				names.tip === names.label &&
+				names.thinking !== null &&
+				names.thinking !== names.label,
+			JSON.stringify(names),
+		);
 		const rows = await menuRows(page);
 		check(
 			'five rows, Max to Low, each "<level> · <model> @ <thinking>"',
@@ -455,8 +522,16 @@ try {
 			over.ok && over.fixed.length === 0,
 			describeOverflow(over, { fixed: true }),
 		);
+		await phoneMenuChecks(narrow, 320);
 		await shot(narrow, "320-menu");
 	}
+	const phone = await openPage(390);
+	await openChat(phone, T.ops, "EFFORT-OPS");
+	if (await until(async () => (await buttonText(phone)) !== null)) {
+		await openMenu(phone);
+		await phoneMenuChecks(phone, 390);
+		await shot(phone, "390-menu");
+	} else check("at 390px the button is shown", false, notBuilt());
 
 	// ---- 7. the open menu is readable (axe, dark and White) ------------------------------------------------------
 	for (const theme of [null, "white"]) {

@@ -8848,12 +8848,15 @@ selector"; then "A new button beside it", "Lead and task chats", "Until you chan
    showed; test `tests/unit/effort-level-state.test.ts`; takes answers and pushes from `use-chat.ts`), `web/src/components/EffortLevelButton.tsx` + `web/src/effort-level.css`,
    strings in `web/src/i18n-effort-level.ts`. The button sits after the Effort menu (both composer layouts,
    not DSH), only when the chat has a department table; it shows the level's name ("Extra high") at every
-   width, aria-label "Department effort level". Its menu (`role="menu"`, arrow keys): header "<Department>
-   table", five rows "<level> · <model> @ <thinking>", ✓ on the current row, "(default)" on the department
+   width, aria-label and tip "Department effort level: <level>" (ops #879, Design rm-866a7f1a: reads apart from
+   the Thinking chip). Its menu (`role="menu"`, "Department effort level", arrow keys): header "Effort level ·
+   <Department>" (ops #879; was "<Department> table"), five rows "<level> · <model> @ <thinking>", ✓ on the current row, "(default)" on the department
    default, notes ("raised to Medium for a lead chat", "uses spare ChatGPT allowance", a row's problem), a
    table problem as a warning, the busy/failed status, last item "Back to department default".
    `Dropdown` gained optional `menuRole` / `menuLabel`. Today's model and Effort menus are unchanged.
-   On a phone the menu is the usual bottom sheet; Send/Stop stay above it, as with the other composer menus.
+   On a phone the menu is the usual bottom sheet, but stacked above Send/Stop (z-index 110 over the right
+   group's 100; ops #879, Design rm-866a7f1a: the send button covered the Low row), and a row with no note
+   keeps its text centred in the 44px touch height (`align-content: center`).
 
 ### How it was checked
 
@@ -8862,7 +8865,9 @@ selector"; then "A new button beside it", "Lead and task chats", "Until you chan
   Ops table, models that can't be reached, no model call): 19 checks pass (axe on the open menu in dark and White added after the live look: White's
   faint "(default)" on the checked row was 4.24:1, now `--text-dim`). #878 completed the fixture table
   (every column has a cell, every row order lists each column, as pi-queue's table check requires) and made
-  `pick` match the row by its level ("High" had matched "Max … @ xhigh"). `EFFORT_HOLD=<file>` keeps the
+  `pick` match the row by its level ("High" had matched "Max … @ xhigh"). #879 added, failing first: the header
+  text and the chip's aria-label/tip, and at 320 and 390 no row covered (elementFromPoint across each row's right
+  half) and a row with no note under 60px with its text centred. `EFFORT_HOLD=<file>` keeps the
   seeded server up for ui-check (`?chat=` addresses in that file).
 - `tests/lib/overflow-finder.mjs`: invisible boxes (a closed drawer, `visibility: hidden`) no longer count
   as cut off.

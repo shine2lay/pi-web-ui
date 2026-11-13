@@ -31,11 +31,23 @@
 	font-size: 12px;
 }
 
-/* One level: "<level> · <model> @ <thinking> (default)" with ✓ on the right, its notes on a second line. */
+/* On a phone the menu is a bottom sheet over the message box; the send / stop group sits at z-index 100 so the
+   Thinking sheet can't cover it, but this menu's rows run under it, so here the menu stacks above it (ops #879,
+   Design rm-866a7f1a: the send button covered the Low row, and Medium at 320px). */
+@media (max-width: 768px) {
+	.dropdown .dd-menu.effort-menu {
+		z-index: 110;
+	}
+}
+
+/* One level: "<level> · <model> @ <thinking> (default)" with ✓ on the right, its notes on a second line. The row
+   hugs its content: on a phone (.dd-item min-height 44px) a row with no note keeps its text centred, not pinned to
+   the top of a 2-line box (ops #879, Design rm-866a7f1a). */
 .dd-item.effort-row {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
 	align-items: start;
+	align-content: center;
 	gap: 2px 10px;
 }
 /* The ✓ is real text (screen readers and copy get it), so the generic active tick is dropped. */
