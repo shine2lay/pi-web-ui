@@ -2,9 +2,10 @@
  * The owner check (OI-1) on a real HTTP server, as server/index.ts mounts it: the JSON parser with the write-body
  * hook, the owner routes, and the explorer routes whose gate is the owner check's. The daemon fake stands in for
  * :1933, `FakePasskey` for the owner's authenticator, `fakeTelegram` for his Telegram, the daemon's manual clock for
- * time. `restart()` builds a new server process on the same data folder (memory gone, passkey file kept).
+ * time. `restart()` stops the server as server/index.ts does (shutdown hooks first) and builds a new server process
+ * on the same data folder (memory gone, passkey file kept).
  */
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -66,12 +67,22 @@ export async function ownerHarness(
 	const app = express();
 	app.use(express.json({ limit: "10mb", verify: keepOwnerWriteBody }));
 	owner.register(app);
+	const stateDir = mkdtempSync(join(tmpdir(), "ov-owner-state-"));
+	const changelogPath = join(stateDir, "memory-changelog.jsonl");
+	// As route-modules.ts wires it: server stop runs the explorer's shutdown hooks.
+	const shutdownHooks: Array<() => Promise<void>> = [];
 	registerOpenVikingRoutes(app, {
-		stateDir: mkdtempSync(join(tmpdir(), "ov-owner-state-")),
+		stateDir,
 		fetchImpl: fake.fetchImpl,
 		now: clock.now,
-		explorer: { ownerGate: owner.gate, clock, onShutdown: () => {}, onUndoAsk: (ask) => void (askUndo = ask) },
+		explorer: {
+			ownerGate: owner.gate,
+			clock,
+			onShutdown: (hook) => void shutdownHooks.push(hook),
+			onUndoAsk: (ask) => void (askUndo = ask),
+		},
 	});
+	const stop = () => Promise.all(shutdownHooks.map((hook) => hook())).then(() => undefined);
 	const server: Server = createServer(app);
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -176,9 +187,18 @@ export async function ownerHarness(
 		owned,
 		assertion,
 		write,
+		/** The owner's change-record lines (`memory-changelog.jsonl`), oldest first. */
+		changelog: (): Record<string, unknown>[] =>
+			existsSync(changelogPath)
+				? readFileSync(changelogPath, "utf8")
+						.split("\n")
+						.filter(Boolean)
+						.map((l) => JSON.parse(l) as Record<string, unknown>)
+				: [],
 		close: () => new Promise<void>((resolve) => server.close(() => resolve())),
-		/** A new server process on the same data folder and clock: sessions and challenges are gone. */
+		/** A new server process on the same data folder and clock: the old one's shutdown hooks run first. */
 		restart: async () => {
+			await stop();
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 			return ownerHarness({ dataDir, clock });
 		},
