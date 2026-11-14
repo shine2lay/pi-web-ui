@@ -5,23 +5,23 @@ max_tokens: 2300 # contract outgrew the 2000 default (architecture #521)
 
 Pinned to `.temper/features/openviking-dashboard/design.md` (`design #274`, `28c2c672`), `.temper/features/openviking-dashboard/brief.md` (`product #65`, `a69a2470`), and `/home/shinelay/architecture-dept/conventions/openviking-contract.md`.
 
-Parts (split by architecture #531; text moved byte-identically, section numbers unchanged): [spec-states.md](spec-states.md) holds §4 Operational States; [spec-commits-and-gaps.md](spec-commits-and-gaps.md) holds Session Commits and Contract-vs-Live Gaps for Ops.
+Parts (architecture #531, text moved byte-identically): [spec-states.md](spec-states.md) holds §4 Operational States; [spec-commits-and-gaps.md](spec-commits-and-gaps.md) holds Session Commits and Contract-vs-Live Gaps for Ops. Explorer (#541): [spec-explorer.md](spec-explorer.md) G1-G4, [spec-explorer-writes.md](spec-explorer-writes.md) G5-G7, [spec-explorer-build.md](spec-explorer-build.md) daemon, gaps, deletes, chrome.
 
 ## API and State Contract
 
 ### 1. Read-Only & Sources
-- **Read-Only:** `server/index.ts` exposes only `GET /api/openviking/{overview,entries,audit}` (`2000ms` timeout; non-`GET` -> `405`). No writes to `:1933` or `/home/shinelay/.pi/openviking/`.
+- **Read-Only, Except the Explorer:** `GET /api/openviking/{overview,entries,audit}` (`2000ms` timeout; non-`GET` -> `405`). Writes to `:1933` or `/home/shinelay/.pi/openviking/` exist ONLY on the explorer's owner-initiated edit/delete/undo routes ([spec-explorer-writes.md](spec-explorer-writes.md)).
 - **Sources:** `http://127.0.0.1:1933` (`/health`, `/api/v1/{system/status,observer/system,fs/ls}`, `/api/v1/content/{abstract,overview,read}`) and `/home/shinelay/.pi/openviking/{memory-changelog.jsonl,metrics.jsonl,rollout-state.json,migration-verification.json,seen-role-messages.json}`. Sync state is `rollout-state.json`'s `pending_wt_land_syncs`, written only by `/home/shinelay/projects/agent-tools/lib/wt-openviking-sync.mjs`; no resource-sync state file exists, so none is a source (ops `rm-d62cd5d6`).
 
 ### 2. Cross-Role Isolation (`R-NAMESPACE-1`, `R-ISOLATION-1`)
 - Role memories (`viking://agent/memories/...`) are isolated per role (`X-OpenViking-Agent: <role>`).
 - **Allowed across roles:** Counts, sizes, `modTime`, latencies, sync states (`/api/v1/fs/ls`, `metrics.jsonl`).
-- **Forbidden across roles:** Never expose another role's `viking://agent/memories/...` content. `/api/openviking/entries` reads `/api/v1/content/*` **only** for shared URIs (`viking://resources/...`, `viking://user/default/memories/...`); cross-role `agent` rows set `l0_abstract: "[Isolated per-role memory — metadata only (R-ISOLATION-1)]"` and `l1_overview`/`l2_content: null` (`403`). `/api/openviking/audit` redacts `summary_1line` on `agent` rows.
+- **Forbidden across roles:** Never expose another role's `viking://agent/memories/...` content. `/api/openviking/entries` reads `/api/v1/content/*` **only** for shared URIs (`viking://resources/...`, `viking://user/default/memories/...`); cross-role `agent` rows set `l0_abstract: "[Isolated per-role memory — metadata only (R-ISOLATION-1)]"` and `l1_overview`/`l2_content: null` (`403`). `/api/openviking/audit` redacts `summary_1line` on `agent` rows. The owner-only explorer routes read every root ([spec-explorer.md](spec-explorer.md)); role chats stay isolated.
 
 ### 3. Endpoints
 - **`GET /api/openviking/overview` (`200`):** `{ screen_state: "live"|"stale"|"empty"|"error", observer, metrics, changelog, slots, auxiliary: { rollout, resource_sync, migration, dedup } }`; `observer.stale_badge: "> 30s"|"pending sync"|null` (§4).
 - **`GET /api/openviking/entries?scope=all|resources|user|agent&role=<role>` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|"pending sync"|null, entries_partial, unread_count, entries }` (`updated_at`, `provenance`); §3a; snapshot §4a.
-- **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|"pending sync"|null, events }` (`action`: `"commit"|"role_memory_write"|"promote_shared"|"reject_noise"|"sidecar_timeout"`, `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
+- **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|"pending sync"|null, events }` (`action`: `"commit"|"role_memory_write"|"promote_shared"|"reject_noise"|"sidecar_timeout"|"owner_edit"|"owner_delete"` (G7), `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
 
 ### 3a. Short Listings Are Flagged (`entries_partial`, `unread_count`)
 - **Reachability is `/health` alone (§4):** `health_state: "server-unreachable"` only when this request's `/health` probe fails. A failed `/api/v1/fs/ls` or `/api/v1/content/*` read under an answering `/health` never sets it and never empties `entries` (backend #150: `16`/`88` live loads said `server-unreachable` with `entries: []` while `/health` answered in `1.0–6.3ms`).
@@ -57,7 +57,7 @@ Session Commits and Contract-vs-Live Gaps for Ops: [spec-commits-and-gaps.md](sp
 
 ## Obsolete Code and Tests to Delete
 
-- **Delete:** `parseQueueDepth` + drift test + `/api/v1/observer/queue` fetch (`server/openviking/observer.ts`, G1); folder-count `isDegraded` condition (`server/openviking/overview.ts`); the reader of the file nothing writes, `resourceSyncStateJsonPath` + `readResourceSyncState` (`server/openviking/state-files.ts`) and its fixture (`server/openviking-dashboard.test.ts`). Else greenfield; no shims (Rule 23).
+One list for the feature, in [spec-explorer-build.md](spec-explorer-build.md).
 
 ## Prototype-Only Chrome Excluded from Production
 
