@@ -1,0 +1,1 @@
+{"bug": "dashboard server read the owner's real memory files from a fixed path (QA miss log M4, found by Ops (ops #871), 2026-11-12)", "test": "tests/unit/openviking-state-dir.test.ts"}
