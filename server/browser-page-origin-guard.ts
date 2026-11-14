@@ -54,35 +54,80 @@ const FRAME_SELECTOR = "iframe,frame";
 export const ORIGIN_CHECK_ARG = "originCheck";
 const PROBE_TIMEOUT_MS = 10_000;
 
-/** `scheme://host[:port]` lower-cased with the default port dropped, or null for a string that is not a URL. */
-export function browserOriginOf(url: string): string | null {
+/** The http(s) origin `input` parses to (against `base` when given), one trailing dot of the host dropped, or null. */
+function parsedOrigin(input: string, base?: string): string | null {
 	let parsed: URL;
 	try {
-		parsed = new URL(url.trim());
+		parsed = new URL(input.trim(), base);
 	} catch {
 		return null;
 	}
 	if (!(parsed.protocol in DEFAULT_PORT)) return null;
-	return parsed.origin;
+	const host = parsed.hostname.endsWith(".") ? parsed.hostname.slice(0, -1) : parsed.hostname;
+	return `${parsed.protocol}//${host}${parsed.port ? `:${parsed.port}` : ""}`;
 }
 
-/** The first denied origin named in `text` (a whole URL or its host[:port] inside other text), or null. */
-export function deniedOriginInText(text: string, denied: readonly string[]): string | null {
-	const lower = text.toLowerCase();
+/**
+ * `scheme://host[:port]` lower-cased with the default port and one trailing dot of the host dropped
+ * (`https://pi.wai2shine.com./` is `https://pi.wai2shine.com`, Ops #901 L2), or null for a string that is not a URL.
+ */
+export function browserOriginOf(url: string): string | null {
+	return parsedOrigin(url);
+}
+
+/** A character that continues a host name. */
+const HOST_CHAR = /[a-z0-9.\-_]/;
+
+/** Raw-text scan: a denied host bounded on both sides (one trailing dot allowed), with its port when it has one. */
+function deniedHostInText(lower: string, denied: readonly string[]): string | null {
 	for (const origin of denied) {
 		const u = new URL(origin);
-		const host = u.host;
-		const port = u.port || DEFAULT_PORT[u.protocol];
-		for (let at = lower.indexOf(host); at >= 0; at = lower.indexOf(host, at + 1)) {
-			if (at > 0 && /[a-z0-9.\-_]/.test(lower[at - 1])) continue;
-			const rest = lower.slice(at + host.length);
-			if (/^[a-z0-9.\-_]/.test(rest)) continue;
+		const name = u.hostname;
+		const port = Number(u.port || DEFAULT_PORT[u.protocol]);
+		for (let at = lower.indexOf(name); at >= 0; at = lower.indexOf(name, at + 1)) {
+			if (at > 0 && HOST_CHAR.test(lower[at - 1])) continue;
+			let rest = lower.slice(at + name.length);
+			if (rest[0] === "." && !HOST_CHAR.test(rest[1] ?? "")) rest = rest.slice(1);
+			if (HOST_CHAR.test(rest[0] ?? "")) continue;
 			const named = /^:(\d+)/.exec(rest);
-			if (named && !u.port && named[1] !== port) continue;
+			if (u.port ? !named || Number(named[1]) !== port : named && Number(named[1]) !== port) continue;
 			return origin;
 		}
 	}
 	return null;
+}
+
+/** Where a URL may start inside text: a scheme, or `//` / `\\` (scheme-relative, resolved as https). */
+const URL_START = /https?:|[\\/]{2}/gi;
+/** What ends a URL token inside text: white space, quotes, brackets and separators. */
+const TOKEN_END = /[\s"'`<>()[\]{},;|^]/;
+const SCHEME_RELATIVE_BASE = "https://scheme-relative.invalid/";
+
+/** URL parse: the whole string and each URL-like token, as written and with tabs and newlines removed (as `new URL` does). */
+function deniedUrlInText(text: string, denied: readonly string[]): string | null {
+	const variants = /[\t\n\r]/.test(text) ? [text, text.replace(/[\t\n\r]/g, "")] : [text];
+	for (const variant of variants) {
+		const whole = parsedOrigin(variant);
+		if (whole && denied.includes(whole)) return whole;
+		for (const m of variant.matchAll(URL_START)) {
+			let end = m.index + m[0].length;
+			while (end < variant.length && !TOKEN_END.test(variant[end])) end++;
+			const token = variant.slice(m.index, end);
+			const origin = /^h/i.test(m[0]) ? parsedOrigin(token) : parsedOrigin(token, SCHEME_RELATIVE_BASE);
+			if (origin && denied.includes(origin)) return origin;
+		}
+	}
+	return null;
+}
+
+/**
+ * The first denied origin named in `text`, or null: its host[:port] in the raw text, or any URL in it that
+ * `new URL()` resolves to a denied origin (`https://pi%2Ewai2shine.com/`, a fullwidth dot, a tab in the host;
+ * Ops #901 L1). Same as pi-worktree's deniedOriginIn (parity vectors).
+ */
+export function deniedOriginInText(text: string, denied: readonly string[]): string | null {
+	if (!denied.length) return null;
+	return deniedHostInText(text.toLowerCase(), denied) ?? deniedUrlInText(text, denied);
 }
 
 /** Read the setting: missing, unparsable or wrongly shaped = the built-in origins plus a warning. Never reads the environment. */
