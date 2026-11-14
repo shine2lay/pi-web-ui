@@ -312,8 +312,14 @@ export interface PluginHost {
 	ownerActions?: {
 		watch(
 			watch: {
+				/** Record's ask and answeredIn; validated lowercase letters only, e.g. "showtell". */
 				answeredIn: string;
-				actions: { method: "POST" | "PUT" | "PATCH" | "DELETE"; path: string; body?: Record<string, string>; refField: string }[];
+				actions: {
+					method: "POST" | "PUT" | "PATCH" | "DELETE";
+					path: string;
+					body?: Record<string, string>;
+					refField: string;
+				}[];
 			},
 			handler: (receipt: {
 				id: string;

@@ -283,7 +283,7 @@ export class OwnerFrontDoor {
 			source: SOURCE,
 			from: "owner",
 			how: "live",
-			ask: "showtell",
+			ask: r.answeredIn,
 			answeredIn: r.answeredIn,
 			ref: r.ref,
 			at: r.at,

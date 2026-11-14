@@ -126,6 +126,45 @@ const commentFields = (): OwnerActionRecordFields => ({
 	sharer: { sessionId: SHARER_SESSION, role: "design", chat: "Design #308" },
 });
 
+describe("owner front door (ops #886 regression)", () => {
+	it("a second plugin keeps its declared ask and answeredIn; Show&Tell's complete record stays unchanged", () => {
+		const r = rig();
+		const otherReceipts: OwnerActionReceipt[] = [];
+		r.door.watch("notes", { ...SHOWTELL, answeredIn: "other" }, (receipt) => otherReceipts.push(receipt));
+		r.door.observe(markDone());
+		r.door.observe(markDone({ pluginId: "notes" }));
+		expect(r.door.record(PLUGIN, r.receipts[0]!.id, approvedFields())).toMatchObject({ ok: true, added: true });
+		expect(r.door.record("notes", otherReceipts[0]!.id, approvedFields())).toMatchObject({ ok: true, added: true });
+		// The seam's expected Show&Tell record, with every field (including the append envelope).
+		const showtell = {
+			v: 1,
+			id: idFor("answer", "showtell:b_sgoxttej4o"),
+			source: "answer",
+			from: "owner",
+			how: "live",
+			ask: "showtell",
+			answeredIn: "showtell",
+			ref: "showtell:b_sgoxttej4o",
+			at: T0,
+			seen: T0,
+			to: "design",
+			chat: "Design #315",
+			file: SHARER_FILE,
+			title: "The Memory page, redrawn as a memory explorer: build this?",
+			summary: "Approved",
+			doc: { ...approvedFields().doc, sharerSession: SHARER_SESSION },
+		};
+		expect(r.lines()[0]).toEqual(showtell);
+		expect(r.lines()[1]).toEqual({
+			...showtell,
+			id: idFor("answer", "other:b_sgoxttej4o"),
+			ask: "other",
+			answeredIn: "other",
+			ref: "other:b_sgoxttej4o",
+		});
+	});
+});
+
 describe("owner front door (ops #882 seam)", () => {
 	it("Mark done through the front door: one receipt, then one owner answer record with his word", () => {
 		const r = rig();

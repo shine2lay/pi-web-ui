@@ -132,8 +132,8 @@ export interface DecisionRecord {
 	ownerWords?: string;
 	via?: string;
 
-	// answer
-	ask?: "question" | "dialog" | "stuck" | "showtell";
+	/** Answer kind, or a plugin's validated lowercase answeredIn (e.g. "showtell"). */
+	ask?: string;
 	body?: string;
 	questions?: AnswerQuestion[];
 	/** Where the owner answered: browser, telegram, … */

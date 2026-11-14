@@ -8900,8 +8900,8 @@ no decision record was written for it.
 1. `server/owner-front-door.ts` (seam): a generic plugin-host addition. A plugin declares owner actions on its
    `host.registerProxy` prefix (method, path, body values, the response field naming the action); a matching
    request through the front door (browser `sec-fetch-site: same-origin`, upstream 2xx) gives the plugin a
-   single-use receipt, and only with it pi-web-ui writes one `answer` record (`answeredIn` and `ask` "showtell",
-   ref `showtell:<batch_id>`, his words verbatim in `doc.words`). Agent tools and direct calls to the plugin's
+   single-use receipt, and only with it pi-web-ui writes one `answer` record (`answeredIn` and `ask` from the
+   plugin's validated lowercase `answeredIn`, e.g. "showtell"; ref `<answeredIn>:<batch_id>`, his words verbatim in `doc.words`). Agent tools and direct calls to the plugin's
    server never pass the proxy. Built by ops #883; `sessionFileIn` finds the sharer's chat file by session id.
 2. `server/plugin-proxy.ts` `proxyHttp`: optional observer, told a watched request's status and first 64 KB
    of the answer once it ended (the browser's stream is unchanged). The proxy middleware moved from
@@ -8912,7 +8912,7 @@ no decision record was written for it.
 3. `server/plugins.ts` `PluginHost.ownerActions` (optional, needs "http"; watch undone on unload; Ops108 pin
    re-pinned) and `plugin-sdk/index.d.ts` the same type; `owner-front-door.ts` `ownerFrontDoorFor` builds it on
    `AgentService.decisions` (now readonly public) and `decisionsSessionsRoot` (now exported);
-   `server/decision-records.ts` `ask: "showtell"`, `doc`.
+   `server/decision-records.ts` `ask` string (plugin label, e.g. "showtell"), `doc`.
 
 ### How it was checked
 
@@ -8920,6 +8920,8 @@ no decision record was written for it.
   changed. `tests/unit/owner-front-door-proxy.test.ts`: proxy wiring (body unchanged, one receipt; none without
   the header or straight to the plugin's server; GET never kept; session file lookup).
   Seam: ~/ops-checks/owner-answers-2026-11-13/showtell-seam.md.
+- Ops #886 (after QA #148): `a second plugin keeps its declared ask and answeredIn; Show&Tell's complete record stays unchanged`
+  fails before the fix (`ask` "showtell" instead of "other"); asserts both complete records, nine seam cases unchanged.
 
 ### When syncing
 
