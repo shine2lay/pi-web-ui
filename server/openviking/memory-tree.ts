@@ -4,12 +4,28 @@
  * (R-URI-REWRITE-1). It never calls `/api/v1/content/*`.
  */
 import { mapWithLimit, OpenVikingDaemonRequestError, type OpenVikingDaemonHttp } from "./daemon-http.js";
-import { OpenVikingDashboardError } from "./types.js";
+import type { OpenVikingExplorerRoot } from "./explorer-types.js";
+import { OPENVIKING_ROLES, OpenVikingDashboardError } from "./types.js";
 import { resolveRequestHeaders } from "./uri.js";
 
 export const RESOURCES_ROOT_URI = "viking://resources";
 export const SHARED_MEMORIES_ROOT_URI = "viking://user/default/memories";
 export const roleMemoriesRootUri = (role: string) => `viking://user/${role}/memories`;
+
+/**
+ * R-EXPLORER-ROOTS-1 (spec-explorer.md, addendum A5): the Memory Explorer's 17 roots in their constant order, the
+ * only list of them: the shared resources tree, the shared memories, then every role's memories in
+ * `OPENVIKING_ROLES` order.
+ */
+export const OPENVIKING_EXPLORER_ROOTS: readonly OpenVikingExplorerRoot[] = Object.freeze([
+	{ uri: RESOURCES_ROOT_URI, group: "projects", role: null },
+	{ uri: SHARED_MEMORIES_ROOT_URI, group: "shared", role: null },
+	...OPENVIKING_ROLES.map((role): OpenVikingExplorerRoot => ({
+		uri: roleMemoriesRootUri(role),
+		group: "department",
+		role,
+	})),
+]);
 /** Each role walk is one listing per folder; a few at a time keeps the daemon responsive. */
 const ROLE_WALKS_IN_FLIGHT = 4;
 /** Folder listings in flight within one walk (one tree level at a time). */

@@ -7,6 +7,7 @@
  * - .temper/features/openviking-dashboard/spec.md (Architecture #515)
  * - /home/shinelay/architecture-dept/conventions/openviking-contract.md
  */
+import type { OpenVikingExplorerOptions } from "./explorer-types.js";
 
 export const DEFAULT_OPENVIKING_DAEMON_URL = "http://127.0.0.1:1933";
 export const DEFAULT_OPENVIKING_DAEMON_BIND = "127.0.0.1:1933";
@@ -410,6 +411,8 @@ export interface OpenVikingDashboardOptions {
 	timeoutMs?: number;
 	fetchImpl?: typeof fetch;
 	now?: () => number;
+	/** Memory Explorer routes' dependencies (explorer-types.ts): owner gate, clock, shutdown hook. */
+	explorer?: OpenVikingExplorerOptions;
 }
 
 export interface OpenVikingHttpErrorBody {

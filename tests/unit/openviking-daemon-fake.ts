@@ -4,6 +4,12 @@
  * come and go.
  */
 
+import {
+	OPENVIKING_EXPLORER_ROOTS,
+	OPENVIKING_ROLES,
+	type OpenVikingExplorerClock,
+} from "../../server/openviking/index.js";
+
 export const NOW = Date.parse("2026-11-11T08:30:00.000Z");
 export const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
 const QUEUE = ["| Queue | Pending | In Progress | Processed |", "| TOTAL | 4 | 1 | 99 |"].join("\n");
@@ -12,6 +18,8 @@ export interface DaemonCall {
 	url: URL;
 	method: string;
 	headers: Record<string, string>;
+	/** The parsed JSON body of a POST, else undefined. */
+	body: unknown;
 }
 
 /**
@@ -33,6 +41,13 @@ export interface DaemonCall {
  * that string answers `404 NOT_FOUND`, so a root the daemon says is not there can be told from one it would
  * not read — and `state.extraSharedDirs` / `state.extraRoleDirs`, which widen the shared and role trees so one
  * walk can have more than one sub-listing fail (an all-or-nothing read unit is still one unit).
+ *
+ * Backend #161 (Memory Explorer seam) adds, behind `daemon(mode, { explorer: true })`, the calls of
+ * spec-explorer-build.md's table over an in-memory store (`store`, `explorerStore`): `fs/tree`, `fs/stat`
+ * (whole-second `modTime`, folders `count`), `content/{abstract,overview,read,write}`, `search/{find,grep}`,
+ * `DELETE /api/v1/fs`, in the daemon's envelope `{ status, result, error }`. `state.failures` makes one call
+ * answer an error, `state.findHits` is what `find` knows, and `clock` (a `manualClock`) is the server's clock for
+ * the 10 s window and the store's `modTime`. Every call is recorded with its parsed body.
  */
 export type DaemonMode = "up" | "down" | "hang" | "stall-once" | "unhealthy";
 
@@ -69,8 +84,10 @@ function lsResult(uri: string, extraSharedDirs: string[], extraRoleDirs: string[
 	return [];
 }
 
-export function daemon(initial: DaemonMode = "up") {
+export function daemon(initial: DaemonMode = "up", options: { explorer?: boolean; clock?: ManualClock } = {}) {
+	const clock = options.clock ?? manualClock();
 	const calls: DaemonCall[] = [];
+	const store = explorerStore();
 	const state = {
 		mode: initial,
 		hangLsMatching: null as string | null,
@@ -83,11 +100,17 @@ export function daemon(initial: DaemonMode = "up") {
 		extraSharedDirs: [] as string[],
 		extraRoleDirs: [] as string[],
 		failAllLs: false,
+		/** Explorer calls answering an error (first match wins); see `FakeFailure`. */
+		failures: [] as FakeFailure[],
+		/** `search/find` answers these, filtered to its targets, best score first. */
+		findHits: [] as FakeFindHit[],
 	};
 	const matches = (uri: string, needle: string | null) => needle !== null && uri.includes(needle);
 	const fetchImpl: typeof fetch = async (input, init) => {
 		const url = new URL(String(input));
-		calls.push({ url, method: init?.method ?? "GET", headers: { ...(init?.headers as Record<string, string>) } });
+		const body = typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : undefined;
+		const method = init?.method ?? "GET";
+		calls.push({ url, method, headers: { ...(init?.headers as Record<string, string>) }, body });
 		const { mode } = state;
 		if (mode === "down") throw new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:1933");
 		const firstHealth = url.pathname === "/health" && calls.filter((c) => c.url.pathname === "/health").length === 1;
@@ -121,6 +144,9 @@ export function daemon(initial: DaemonMode = "up") {
 			}
 			return ok(lsResult(uri, state.extraSharedDirs, state.extraRoleDirs));
 		}
+		if (options.explorer && EXPLORER_PATHS.has(url.pathname)) {
+			return explorerAnswer({ url, method, body, store, clock, failures: state.failures, findHits: state.findHits });
+		}
 		if (url.pathname.startsWith("/api/v1/content/")) {
 			if (matches(askedUri, state.errorContentMatching)) {
 				return daemonError(503, "UNAVAILABLE", `daemon busy: ${askedUri}`);
@@ -129,5 +155,256 @@ export function daemon(initial: DaemonMode = "up") {
 		}
 		return new Response(JSON.stringify({ status: "error", error: { code: "NOT_FOUND" } }), { status: 404 });
 	};
-	return { fetchImpl, calls, state };
+	return { fetchImpl, calls, state, store, clock };
+}
+
+// ---- Memory Explorer (backend #161): the daemon calls of spec-explorer-build.md's table, over an in-memory store ----
+
+/** The server's clock in a test: `advance` moves it and fires every timer that came due, in order. */
+export interface ManualClock extends OpenVikingExplorerClock {
+	advance(ms: number): void;
+	/** Timers set and not yet fired or cleared. */
+	pendingTimers(): number;
+}
+
+export function manualClock(start = NOW): ManualClock {
+	let now = start;
+	let nextId = 0;
+	const timers: { id: number; at: number; fn: () => void }[] = [];
+	return {
+		now: () => now,
+		setTimer: (ms, fn) => {
+			timers.push({ id: ++nextId, at: now + ms, fn });
+			return nextId;
+		},
+		clearTimer: (handle) => {
+			const i = timers.findIndex((t) => t.id === handle);
+			if (i >= 0) timers.splice(i, 1);
+		},
+		advance: (ms) => {
+			const until = now + ms;
+			for (;;) {
+				const due = timers.filter((t) => t.at <= until).sort((a, b) => a.at - b.at || a.id - b.id)[0];
+				if (!due) break;
+				timers.splice(timers.indexOf(due), 1);
+				now = due.at;
+				due.fn();
+			}
+			now = until;
+		},
+		pendingTimers: () => timers.length,
+	};
+}
+
+export interface FakeNode {
+	isDir: boolean;
+	/** File text; "" for a folder. */
+	content: string;
+	modTimeMs: number;
+	/** Folder abstract; null = not ready (`# <uri> [Directory abstract is not ready]`). */
+	abstract: string | null;
+	/** Folder overview; null = "". */
+	overview: string | null;
+}
+
+/** An explorer call that answers an error: `path` exact, `method` and `uri` (query or body `uri`) when given. */
+export interface FakeFailure {
+	path: string;
+	method?: string;
+	uri?: string;
+	status: number;
+	code: string;
+	message?: string;
+}
+
+export interface FakeFindHit {
+	uri: string;
+	score: number;
+	abstract: string;
+}
+
+const EXPLORER_PATHS = new Set([
+	"/api/v1/fs/tree",
+	"/api/v1/fs/stat",
+	"/api/v1/fs",
+	"/api/v1/content/abstract",
+	"/api/v1/content/overview",
+	"/api/v1/content/read",
+	"/api/v1/content/write",
+	"/api/v1/search/find",
+	"/api/v1/search/grep",
+]);
+const WRITE_FIELDS = new Set(["uri", "content", "mode", "wait", "edit_source"]);
+const notReady = (uri: string) => `# ${uri} [Directory abstract is not ready]`;
+/** `fs/tree` writes `…:57.000Z`, `fs/stat` `…:57Z`: whole seconds either way (gap D2). */
+const wholeSeconds = (ms: number) => new Date(Math.floor(ms / 1000) * 1000).toISOString();
+const statTime = (ms: number) => wholeSeconds(ms).replace(".000Z", "Z");
+const parentOf = (uri: string) => uri.slice(0, uri.lastIndexOf("/"));
+const bytes = (text: string) => Buffer.byteLength(text, "utf8");
+
+/**
+ * The store behind the explorer calls: every root of the 17 is a folder; `put` adds a file (and its folders),
+ * `folder` sets a folder's abstract/overview. Default seed: one note per root, a not-ready shared folder, and
+ * backend's two setup files.
+ */
+export function explorerStore() {
+	const nodes = new Map<string, FakeNode>();
+	const folder = (
+		uri: string,
+		abstract: string | null = null,
+		overview: string | null = null,
+		modTimeMs = NOW - 600_000,
+	) => {
+		nodes.set(uri, { isDir: true, content: "", modTimeMs, abstract, overview });
+	};
+	const put = (uri: string, content: string, modTimeMs = NOW - 300_000) => {
+		for (let p = parentOf(uri); p.length > "viking://".length && !nodes.has(p); p = parentOf(p)) folder(p);
+		nodes.set(uri, { isDir: false, content, modTimeMs, abstract: null, overview: null });
+	};
+	const under = (uri: string) => [...nodes.keys()].filter((k) => k.startsWith(`${uri}/`)).sort();
+	for (const root of OPENVIKING_EXPLORER_ROOTS) folder(root.uri, `${root.uri} abstract`, `${root.uri} overview`);
+	folder("viking://resources/pi-web-ui", "pi-web-ui L0 abstract", "pi-web-ui L1 overview");
+	put("viking://resources/pi-web-ui/README.md", "# pi-web-ui\nA fork of the pi web UI.\n");
+	folder("viking://user/default/memories/preferences");
+	put("viking://user/default/memories/preferences/backend_code.md", "Money in integer minor units.\n");
+	put("viking://user/default/memories/entities/pi-web-ui.md", "pi-web-ui is the owner's chat app.\n");
+	for (const role of OPENVIKING_ROLES) put(`viking://user/${role}/memories/cases/c1.md`, `${role} case one\n`);
+	put("viking://user/backend/memories/identity.md", "backend identity\n");
+	put("viking://user/backend/memories/Soul.MD", "backend soul\n");
+	return { nodes, folder, put, under, remove: (uri: string) => nodes.delete(uri) };
+}
+
+export type ExplorerStore = ReturnType<typeof explorerStore>;
+
+interface ExplorerCall {
+	url: URL;
+	method: string;
+	body: unknown;
+	store: ExplorerStore;
+	clock: ManualClock;
+	failures: FakeFailure[];
+	findHits: FakeFindHit[];
+}
+
+function explorerAnswer({ url, method, body, store, clock, failures, findHits }: ExplorerCall): Response {
+	const b = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
+	const uri = url.searchParams.get("uri") ?? (typeof b.uri === "string" ? b.uri : "");
+	const failure = failures.find(
+		(f) => f.path === url.pathname && (f.method ?? method) === method && (f.uri === undefined || f.uri === uri),
+	);
+	if (failure) return daemonError(failure.status, failure.code, failure.message ?? `fake failure: ${uri}`);
+	const node = store.nodes.get(uri);
+	const q = (k: string) => url.searchParams.get(k);
+	switch (`${method} ${url.pathname}`) {
+		case "GET /api/v1/fs/tree": {
+			if (!node) return daemonError(404, "NOT_FOUND", `File not found: ${uri}`);
+			const levels = Number(q("level_limit") ?? 3);
+			const cap = Number(q("node_limit") ?? 1000);
+			const withAbstract = q("include_abstract") === "true";
+			const rows = store.under(uri).filter((k) => k.slice(uri.length + 1).split("/").length <= levels);
+			return ok(
+				rows.slice(0, cap).map((k) => {
+					const n = store.nodes.get(k) as FakeNode;
+					const abstract = n.isDir && withAbstract ? (n.abstract ?? notReady(k)) : "";
+					const size = bytes(n.content);
+					return {
+						uri: k,
+						size,
+						isDir: n.isDir,
+						modTime: wholeSeconds(n.modTimeMs),
+						rel_path: k.slice(uri.length + 1),
+						abstract,
+					};
+				}),
+			);
+		}
+		case "GET /api/v1/fs/stat": {
+			if (!node) return daemonError(404, "NOT_FOUND", `File not found: ${uri}`);
+			const stat = {
+				name: uri.slice(uri.lastIndexOf("/") + 1),
+				size: bytes(node.content),
+				mode: node.isDir ? 493 : 420,
+				modTime: statTime(node.modTimeMs),
+				isDir: node.isDir,
+				uri,
+				isLocked: false,
+				id: uri,
+			};
+			return ok(
+				node.isDir
+					? { ...stat, count: store.under(uri).filter((k) => !k.slice(uri.length + 1).includes("/")).length }
+					: stat,
+			);
+		}
+		case "GET /api/v1/content/abstract":
+		case "GET /api/v1/content/overview": {
+			if (!node) return daemonError(404, "NOT_FOUND", "Resource not found");
+			// Gap D1: a file answers its folder's text.
+			const ofUri = node.isDir ? uri : parentOf(uri);
+			const of = store.nodes.get(ofUri) as FakeNode;
+			return url.pathname.endsWith("/abstract") ? ok(of.abstract ?? notReady(ofUri)) : ok(of.overview ?? "");
+		}
+		case "GET /api/v1/content/read":
+			if (!node) return daemonError(404, "NOT_FOUND", "Resource not found");
+			if (node.isDir) return daemonError(400, "INVALID_ARGUMENT", "Directory URI is not readable as a file");
+			return ok(node.content);
+		case "POST /api/v1/content/write": {
+			const extra = Object.keys(b).filter((k) => !WRITE_FIELDS.has(k));
+			if (extra.length > 0 || typeof b.content !== "string") {
+				return daemonError(400, "INVALID_ARGUMENT", `bad write body: ${extra.join(",") || "content"}`);
+			}
+			if (!node) return daemonError(404, "NOT_FOUND", `File not found: ${uri}`);
+			if (node.isDir) return daemonError(400, "INVALID_ARGUMENT", "Directory URI is not writable");
+			store.nodes.set(uri, { ...node, content: b.content, modTimeMs: clock.now() });
+			return ok({ uri, written_bytes: bytes(b.content) });
+		}
+		case "DELETE /api/v1/fs":
+			if (!node) return daemonError(404, "NOT_FOUND", `File not found: ${uri}`);
+			if (node.isDir && q("recursive") !== "true" && store.under(uri).length > 0) {
+				return daemonError(400, "INVALID_ARGUMENT", "Directory not empty");
+			}
+			store.remove(uri);
+			return ok({ uri, estimated_deleted_count: 1 });
+		case "POST /api/v1/search/find": {
+			const targets = ([] as unknown[]).concat(b.target_uri).filter((t): t is string => typeof t === "string");
+			const hits = findHits
+				.filter((h) => targets.some((t) => h.uri === t || h.uri.startsWith(`${t}/`)))
+				.sort((x, y) => y.score - x.score)
+				.slice(0, typeof b.limit === "number" ? b.limit : 10);
+			const row = (h: FakeFindHit, context_type: string) => ({
+				context_type,
+				uri: h.uri,
+				level: 2,
+				score: h.score,
+				abstract: h.abstract,
+				tags: [],
+			});
+			const isResource = (h: FakeFindHit) => h.uri.startsWith("viking://resources/");
+			return ok({
+				memories: hits.filter((h) => !isResource(h)).map((h) => row(h, "memory")),
+				resources: hits.filter(isResource).map((h) => row(h, "resource")),
+				skills: [],
+				total: hits.length,
+			});
+		}
+		case "POST /api/v1/search/grep": {
+			if (!node) return daemonError(404, "NOT_FOUND", `File not found: ${uri}`);
+			let re: RegExp;
+			try {
+				re = new RegExp(String(b.pattern), b.case_insensitive === true ? "i" : "");
+			} catch {
+				return daemonError(400, "INVALID_ARGUMENT", "Invalid regex pattern");
+			}
+			const files = store.under(uri).filter((k) => !store.nodes.get(k)?.isDir);
+			const matches = files.flatMap((k) =>
+				(store.nodes.get(k) as FakeNode).content
+					.split("\n")
+					.flatMap((content, i) => (re.test(content) ? [{ line: i + 1, uri: k, content }] : [])),
+			);
+			const shown = matches.slice(0, typeof b.node_limit === "number" ? b.node_limit : 256);
+			return ok({ matches: shown, count: shown.length, match_count: matches.length, files_scanned: files.length });
+		}
+		default:
+			return daemonError(405, "METHOD_NOT_ALLOWED", `${method} ${url.pathname}`);
+	}
 }
