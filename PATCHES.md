@@ -8927,3 +8927,10 @@ no decision record was written for it.
 
 - Undo: revert this entry's commits.
 
+## qa-testing-page: the page QA's test-check reads
+
+- `local`, never upstream (QA #158, commit c349a0cc; owner's testing standard, 2026-11-14). Every repo carries one testing page that QA's `test-check` (agent-tools) reads. QA owns the page, the quarantine list and the miss log; Ops keeps the page's "What runs when" table true when the landing check (`scripts/check.sh --fast`) or `pi-web-deploy`'s checks change.
+- Four new files, no code: `docs/testing.md`, `docs/testing-quarantine.md`, `docs/testing-misses.jsonl`, `found-below-par.md`. The page classes this repo as a product (required level 4) and names `pi-web-deploy`'s files in agent-tools as the release path.
+- Sync cost: none; upstream has none of these files. Checks: `test-check .` from agent-tools (level 2 when it landed; the smoke-test levels are open work between QA and Ops).
+- Undo: revert that commit and this entry (docs only; no deploy needed).
+
