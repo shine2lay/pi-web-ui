@@ -139,8 +139,15 @@ export interface OpenVikingAuditEvent extends OpenVikingOwnerAuditFields {
 	ts: string;
 }
 
+/**
+ * R-AUDIT-OWNER-1 (spec-explorer-writes.md G7): `included` when the request passed the owner check for reads, else
+ * `withheld` (owner events left out), so a withheld list never reads as "no changes".
+ */
+export type OpenVikingOwnerEvents = "included" | "withheld";
+
 export interface OpenVikingAuditResponse {
 	panel_updated_at: string;
+	owner_events: OpenVikingOwnerEvents;
 	health_state: OpenVikingHealthState;
 	/** The true reason (ruling rm-b5272a3e): the age when past the `15m` cadence, else a waiting sync, else null. */
 	stale_badge: "> 15m" | OpenVikingPendingSyncBadge | null;

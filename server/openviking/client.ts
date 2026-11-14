@@ -14,6 +14,7 @@ import {
 	type OpenVikingDashboardOptions,
 	type OpenVikingEntryScope,
 	type OpenVikingOverviewResponse,
+	type OpenVikingOwnerEvents,
 	type RewrittenVikingUri,
 } from "./types.js";
 import { resolveRequestHeaders, rewriteVikingUri } from "./uri.js";
@@ -65,9 +66,12 @@ export class OpenVikingDaemonClient {
 		return buildOverview(this.http, this.statePaths, this.now());
 	}
 
-	/** `GET /api/openviking/audit`. */
-	async getAudit(query: OpenVikingAuditQuery = {}): Promise<OpenVikingAuditResponse> {
-		return buildAudit(this.statePaths, query, this.now());
+	/** `GET /api/openviking/audit`; owner events only when `ownerEvents` is `included` (R-AUDIT-OWNER-1). */
+	async getAudit(
+		query: OpenVikingAuditQuery = {},
+		ownerEvents: OpenVikingOwnerEvents = "withheld",
+	): Promise<OpenVikingAuditResponse> {
+		return buildAudit(this.statePaths, query, this.now(), ownerEvents);
 	}
 }
 

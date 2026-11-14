@@ -14,7 +14,7 @@ import { systemExplorerClock } from "./explorer-clock.js";
 import { registerExplorerReadRoutes } from "./explorer-read-routes.js";
 import type { OpenVikingExplorerOptions } from "./explorer-types.js";
 import { registerExplorerWriteRoutes } from "./explorer-write-routes.js";
-import { ownerCheckMissing } from "./owner-gate.js";
+import { assertOwner, ownerCheckMissing, type OpenVikingOwnerGate } from "./owner-gate.js";
 import {
 	methodNotAllowedResult,
 	okResult,
@@ -27,6 +27,7 @@ import type {
 	OpenVikingAuditResponse,
 	OpenVikingDashboardOptions,
 	OpenVikingOverviewResponse,
+	OpenVikingOwnerEvents,
 } from "./types.js";
 
 export type { OpenVikingRouteResult } from "./route-result.js";
@@ -49,14 +50,25 @@ export async function handleOpenVikingAuditRequest(
 	client: OpenVikingDaemonClient,
 	query: OpenVikingAuditQuery = {},
 	method = "GET",
+	ownerEvents: OpenVikingOwnerEvents = "withheld",
 ): Promise<OpenVikingRouteResult<OpenVikingAuditResponse>> {
 	if (method.toUpperCase() !== "GET") {
 		return methodNotAllowedResult(method, "/api/openviking/audit");
 	}
 	try {
-		return okResult(await client.getAudit(query));
+		return okResult(await client.getAudit(query, ownerEvents));
 	} catch (err) {
 		return toErrorResult(err);
+	}
+}
+
+/** R-AUDIT-OWNER-1: owner events only to a request the one owner gate passes for a read; any failure withholds. */
+function auditOwnerEvents(gate: OpenVikingOwnerGate, req: Request): OpenVikingOwnerEvents {
+	try {
+		assertOwner(gate, req);
+		return "included";
+	} catch {
+		return "withheld";
 	}
 }
 
@@ -73,6 +85,14 @@ export function registerOpenVikingRoutes(
 		sendRouteResult(res, result);
 	});
 
+	// Production passes the passkey owner check's gate (route-modules.ts); without one, nobody passes (fail closed).
+	const explorer: OpenVikingExplorerOptions = options.explorer ?? {
+		ownerGate: ownerCheckMissing,
+		clock: systemExplorerClock,
+		onShutdown: () => {},
+		onUndoAsk: () => {},
+	};
+
 	app.all("/api/openviking/audit", async (req: Request, res: Response) => {
 		const result = await handleOpenVikingAuditRequest(
 			client,
@@ -83,17 +103,10 @@ export function registerOpenVikingRoutes(
 				owner_only: req.query.owner_only,
 			},
 			req.method,
+			auditOwnerEvents(explorer.ownerGate, req),
 		);
 		sendRouteResult(res, result);
 	});
-
-	// Production passes the passkey owner check's gate (route-modules.ts); without one, nobody passes (fail closed).
-	const explorer: OpenVikingExplorerOptions = options.explorer ?? {
-		ownerGate: ownerCheckMissing,
-		clock: systemExplorerClock,
-		onShutdown: () => {},
-		onUndoAsk: () => {},
-	};
 	registerExplorerReadRoutes(app, client, explorer.ownerGate);
 	registerExplorerWriteRoutes(app, client, explorer);
 
