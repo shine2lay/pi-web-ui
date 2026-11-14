@@ -26,6 +26,7 @@ Part of [spec.md](spec.md) (architecture #541). Every rule in [spec-explorer.md]
 ## Undo
 
 **`POST /api/openviking/undo`** `{ operation_id }`. The server's clock decides the window (`10 000 ms` from registering); the page's toast only shows it. Unknown id (also after a restart): `404 OPERATION_UNKNOWN`; closed or already ended: `410 UNDO_WINDOW_CLOSED { state }`.
+- **Confirmation and the window (`R-OWNER-UNDO-1`):** undo is a write, so it needs its own assertion ([spec-explorer-owner.md](spec-explorer-owner.md)). The 10 s window is the time to ASK (`owner/write/options` with `{ method, operation_id }`), not to finish the prompt. For a held delete, a valid ask inside the window moves it to `undo_pending` and stops its timer. From there: assertion verified -> `cancelled`; the 60 s challenge expires unused -> `cancelled` too, recorded as unconfirmed. The delete never runs once undo was asked for. *Why:* the delete cannot be reversed and a cancelled delete destroys nothing, so every doubtful case resolves to "nothing deleted". For an edit, a valid ask inside the window keeps the undo open for that challenge's 60 s; expiry closes it with nothing written.
 - **Delete:** cancels the held call. `200 { operation_id, state: "cancelled" }`; appends `owner_undo` then `owner_delete` (`cancelled`).
 - **Edit:** `fs/stat`; `modTime` != `after_mod_time` -> `409 UNDO_REFUSED { current_mod_time }`, `owner_undo` (`refused`), nothing written. Else `content/write` of `before` (the text read just before the edit), `fs/stat`, `owner_undo` (`applied`); `200 { operation_id, state: "undone", mod_time }`.
 
@@ -36,7 +37,9 @@ Part of [spec.md](spec.md) (architecture #541). Every rule in [spec-explorer.md]
 | delete | (request) | accepted | `pending` | none yet |
 | delete | `pending` | window closes, store `200` | `applied` | `owner_delete` `applied` |
 | delete | `pending` | window closes, store error | `failed` | `owner_delete` `failed` + code |
-| delete | `pending` | undo | `cancelled` | `owner_undo` `applied`, `owner_delete` `cancelled` |
+| delete | `pending` | undo asked (`write/options`) | `undo_pending` | none yet |
+| delete | `undo_pending` | assertion verified | `cancelled` | `owner_undo` `applied`, `owner_delete` `cancelled` |
+| delete | `undo_pending` | challenge expires unused | `cancelled` | `owner_undo` `unconfirmed`, `owner_delete` `cancelled` |
 | delete | `pending` | server stops | `not_applied_restart` | `owner_delete` `not_applied_restart` (shutdown hook) |
 | edit | (request) | written | `edited` | `owner_edit` `applied` |
 | edit | `edited` | undo, unchanged | `undone` | `owner_undo` `applied` |
@@ -56,7 +59,7 @@ Contract `§7.4b` `R-CHANGELOG-1e` (`/home/shinelay/architecture-dept/convention
   "summary": "owner edited a note: 412 -> 530 bytes", "diff": null, "task_id": null, "session_id": null }
 ```
 
-- `action`: `owner_edit` | `owner_delete` | `owner_undo`. `outcome`: `applied` | `cancelled` | `not_applied_restart` | `failed` | `refused`. `undo_of`: `"edit"` | `"delete"` on `owner_undo`, else `null`. `operation_id`: `op-<ms>-<8 hex>`, set at request.
+- `action`: `owner_edit` | `owner_delete` | `owner_undo`. `outcome`: `applied` | `cancelled` | `not_applied_restart` | `failed` | `refused` | `unconfirmed` (an `owner_undo` whose confirmation was asked for and never given). `undo_of`: `"edit"` | `"delete"` on `owner_undo`, else `null`. `operation_id`: `op-<ms>-<8 hex>`, set at request.
 - Hashes are sha256 of the whole text; `null` where there is none (`after_sha256` of an applied delete). Never the text itself, in no field.
 
 **`GET /api/openviking/audit`** (existing route) reads these through `readChangelogRecords` and `CHANGELOG_ACTIONS` (`server/openviking/state-files.ts`, the one reader) and `auditActionOf` (`server/openviking/activity.ts`):
