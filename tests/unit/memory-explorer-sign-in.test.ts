@@ -60,7 +60,9 @@ const READS: Record<string, unknown> = {
 };
 
 /** The server: reads answer only with a session; the owner routes as spec-explorer-owner.md says. */
-function fakeServer(options: { signedIn?: boolean; passkeys?: number } = {}) {
+function fakeServer(
+	options: { signedIn?: boolean; passkeys?: number; publicHealth?: boolean; failedRoots?: boolean } = {},
+) {
 	const state = { signedIn: options.signedIn ?? false, passkeys: options.passkeys ?? 1, codeOk: true };
 	const sent: string[] = [];
 	const fetch = vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -92,7 +94,9 @@ function fakeServer(options: { signedIn?: boolean; passkeys?: number } = {}) {
 				state.signedIn = false;
 				return answer(200, { removed: "pk-1" });
 		}
+		if (options.publicHealth && key === "GET /overview") return answer(200, READS[key]);
 		if (!state.signedIn) return refuse();
+		if (options.failedRoots && key === "GET /tree/roots") return answer(500, { error: { code: "FAILED" } });
 		return key in READS ? answer(200, READS[key]) : answer(404, { error: { code: "NOT_FOUND" } });
 	});
 	return { fetch, sent, state };
@@ -167,6 +171,30 @@ describe("checking sign-in", () => {
 		expect(dialog()).not.toBeNull();
 		expect(maybeByRole(page, "button", "Sign out")).toBeNull();
 		expect(maybeByRole(page, "button", "Passkeys")).toBeNull();
+	});
+});
+
+describe("signed-out honesty (#321)", () => {
+	for (const dismissed of [false, true]) {
+		it(`replaces checking/loading behind the sign-in ${dismissed ? "dismissed" : "open"} box`, async () => {
+			const page = await mountPage(fakeServer(), passkeyPrompt());
+			if (dismissed) await click(oneByRole(dialog() as HTMLElement, "button", "Not now"));
+			const background = page.querySelector("main")!;
+			expect(text(background)).not.toMatch(/Checking memory…|Loading memory…/);
+			expect(text(background)).toContain("Sign in to see memory");
+		});
+	}
+
+	it("public healthy overview plus OWNER_ONLY places means needs sign-in, not unreadable", async () => {
+		const page = await mountPage(fakeServer({ publicHealth: true }), passkeyPrompt());
+		await click(oneByRole(dialog() as HTMLElement, "button", "Not now"));
+		expect(text(page)).not.toContain("couldn't be read");
+		expect(text(oneByRole(page, "status"))).toBe("Memory is up · sign in to see everything");
+	});
+
+	it("signed-in real root failure still says some places couldn't be read", async () => {
+		const page = await mountPage(fakeServer({ signedIn: true, failedRoots: true }), passkeyPrompt());
+		expect(text(oneByRole(page, "status"))).toContain("some places couldn't be read");
 	});
 });
 

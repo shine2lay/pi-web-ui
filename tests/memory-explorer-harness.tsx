@@ -42,6 +42,8 @@ const signIn = (
 // Auth cases exercise the actual page and session hook, not a hand-built account slot.
 const ownerFetch = async (url: string): Promise<Response> => {
 	if (state === "checking") return new Promise(() => {});
+	if ((state === "signed-out-open" || state === "signed-out-dismissed") && !url.includes("/overview"))
+		return new Response(JSON.stringify({ error: { code: "OWNER_ONLY" } }), { status: 403 });
 	const at = new Date(NOW_MS).toISOString();
 	const body = url.includes("/tree/roots")
 		? {
@@ -80,7 +82,7 @@ if (state === "withheld")
 		fetch: async () => new Response(JSON.stringify({ owner_events: "withheld", events: [] })),
 	}).changes;
 createRoot(host).render(
-	state === "checking" || state === "signed-in" ? (
+	["checking", "signed-in", "signed-out-open", "signed-out-dismissed"].includes(state) ? (
 		<MemoryExplorerPage active fetch={ownerFetch} />
 	) : (
 		<MemoryExplorerView
@@ -98,6 +100,10 @@ const click = (el: Element | null | undefined) => (el as HTMLElement | null | un
 /** Interactive cases: drive the real view the way the owner would, then leave it for measuring. */
 async function drive(): Promise<void> {
 	await settle();
+	if (state === "signed-out-dismissed") {
+		click([...document.querySelectorAll("[role=dialog] button")].find((b) => b.textContent === "Not now"));
+		await settle();
+	}
 	if (state === "results") {
 		const input = host.querySelector<HTMLInputElement>(".mx-find-box input");
 		if (!input) return;

@@ -101,7 +101,7 @@ export function MemoryExplorerView({
 	const seqRef = useRef(0);
 	const nowMs = now();
 	const place = steps[steps.length - 1].place;
-	const canChange = memoryAnswers(health.load);
+	const canChange = ownerState !== "signed-out" && memoryAnswers(health.load);
 	const memoryEmpty = health.load.data?.totalNotes === 0;
 
 	const runSearch = (q: string, m: SearchMode, s: SearchScope) => {
@@ -191,7 +191,8 @@ export function MemoryExplorerView({
 	const previous = steps[steps.length - 2]?.place;
 	const label = backLabel(previous, asked !== null);
 	let work;
-	const ownerOnly = roots.load.status === "failed" && roots.load.code === "OWNER_ONLY";
+	// OWNER_ONLY reads wait for the sign-in box; their loads still say loading meanwhile.
+	const ownerOnly = ownerState === "signed-out" || (roots.load.status === "failed" && roots.load.code === "OWNER_ONLY");
 	if (ownerOnly) {
 		work = <OwnerOnly signIn={signIn} />;
 	} else if (place.kind === "note") {
@@ -250,7 +251,7 @@ export function MemoryExplorerView({
 						</p>
 					</div>
 					<div className="mx-head-side">
-						<HealthLine health={health.load} nowMs={nowMs} onRetry={reloadAll} />
+						<HealthLine health={health.load} signedOut={ownerOnly} nowMs={nowMs} onRetry={reloadAll} />
 						{account}
 					</div>
 				</header>
@@ -279,7 +280,7 @@ export function MemoryExplorerView({
 					</div>
 					<ExplorerTree
 						api={api}
-						roots={roots.load}
+						roots={ownerOnly ? { status: "failed", code: "OWNER_ONLY", data: null } : roots.load}
 						totalNotes={health.load.data?.totalNotes ?? null}
 						onRetry={roots.reload}
 						current={place.kind === "start" ? null : place.uri}
