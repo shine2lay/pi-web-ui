@@ -33,7 +33,7 @@ A root whose walk returns `node_limit` nodes is unread (`truncated`), never a sh
 
 **`GET /api/openviking/tree?uri=<folder>&offset=0&limit=30`** (`limit` 1-200) — one folder level: `/api/v1/fs/tree` `level_limit=1`, `include_abstract=true`, plus a no-abstract deep walk of the folder for counts. File uri: `400 NOT_A_FOLDER`. `200`: `{ uri, root, notes, folders, last_change, abstract, abstract_reason, total, children[] }`; `children[]` newest first: `{ uri, name, is_folder, kind, size, mod_time, notes (folders; null for files), abstract, abstract_reason, locked }`.
 - Bad `limit` or `offset`: `400 INVALID_ARGUMENT`.
-- Count walk returns `node_limit` nodes: the level is still served, `notes` and `folders` `null`, `counts_reason: "truncated"` (else `null`). Never a short count, never an error (replaces backend #162's `502`).
+- Count walk returns `node_limit` nodes: the level is still served; `notes`, `folders`, `last_change` and child-folder `notes` are `null`; `counts_reason: "truncated"` (else `null`). Never a short count, never an error.
 - The owner gate runs before the setup-file lock: `identity.md` under an unreadable root answers `403 OWNER_ONLY`; under a readable one, `403 SETUP_FILE_LOCKED`.
 - `abstract_reason`: `null` (text present), `"not_ready"` (daemon `[Directory abstract is not ready]`), `"none"` (empty; file rows always), `"locked"`. Never placeholder text.
 
