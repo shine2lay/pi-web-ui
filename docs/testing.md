@@ -5,8 +5,8 @@ test_check:
   release:
     files:
       - ~/projects/agent-tools/bin/pi-web-deploy
-      - ~/projects/agent-tools/lib/pi-web-deploy.mjs
-      - ~/projects/agent-tools/lib/pi-web-check.mjs
+      - ~/projects/agent-tools/lib/deploy/release-smoke.mjs
+    stop_proof: docs/release-stop-proof.json
   smoke:
     flows:
       F1: open the app
