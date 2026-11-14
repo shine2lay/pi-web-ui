@@ -3,8 +3,8 @@
  * results of a search, with their loading, empty, no-results and failed states.
  */
 
-import type { MemoryItem, SearchHit, SearchMode } from "./explorer-api.js";
-import { countWords, isSetupFile } from "./explorer-text.js";
+import type { MemoryItem, SearchAnswer, SearchHit, SearchMode } from "./explorer-api.js";
+import { countWords } from "./explorer-text.js";
 import { NoteRow } from "./NoteRow.js";
 import type { Load } from "./use-load.js";
 
@@ -62,7 +62,7 @@ export function RecentList({
 	if (recent.status === "failed" && !recent.data) return <Failed what="Couldn't load memory" onRetry={onRetry} />;
 	if (!recent.data) return <Placeholder heading="Loading memory…" />;
 	// Setup files are managed with each department's settings, not browsed as notes.
-	const notes = recent.data.filter((item) => !isSetupFile(item.uri));
+	const notes = recent.data.filter((item) => !item.locked);
 	return (
 		<>
 			<div className="mx-vhead">
@@ -100,7 +100,7 @@ export function SearchResults({
 	onOtherWay,
 }: {
 	asked: AskedSearch;
-	results: Load<readonly SearchHit[]>;
+	results: Load<SearchAnswer>;
 	nowMs: number;
 	onOpen(item: MemoryItem): void;
 	onRetry(): void;
@@ -109,12 +109,19 @@ export function SearchResults({
 }) {
 	if (results.status === "failed") return <Failed what="Couldn't search memory" onRetry={onRetry} />;
 	if (results.status === "loading") return <Placeholder heading={`Searching for “${asked.query}”…`} />;
-	const hits = results.data;
+	const { hits, missedPlaces } = results.data;
+	const missed =
+		missedPlaces > 0 ? (
+			<p className="mx-dim" data-missed>
+				{countWords(missedPlaces, "place", "places")} couldn't be searched, so some notes may be missing.
+			</p>
+		) : null;
 	const otherWay = asked.mode === "meaning" ? "Exact words" : "By meaning";
 	if (hits.length === 0) {
 		return (
 			<div className="mx-empty">
 				<h2>Nothing found for “{asked.query}”</h2>
+				{missed}
 				<p className="mx-dim">
 					{asked.mode === "meaning"
 						? "No note is about this. Try other words, or look for the exact words."
@@ -133,13 +140,13 @@ export function SearchResults({
 			</div>
 		);
 	}
-	const best = Math.max(...hits.map((h) => h.score ?? 0));
 	return (
 		<>
 			<div className="mx-vhead">
 				<h2>{resultHeading(hits, asked.mode)}</h2>
 				<span className="mx-dim">{asked.mode === "meaning" ? "Closest first" : "In the order memory found them"}</span>
 			</div>
+			{missed}
 			<ul className="mx-rows">
 				{hits.map((hit, i) => (
 					<NoteRow
@@ -148,7 +155,9 @@ export function SearchResults({
 						nowMs={nowMs}
 						onOpen={onOpen}
 						extra={
-							asked.mode === "meaning" ? { score: hit.score, best } : { line: hit.line, lineNumber: hit.lineNumber }
+							asked.mode === "meaning"
+								? { score: hit.score, relative: hit.relative }
+								: { line: hit.line, lineNumber: hit.lineNumber }
 						}
 					/>
 				))}

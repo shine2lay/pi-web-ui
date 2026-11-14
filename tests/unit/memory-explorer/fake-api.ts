@@ -17,6 +17,8 @@ import {
 	type MemoryItem,
 	type MemoryRoot,
 	type NoteDetail,
+	type NoteKind,
+	type SearchAnswer,
 	type SearchHit,
 	type SearchRequest,
 } from "../../../web/src/memory-explorer/explorer-api.js";
@@ -42,27 +44,46 @@ export const RAW_CASE_SUMMARY =
 export const CASE_FULL_TEXT =
 	"# Case: memory page redesign\n\n**Role:** design\n\n- Owner asked to find things\n- Picked P";
 
-function note(uri: string, minutes: number, size: number, summary: string | null): MemoryItem {
-	return { uri, isFolder: false, size, changedAt: minutesAgo(minutes), summary };
+function note(uri: string, kind: NoteKind, minutes: number, size: number, summary: string | null): MemoryItem {
+	return { uri, isFolder: false, kind, locked: uri === SETUP_URI, size, changedAt: minutesAgo(minutes), summary };
 }
-function folder(uri: string, minutes: number, noteCount: number, summary: string | null): MemoryItem {
-	return { uri, isFolder: true, size: null, changedAt: minutesAgo(minutes), summary, noteCount, kindCounts: {} };
+function folder(uri: string, minutes: number, noteCount: number | null, summary: string | null): MemoryItem {
+	return {
+		uri,
+		isFolder: true,
+		kind: "other",
+		locked: false,
+		size: null,
+		changedAt: minutesAgo(minutes),
+		summary,
+		noteCount,
+		kindCounts: {},
+	};
 }
 
 export const NOTES: readonly MemoryItem[] = [
-	note(CASE_URI, 4, 2400, RAW_CASE_SUMMARY),
-	note(EVENT_URI, 30, 600, "On 2026-11-12, Marketing task #26 was assigned landing-page copy."),
-	note(RULE_URI, 90, 5200, "# Shared Craft Preferences: ui_ux_design\n- **Owner** wants findings rated 0-4"),
-	note(DOC_URI, 600, 9000, "pi-web-ui L0 abstract: the fork's architecture and patches."),
-	note(`${OPS}/preferences/deploy.md`, 1500, 800, null),
-	note(SETUP_URI, 3000, 1200, null),
+	note(CASE_URI, "case", 4, 2400, RAW_CASE_SUMMARY),
+	note(EVENT_URI, "event", 30, 600, "On 2026-11-12, Marketing task #26 was assigned landing-page copy."),
+	note(RULE_URI, "rule", 90, 5200, "# Shared Craft Preferences: ui_ux_design\n- **Owner** wants findings rated 0-4"),
+	note(DOC_URI, "document", 600, 9000, "pi-web-ui L0 abstract: the fork's architecture and patches."),
+	note(`${OPS}/preferences/deploy.md`, "rule", 1500, 800, null),
+	note(SETUP_URI, "other", 3000, 1200, null),
 ];
 
+const root = (uri: string, group: MemoryRoot["group"], noteCount: number, kindCounts: MemoryRoot["kindCounts"]) => ({
+	uri,
+	group,
+	role: group === "department" ? (uri.split("/")[3] ?? null) : null,
+	read: true,
+	noteCount,
+	kindCounts,
+});
+
 export const ROOTS: readonly MemoryRoot[] = [
-	{ uri: SHARED, group: "shared", noteCount: 2, kindCounts: { rule: 1, event: 1 } },
-	{ uri: PROJECTS, group: "projects", noteCount: 1, kindCounts: { doc: 1 } },
-	{ uri: DESIGN, group: "department", noteCount: 2, kindCounts: { case: 1, other: 1 } },
-	{ uri: OPS, group: "department", noteCount: 1, kindCounts: { rule: 1 } },
+	root(SHARED, "shared", 2, { rule: 1, event: 1 }),
+	root(PROJECTS, "projects", 1, { document: 1 }),
+	root(DESIGN, "department", 2, { case: 1, other: 1 }),
+	root(OPS, "department", 1, { rule: 1 }),
 ];
 
 const FOLDERS: Record<string, MemoryItem[]> = {
@@ -81,9 +102,9 @@ const FOLDERS: Record<string, MemoryItem[]> = {
 };
 
 export const MEANING_HITS: readonly SearchHit[] = [
-	{ item: NOTES[0], score: 0.886 },
-	{ item: NOTES[2], score: 0.871 },
-	{ item: NOTES[1], score: 0.84 },
+	{ item: NOTES[0], score: 0.886, relative: 1 },
+	{ item: NOTES[2], score: 0.871, relative: 0.983 },
+	{ item: NOTES[1], score: 0.84, relative: 0.948 },
 ];
 export const WORD_HITS: readonly SearchHit[] = [
 	{ item: NOTES[0], line: "- Owner asked to find things", lineNumber: 5 },
@@ -97,6 +118,8 @@ export interface FakeOptions {
 	fail?: Partial<Record<keyof MemoryExplorerApi, ExplorerApiError["code"]>>;
 	/** No notes anywhere (empty memory). */
 	empty?: boolean;
+	/** Places search couldn't reach. */
+	missedPlaces?: number;
 }
 
 export type FakeApi = { [K in keyof MemoryExplorerApi]: ReturnType<typeof vi.fn> & MemoryExplorerApi[K] };
@@ -154,26 +177,31 @@ export function fakeApi(options: FakeOptions = {}): FakeApi {
 				const locked = uri === SETUP_URI;
 				return {
 					item,
+					summaryOf: uri,
+					changedBy: null,
 					locked,
 					overview: uri === CASE_URI ? "## Design cases\nWhat Design learned, one case per file." : null,
 					fullText: locked ? null : uri === CASE_URI ? CASE_FULL_TEXT : `Text of ${uri}`,
 				};
 			}),
 		search: (request: SearchRequest) =>
-			guard("search", () => {
-				if (request.query.includes("nothing")) return [];
+			guard("search", (): SearchAnswer => {
+				const missedPlaces = options.missedPlaces ?? 0;
+				if (request.query.includes("nothing")) return { hits: [], missedPlaces };
 				const hits = request.mode === "meaning" ? MEANING_HITS : WORD_HITS;
-				return hits.filter((h) => request.scope === "all" || h.item.uri.startsWith(`${request.scope}/`));
+				return {
+					hits: hits.filter((h) => request.scope === "all" || h.item.uri.startsWith(`${request.scope}/`)),
+					missedPlaces,
+				};
 			}),
 		save: (uri) => guard("save", () => record("edit", uri)),
 		remove: (uri) => guard("remove", () => record("delete", uri)),
 		undo: (id) =>
 			guard("undo", () => {
 				const i = changes.findIndex((c) => c.id === id);
-				const undone = { ...changes[i], undone: true, undoUntil: null };
-				changes[i] = undone;
-				return undone;
+				changes[i] = { ...changes[i], undone: true, undoUntil: null };
 			}),
+		changes: () => guard("changes", () => [...changes]),
 	};
 	for (const key of Object.keys(api) as (keyof MemoryExplorerApi)[]) {
 		(api as unknown as Record<string, unknown>)[key] = vi.fn(api[key]);

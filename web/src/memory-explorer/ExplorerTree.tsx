@@ -29,7 +29,13 @@ interface TreeProps {
 function SubFolders({ api, uri, current, onOpen }: TreeProps & { uri: string }) {
 	const { load } = useLoad(uri, (signal) => api.folder(uri, null, signal));
 	if (load.status === "loading") return <p className="mx-tree-note">Opening…</p>;
-	if (load.status === "failed") return <p className="mx-tree-note">Couldn't open this folder.</p>;
+	if (load.status === "failed") {
+		return (
+			<p className="mx-tree-note">
+				{load.code === "OWNER_ONLY" ? "Opens once owner sign-in is on." : "Couldn't open this folder."}
+			</p>
+		);
+	}
 	const folders = load.data.items.filter((item) => item.isFolder);
 	if (folders.length === 0) return null;
 	return (
@@ -50,7 +56,8 @@ function TreeRow({
 }: TreeProps & { item: Pick<MemoryItem, "uri" | "noteCount" | "kindCounts">; root?: boolean }) {
 	const [open, setOpen] = useState(item.uri === SHARED_OPEN_BY_DEFAULT);
 	const label = folderLabel(item.uri);
-	const count = item.noteCount ?? 0;
+	// null: too many to count, or the place didn't answer; never shown as 0.
+	const count = item.noteCount ?? null;
 	return (
 		<li>
 			<div className="mx-tree-row" data-tree-row aria-current={current === item.uri ? "true" : undefined}>
@@ -68,12 +75,16 @@ function TreeRow({
 					<span className="mx-tree-name">{label}</span>
 					{root ? <KindBar counts={item.kindCounts ?? {}} /> : null}
 				</button>
-				<span className="mx-num mx-tree-count">
-					{count.toLocaleString("en-US")}
-					<span className="mx-sr">{count === 1 ? " note" : " notes"}</span>
-				</span>
+				{count === null ? (
+					<span className="mx-tree-count mx-dim">not counted</span>
+				) : (
+					<span className="mx-num mx-tree-count">
+						{count.toLocaleString("en-US")}
+						<span className="mx-sr">{count === 1 ? " note" : " notes"}</span>
+					</span>
+				)}
 			</div>
-			{open && count > 0 ? <SubFolders api={api} uri={item.uri} current={current} onOpen={onOpen} /> : null}
+			{open && count !== 0 ? <SubFolders api={api} uri={item.uri} current={current} onOpen={onOpen} /> : null}
 		</li>
 	);
 }

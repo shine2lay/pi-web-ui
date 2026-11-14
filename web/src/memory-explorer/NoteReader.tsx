@@ -54,6 +54,11 @@ function saveFailedText(code: ExplorerErrorCode): string {
 	return "Couldn't save: memory didn't answer. Your text is still here.";
 }
 
+function changedByWords(role: string | null): string {
+	if (!role) return "";
+	return role === "owner" ? ", by you" : `, by ${departmentName(role)}`;
+}
+
 export function NoteReader(props: NoteReaderProps) {
 	const { api, uri, nowMs, host } = props;
 	const note = useLoad(uri, (signal) => api.read(uri, signal));
@@ -108,8 +113,10 @@ export function NoteReader(props: NoteReaderProps) {
 		setSaveError(null);
 		try {
 			const record = await api.save(uri, text, detail.item.changedAt);
-			note.set((d) => ({ ...d, fullText: text, item: { ...d.item, size: byteLength(text), changedAt: record.at } }));
 			setDraft(null);
+			// null: the text was already this, so nothing was written and there is nothing to undo.
+			if (record === null) return;
+			note.set((d) => ({ ...d, fullText: text, item: { ...d.item, size: byteLength(text), changedAt: record.at } }));
 			setEditedAt(record.at);
 			host.made({ id: record.id, what: "Changed", title, where: keptIn(uri) }, record, () => {
 				setEditedAt(null);
@@ -246,13 +253,26 @@ export function NoteReader(props: NoteReaderProps) {
 				rows={[
 					["Kept in", keptIn(uri)],
 					["Kind", kindWord(uri)],
-					["Changed", editedAt ? "just now, by you" : ago(detail.item.changedAt, nowMs)],
+					[
+						"Changed",
+						editedAt
+							? "just now, by you"
+							: `${ago(detail.item.changedAt, nowMs)}${changedByWords(detail.changedBy)}`,
+					],
 					["Length", lengthWords(detail.item.size)],
 				]}
 			/>
 			<section className="mx-levels" aria-label="How memory keeps it">
 				<h3>How memory keeps it</h3>
-				<Level n={1} title="One-line summary" why="What search and chats see first.">
+				<Level
+					n={1}
+					title="One-line summary"
+					why={
+						detail.summaryOf && detail.summaryOf !== uri
+							? `What search and chats see first. Memory keeps it for the folder it sits in: ${folderLabel(parent)}.`
+							: "What search and chats see first."
+					}
+				>
 					{summary ? (
 						<p className="mx-text" data-level="1">
 							{summary}

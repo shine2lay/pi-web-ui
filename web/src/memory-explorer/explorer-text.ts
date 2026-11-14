@@ -4,7 +4,8 @@
  *
  * Memory keeps notes under a few top-level places: `viking://user/default/memories` (shared by every
  * chat), `viking://resources` (project documents) and `viking://user/<department>/memories` (each
- * department's own). The first folder inside a place says what kind of note it is.
+ * department's own). The first folder inside a place says what kind of note it is; the server names
+ * the kind and the locked setup files, so this file only words them.
  */
 
 import type { NoteKind, RootGroup } from "./explorer-api.js";
@@ -12,16 +13,15 @@ import type { NoteKind, RootGroup } from "./explorer-api.js";
 const SHARED_ROOT = "viking://user/default/memories";
 const PROJECTS_ROOT = "viking://resources";
 const DEPARTMENT_ROOT = /^viking:\/\/user\/([^/]+)\/memories/;
-const SETUP_FILES = new Set(["identity.md", "soul.md"]);
 
-/** First folder inside a place -> [kind, folder label, one-note word]. */
-const KIND_FOLDERS: Readonly<Record<string, readonly [NoteKind, string, string]>> = {
-	preferences: ["rule", "Rules", "Rule"],
-	cases: ["case", "Cases", "Case"],
-	experiences: ["case", "Lessons", "Lesson"],
-	entities: ["fact", "Facts about things", "Fact"],
-	events: ["event", "Events", "Event"],
-	instructions: ["other", "Instructions", "Instruction"],
+/** First folder inside a place -> [folder label, one-note word]. */
+const KIND_FOLDERS: Readonly<Record<string, readonly [string, string]>> = {
+	preferences: ["Rules", "Rule"],
+	cases: ["Cases", "Case"],
+	experiences: ["Lessons", "Lesson"],
+	entities: ["Facts about things", "Fact"],
+	events: ["Events", "Event"],
+	instructions: ["Instructions", "Instruction"],
 };
 
 /** Words for the kind bar's key, one per kind that has a colour. */
@@ -30,7 +30,7 @@ export const KIND_KEY: ReadonlyArray<readonly [NoteKind, string]> = [
 	["case", "Cases and lessons"],
 	["fact", "Facts"],
 	["event", "Events"],
-	["doc", "Documents"],
+	["document", "Documents"],
 ];
 
 /** Department names keep their own spelling. */
@@ -124,7 +124,7 @@ export function folderLabel(uri: string): string {
 	if (segs.length === 0) return rootName(uri);
 	const last = segs[segs.length - 1];
 	if (groupOf(uri) === "projects") return last;
-	if (segs.length === 1 && KIND_FOLDERS[last]) return KIND_FOLDERS[last][1];
+	if (segs.length === 1 && KIND_FOLDERS[last]) return KIND_FOLDERS[last][0];
 	if (segs[0] === "events" && segs.length === 3) return `${MONTHS[Number(last) - 1]} ${segs[1]}`;
 	if (segs[0] === "events" && segs.length === 4) return `${MONTHS[Number(segs[2]) - 1].slice(0, 3)} ${Number(last)}`;
 	return humanize(last);
@@ -137,20 +137,10 @@ export function noteTitle(uri: string): string {
 	return groupOf(uri) === "projects" ? file : humanize(file);
 }
 
-export function kindOf(uri: string): NoteKind {
-	if (groupOf(uri) === "projects") return "doc";
-	return KIND_FOLDERS[segments(uri)[0]]?.[0] ?? "other";
-}
-
 export function kindWord(uri: string): string {
 	if (groupOf(uri) === "projects") return "Document";
 	const segs = segments(uri);
-	return segs.length > 1 ? (KIND_FOLDERS[segs[0]]?.[2] ?? "Note") : "Note";
-}
-
-/** A department's setup file: managed with its settings, never shown or changed here. */
-export function isSetupFile(uri: string): boolean {
-	return SETUP_FILES.has(lastSegment(uri));
+	return segs.length > 1 ? (KIND_FOLDERS[segs[0]]?.[1] ?? "Note") : "Note";
 }
 
 /** The parent folder of a note or folder; null for a top-level place. */
@@ -182,10 +172,14 @@ export function summaryText(raw: string | null | undefined): string | null {
 	return plain;
 }
 
-/** How close a meaning hit is, read against the best hit for the same question (3 strong .. 1 weak). */
-export function matchLevel(score: number, best: number): 1 | 2 | 3 {
-	if (score >= 0.85 && score >= best - 0.012) return 3;
-	return score >= best - 0.03 ? 2 : 1;
+/**
+ * How close a meaning hit is (3 strong .. 1 weak), from its score and its score against the best hit
+ * for the same question (`relative`, worked out by the server). Scores bunch close together (0.84-0.89
+ * on the real store), so the steps are narrow.
+ */
+export function matchLevel(score: number, relative: number): 1 | 2 | 3 {
+	if (score >= 0.85 && relative >= 0.986) return 3;
+	return relative >= 0.966 ? 2 : 1;
 }
 
 export const MATCH_WORDS: Readonly<Record<1 | 2 | 3, string>> = { 1: "Weak match", 2: "Good match", 3: "Strong match" };

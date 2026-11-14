@@ -13,7 +13,6 @@ import {
 	folderLabel,
 	groupOf,
 	keptIn,
-	kindOf,
 	kindWord,
 	lengthWords,
 	matchLevel,
@@ -43,7 +42,7 @@ const ICON_PATHS: Readonly<Record<NoteKind | "folder", ReactNode>> = {
 			<path d="M3 8.5h14M7 3v3M13 3v3" />
 		</>
 	),
-	doc: <path d="M5 2.5h7l3.5 3.5v11.5H5zM8 10h5M8 13h5" />,
+	document: <path d="M5 2.5h7l3.5 3.5v11.5H5zM8 10h5M8 13h5" />,
 	other: <path d="M5 2.5h7l3.5 3.5v11.5H5z" />,
 	folder: <path d="M2.5 5.5a1 1 0 011-1h4l2 2h7a1 1 0 011 1v8a1 1 0 01-1 1h-13a1 1 0 01-1-1z" />,
 };
@@ -56,8 +55,8 @@ export function KindIcon({ kind }: { kind: NoteKind | "folder" }) {
 	);
 }
 
-export function MatchLabel({ score, best }: { score: number; best: number }) {
-	const level = matchLevel(score, best);
+export function MatchLabel({ score, relative }: { score: number; relative: number }) {
+	const level = matchLevel(score, relative);
 	return (
 		<span className="mx-match" data-match>
 			<span className="mx-match-dots" aria-hidden="true">
@@ -80,7 +79,7 @@ function whereShort(uri: string): string | null {
 
 export interface RowExtra {
 	readonly score?: number;
-	readonly best?: number;
+	readonly relative?: number;
 	readonly line?: string;
 	readonly lineNumber?: number;
 }
@@ -96,11 +95,13 @@ export function NoteRow({
 	nowMs: number;
 	onOpen(item: MemoryItem): void;
 }) {
-	const kind = item.isFolder ? "folder" : kindOf(item.uri);
+	const kind = item.isFolder ? "folder" : item.kind;
 	const where = item.isFolder ? null : whereShort(item.uri);
 	const summary = summaryText(item.summary);
 	const facts = item.isFolder
-		? countWords(item.noteCount ?? 0, "note", "notes")
+		? item.noteCount == null
+			? "not counted"
+			: countWords(item.noteCount, "note", "notes")
 		: `${ago(item.changedAt, nowMs)} · ${lengthWords(item.size)}`;
 	const data = item.isFolder ? { "data-folder": item.uri } : { "data-note": item.uri };
 	return (
@@ -109,7 +110,9 @@ export function NoteRow({
 				<KindIcon kind={kind} />
 				<span className="mx-row-title">{item.isFolder ? folderLabel(item.uri) : noteTitle(item.uri)}</span>
 				<span className="mx-row-side">
-					{extra.score != null && extra.best != null ? <MatchLabel score={extra.score} best={extra.best} /> : null}
+					{extra.score != null && extra.relative != null ? (
+						<MatchLabel score={extra.score} relative={extra.relative} />
+					) : null}
 				</span>
 				<span className="mx-row-where">
 					{item.isFolder ? (

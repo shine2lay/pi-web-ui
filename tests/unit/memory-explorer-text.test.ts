@@ -8,9 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
 	ago,
 	folderLabel,
-	isSetupFile,
 	keptIn,
-	kindOf,
 	kindWord,
 	lengthWords,
 	matchLevel,
@@ -70,16 +68,9 @@ describe("names", () => {
 	});
 });
 
+// The kind of a note and the locked setup files are the server's answer (spec-explorer.md `kind`,
+// `locked`), tested with its routes; the page only words them.
 describe("kinds", () => {
-	it("reads the kind from the folder a note is kept in", () => {
-		expect(kindOf("viking://user/default/memories/preferences/a.md")).toBe("rule");
-		expect(kindOf("viking://user/design/memories/cases/a.md")).toBe("case");
-		expect(kindOf("viking://user/design/memories/experiences/a.md")).toBe("case");
-		expect(kindOf("viking://user/default/memories/entities/a.md")).toBe("fact");
-		expect(kindOf("viking://user/default/memories/events/2026/11/12/a.md")).toBe("event");
-		expect(kindOf("viking://resources/pi-web-ui/README.md")).toBe("doc");
-		expect(kindOf("viking://user/design/memories/identity.md")).toBe("other");
-	});
 	it("names each kind in one word", () => {
 		expect(kindWord("viking://user/default/memories/preferences/a.md")).toBe("Rule");
 		expect(kindWord("viking://user/design/memories/experiences/a.md")).toBe("Lesson");
@@ -88,19 +79,11 @@ describe("kinds", () => {
 	});
 });
 
-describe("setup files are locked", () => {
-	it("knows a department's identity and soul files", () => {
-		expect(isSetupFile("viking://user/design/memories/identity.md")).toBe(true);
-		expect(isSetupFile("viking://user/design/memories/soul.md")).toBe(true);
-		expect(isSetupFile("viking://user/design/memories/cases/identity-check.md")).toBe(false);
-	});
-});
-
 describe("match labels read each score against the best one for the same question", () => {
 	it("gives strong, good and weak", () => {
-		expect(matchLevel(0.886, 0.886)).toBe(3);
-		expect(matchLevel(0.871, 0.886)).toBe(2);
-		expect(matchLevel(0.84, 0.886)).toBe(1);
+		expect(matchLevel(0.886, 1)).toBe(3);
+		expect(matchLevel(0.871, 0.871 / 0.886)).toBe(2);
+		expect(matchLevel(0.84, 0.84 / 0.886)).toBe(1);
 	});
 });
 
