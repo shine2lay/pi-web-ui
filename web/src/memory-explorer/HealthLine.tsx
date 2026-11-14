@@ -24,12 +24,12 @@ export function HealthLine({ health, nowMs, onRetry }: { health: Load<MemoryHeal
 	}
 	const h = health.data;
 	if (health.status === "failed" || !h || h.state === "down") {
-		const since = h?.lastSeenUpAt ? `since ${clock(h.lastSeenUpAt)} · ` : "";
+		const seen = h?.lastSeenUpAt ?? (h?.state !== "down" ? h?.checkedAt : null);
+		const age = seen ? ` · last seen ${Math.max(0, Math.floor((nowMs - Date.parse(seen)) / 60_000))} min ago` : "";
 		return (
 			<p className="mx-health" data-tone="down" role="status">
 				<span className="mx-dot" aria-hidden="true" />
-				<b>Memory is down</b>
-				<span>{since}showing the last copy · editing is off until it's back</span>
+				<b>Memory isn't answering{age}</b>
 				<button type="button" className="mx-btn" onClick={onRetry}>
 					Try again
 				</button>
@@ -55,5 +55,5 @@ export function HealthLine({ health, nowMs, onRetry }: { health: Load<MemoryHeal
 
 /** Editing and deleting need memory to answer. */
 export function memoryAnswers(health: Load<MemoryHealth>): boolean {
-	return health.status !== "failed" && health.data?.state !== "down";
+	return health.status === "ready" && health.data.state !== "down";
 }

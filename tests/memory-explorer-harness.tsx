@@ -7,6 +7,8 @@
 import { createRoot } from "react-dom/client";
 import { MemoryExplorerPage } from "../web/src/components/MemoryExplorerPage";
 import { MemoryExplorerView } from "../web/src/memory-explorer/MemoryExplorerView";
+import { ExplorerApiError } from "../web/src/memory-explorer/explorer-api";
+import { createHttpExplorerApi } from "../web/src/memory-explorer/explorer-http";
 import { fakeApi, NOW_MS, type FakeOptions } from "./unit/memory-explorer/fake-api";
 import "../web/src/styles.css";
 import "../web/src/memory-explorer/memory-explorer.css";
@@ -56,12 +58,33 @@ const ownerFetch = async (url: string): Promise<Response> => {
 			: { health_state: "healthy", observer: { checked_at: at, last_commit_at: at, last_reachable_at: at } };
 	return new Response(JSON.stringify(body), { status: 200 });
 };
+const api = fakeApi(OPTIONS[state] ?? {});
+let offline = false;
+const health = api.health;
+const roots = api.roots;
+const recent = api.recent;
+api.health = async () => ({
+	...(await health()),
+	...(offline ? { state: "down" as const, lastSeenUpAt: new Date(NOW_MS - 180000).toISOString() } : {}),
+});
+api.roots = async () => {
+	if (offline) throw new ExplorerApiError("MEMORY_DOWN", "offline");
+	return roots();
+};
+api.recent = async (...args) => {
+	if (offline) throw new ExplorerApiError("MEMORY_DOWN", "offline");
+	return recent(...args);
+};
+if (state === "withheld")
+	api.changes = createHttpExplorerApi({
+		fetch: async () => new Response(JSON.stringify({ owner_events: "withheld", events: [] })),
+	}).changes;
 createRoot(host).render(
 	state === "checking" || state === "signed-in" ? (
 		<MemoryExplorerPage active fetch={ownerFetch} />
 	) : (
 		<MemoryExplorerView
-			api={fakeApi(OPTIONS[state] ?? {})}
+			api={api}
 			ownerState={state === "signed-out" ? "signed-out" : "signed-in"}
 			now={() => NOW_MS}
 			signIn={signIn}
@@ -83,12 +106,17 @@ async function drive(): Promise<void> {
 		input.dispatchEvent(new Event("input", { bubbles: true }));
 		click(host.querySelector(".mx-find-box .mx-btn-solid"));
 	}
-	if (state === "reader" || state === "confirm") click(host.querySelector(".mx-row"));
+	if (state === "reader" || state === "confirm" || state === "down-after-load") click(host.querySelector(".mx-row"));
 	await settle();
 	if (state === "confirm") {
 		click(document.querySelector(".mx-btn-danger"));
 	}
 	await settle();
+	if (state === "down-after-load") {
+		offline = true;
+		window.dispatchEvent(new Event("focus"));
+		await settle();
+	}
 	document.documentElement.dataset.harnessReady = "1";
 }
 void drive();

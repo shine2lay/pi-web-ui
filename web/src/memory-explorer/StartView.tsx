@@ -107,8 +107,8 @@ export function SearchResults({
 	onEverywhere(): void;
 	onOtherWay(): void;
 }) {
-	if (results.status === "failed") return <Failed what="Couldn't search memory" onRetry={onRetry} />;
-	if (results.status === "loading") return <Placeholder heading={`Searching for “${asked.query}”…`} />;
+	if (results.status === "failed" && !results.data) return <Failed what="Couldn't search memory" onRetry={onRetry} />;
+	if (!results.data) return <Placeholder heading={`Searching for “${asked.query}”…`} />;
 	const { hits, missedPlaces } = results.data;
 	const missed =
 		missedPlaces > 0 ? (

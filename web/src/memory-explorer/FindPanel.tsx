@@ -31,6 +31,7 @@ export function scopeOptions(roots: readonly MemoryRoot[]): Array<{ value: Searc
 }
 
 export interface FindPanelProps {
+	readonly disabled?: boolean;
 	readonly query: string;
 	readonly mode: SearchMode;
 	readonly scope: SearchScope;
@@ -46,7 +47,7 @@ export function FindPanel(props: FindPanelProps) {
 	const { query, mode, scope, roots } = props;
 	const submit = (event: FormEvent) => {
 		event.preventDefault();
-		if (query.trim()) props.onSearch(query.trim(), mode);
+		if (!props.disabled && query.trim()) props.onSearch(query.trim(), mode);
 	};
 	return (
 		<section className="mx-find" aria-label="Search memory">
@@ -57,6 +58,7 @@ export function FindPanel(props: FindPanelProps) {
 				<div className="mx-find-box">
 					<input
 						id="mx-q"
+						disabled={props.disabled}
 						type="search"
 						autoComplete="off"
 						placeholder="Ask in your own words, e.g. rules for rolling a covered call down"
@@ -70,20 +72,27 @@ export function FindPanel(props: FindPanelProps) {
 							</svg>
 						</button>
 					) : null}
-					<button type="submit" className="mx-btn mx-btn-solid">
+					<button type="submit" className="mx-btn mx-btn-solid" disabled={props.disabled}>
 						Search
 					</button>
 				</div>
 				<div className="mx-find-ways">
 					<div className="mx-seg" role="group" aria-label="How to search">
 						{(["meaning", "words"] as const).map((m) => (
-							<button key={m} type="button" aria-pressed={mode === m} onClick={() => props.onMode(m)}>
+							<button
+								key={m}
+								type="button"
+								disabled={props.disabled}
+								aria-pressed={mode === m}
+								onClick={() => props.onMode(m)}
+							>
 								{m === "meaning" ? "By meaning" : "Exact words"}
 							</button>
 						))}
 					</div>
 					<select
 						className="mx-scope"
+						disabled={props.disabled}
 						aria-label="Where to search"
 						value={scope}
 						onChange={(e) => props.onScope(e.target.value)}
@@ -101,6 +110,7 @@ export function FindPanel(props: FindPanelProps) {
 					{TRY_EXAMPLES.map((t) => (
 						<button
 							key={t.query}
+							disabled={props.disabled}
 							type="button"
 							className="mx-chip"
 							data-try={t.query}

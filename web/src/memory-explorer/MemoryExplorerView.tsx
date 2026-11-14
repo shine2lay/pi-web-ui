@@ -177,6 +177,17 @@ export function MemoryExplorerView({
 		roots.reload();
 		recent.reload();
 	};
+	// Recheck when the owner returns to the page, retaining the same-key snapshots.
+	useEffect(() => {
+		const refresh = () => {
+			health.reload();
+			roots.reload();
+			recent.reload();
+			recorded.reload();
+		};
+		window.addEventListener("focus", refresh);
+		return () => window.removeEventListener("focus", refresh);
+	}, [health.reload, roots.reload, recent.reload, recorded.reload]);
 	const previous = steps[steps.length - 2]?.place;
 	const label = backLabel(previous, asked !== null);
 	let work;
@@ -246,6 +257,7 @@ export function MemoryExplorerView({
 				<div className="mx-layout">
 					<div className="mx-work" ref={workRef}>
 						<FindPanel
+							disabled={!canChange}
 							query={query}
 							mode={mode}
 							scope={scope}
@@ -259,7 +271,11 @@ export function MemoryExplorerView({
 						<section className="mx-view" aria-label="What you're looking at" aria-live="polite">
 							{work}
 						</section>
-						{signedIn ? <ChangesYouMade changes={mergeChanges(changes, recorded.load.data ?? [])} /> : null}
+						{signedIn && recorded.load.status === "failed" && recorded.load.code === "OWNER_ONLY" ? (
+							<p className="mx-dim">Sign in to see your changes</p>
+						) : signedIn ? (
+							<ChangesYouMade changes={mergeChanges(changes, recorded.load.data ?? [])} />
+						) : null}
 					</div>
 					<ExplorerTree
 						api={api}

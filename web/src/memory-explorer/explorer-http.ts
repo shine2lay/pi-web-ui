@@ -186,6 +186,9 @@ export function healthOf(
 
 /** The owner's changes from the change record; `owner_undo` lines are not events (G7). */
 export function changesFromAudit(answer: OpenVikingAuditResponse): ChangeRecord[] {
+	if (answer.owner_events === "withheld") {
+		throw new ExplorerApiError("OWNER_ONLY", "Sign in to see your changes");
+	}
 	return answer.events.flatMap((event): ChangeRecord[] => {
 		if (event.action !== "owner_edit" && event.action !== "owner_delete") return [];
 		// A delete the owner took back never happened; one cut off by a restart didn't either.

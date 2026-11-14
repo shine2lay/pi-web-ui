@@ -126,8 +126,8 @@ describe("states", () => {
 	it("offline: memory down, last copy shown, edit and delete off with the reason", async () => {
 		page = await mountExplorer(fakeApi({ health: "down" }));
 		const c = page.container;
-		const health = oneByRole(c, "status", /Memory is down/);
-		expect(text(health)).toMatch(/since/);
+		const health = oneByRole(c, "status", /Memory isn't answering/);
+		expect(text(health)).toMatch(/last seen \d+ min ago/);
 		oneByRole(health, "button", "Try again");
 		await click(byRole(c, "button").find((b) => b.hasAttribute("data-note")) as HTMLElement);
 		expect((oneByRole(c, "button", "Edit") as HTMLButtonElement).disabled).toBe(true);
@@ -155,6 +155,6 @@ describe("states", () => {
 	it("never shows error codes or stack text", async () => {
 		page = await mountExplorer(fakeApi({ fail: { recent: "FAILED", roots: "FAILED", health: "MEMORY_DOWN" } }));
 		expect(text(page.container)).not.toMatch(/FAILED|MEMORY_DOWN|Error:|at \w+ \(/);
-		expect(maybeByRole(page.container, "status", /Memory is (up|down)|Checking/)).not.toBeNull();
+		expect(maybeByRole(page.container, "status", /Memory is up|Memory isn't answering|Checking/)).not.toBeNull();
 	});
 });

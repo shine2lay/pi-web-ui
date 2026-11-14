@@ -92,7 +92,7 @@ export function NoteReader(props: NoteReaderProps) {
 			</div>
 		);
 	}
-	if (note.load.status !== "ready") {
+	if (!note.load.data || (note.load.status === "failed" && note.load.code !== "MEMORY_DOWN")) {
 		return (
 			<div className="mx-reader">
 				{crumbs}
@@ -118,6 +118,7 @@ export function NoteReader(props: NoteReaderProps) {
 	const editing = draft !== null;
 
 	const save = async (text: string) => {
+		if (!props.canChange) return;
 		setSaveError(null);
 		try {
 			const record = await api.save(uri, text, detail.item.changedAt);
@@ -135,6 +136,7 @@ export function NoteReader(props: NoteReaderProps) {
 		}
 	};
 	const remove = async () => {
+		if (!props.canChange) return;
 		setDeleteFailed(null);
 		try {
 			const record = await api.remove(uri);
@@ -194,7 +196,7 @@ export function NoteReader(props: NoteReaderProps) {
 					</p>
 				) : null}
 				<div className="mx-editbar">
-					<button type="button" className="mx-btn mx-btn-solid" onClick={askSave}>
+					<button type="button" className="mx-btn mx-btn-solid" disabled={!props.canChange} onClick={askSave}>
 						Save changes
 					</button>
 					<button
