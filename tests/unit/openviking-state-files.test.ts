@@ -1,11 +1,10 @@
 /**
  * Backend #137: spec 2677060e / 3a56d6a3 (Architecture rm-19da6607, rm-9724bae9, rm-84facfcf) and Ops #810's verified
  * telemetry names (rm-43f3ed93). Each state-file reader takes the #810 names and the older ones in the same file;
- * `session_commits_24h` counts a session committing its own work only, classified by URI + source, never one name;
- * `role_memory_folder_count` counts canonical `viking://user/<role>/memories` folders and never feeds a verdict.
+ * a session commit is a session committing its own work only, classified by URI + source, never one name.
  * Backend #139 (Architecture #523 rm-0964900e, contract R-CHANGELOG-1d, spec c5c47e6 §3): a row's audit action is
- * decided by URI namespace + `source`, never the verb; "commit" is the session-commit classifier above, so audit
- * commits in 24h equal `session_commits_24h`, and migration / lead_direct role writes are `role_memory_write`.
+ * decided by URI namespace + `source`, never the verb; "commit" is the session-commit classifier above, and
+ * migration / lead_direct role writes are `role_memory_write`.
  * Lines are read by the contract key names only (`timestamp`, `source`).
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -16,8 +15,6 @@ import { auditActionOf } from "../../server/openviking/activity.js";
 import {
 	createOpenVikingClient,
 	ISOLATED_AGENT_MEMORY_ABSTRACT,
-	OPENVIKING_ROLES,
-	WINDOW_24H_MS,
 	type OpenVikingAuditAction,
 } from "../../server/openviking/index.js";
 import {
@@ -35,20 +32,11 @@ const ok = (result: unknown) =>
 	});
 const notFound = () => new Response(JSON.stringify({ status: "error", error: { code: "NOT_FOUND" } }), { status: 404 });
 
-/** A `:1933` stand-in where only `withFolder` roles have a `viking://user/<role>/memories` folder. */
-function daemon(withFolder: readonly string[] = OPENVIKING_ROLES, up = true): typeof fetch {
-	return async (input) => {
-		if (!up) throw new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:1933");
-		const url = new URL(String(input));
-		if (url.pathname === "/health") return ok(undefined);
-		if (url.pathname === "/api/v1/observer/system") return ok({ components: {} });
-		if (url.pathname !== "/api/v1/fs/ls") return notFound();
-		const uri = url.searchParams.get("uri") ?? "";
-		const role = /^viking:\/\/user\/([a-z]+)\/memories$/.exec(uri)?.[1];
-		if (role === undefined || role === "default") return ok([]);
-		return withFolder.includes(role) ? ok([]) : notFound();
-	};
-}
+/** A `:1933` stand-in that answers `/health` only. */
+const daemon: typeof fetch = async (input) => {
+	const url = new URL(String(input));
+	return url.pathname === "/health" ? ok(undefined) : notFound();
+};
 
 const write = (dir: string, name: string, value: object | object[]) =>
 	writeFileSync(
@@ -121,9 +109,8 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 		for (const [name, value] of Object.entries(files)) write(dir, name, value);
 		return dir;
 	};
-	const client = (dir: string, fetchImpl = daemon()) =>
-		createOpenVikingClient({ stateDir: dir, fetchImpl, now: () => NOW });
-	const overview = (dir: string, fetchImpl = daemon()) => client(dir, fetchImpl).getOverview();
+	const client = (dir: string) => createOpenVikingClient({ stateDir: dir, fetchImpl: daemon, now: () => NOW });
+	const overview = (dir: string) => client(dir).getOverview();
 
 	it("session commits (#521): queue_done / session_commit_200k adds to a session URI, old and new names; nothing else", async () => {
 		const lines: [object, boolean][] = [
@@ -150,8 +137,6 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 		expect(records.map((r) => r.sessionCommit)).toEqual(lines.map(([, commit]) => commit));
 
 		const o = await overview(dir);
-		expect(o.changelog.session_commits_24h).toBe(5);
-		expect(o.changelog).not.toHaveProperty("commits_24h");
 		expect(o.observer.last_commit_at).toBe(minutesAgo(36));
 	});
 
@@ -183,24 +168,8 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 		expect(filtered.events.map((e) => e.id).sort()).toEqual(
 			AUDIT_CASES.flatMap(([, action], i) => (action === "role_memory_write" ? [`changelog:${i + 1}`] : [])).sort(),
 		);
-	});
-
-	it('#139 audit "commit" rows in 24h equal changelog.session_commits_24h', async () => {
-		const dir = stateDir({
-			"memory-changelog.jsonl": [
-				change(25 * 60, "add", "viking://session/yesterday", "queue_done"),
-				change(25 * 60, "updated", "viking://user/backend/memories/cases/old.md", "migration", "backend"),
-				...AUDIT_CASES.map(([row]) => row),
-			],
-		});
-		const o = await overview(dir);
-		const commits = (await client(dir).getAudit({ action: "commit", limit: "500" })).events;
-		const commitsIn24h = commits.filter((e) => NOW - Date.parse(e.ts) <= WINDOW_24H_MS).length;
-
-		expect(commits).toHaveLength(5);
-		expect(o.changelog.session_commits_24h).toBe(4);
-		expect(commitsIn24h).toBe(o.changelog.session_commits_24h);
-		expect(o.changelog).toMatchObject({ promotions_24h: 10, rejected_24h: 4 });
+		const commits = await client(dir).getAudit({ action: "commit", limit: "500" });
+		expect(commits.events).toHaveLength(4);
 	});
 
 	it("#139 lines are read by the contract key names only: timestamp envelope, source (rm-0964900e)", async () => {
@@ -223,238 +192,49 @@ describe("OpenViking state files and spec 2677060e (Backend #137)", () => {
 		expect((await readMetricsRecords(paths)).map((m) => m.line)).toEqual([1]);
 	});
 
-	it("sync_resource_failed is not a memory write: kept out of every changelog count and the panel's freshness", async () => {
+	it("sync_resource_failed is not a memory write: it never makes the overview fresh", async () => {
 		const failed = (min: number) =>
 			change(min, "sync_resource_failed", "viking://resources/product-autopilot", "wt_land");
 		const o = await overview(stateDir({ "memory-changelog.jsonl": [failed(3), failed(2)] }));
-		expect(o.changelog).toMatchObject({
-			session_commits_24h: 0,
-			promotions_24h: 0,
-			rejected_24h: 0,
-			last_event_at: null,
-			health_state: "zero-activity",
-		});
+		expect(o).toMatchObject({ screen_state: "empty", health_state: "zero-activity" });
 
 		const mixed = stateDir({
-			"memory-changelog.jsonl": [change(20, "sync_resource", "viking://resources/rollcall", "wt_land"), failed(1)],
+			"memory-changelog.jsonl": [change(2, "sync_resource", "viking://resources/rollcall", "wt_land"), failed(1)],
 		});
-		expect((await overview(mixed)).changelog).toMatchObject({ promotions_24h: 1, last_event_at: minutesAgo(20) });
+		expect(await overview(mixed)).toMatchObject({ screen_state: "live", health_state: "healthy" });
 	});
 
-	it("role_memory_folder_count: canonical role folders found (0..15), never liveness, never a degraded verdict", async () => {
-		const some = OPENVIKING_ROLES.slice(0, 12);
-		const o = await overview(stateDir(), daemon(some));
-		expect(o.observer).toMatchObject({
-			role_memory_folder_count: 12,
-			roles_total_count: 15,
-			mode_label: "Active",
-			health_state: "healthy",
+	it("rollout-state.json: a role on the local fallback reads stale; none reads as the data says", async () => {
+		const fresh = [change(2, "add", "viking://session/20261111-a", "queue_done")];
+		const fallback = stateDir({
+			"memory-changelog.jsonl": fresh,
+			"rollout-state.json": { stage: "partial", fallback_roles: ["qa"] },
 		});
-		expect(o.observer).not.toHaveProperty("roles_online_count");
-		expect(o.screen_state).not.toBe("stale");
-		expect((await overview(stateDir(), daemon([]))).observer).toMatchObject({
-			role_memory_folder_count: 0,
-			mode_label: "Active",
+		expect(await overview(fallback)).toMatchObject({ screen_state: "stale", health_state: "stale" });
+
+		const none = stateDir({
+			"memory-changelog.jsonl": fresh,
+			"rollout-state.json": { phase: "phase2", fallback_roles: [], pending_wt_land_syncs: [] },
 		});
+		expect(await overview(none)).toMatchObject({ screen_state: "live", health_state: "healthy" });
 
-		const down = await overview(stateDir(), daemon(OPENVIKING_ROLES, false));
-		expect(down.observer).toMatchObject({ role_memory_folder_count: null, mode_label: "Offline", queue_depth: null });
-
-		const fallback = stateDir({ "rollout-state.json": { stage: "partial", fallback_roles: ["qa"] } });
-		expect((await overview(fallback)).observer.mode_label).toBe("Degraded Local Fallback");
+		expect(await overview(stateDir({ "memory-changelog.jsonl": fresh }))).toMatchObject({ screen_state: "live" });
 	});
 
-	it("metrics.jsonl: #810 worker_prefetch_inject slots[] feed the slot strip; old turn_start lines stay totals only", async () => {
-		const slot = (n: number, name: string, state: string, hits: number, tokens: number) => ({
-			slot: n,
-			name,
-			state,
-			uris: hits ? [`viking://user/ops/memories/cases/c${n}.md`] : [],
-			l0_hit_count: hits,
-			l1_expanded_count: hits,
-			injected_tokens_est: tokens,
-		});
-		const dir = stateDir({
-			"metrics.jsonl": [
-				{ timestamp: minutesAgo(3), event: "turn_start", mode: "lead_l0", role: "ops", l0_hits: 1, tokens_est: 100 },
-				{
-					timestamp: minutesAgo(2),
-					event: "worker_prefetch_inject",
-					role: "architecture",
-					session_id: "01a1cb7f-f95a-7723-8686-91872459ccc2",
-					chat_mode: "worker",
-					project: null,
-					l0_hit_count: 2,
-					l1_expanded_count: 2,
-					injected_tokens_est: 2247,
-					degraded_slots: [],
-					dropped_slots: [],
-					slots: [
-						slot(1, "project_overview", "skipped", 0, 0),
-						slot(2, "shared_entity", "skipped", 0, 0),
-						slot(3, "matching_spec", "miss", 0, 0),
-						slot(4, "role_cases", "hit", 2, 1048),
-						slot(5, "sibling_docs", "miss", 0, 0),
-					],
-				},
-			],
-		});
-		const o = await overview(dir);
-		expect(o.metrics).toMatchObject({ turns_sampled_24h: 2, avg_injected_tokens: 1174, slot_hit_rate_pct: 100 });
-		// #156: `project: null`, so slots 1-3 have no sample from this turn (slot 3's `miss` included).
-		expect(o.slots.map((s) => [s.slot_id, s.hit_rate_pct, s.avg_tokens])).toEqual([
-			[1, null, null],
-			[2, null, null],
-			[3, null, null],
-			[4, 100, 1048],
-			[5, 0, 0],
-		]);
-
-		const noSlots = stateDir({
-			"metrics.jsonl": [{ timestamp: minutesAgo(1), event: "turn_start", role: "ops", l0_hits: 0, tokens_est: 5 }],
-		});
-		expect((await overview(noSlots)).slots.every((s) => s.state === "unmeasured-gap")).toBe(true);
-	});
-
-	it("metrics.jsonl: #828 a session_id that is not a pi session uuid is never a sample, so no rate is read off it", async () => {
-		const foreignSessionLine = (min: number) => ({
+	it("metrics.jsonl: #828 a session_id that is not a pi session uuid is never a sample, so never freshness", async () => {
+		const line = (min: number, session_id: string) => ({
 			timestamp: minutesAgo(min),
 			event: "worker_prefetch_inject",
 			role: "ops",
-			session_id: "worker-sess-803",
+			session_id,
 			chat_mode: "worker",
-			project: "pi-web-ui",
-			l0_hit_count: 5,
-			l1_expanded_count: 5,
-			injected_tokens_est: 1200,
-			slots: [1, 2, 3, 4, 5].map((n) => ({
-				slot: n,
-				name: `s${n}`,
-				state: "hit",
-				uris: [`viking://resources/pi-web-ui/f${n}.md`],
-				l0_hit_count: 1,
-				l1_expanded_count: 1,
-				injected_tokens_est: 240,
-			})),
 		});
+		const onlyForeign = stateDir({ "metrics.jsonl": [line(2, "worker-sess-803"), line(1, "worker-sess-803")] });
+		expect(await overview(onlyForeign)).toMatchObject({ screen_state: "empty", health_state: "zero-activity" });
 
-		// Foreign session ids alone: every slot reads "never measured", not a 100% hit rate.
-		const onlyForeign = await overview(stateDir({ "metrics.jsonl": [foreignSessionLine(20), foreignSessionLine(10)] }));
-		expect(onlyForeign.slots.map((s) => [s.hit_rate_pct, s.state])).toEqual([
-			[null, "unmeasured-gap"],
-			[null, "unmeasured-gap"],
-			[null, "unmeasured-gap"],
-			[null, "unmeasured-gap"],
-			[null, "unmeasured-gap"],
-		]);
-		expect(onlyForeign.metrics).toMatchObject({
-			turns_sampled_24h: 0,
-			slot_hit_rate_pct: null,
-			avg_injected_tokens: null,
-			last_recorded_at: null,
+		const real = stateDir({
+			"metrics.jsonl": [line(2, "worker-sess-803"), line(1, "01a1cb9c-0568-746a-9b58-ac58c00fc9c3")],
 		});
-
-		// Mixed: the real miss stands on its own, undiluted by the two foreign-session hits.
-		const realMiss = {
-			timestamp: minutesAgo(5),
-			event: "worker_prefetch_inject",
-			role: "ops",
-			session_id: "01a1cb9c-0568-746a-9b58-ac58c00fc9c3",
-			chat_mode: "worker",
-			project: "pi-openviking",
-			l0_hit_count: 0,
-			l1_expanded_count: 0,
-			injected_tokens_est: 0,
-			slots: [{ slot: 1, name: "project_overview", state: "miss", uris: [], l0_hit_count: 0, injected_tokens_est: 0 }],
-		};
-		const mixed = await overview(
-			stateDir({ "metrics.jsonl": [foreignSessionLine(20), foreignSessionLine(10), realMiss] }),
-		);
-		expect(mixed.slots[0]).toMatchObject({ slot_id: 1, hit_rate_pct: 0 });
-		expect(mixed.metrics).toMatchObject({ turns_sampled_24h: 1, slot_hit_rate_pct: 0 });
-	});
-
-	it("metrics.jsonl: post_task_digest extracted_count null stays null (not measured), never 0; old names still read", async () => {
-		const digest = (min: number, fields: object) => ({
-			timestamp: minutesAgo(min),
-			event: "post_task_digest",
-			role: "ops",
-			taskId: 820,
-			...fields,
-		});
-		const dir = stateDir({
-			"metrics.jsonl": [
-				digest(4, { extracted_count: null, dedup_skipped_count: 2, rm_dedup_skipped_count: 2 }),
-				digest(3, { extracted_count: 0, dedup_skipped_count: 0, rm_dedup_skipped_count: 0 }),
-				digest(2, { extracted: 3, dedup_skipped: 1 }),
-				digest(1, {}),
-			],
-		});
-		const records = await readMetricsRecords(resolveOpenVikingStatePaths(dir));
-		expect(records.map((r) => [r.extractedCount, r.dedupSkippedCount])).toEqual([
-			[null, 2],
-			[0, 0],
-			[3, 1],
-			[null, null],
-		]);
-		expect((await overview(dir)).metrics.rm_dedup_skipped_24h).toBe(3);
-	});
-
-	it("rollout-state.json and migration-verification.json: #810 names and the older ones", async () => {
-		const live = await overview(
-			stateDir({
-				"rollout-state.json": {
-					stage: "full",
-					updated_at: minutesAgo(5),
-					fallback_roles: [],
-					pending_wt_land_syncs: [],
-				},
-				"migration-verification.json": {
-					verified_at: minutesAgo(60),
-					status: "PASS",
-					total_checked: 21,
-					roles_passed: 15,
-					total_roles: 15,
-					repos_passed: 6,
-					total_repos: 6,
-				},
-			}),
-		);
-		expect(live.auxiliary.rollout).toMatchObject({ stage: "full", updated_at: minutesAgo(5) });
-		expect(live.auxiliary.migration).toMatchObject({
-			verified_at: minutesAgo(60),
-			status: "PASS",
-			total_checked: 21,
-			roles_passed: 15,
-			total_roles: 15,
-			repos_passed: 6,
-			total_repos: 6,
-		});
-
-		const old = await overview(
-			stateDir({
-				"rollout-state.json": { phase: "phase2", cutover_ts: minutesAgo(600), pending_wt_land_syncs: [] },
-				"migration-verification.json": { verified_at: minutesAgo(90), total_roles: 15, total_repos: 6 },
-			}),
-		);
-		expect(old.auxiliary.rollout).toMatchObject({ stage: null, updated_at: minutesAgo(600) });
-		// `phase` has no writer (frozen rollout marker): never exposed, even when the file carries it (backend #154).
-		expect(old.auxiliary.rollout).not.toHaveProperty("phase");
-		expect(old.auxiliary.migration).toMatchObject({ verified_at: minutesAgo(90), total_checked: 21 });
-	});
-
-	it("seen-role-messages.json: schema_version or version envelope; an absent file gives null fields, not 0 or an error", async () => {
-		const entries = { "rm-51ac955d": { role: "ops" }, "rm-dd387b45": { role: "product" } };
-		const current = stateDir({
-			"seen-role-messages.json": { schema_version: 1, updated_at: minutesAgo(7), entries },
-		});
-		expect((await overview(current)).auxiliary.dedup).toEqual({ seen_count: 2, updated_at: minutesAgo(7) });
-
-		const older = stateDir({ "seen-role-messages.json": { version: 1, updated_at: minutesAgo(8), entries: {} } });
-		expect((await overview(older)).auxiliary.dedup).toEqual({ seen_count: 0, updated_at: minutesAgo(8) });
-
-		const absent = await overview(stateDir());
-		expect(absent.auxiliary.dedup).toEqual({ seen_count: null, updated_at: null });
-		expect(absent.screen_state).not.toBe("error");
+		expect(await overview(real)).toMatchObject({ screen_state: "live", health_state: "healthy" });
 	});
 });

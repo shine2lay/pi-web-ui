@@ -14,7 +14,7 @@ Part of [spec.md](spec.md) (architecture #541). Pinned to Design's hand-off `/ho
 
 ## G1 One Note Count
 
-- **R-EXPLORER-COUNT-1:** a note = a file (`isDir: false`) under the 17 roots from the G2 walk. `notes_total` is the one count: the health line and the tree both show it. `observer.store_counts` and `/entries` row counts are other counts and never shown as it. Unmeasured -> `null`, never `0` (as `pending_syncs_count`, `unread_count`).
+- **R-EXPLORER-COUNT-1:** a note = a file (`isDir: false`) under the 17 roots from the G2 walk. `notes_total` is the one count: the health line and the tree both show it. No other count is shown as it. Unmeasured -> `null`, never `0` (as `pending_syncs_count`, `unread_count`).
 
 ## G2 Tree (Lazy, A4)
 
@@ -23,9 +23,9 @@ Part of [spec.md](spec.md) (architecture #541). Pinned to Design's hand-off `/ho
 | Field | Type | Null / meaning |
 |---|---|---|
 | `checked_at` | ISO | request time |
-| `health_state` | as `/overview` | `/health` alone (§3a) |
+| `health_state` | as `/overview` | `/health` alone ([spec-states.md](spec-states.md) §4) |
 | `notes_total` | int \| null | sum of `roots[].notes`; `null` when any root is unread |
-| `unread_count`, `roots_partial` | int, bool | roots that did not answer; `roots_partial` = `unread_count > 0` (§3a shape) |
+| `unread_count`, `roots_partial` | int, bool | roots that did not answer; `roots_partial` = `unread_count > 0`; every root that read is still returned |
 | `roots[]` | 17 rows, constant order | `{ uri, group, role (null unless department), read, notes, folders, kinds: { rule, case, fact, event, document, other } }`; unread root: `read: false`, counts `null`, row kept; daemon `NOT_FOUND`: `read: true`, `0` |
 | `recent[]` | 12 rows | newest files over read roots: `{ uri, root, kind, size, mod_time, locked }` |
 

@@ -1,9 +1,8 @@
 /**
- * OpenViking Memory Dashboard — Express route handlers and transport adapter seam.
+ * OpenViking memory — Express route handlers and transport adapter seam.
  *
  * Exposes read-only endpoints:
  * - GET /api/openviking/overview
- * - GET /api/openviking/entries
  * - GET /api/openviking/audit
  * Non-GET requests return HTTP 405 Method Not Allowed (Allow: GET).
  * The Memory Explorer's read routes (tree/roots, tree, note, search) are registered from explorer-read-routes.ts,
@@ -27,8 +26,6 @@ import type {
 	OpenVikingAuditQuery,
 	OpenVikingAuditResponse,
 	OpenVikingDashboardOptions,
-	OpenVikingEntriesQuery,
-	OpenVikingEntriesResponse,
 	OpenVikingOverviewResponse,
 } from "./types.js";
 
@@ -43,21 +40,6 @@ export async function handleOpenVikingOverviewRequest(
 	}
 	try {
 		return okResult(await client.getOverview());
-	} catch (err) {
-		return toErrorResult(err);
-	}
-}
-
-export async function handleOpenVikingEntriesRequest(
-	client: OpenVikingDaemonClient,
-	query: OpenVikingEntriesQuery = {},
-	method = "GET",
-): Promise<OpenVikingRouteResult<OpenVikingEntriesResponse>> {
-	if (method.toUpperCase() !== "GET") {
-		return methodNotAllowedResult(method, "/api/openviking/entries");
-	}
-	try {
-		return okResult(await client.getEntries(query));
 	} catch (err) {
 		return toErrorResult(err);
 	}
@@ -88,21 +70,6 @@ export function registerOpenVikingRoutes(
 
 	app.all("/api/openviking/overview", async (req: Request, res: Response) => {
 		const result = await handleOpenVikingOverviewRequest(client, req.method);
-		sendRouteResult(res, result);
-	});
-
-	app.all("/api/openviking/entries", async (req: Request, res: Response) => {
-		const result = await handleOpenVikingEntriesRequest(
-			client,
-			{
-				scope: req.query.scope,
-				role: req.query.role,
-				uri: req.query.uri,
-				tier: req.query.tier,
-				include_content: req.query.include_content,
-			},
-			req.method,
-		);
 		sendRouteResult(res, result);
 	});
 

@@ -914,6 +914,7 @@ describe("writes: G7 change record and /audit", () => {
 		]);
 		const { status, body } = await x.call("GET", "/api/openviking/overview");
 		expect(status).toBe(200);
-		expect(body.changelog).toMatchObject({ session_commits_24h: 0, promotions_24h: 0, rejected_24h: 0 });
+		// #164: the promotion and rejection counts left with the dashboard; an owner line is still no session commit.
+		expect(body.observer.last_commit_at).toBeNull();
 	});
 });

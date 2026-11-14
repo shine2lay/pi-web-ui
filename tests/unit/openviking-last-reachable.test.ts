@@ -1,7 +1,7 @@
 /**
  * Backend #140: `observer.last_reachable_at` (spec 895b0cb1, ruling rm-5bbe0bcc): the ISO time of the last `/health`
  * that answered ok, seen by this server process. Held while `:1933` is down, null only before the first ok, never
- * `checked_at` (request time), and it gates nothing: screen_state, mode_label and health_state are the same whether
+ * `checked_at` (request time), and it gates nothing: screen_state and health_state are the same whether
  * it is null or set.
  */
 import { mkdtempSync, rmSync } from "node:fs";
@@ -41,7 +41,7 @@ describe("observer.last_reachable_at (Backend #140, spec 895b0cb1)", () => {
 			fake.state.mode = mode;
 			clock.t += minutes(1);
 			const o = await client.getOverview();
-			expect(o.observer.mode_label).toBe("Offline");
+			expect(o.health_state).toBe("server-unreachable");
 			expect(o.observer.last_reachable_at).toBeNull();
 			expect(o.observer.checked_at).toBe(iso(clock.t));
 			const wire = JSON.stringify(o);
@@ -53,7 +53,7 @@ describe("observer.last_reachable_at (Backend #140, spec 895b0cb1)", () => {
 	it("is the time of the ok /health, advancing with each ok answer", async () => {
 		const { clock, client } = setup("up");
 		const first = await client.getOverview();
-		expect(first.observer.mode_label).toBe("Active");
+		expect(first.health_state).not.toBe("server-unreachable");
 		expect(first.observer.last_reachable_at).toBe(iso(NOW));
 
 		clock.t = NOW + 30_000;
@@ -62,7 +62,7 @@ describe("observer.last_reachable_at (Backend #140, spec 895b0cb1)", () => {
 		expect(JSON.parse(JSON.stringify(next)).observer.last_reachable_at).toBe(iso(NOW + 30_000));
 	});
 
-	it("is held while :1933 is down (refused, hung, healthy:false) while the other :1933 fields go null", async () => {
+	it("is held while :1933 is down (refused, hung, healthy:false)", async () => {
 		const { fake, clock, client } = setup("up");
 		expect((await client.getOverview()).observer.last_reachable_at).toBe(iso(NOW));
 
@@ -71,31 +71,12 @@ describe("observer.last_reachable_at (Backend #140, spec 895b0cb1)", () => {
 			clock.t += minutes(5);
 			const o = await client.getOverview();
 			expect(o).toMatchObject({ screen_state: "error", health_state: "server-unreachable" });
-			expect(o.observer).toMatchObject({
-				mode_label: "Offline",
-				health_state: "server-unreachable",
-				role_memory_folder_count: null,
-				retrieval_latency_avg_ms: null,
-				retrieval_hit_rate_pct: null,
-				last_reachable_at: iso(NOW),
-				checked_at: iso(clock.t),
-			});
-			expect(Object.values(o.observer.store_counts.layer1_shared).every((v) => v === null)).toBe(true);
+			expect(o.observer).toMatchObject({ last_reachable_at: iso(NOW), checked_at: iso(clock.t) });
 		}
 
 		fake.state.mode = "up";
 		clock.t += minutes(1);
 		expect((await client.getOverview()).observer.last_reachable_at).toBe(iso(clock.t));
-	});
-
-	it("an ok /health from the entries endpoint counts too: one holder, fed by the single /health path", async () => {
-		const { fake, clock, client } = setup("up");
-		await client.getEntries({ scope: "resources" });
-		fake.state.mode = "down";
-		clock.t += minutes(2);
-		const o = await client.getOverview();
-		expect(o.observer.last_reachable_at).toBe(iso(NOW));
-		expect(o.observer.checked_at).toBe(iso(NOW + minutes(2)));
 	});
 
 	it("gates nothing: with :1933 down, a server that saw an ok and one that never did answer the same overview", async () => {
@@ -112,9 +93,6 @@ describe("observer.last_reachable_at (Backend #140, spec 895b0cb1)", () => {
 		const verdicts = (o: OpenVikingOverviewResponse) => ({
 			screen_state: o.screen_state,
 			health_state: o.health_state,
-			mode_label: o.observer.mode_label,
-			observer_health_state: o.observer.health_state,
-			stale_badge: o.observer.stale_badge,
 		});
 		expect(verdicts(withField)).toEqual(verdicts(withoutField));
 		const { last_reachable_at: _set, ...restSet } = withField.observer;

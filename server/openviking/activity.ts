@@ -1,6 +1,6 @@
 /**
  * OpenViking Memory Dashboard — the one mapping from state-file lines to audit actions,
- * guard verdicts and activity rows, with R-ISOLATION-1 redaction of personal summaries.
+ * guard verdicts and audit events, with R-ISOLATION-1 redaction of personal summaries.
  */
 import type { OpenVikingChangelogRecord, OpenVikingMetricsRecord } from "./state-files.js";
 import type { OpenVikingOwnerAuditFields } from "./explorer-types.js";
@@ -9,14 +9,13 @@ import {
 	type OpenVikingAuditEvent,
 	type OpenVikingAuditEventAction,
 	type OpenVikingGuardVerdict,
-	type OpenVikingLiveActivityItem,
 } from "./types.js";
 import { isSharedUri } from "./uri.js";
 
 /**
  * Contract R-CHANGELOG-1d (#523): what kind of write a row is, by URI namespace + `source`, never the verb.
  * "commit" is exactly the one session-commit classifier (`sessionCommit`, state-files.ts), so the audit's commits
- * in 24h are `changelog.session_commits_24h`. Any other add/update/delete is a shared promotion (`viking://resources/`,
+ * are the commits `observer.last_commit_at` dates. Any other add/update/delete is a shared promotion (`viking://resources/`,
  * `viking://user/default/`) or else a role memory write (`viking://user/<role>/`, alias `viking://agent/`: live
  * `migration`, `lead_direct`); a URI that cannot be classified fails closed as personal. Preference rows keep their
  * verdicts; the agent-tools sync rows fold as the contract states. R-CHANGELOG-1e: the owner's own lines
@@ -76,11 +75,8 @@ interface Timed<T> {
 	item: T;
 }
 
-function newestFirst<T>(rows: Timed<T>[], limit: number): T[] {
-	return rows
-		.sort((a, b) => b.tsMs - a.tsMs || b.order - a.order)
-		.slice(0, limit)
-		.map((r) => r.item);
+function newestFirst<T>(rows: Timed<T>[]): T[] {
+	return rows.sort((a, b) => b.tsMs - a.tsMs || b.order - a.order).map((r) => r.item);
 }
 
 const NOT_OWNER: OpenVikingOwnerAuditFields = { operation_id: null, outcome: null, undone: null };
@@ -152,62 +148,5 @@ export function buildAuditEvents(
 			},
 		});
 	}
-	return newestFirst(rows, rows.length);
-}
-
-function injectionSummary(m: OpenVikingMetricsRecord): string {
-	const inj = m.injection;
-	const mode =
-		inj?.mode === "lead" ? "Lead L0 injection" : inj?.mode === "worker" ? "Worker Turn-1 prefetch" : "Injection";
-	const count = (v: number | null | undefined) => (v === null || v === undefined ? "unmeasured" : String(v));
-	return `${mode}: ${count(inj?.l0HitCount)} L0 hits, ${count(inj?.l1ExpandedCount)} L1 expansions`;
-}
-
-export function buildLiveActivity(
-	changelog: readonly OpenVikingChangelogRecord[],
-	metrics: readonly OpenVikingMetricsRecord[],
-	limit = 25,
-): OpenVikingLiveActivityItem[] {
-	const rows: Timed<OpenVikingLiveActivityItem>[] = [];
-	for (const r of changelog) {
-		const action = auditActionOf(r);
-		if (!action) continue;
-		const status = action === "reject_noise" ? "rejected" : action === "sidecar_timeout" ? "degraded" : "ok";
-		rows.push({
-			tsMs: r.tsMs,
-			order: r.line,
-			item: {
-				id: `changelog:${r.line}`,
-				ts: r.ts,
-				role: r.role ?? "unknown",
-				task_id: r.taskId,
-				action: r.rawAction,
-				count_value: null,
-				count_unit: null,
-				status,
-				summary_1line: visibleSummary(r.uri, r.role, r.summary),
-			},
-		});
-	}
-	for (const m of metrics) {
-		if (!m.injection && !isDegradedCommit(m)) continue;
-		const tokens = m.injection ? m.injection.injectedTokensEst : m.evictedTokens;
-		const unavailable = m.injection?.slots?.some((s) => s.state === "unavailable") ?? false;
-		rows.push({
-			tsMs: m.tsMs,
-			order: m.line,
-			item: {
-				id: `metrics:${m.line}`,
-				ts: m.ts,
-				role: m.role ?? "unknown",
-				task_id: m.taskId,
-				action: m.event,
-				count_value: tokens,
-				count_unit: tokens === null ? null : "tokens",
-				status: m.injection && !unavailable ? "ok" : "degraded",
-				summary_1line: m.injection ? injectionSummary(m) : DEGRADED_COMMIT_SUMMARY,
-			},
-		});
-	}
-	return newestFirst(rows, limit);
+	return newestFirst(rows);
 }

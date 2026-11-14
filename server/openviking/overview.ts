@@ -1,53 +1,39 @@
 /**
- * OpenViking Memory Dashboard — `GET /api/openviking/overview`: every sum, average, percentage and
- * health verdict the page shows is computed here (the browser only formats, spec A07).
+ * OpenViking memory — `GET /api/openviking/overview`: the Memory Explorer's health line. Every verdict is computed
+ * here (the browser only formats, spec A07); the answer carries only what the explorer reads (spec-explorer-build.md).
  */
-import { auditActionOf, buildLiveActivity } from "./activity.js";
 import type { OpenVikingDaemonHttp } from "./daemon-http.js";
-import type { OpenVikingMemoryTreeCache } from "./memory-tree-cache.js";
-import { readObserverSnapshot, type OpenVikingObserverSnapshot } from "./observer.js";
 import {
 	isMemoryWrite,
 	readChangelogRecords,
 	readMetricsRecords,
-	readMigrationState,
 	readRolloutState,
-	readSeenRoleMessages,
 	type OpenVikingChangelogRecord,
 	type OpenVikingMetricsRecord,
 	type OpenVikingRolloutState,
 	type OpenVikingStatePaths,
 } from "./state-files.js";
 import {
-	OPENVIKING_CONTEXT_SLOTS,
 	OPENVIKING_PENDING_SYNC_BADGE,
-	OPENVIKING_ROLES,
 	OVERVIEW_CHANGELOG_CADENCE_MS,
 	OVERVIEW_METRICS_CADENCE_MS,
-	OVERVIEW_OBSERVER_CADENCE_MS,
 	OpenVikingDashboardError,
 	WINDOW_24H_MS,
-	type OpenVikingAuxiliaryState,
-	type OpenVikingChangelogSummary,
 	type OpenVikingHealthState,
-	type OpenVikingMetricsSummary,
-	type OpenVikingObserverSummary,
 	type OpenVikingOverviewResponse,
 	type OpenVikingScreenState,
-	type OpenVikingSlotSummary,
 } from "./types.js";
+import { resolveRequestHeaders } from "./uri.js";
 
-const round1 = (v: number) => Math.round(v * 10) / 10;
 const isoOrNull = (ms: number) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
 const latestMs = (rows: readonly { tsMs: number }[]) => rows.reduce((m, r) => Math.max(m, r.tsMs), -Infinity);
 
 /**
- * The one rule every panel's `(health_state, stale_badge)` comes from (spec-states.md §4, ruling rm-b5272a3e).
+ * The one rule every reading's `(health_state, stale_badge)` comes from (spec-states.md §4, ruling rm-b5272a3e).
  *
  * No data in the window -> zero-activity. Newest data past the cadence -> stale, badged with the age; **the age
  * wins** over a waiting sync. Inside the cadence while a `wt land` sync waits -> stale, badged `sync.badge`
  * (`"pending sync"`) and **never an age**, so a badge never names a cause the reading does not have (#138 row 32).
- * Panels with no sync input (metrics, changelog, slots) pass no `sync` and can only read an age.
  */
 export function panelHealth<B extends string, S extends string = never>(
 	dataCount: number,
@@ -63,96 +49,30 @@ export function panelHealth<B extends string, S extends string = never>(
 	return { health_state: "healthy", stale_badge: null };
 }
 
-/** The sync half of that rule, read from `rollout-state.json` in one place for the three panels that use it. */
+/** The sync half of that rule, read from `rollout-state.json` in one place. */
 export const pendingSyncCause = (rollout: OpenVikingRolloutState) => ({
 	pending: rollout.pending_wt_land_syncs.length,
 	badge: OPENVIKING_PENDING_SYNC_BADGE,
 });
 
 /**
- * #828: a line whose `session_id` is not a pi session uuid is not a live sample — it is evidence of a bad write.
- * Every rate, count and freshness stamp on this page is read off pi sessions only.
+ * How fresh the injection samples are. #828: a line whose `session_id` is not a pi session uuid is not a live
+ * sample — it is evidence of a bad write — so freshness is read off pi sessions only.
  */
-function measured(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingMetricsRecord[] {
-	return records.filter((r) => r.piSession && nowMs - r.tsMs <= WINDOW_24H_MS);
+function metricsHealth(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingHealthState {
+	const pi = records.filter((r) => r.piSession);
+	const recent = pi.filter((r) => nowMs - r.tsMs <= WINDOW_24H_MS);
+	return panelHealth(recent.length, latestMs(pi), nowMs, OVERVIEW_METRICS_CADENCE_MS, "> 5m").health_state;
 }
 
-export function summarizeMetrics(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingMetricsSummary {
-	const recent = measured(records, nowMs);
-	const injections = recent.flatMap((r) => (r.injection ? [r.injection] : []));
-	const hits = injections.map((i) => i.l0HitCount).filter((v): v is number => v !== null);
-	const tokens = injections.map((i) => i.injectedTokensEst).filter((v): v is number => v !== null);
-	const last = latestMs(records.filter((r) => r.piSession));
-	return {
-		slot_hit_rate_pct: hits.length ? round1((100 * hits.filter((h) => h > 0).length) / hits.length) : null,
-		avg_injected_tokens: tokens.length ? Math.round(tokens.reduce((a, b) => a + b, 0) / tokens.length) : null,
-		turns_sampled_24h: injections.length,
-		mode1_lead_l0_injections_24h: injections.filter((i) => i.mode === "lead").length,
-		mode2_worker_turn1_prefetches_24h: injections.filter((i) => i.mode === "worker").length,
-		lead_200k_commits_24h: recent.filter((r) => r.event === "lead_200k_commit").length,
-		rm_dedup_skipped_24h: recent.reduce((n, r) => n + (r.dedupSkippedCount ?? 0), 0),
-		last_recorded_at: isoOrNull(last),
-		...panelHealth(recent.length, last, nowMs, OVERVIEW_METRICS_CADENCE_MS, "> 5m" as const),
-	};
-}
-
-/** A slot `skipped` (no project slug) or `unavailable` (server error) made no lookup, so it is not a miss (#809). */
-const NOT_LOOKED_UP = new Set(["skipped", "unavailable"]);
-
-/**
- * #156 (QA #136 F2): slots 1-3 look things up by project, so a turn with no project is not a slot 1-3 sample,
- * whatever state it recorded — the pre-fix lines marked slot 3 a `miss` with no project and diluted its rate.
- */
-const PROJECT_SLOT_IDS = new Set([1, 2, 3]);
-
-/** G3: per-slot figures exist only once injection lines carry `slots[]`; until then `unmeasured-gap`. */
-export function summarizeSlots(records: readonly OpenVikingMetricsRecord[], nowMs: number): OpenVikingSlotSummary[] {
-	const recent = measured(records, nowMs).filter((r) => r.injection?.slots);
-	return OPENVIKING_CONTEXT_SLOTS.map((def) => {
-		const turns = PROJECT_SLOT_IDS.has(def.slot_id) ? recent.filter((r) => r.injection?.project) : recent;
-		const samples = turns.flatMap((r) =>
-			(r.injection?.slots ?? []).filter((s) => s.slot === def.slot_id).map((s) => ({ ...s, tsMs: r.tsMs })),
-		);
-		const base = { slot_id: def.slot_id, label: def.label, uri_prefix: def.uri_prefix };
-		if (samples.length === 0) {
-			return { ...base, hit_rate_pct: null, avg_tokens: null, state: "unmeasured-gap", last_sampled_at: null };
-		}
-		const lookedUp = samples.filter((s) => s.state === null || !NOT_LOOKED_UP.has(s.state));
-		const hits = lookedUp.filter((s) => s.state === "hit" || (s.l0HitCount ?? 0) > 0).length;
-		const tokens = lookedUp.map((s) => s.injectedTokensEst).filter((v): v is number => v !== null);
-		const last = latestMs(samples);
-		const health = panelHealth(hits, last, nowMs, OVERVIEW_METRICS_CADENCE_MS, "> 5m");
-		return {
-			...base,
-			hit_rate_pct: lookedUp.length ? round1((100 * hits) / lookedUp.length) : null,
-			avg_tokens: tokens.length ? Math.round(tokens.reduce((a, b) => a + b, 0) / tokens.length) : null,
-			state: health.health_state,
-			last_sampled_at: isoOrNull(last),
-		};
-	});
-}
-
-export function summarizeChangelog(
-	records: readonly OpenVikingChangelogRecord[],
-	nowMs: number,
-): OpenVikingChangelogSummary {
+/** How fresh the memory writes are. */
+function changelogHealth(records: readonly OpenVikingChangelogRecord[], nowMs: number): OpenVikingHealthState {
 	const writes = records.filter(isMemoryWrite);
 	const recent = writes.filter((r) => nowMs - r.tsMs <= WINDOW_24H_MS);
-	const actions = recent.map(auditActionOf);
-	const last = latestMs(writes);
-	return {
-		session_commits_24h: recent.filter((r) => r.sessionCommit).length,
-		promotions_24h: actions.filter((a) => a === "promote_shared").length,
-		rejected_24h: actions.filter((a) => a === "reject_noise").length,
-		last_event_at: isoOrNull(last),
-		...panelHealth(recent.length, last, nowMs, OVERVIEW_CHANGELOG_CADENCE_MS, "> 15m" as const),
-	};
+	return panelHealth(recent.length, latestMs(writes), nowMs, OVERVIEW_CHANGELOG_CADENCE_MS, "> 15m").health_state;
 }
 
-/**
- * Degraded: wt land syncs waiting or roles on the local fallback. The role memory folder count is not liveness
- * and never feeds this verdict (spec 2677060e, "No role liveness (v1)").
- */
+/** Degraded: wt land syncs waiting or roles on the local fallback. */
 const isDegraded = (rollout: OpenVikingRolloutState) =>
 	rollout.pending_wt_land_syncs.length > 0 || rollout.fallback_roles.length > 0;
 
@@ -164,121 +84,59 @@ const HEALTH_BY_SCREEN: Record<OpenVikingScreenState, OpenVikingHealthState> = {
 };
 
 function screenStateOf(
-	snapshot: OpenVikingObserverSnapshot,
+	reachable: boolean,
 	degraded: boolean,
-	metrics: OpenVikingMetricsSummary,
-	changelog: OpenVikingChangelogSummary,
+	readings: OpenVikingHealthState[],
 ): OpenVikingScreenState {
-	if (!snapshot.reachable) return "error";
+	if (!reachable) return "error";
 	if (degraded) return "stale";
-	const panels = [metrics.health_state, changelog.health_state];
-	if (panels.every((h) => h === "zero-activity")) return "empty";
-	return panels.includes("stale") ? "stale" : "live";
+	if (readings.every((h) => h === "zero-activity")) return "empty";
+	return readings.includes("stale") ? "stale" : "live";
 }
 
 /**
  * The #144 fingerprint, made impossible: an answer that calls `:1933` unreachable while its own
  * `last_reachable_at` is later than its `checked_at` means `/health` answered ok inside this very request.
  * Reachability is `/health`'s alone (§4), so the pair cannot be built; if it ever is again, the request fails
- * loudly instead of showing the page a false `Offline`.
+ * loudly instead of showing the page a false "down".
  */
-function assertUnreachableIsConsistent(observer: OpenVikingObserverSummary): void {
-	if (observer.health_state !== "server-unreachable" || observer.last_reachable_at === null) return;
-	if (Date.parse(observer.last_reachable_at) <= Date.parse(observer.checked_at)) return;
+function assertUnreachableIsConsistent(overview: OpenVikingOverviewResponse): void {
+	const { checked_at, last_reachable_at } = overview.observer;
+	if (overview.health_state !== "server-unreachable" || last_reachable_at === null) return;
+	if (Date.parse(last_reachable_at) <= Date.parse(checked_at)) return;
 	throw new OpenVikingDashboardError(
-		`OpenViking overview calls the daemon unreachable, but /health answered ok at ${observer.last_reachable_at}, ` +
-			`after this request's checked_at ${observer.checked_at}`,
+		`OpenViking overview calls the daemon unreachable, but /health answered ok at ${last_reachable_at}, ` +
+			`after this request's checked_at ${checked_at}`,
 		500,
 		"UNREACHABLE_CLAIM_INCONSISTENT",
-		{ last_reachable_at: observer.last_reachable_at, checked_at: observer.checked_at },
+		{ last_reachable_at, checked_at },
 	);
 }
 
 export async function buildOverview(
 	http: OpenVikingDaemonHttp,
-	tree: OpenVikingMemoryTreeCache,
 	paths: OpenVikingStatePaths,
 	nowMs: number,
-	daemonBind: string,
 ): Promise<OpenVikingOverviewResponse> {
-	const [snapshot, metricsRecords, changelogRecords, rolloutReading, migration, seen] = await Promise.all([
-		readObserverSnapshot(http, tree, nowMs),
+	// The one reachability verdict: `/health`. No other read may turn the answer unreachable (§4, #147).
+	const [reachable, metricsRecords, changelogRecords, rollout] = await Promise.all([
+		http.isHealthy(resolveRequestHeaders("user")),
 		readMetricsRecords(paths),
 		readChangelogRecords(paths),
 		readRolloutState(paths),
-		readMigrationState(paths),
-		readSeenRoleMessages(paths),
 	]);
-	const rollout = rolloutReading.state;
-	const metrics = summarizeMetrics(metricsRecords, nowMs);
-	const changelog = summarizeChangelog(changelogRecords, nowMs);
-	const degraded = isDegraded(rollout);
-	const screen_state = screenStateOf(snapshot, degraded, metrics, changelog);
-	const lastInjection = latestMs(metricsRecords.filter((r) => r.injection));
-	const lastCommit = latestMs(changelogRecords.filter((r) => r.sessionCommit));
-	// `/health` answers inside this request, so the daemon reading has no age of its own: it is inside its `30s`
-	// cadence by construction and can only be stale on a waiting sync, never badged `"> 30s"` (ruling rm-b5272a3e).
-	const observerHealth = panelHealth(
-		1,
-		nowMs,
-		nowMs,
-		OVERVIEW_OBSERVER_CADENCE_MS,
-		"> 30s" as const,
-		pendingSyncCause(rollout),
-	);
-
-	const observer: OpenVikingObserverSummary = {
-		mode_label: !snapshot.reachable ? "Offline" : degraded ? "Degraded Local Fallback" : "Active",
-		role_memory_folder_count: snapshot.role_memory_folder_count,
-		roles_total_count: OPENVIKING_ROLES.length,
-		daemon_bind: daemonBind,
-		queue_depth: null,
-		checked_at: new Date(nowMs).toISOString(),
-		// Read after the snapshot's /health; display only, nothing above or below derives from it (spec 895b0cb1).
-		last_reachable_at: http.lastReachableAt,
-		// A fallback role is a degraded verdict with no age and no sync: stale, with no badge to name (§4).
-		health_state: !snapshot.reachable ? "server-unreachable" : degraded ? "stale" : observerHealth.health_state,
-		// Unreachable is `error`, not `stale`: no badge (§4).
-		stale_badge: snapshot.reachable ? observerHealth.stale_badge : null,
-		last_injection_at: isoOrNull(lastInjection),
-		last_commit_at: isoOrNull(lastCommit),
-		retrieval_latency_avg_ms: snapshot.retrieval_latency_avg_ms,
-		retrieval_hit_rate_pct: snapshot.retrieval_hit_rate_pct,
-		store_counts: snapshot.store_counts,
-	};
-	assertUnreachableIsConsistent(observer);
-	// Sync state is `rollout-state.json`'s `pending_wt_land_syncs` and nothing else (spec field table, G5): the
-	// list's length while the file reads, `null` while it does not — `0` would be a figure for a file nobody read,
-	// and it already means "looked, none pending". Nothing anywhere writes a sync time or a repo count.
-	const pendingSyncs = rolloutReading.present ? rollout.pending_wt_land_syncs.length : null;
-	const auxiliary: OpenVikingAuxiliaryState = {
-		rollout,
-		resource_sync: {
-			synced_at: null,
-			repos_synced: null,
-			pending_syncs_count: pendingSyncs,
-			status: pendingSyncs === null ? "missing" : pendingSyncs > 0 ? "pending" : "ok",
-		},
-		migration: {
-			verified_at: migration?.verified_at ?? null,
-			checked_at: migration?.verified_at ?? null,
-			status: migration?.status ?? null,
-			roles_passed: migration?.roles_passed ?? null,
-			total_roles: migration?.total_roles ?? null,
-			repos_passed: migration?.repos_passed ?? null,
-			total_repos: migration?.total_repos ?? null,
-			total_checked: migration?.total_checked ?? null,
-		},
-		dedup: { seen_count: seen?.seen_count ?? null, updated_at: seen?.updated_at ?? null },
-	};
-	return {
+	const readings = [metricsHealth(metricsRecords, nowMs), changelogHealth(changelogRecords, nowMs)];
+	const screen_state = screenStateOf(reachable, isDegraded(rollout), readings);
+	const overview: OpenVikingOverviewResponse = {
 		screen_state,
 		health_state: HEALTH_BY_SCREEN[screen_state],
-		observer,
-		metrics,
-		changelog,
-		slots: summarizeSlots(metricsRecords, nowMs),
-		auxiliary,
-		live_activity: buildLiveActivity(changelogRecords, metricsRecords),
+		observer: {
+			checked_at: new Date(nowMs).toISOString(),
+			last_commit_at: isoOrNull(latestMs(changelogRecords.filter((r) => r.sessionCommit))),
+			// Read after this request's /health; display only, nothing above derives from it (spec 895b0cb1).
+			last_reachable_at: http.lastReachableAt,
+		},
 	};
+	assertUnreachableIsConsistent(overview);
+	return overview;
 }

@@ -1,9 +1,9 @@
 /**
  * Backend #143 (ruling rm-b5272a3e, `.temper/features/openviking-dashboard/spec-states.md` §4, blind verify #138
- * row 32): a stale badge names its true reason. `observer.stale_badge` is `"> 30s"|"pending sync"|null`,
- * `entries.stale_badge` and `audit.stale_badge` are `"> 15m"|"pending sync"|null`. Age wins when both causes hold,
- * `"pending sync"` appears only inside the cadence while a `wt land` sync waits, and a sync-caused stale never
- * reports an age. One rule (`panelHealth`) decides it for all three panels; metrics and changelog stay age-only.
+ * row 32): a stale badge names its true reason. `audit.stale_badge` is `"> 15m"|"pending sync"|null`. Age wins
+ * when both causes hold, `"pending sync"` appears only inside the cadence while a `wt land` sync waits, and a
+ * sync-caused stale never reports an age. One rule (`panelHealth`) decides it; `/overview` reads a waiting sync as
+ * a stale `health_state`.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,9 +13,7 @@ import { panelHealth } from "../../server/openviking/overview.js";
 import {
 	AUDIT_CADENCE_MS,
 	createOpenVikingClient,
-	ENTRIES_CADENCE_MS,
 	OPENVIKING_PENDING_SYNC_BADGE,
-	OVERVIEW_OBSERVER_CADENCE_MS,
 	type OpenVikingDashboardOptions,
 } from "../../server/openviking/index.js";
 import { daemon, minutesAgo, NOW } from "./openviking-daemon-fake.js";
@@ -74,57 +72,26 @@ describe("stale_badge names its true reason (Backend #143, ruling rm-b5272a3e)",
 	const client = (state: StateOptions, opts: OpenVikingDashboardOptions = {}) =>
 		createOpenVikingClient({ stateDir: stateDir(state), fetchImpl: daemon().fetchImpl, now: () => NOW, ...opts });
 
-	/**
-	 * (a)-(d) of the ruling, for each panel's own cadence and age badge. `entries` and `observer` read `:1933` live,
-	 * so (c) and (d) can only reach them through this rule — their data is fetched during the request and is never
-	 * past its cadence, which is exactly why neither may print an age (the #138 row 32 bug).
-	 */
-	it("one rule for all three panels: age wins, a pending sync inside the cadence reads 'pending sync'", () => {
-		const panels = [
-			{ panel: "observer", cadenceMs: OVERVIEW_OBSERVER_CADENCE_MS, ageBadge: "> 30s" as const },
-			{ panel: "entries", cadenceMs: ENTRIES_CADENCE_MS, ageBadge: "> 15m" as const },
-			{ panel: "audit", cadenceMs: AUDIT_CADENCE_MS, ageBadge: "> 15m" as const },
-		];
-		for (const { panel, cadenceMs, ageBadge } of panels) {
-			const inCadence = NOW - cadenceMs + 1_000;
-			const pastCadence = NOW - cadenceMs - 1_000;
-			const syncs = (pending: number) => ({ pending, badge: OPENVIKING_PENDING_SYNC_BADGE });
-			const verdict = (lastMs: number, pending: number) =>
-				panelHealth(1, lastMs, NOW, cadenceMs, ageBadge, syncs(pending));
+	/** (a)-(d) of the ruling, at the audit's cadence and age badge. */
+	it("one rule: age wins, a pending sync inside the cadence reads 'pending sync'", () => {
+		const inCadence = NOW - AUDIT_CADENCE_MS + 1_000;
+		const pastCadence = NOW - AUDIT_CADENCE_MS - 1_000;
+		const syncs = (pending: number) => ({ pending, badge: OPENVIKING_PENDING_SYNC_BADGE });
+		const verdict = (lastMs: number, pending: number) =>
+			panelHealth(1, lastMs, NOW, AUDIT_CADENCE_MS, "> 15m" as const, syncs(pending));
 
-			expect({ panel, ...verdict(inCadence, 0) }).toEqual({ panel, health_state: "healthy", stale_badge: null });
-			expect({ panel, ...verdict(inCadence, 2) }).toEqual({
-				panel,
-				health_state: "stale",
-				stale_badge: "pending sync",
-			});
-			expect({ panel, ...verdict(pastCadence, 0) }).toEqual({ panel, health_state: "stale", stale_badge: ageBadge });
-			expect({ panel, ...verdict(pastCadence, 2) }).toEqual({ panel, health_state: "stale", stale_badge: ageBadge });
-		}
+		expect(verdict(inCadence, 0)).toEqual({ health_state: "healthy", stale_badge: null });
+		expect(verdict(inCadence, 2)).toEqual({ health_state: "stale", stale_badge: "pending sync" });
+		expect(verdict(pastCadence, 0)).toEqual({ health_state: "stale", stale_badge: "> 15m" });
+		expect(verdict(pastCadence, 2)).toEqual({ health_state: "stale", stale_badge: "> 15m" });
 	});
 
-	it("observer: 'pending sync' while syncs wait, null when none, never an age for a live /health", async () => {
+	it("overview: a waiting sync reads stale, none reads live, for a live /health", async () => {
 		const healthy = await client({ dataAgeMin: 1, pendingSyncs: 0 }).getOverview();
-		expect(healthy.observer).toMatchObject({ health_state: "healthy", stale_badge: null });
+		expect(healthy).toMatchObject({ screen_state: "live", health_state: "healthy" });
 
 		const waiting = await client({ dataAgeMin: 1, pendingSyncs: 2 }).getOverview();
-		expect(waiting.observer).toMatchObject({
-			health_state: "stale",
-			stale_badge: "pending sync",
-			mode_label: "Degraded Local Fallback",
-		});
-		expect(waiting.screen_state).toBe("stale");
-		expect(waiting.observer.stale_badge).not.toMatch(/>\s*\d/);
-	});
-
-	it("entries: a sync-caused stale reads 'pending sync', never the false '> 15m' of #138 row 32", async () => {
-		const healthy = await client({ dataAgeMin: 1, pendingSyncs: 0 }).getEntries({ scope: "resources" });
-		expect(healthy.entries.length).toBeGreaterThan(0);
-		expect(healthy).toMatchObject({ health_state: "healthy", stale_badge: null });
-
-		const waiting = await client({ dataAgeMin: 1, pendingSyncs: 2 }).getEntries({ scope: "resources" });
-		expect(waiting).toMatchObject({ health_state: "stale", stale_badge: "pending sync" });
-		expect(waiting.stale_badge).not.toMatch(/>\s*\d/);
+		expect(waiting).toMatchObject({ screen_state: "stale", health_state: "stale" });
 	});
 
 	it("audit: 'pending sync' inside the cadence, '> 15m' past it, the age when both hold", async () => {
@@ -142,13 +109,8 @@ describe("stale_badge names its true reason (Backend #143, ruling rm-b5272a3e)",
 		expect(oldWaiting).toMatchObject({ health_state: "stale", stale_badge: "> 15m" });
 	});
 
-	it("metrics and changelog stay age-only: a pending sync never writes their badge (ruling names three panels)", async () => {
-		const waiting = await client({ dataAgeMin: 1, pendingSyncs: 2 }).getOverview();
-		expect(waiting.metrics).toMatchObject({ health_state: "healthy", stale_badge: null });
-		expect(waiting.changelog).toMatchObject({ health_state: "healthy", stale_badge: null });
-
-		const old = await client({ dataAgeMin: 42, pendingSyncs: 2 }).getOverview();
-		expect(old.metrics.stale_badge).toBe("> 5m");
-		expect(old.changelog.stale_badge).toBe("> 15m");
+	it("overview: data past the metrics and changelog cadences reads stale", async () => {
+		const old = await client({ dataAgeMin: 42, pendingSyncs: 0 }).getOverview();
+		expect(old).toMatchObject({ screen_state: "stale", health_state: "stale" });
 	});
 });

@@ -49,9 +49,9 @@ export function registerRouteModules(
 	const shutdownHooks: Array<() => Promise<void>> = [];
 	const owner = server ? ownerCheckOf(server) : null;
 	owner?.check.register(app);
-	// OpenViking Memory Dashboard (GET overview/entries/audit) and the Memory Explorer behind the owner check (OI-1);
+	// OpenViking memory (GET overview/audit) and the Memory Explorer behind the owner check (OI-1);
 	// with no owner check every explorer route refuses (R-OWNER-FAIL-CLOSED-1).
-	const openViking = registerOpenVikingRoutes(app, {
+	registerOpenVikingRoutes(app, {
 		explorer: {
 			ownerGate: owner?.check.gate ?? ownerCheckMissing,
 			clock: systemExplorerClock,
@@ -61,7 +61,6 @@ export function registerRouteModules(
 	});
 	const stop = () => Promise.all(shutdownHooks.map((hook) => hook())).then(() => undefined);
 	if (owner) {
-		openViking.startEntriesSnapshot();
 		// Exits that skip shutdown() (the systemd quit, restart_service) still end the held deletes: that part of
 		// the hook is synchronous; a second call after shutdown() finds nothing left to end.
 		process.once("exit", () => void stop());

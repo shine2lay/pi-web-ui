@@ -1,8 +1,8 @@
 /**
- * OpenViking Memory Dashboard — the one canonical reader per state file in `<HOME>/.pi/openviking/`.
+ * OpenViking memory — the one canonical reader per state file in `<HOME>/.pi/openviking/` that a route reads.
  *
  * History lines are never rewritten, so each reader accepts the contract names (Ops #808-#810)
- * first and the older live names second (G2, G4, G5, G6, G7). JSONL envelopes are read by the contract's key names
+ * first and the older live names second (G2, G4, G5). JSONL envelopes are read by the contract's key names
  * only (Architecture #523, rm-0964900e): `timestamp`, and on changelog lines `action`/`role`/`uri`/`source`.
  * Nothing here writes; the Memory Explorer's owner lines are appended by changelog-append.ts and read back here.
  */
@@ -18,8 +18,6 @@ export interface OpenVikingStatePaths {
 	readonly metricsJsonlPath: string;
 	readonly changelogJsonlPath: string;
 	readonly rolloutStateJsonPath: string;
-	readonly migrationVerificationJsonPath: string;
-	readonly seenRoleMessagesJsonPath: string;
 }
 
 /** `<HOME>/.pi/openviking`, read when asked (ops #871): a sealed run's temp HOME points it into the sandbox. */
@@ -33,8 +31,6 @@ export function resolveOpenVikingStatePaths(stateDir = defaultOpenVikingStateDir
 		metricsJsonlPath: join(stateDir, "metrics.jsonl"),
 		changelogJsonlPath: join(stateDir, "memory-changelog.jsonl"),
 		rolloutStateJsonPath: join(stateDir, "rollout-state.json"),
-		migrationVerificationJsonPath: join(stateDir, "migration-verification.json"),
-		seenRoleMessagesJsonPath: join(stateDir, "seen-role-messages.json"),
 	};
 }
 
@@ -43,7 +39,6 @@ type JsonObject = Record<string, unknown>;
 const isObject = (v: unknown): v is JsonObject => typeof v === "object" && v !== null && !Array.isArray(v);
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
-const firstNum = (...vals: unknown[]): number | null => vals.map(num).find((v) => v !== null) ?? null;
 const firstStr = (...vals: unknown[]): string | null => vals.map(str).find((v) => v !== null) ?? null;
 const taskIdOf = (o: JsonObject): string | number | null =>
 	num(o.taskId) ?? num(o.task_id) ?? firstStr(o.taskId, o.task_id);
@@ -58,21 +53,13 @@ async function readOptional(path: string): Promise<string | null> {
 	}
 }
 
-async function readJsonObject(path: string): Promise<JsonObject | null> {
-	const text = await readOptional(path);
-	if (text === null) return null;
-	const parsed: unknown = JSON.parse(text);
-	if (!isObject(parsed)) throw new Error(`${path} is not a JSON object`);
-	return parsed;
-}
-
-/**
- * The same read for a file whose absence is itself an answer: gone, unreadable, bad JSON or not an object all
- * read as `null`, so a caller can report "nothing was looked at" instead of a figure it never measured.
- */
+/** A JSON object file; gone, unreadable, bad JSON or not an object all read as `null` (nothing looked at). */
 async function readJsonObjectOrNull(path: string): Promise<JsonObject | null> {
 	try {
-		return await readJsonObject(path);
+		const text = await readOptional(path);
+		if (text === null) return null;
+		const parsed: unknown = JSON.parse(text);
+		return isObject(parsed) ? parsed : null;
 	} catch {
 		return null;
 	}
@@ -106,26 +93,7 @@ async function readJsonl(path: string): Promise<JsonlLine[]> {
 	return out;
 }
 
-// ---- metrics.jsonl (G2, G3) ----
-
-export type OpenVikingInjectionMode = "lead" | "worker";
-
-export interface OpenVikingSlotSample {
-	slot: number;
-	state: string | null;
-	l0HitCount: number | null;
-	injectedTokensEst: number | null;
-}
-
-export interface OpenVikingInjection {
-	mode: OpenVikingInjectionMode | null;
-	/** The line's top-level project slug; `null` when the turn had none (absent, `null` or empty). */
-	project: string | null;
-	l0HitCount: number | null;
-	l1ExpandedCount: number | null;
-	injectedTokensEst: number | null;
-	slots: OpenVikingSlotSample[] | null;
-}
+// ---- metrics.jsonl (G2) ----
 
 export interface OpenVikingMetricsRecord {
 	line: number;
@@ -133,19 +101,12 @@ export interface OpenVikingMetricsRecord {
 	tsMs: number;
 	event: string;
 	role: string | null;
-	sessionId: string | null;
 	/** The line's `session_id` is a pi session uuid (or absent): only these lines are live samples (#828). */
 	piSession: boolean;
 	taskId: string | number | null;
-	injection: OpenVikingInjection | null;
-	extractedCount: number | null;
-	dedupSkippedCount: number | null;
-	evictedTokens: number | null;
 	degradedFallback: boolean;
 }
 
-/** `worker_prefetch_inject` is the contract event (#809); `turn_start` is the spec's older name. */
-const INJECTION_EVENTS = new Set(["worker_prefetch_inject", "turn_start"]);
 const PI_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -155,61 +116,20 @@ const PI_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
  * with a project, so every slot 1-3 rate came from those two. A rate must never be read off them.
  * A line with no `session_id` at all counts as a pi session: it is an old line, not a foreign one.
  */
-export function isPiSessionId(sessionId: string | null): boolean {
+function isPiSessionId(sessionId: string | null): boolean {
 	return sessionId === null || PI_SESSION_ID.test(sessionId);
-}
-const MODE_ALIASES: Record<string, OpenVikingInjectionMode> = {
-	lead: "lead",
-	lead_l0: "lead",
-	worker: "worker",
-	worker_turn1: "worker",
-};
-
-function slotSamples(v: unknown): OpenVikingSlotSample[] | null {
-	if (!Array.isArray(v)) return null;
-	return v.filter(isObject).flatMap((s) => {
-		const slot = num(s.slot) ?? num(s.slot_id);
-		if (slot === null) return [];
-		return [
-			{
-				slot,
-				state: str(s.state),
-				l0HitCount: firstNum(s.l0_hit_count, s.l0_hits),
-				injectedTokensEst: firstNum(s.injected_tokens_est, s.tokens_est),
-			},
-		];
-	});
-}
-
-function injectionOf(event: string, o: JsonObject): OpenVikingInjection | null {
-	if (!INJECTION_EVENTS.has(event)) return null;
-	const modeKey = firstStr(o.mode, o.chat_mode);
-	return {
-		mode: (modeKey ? MODE_ALIASES[modeKey] : undefined) ?? (event === "worker_prefetch_inject" ? "worker" : null),
-		project: str(o.project),
-		l0HitCount: firstNum(o.l0_hit_count, o.l0_hits),
-		l1ExpandedCount: firstNum(o.l1_expanded_count, o.l1_reads),
-		injectedTokensEst: firstNum(o.injected_tokens_est, o.tokens_est),
-		slots: slotSamples(o.slots),
-	};
 }
 
 export async function readMetricsRecords(paths: OpenVikingStatePaths): Promise<OpenVikingMetricsRecord[]> {
 	return (await readJsonl(paths.metricsJsonlPath)).map(({ line, ts, tsMs, obj }) => {
-		const event = str(obj.event) ?? "unknown";
 		return {
 			line,
 			ts,
 			tsMs,
-			event,
+			event: str(obj.event) ?? "unknown",
 			role: str(obj.role),
-			sessionId: str(obj.session_id),
 			piSession: isPiSessionId(str(obj.session_id)),
 			taskId: taskIdOf(obj),
-			injection: injectionOf(event, obj),
-			extractedCount: firstNum(obj.extracted_count, obj.extracted),
-			dedupSkippedCount: firstNum(obj.dedup_skipped_count, obj.rm_dedup_skipped_count, obj.dedup_skipped),
-			evictedTokens: num(obj.evictedTokens),
 			degradedFallback: obj.degradedFallback === true || obj.lead_200k_acp_fallback === true,
 		};
 	});
@@ -314,7 +234,7 @@ export interface OpenVikingChangelogRecord {
 	rawAction: string;
 	/** null for an action no writer is known to emit; such lines are kept out of every count. */
 	action: OpenVikingChangelogAction | null;
-	/** A session commit (spec "Session Commits"), the only kind `session_commits_24h` and `last_commit_at` count. */
+	/** A session commit (spec "Session Commits"), the only kind `last_commit_at` and the audit's `commit` count. */
 	sessionCommit: boolean;
 	source: string;
 	role: string | null;
@@ -349,12 +269,9 @@ export async function readChangelogRecords(paths: OpenVikingStatePaths): Promise
 
 // ---- rollout-state.json (G5) ----
 
+/** What a degraded verdict and a `pending sync` badge are read from (spec-states.md §4). */
 export interface OpenVikingRolloutState {
-	stage: string | null;
-	notebook_retired: boolean | null;
 	fallback_roles: string[];
-	cutover_ts: string | null;
-	updated_at: string | null;
 	pending_wt_land_syncs: OpenVikingPendingWtLandSync[];
 }
 
@@ -373,72 +290,13 @@ function pendingSync(v: unknown): OpenVikingPendingWtLandSync[] {
 	];
 }
 
-/**
- * One reading of `rollout-state.json`. `present` is `false` when the file is absent or unreadable: nothing was
- * looked at, so `pending_wt_land_syncs.length` is not a count of anything (spec field table: `null`, never `0`
- * — `0` means "looked and none pending").
- */
-export interface OpenVikingRolloutReading {
-	present: boolean;
-	state: OpenVikingRolloutState;
-}
-
-export async function readRolloutState(paths: OpenVikingStatePaths): Promise<OpenVikingRolloutReading> {
-	const read = await readJsonObjectOrNull(paths.rolloutStateJsonPath);
-	const o = read ?? {};
-	const cutover = str(o.cutover_ts);
-	const state: OpenVikingRolloutState = {
-		stage: str(o.stage),
-		notebook_retired: typeof o.notebook_retired === "boolean" ? o.notebook_retired : null,
+/** An absent or unreadable file reads as nothing degraded and nothing pending. */
+export async function readRolloutState(paths: OpenVikingStatePaths): Promise<OpenVikingRolloutState> {
+	const o = (await readJsonObjectOrNull(paths.rolloutStateJsonPath)) ?? {};
+	return {
 		fallback_roles: Array.isArray(o.fallback_roles)
 			? o.fallback_roles.filter((r): r is string => typeof r === "string")
 			: [],
-		cutover_ts: cutover,
-		updated_at: str(o.updated_at) ?? cutover,
 		pending_wt_land_syncs: Array.isArray(o.pending_wt_land_syncs) ? o.pending_wt_land_syncs.flatMap(pendingSync) : [],
 	};
-	return { present: read !== null, state };
-}
-
-// ---- migration-verification.json (G6) ----
-
-export interface OpenVikingMigrationState {
-	verified_at: string | null;
-	status: string | null;
-	roles_passed: number | null;
-	total_roles: number | null;
-	repos_passed: number | null;
-	total_repos: number | null;
-	total_checked: number | null;
-}
-
-export async function readMigrationState(paths: OpenVikingStatePaths): Promise<OpenVikingMigrationState | null> {
-	const o = await readJsonObject(paths.migrationVerificationJsonPath);
-	if (o === null) return null;
-	const totalRoles = num(o.total_roles);
-	const totalRepos = num(o.total_repos);
-	const derived = totalRoles !== null && totalRepos !== null ? totalRoles + totalRepos : null;
-	return {
-		verified_at: firstStr(o.verified_at, o.checked_at),
-		status: str(o.status),
-		roles_passed: num(o.roles_passed),
-		total_roles: totalRoles,
-		repos_passed: num(o.repos_passed),
-		total_repos: totalRepos,
-		total_checked: num(o.total_checked) ?? (Array.isArray(o.source_files) ? o.source_files.length : derived),
-	};
-}
-
-// ---- seen-role-messages.json (G7) ----
-
-const SEEN_META_KEYS = new Set(["schema_version", "version", "updated_at", "updatedAt", "entries", "seen"]);
-
-export async function readSeenRoleMessages(
-	paths: OpenVikingStatePaths,
-): Promise<{ seen_count: number; updated_at: string | null } | null> {
-	const o = await readJsonObject(paths.seenRoleMessagesJsonPath);
-	if (o === null) return null;
-	const map = isObject(o.entries) ? o.entries : isObject(o.seen) ? o.seen : null;
-	const seenCount = map ? Object.keys(map).length : Object.keys(o).filter((k) => !SEEN_META_KEYS.has(k)).length;
-	return { seen_count: seenCount, updated_at: firstStr(o.updated_at, o.updatedAt) };
 }
