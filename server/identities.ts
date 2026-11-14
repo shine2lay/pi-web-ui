@@ -27,8 +27,8 @@
 import { execFile } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { canonicalPath, expandHome, home } from "./canonical-path.js";
 import type { IdentityFileName, IdentitySaveError, UiChatIdentity, UiIdentityInfo } from "./protocol.js";
 // identity-config: a role's settings (prompt, skills, tool limits, unique), its prompt and the drafts waiting
 // for the owner are read, checked and saved with pi-identity's own rules (identity-config.ts, identity-roles.ts).
@@ -80,25 +80,15 @@ export interface IdentityDef {
 	dir: string;
 }
 
-function home(env: Env): string {
-	return env.HOME || homedir();
-}
-
 /** 身份所在的文件夹：PI_IDENTITY_DIR，否则 <PI_MEMORY_DIR 或 ~/.pi/agent/memory>/identities（同 pi-identity）。 */
 export function identitiesDir(env: Env = process.env): string {
 	return env.PI_IDENTITY_DIR || join(env.PI_MEMORY_DIR || join(home(env), ".pi", "agent", "memory"), "identities");
 }
 
-function expandHome(p: string, env: Env): string {
-	if (p === "~") return home(env);
-	if (p.startsWith("~/")) return join(home(env), p.slice(2));
-	return p;
-}
-
 /** 两个路径是不是同一个文件（展开 ~、规整后比较）。 */
 export function samePath(a: string | null | undefined, b: string | null | undefined, env: Env = process.env): boolean {
 	if (!a || !b) return false;
-	return resolve(expandHome(a, env)) === resolve(expandHome(b, env));
+	return canonicalPath(a, env) === canonicalPath(b, env);
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");

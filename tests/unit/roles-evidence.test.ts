@@ -3,7 +3,7 @@
 // or writes by the code under test.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { RolesEvidence, type RolesEvidencePaths } from "../../server/roles-evidence.js";
 import { terminalSessionEnvPrefix } from "../../server/terminals.js";
@@ -211,6 +211,125 @@ describe("RolesEvidence: task chat -> branch -> land -> install -> live", () => 
 		expect((await view.of({ file: chat("3333cccc-0000"), status: "working" })).built).toEqual({ not: "recorded" });
 		expect((await view.of({ file: chat("4444dddd-0000"), status: "working" })).built).toEqual({ not: "recorded" });
 		expect((await view.of({ file: chat("5555eeee-0000"), status: "working" })).built).toEqual({ not: "recorded" });
+	});
+
+	// 2026-11-13: with 2,228 branch records and 1,608 lands, the join walked every record (and every
+	// land times every branch) for each task of every role, on the server's main thread: 75% of it,
+	// so new chats could not start. The records are indexed once; the answers must not change.
+	describe("with months of records", () => {
+		const minute = (n: number) => new Date(T("00:00") + n * 60_000).toISOString();
+		const rand = (seed: number) => () => {
+			seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+			return seed / 0x7fffffff;
+		};
+		const chatId = (i: number) => `c${String(i).padStart(7, "0")}-0000`;
+		const records = (chats: number, branches: number, lands: number, seed: number) => {
+			const r = rand(seed);
+			const pick = (n: number) => Math.floor(r() * n);
+			// pi-web-ui's folder, and another repo written three ways.
+			const repos = [
+				"LIVE",
+				"/home/x/projects/agent-tools",
+				"/home/x/projects/agent-tools/",
+				"/home/x/projects/y/../agent-tools",
+			];
+			const names = Array.from({ length: Math.max(4, branches >> 2) }, (_, i) => `b${i}`);
+			const bs = Array.from({ length: branches }, () => {
+				const c = pick(chats);
+				const how = pick(10);
+				const ids =
+					how < 4
+						? { session: chat(chatId(c)) }
+						: how < 7
+							? { chat: chatId(c) }
+							: how < 8
+								? { session: chat(chatId(c)), chat: chatId(c) }
+								: how < 9
+									? { session: chat(chatId(c)), chat: chatId(pick(chats)) }
+									: {};
+				// Few distinct minutes: equal times happen, and the later record must win as before.
+				return {
+					v: 1,
+					at: minute(pick(200)),
+					repo: repos[pick(repos.length)],
+					branch: names[pick(names.length)],
+					...ids,
+				};
+			});
+			const ls = Array.from({ length: lands }, (_, i) => ({
+				v: 1,
+				at: minute(pick(260)),
+				repo: repos[pick(repos.length)],
+				branch: names[pick(names.length)],
+				commit: i.toString(16).padStart(8, "0").padEnd(40, "a"),
+				committedAt: minute(pick(200)),
+			}));
+			return { bs, ls };
+		};
+
+		/** The join as written before the index, on the raw records: the commit shown for a chat's file. */
+		function walked(live: string, bs: any[], ls: any[], file: string): string {
+			const at = (x: any) => Date.parse(x.at);
+			const path = (p: string) => resolve(p === "LIVE" ? live : p);
+			const madeBy = (b: any) =>
+				(b.session || b.chat) &&
+				(!b.session || path(b.session) === path(file)) &&
+				(!b.chat || basename(file).endsWith(`_${b.chat}.jsonl`));
+			const mine = new Set(bs.filter(madeBy));
+			if (!mine.size) return "not recorded";
+			let found: any;
+			for (const l of ls) {
+				let owner: any;
+				for (const b of bs) {
+					if (b.branch !== l.branch || path(b.repo) !== path(l.repo) || at(b) > at(l)) continue;
+					if (!owner || at(b) >= at(owner)) owner = b;
+				}
+				if (owner && mine.has(owner) && (!found || at(l) >= at(found))) found = l;
+			}
+			return found ? found.commit.slice(0, 8) : "no land";
+		}
+
+		it("gives every chat the answer the record-by-record walk gave", async () => {
+			for (const seed of [1, 2, 3]) {
+				const { bs, ls } = records(40, 160, 220, seed);
+				const w = world({ branches: bs, lands: ls });
+				const view = await w.ev.load();
+				const got: string[] = [];
+				const want: string[] = [];
+				for (let c = 0; c < 44; c++) {
+					const e = await view.of({ file: chat(chatId(c)), status: "working" });
+					got.push(e.commit ?? ("not" in e.built && e.built.not === "recorded" ? "not recorded" : "no land"));
+					want.push(walked(w.paths.deployLive, bs, ls, chat(chatId(c))));
+				}
+				expect(got).toEqual(want);
+				// The fixture reaches every outcome.
+				expect(new Set(want).size).toBeGreaterThan(10);
+				expect(want).toContain("not recorded");
+				expect(want).toContain("no land");
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("answers for a few hundred tasks in well under a second of the server's time", async () => {
+			const { bs, ls } = records(400, 2200, 1600, 7);
+			const w = world({ branches: bs, lands: ls });
+			const view = await w.ev.load();
+			const t0 = performance.now();
+			let recorded = 0;
+			for (let c = 0; c < 400; c++) {
+				const e = await view.of({ file: chat(chatId(c)), status: "done", doneAt: T("23:00") });
+				if (e.repo) recorded++;
+			}
+			const ms = performance.now() - t0;
+			expect(recorded).toBeGreaterThan(300);
+			// The walk needed about 3.5 million steps a task (seconds in all); the index needs a lookup.
+			expect(ms).toBeLessThan(1500);
+			// A second overview with unchanged files reuses the index.
+			const t1 = performance.now();
+			const again = await w.ev.load();
+			for (let c = 0; c < 400; c++) await again.of({ file: chat(chatId(c)), status: "working" });
+			expect(performance.now() - t1).toBeLessThan(500);
+		}, 120_000);
 	});
 });
 

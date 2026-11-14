@@ -13,11 +13,15 @@
  * belongs to the newest record of its repo and branch made before it, so a reused branch name never
  * gives one task another task's commit) -> the newest of them. With no branch record the task says
  * "Not recorded" (nothing is guessed for older tasks).
+ *
+ * The join is made once per change of the record files (EvidenceIndex), not once per task: the Roles
+ * overview asks for every task of every role, on the server's main thread.
  */
 
 import { execFile } from "node:child_process";
 import { open, type FileHandle } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { canonicalPath } from "./canonical-path.js";
 import { samePath } from "./identities.js";
 import type { UiTaskEvidence, UiTaskEvidenceStep } from "./protocol.js";
 import { readUpTo, STATE_READ_FLAGS } from "./state-file-read.js";
@@ -212,46 +216,95 @@ const NOT_RECORDED: UiTaskEvidence = {
 	confirmed: NOT("recorded"),
 };
 
+function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+	const had = map.get(key);
+	if (had) had.push(value);
+	else map.set(key, [value]);
+}
+
+/**
+ * The branch and land records joined once: which records each chat made, and the newest land each
+ * record owns. Where two records have the same time, the later line of its file wins.
+ */
+class EvidenceIndex {
+	/** A chat's transcript path (as samePath compares it) -> the records naming it, in file order. */
+	private readonly bySession = new Map<string, BranchRecord[]>();
+	/** A chat id -> the records naming only that id, in file order. */
+	private readonly byChatOnly = new Map<string, BranchRecord[]>();
+	private readonly lineOf = new Map<BranchRecord, number>();
+	/** A branch record -> the newest land that belongs to it, and that land's line. */
+	private readonly landOf = new Map<BranchRecord, { land: LandRecord; line: number }>();
+
+	constructor(
+		readonly branches: BranchRecord[],
+		readonly lands: LandRecord[],
+	) {
+		const canonical = new Map<string, string>();
+		const canon = (p: string): string => {
+			let c = canonical.get(p);
+			if (c === undefined) canonical.set(p, (c = canonicalPath(p)));
+			return c;
+		};
+		const sameBranch = new Map<string, BranchRecord[]>();
+		branches.forEach((b, line) => {
+			this.lineOf.set(b, line);
+			pushTo(sameBranch, `${canon(b.repo)}\0${b.branch}`, b);
+			if (b.session) pushTo(this.bySession, canon(b.session), b);
+			else if (b.chat) pushTo(this.byChatOnly, b.chat, b);
+		});
+		lands.forEach((land, line) => {
+			// A land belongs to the newest record of its repo and branch made before it.
+			let owner: BranchRecord | undefined;
+			for (const b of sameBranch.get(`${canon(land.repo)}\0${land.branch}`) ?? []) {
+				if (b.at <= land.at && (!owner || b.at >= owner.at)) owner = b;
+			}
+			if (!owner) return;
+			const had = this.landOf.get(owner);
+			if (!had || land.at >= had.land.at) this.landOf.set(owner, { land, line });
+		});
+	}
+
+	/** The records made by the chat with transcript `file` (every id a record holds names it), in file order. */
+	madeBy(file: string): BranchRecord[] {
+		// A chat id has no "_", so a file "..._<id>.jsonl" names exactly the id after its last "_".
+		const name = basename(file);
+		const cut = name.lastIndexOf("_");
+		const chat = cut >= 0 && name.endsWith(".jsonl") ? name.slice(cut + 1, -".jsonl".length) : "";
+		const bySession = (this.bySession.get(canonicalPath(file)) ?? []).filter((b) => !b.chat || b.chat === chat);
+		const byChat = (chat && this.byChatOnly.get(chat)) || [];
+		if (!byChat.length) return bySession;
+		if (!bySession.length) return byChat;
+		return [...bySession, ...byChat].sort((a, b) => (this.lineOf.get(a) ?? 0) - (this.lineOf.get(b) ?? 0));
+	}
+
+	/** The newest land among those that belong to these records. */
+	newestLand(records: BranchRecord[]): LandRecord | undefined {
+		let best: { land: LandRecord; line: number } | undefined;
+		for (const b of records) {
+			const l = this.landOf.get(b);
+			if (!l) continue;
+			if (!best || l.land.at > best.land.at || (l.land.at === best.land.at && l.line > best.line)) best = l;
+		}
+		return best?.land;
+	}
+}
+
 /** One overview's view of the records (read once per overview), answering for each task. */
 export class EvidenceView {
 	constructor(
 		private readonly paths: RolesEvidencePaths,
-		private readonly branches: BranchRecord[],
-		private readonly lands: LandRecord[],
+		private readonly index: EvidenceIndex,
 		private readonly installs: InstallRecord[],
 		private readonly live: LiveMarker | null,
 		private readonly contains: (outer: string, inner: string) => Promise<boolean | null>,
 	) {}
 
-	/** Whether a branch record was made by the chat with transcript `file`: every id it holds names it. */
-	private madeBy(b: BranchRecord, file: string): boolean {
-		if (!b.session && !b.chat) return false;
-		if (b.session && !samePath(b.session, file)) return false;
-		if (b.chat && !basename(file).endsWith(`_${b.chat}.jsonl`)) return false;
-		return true;
-	}
-
-	/** The branch record a land belongs to: the newest of its repo and branch made before the land. */
-	private ownerOf(land: LandRecord): BranchRecord | undefined {
-		let owner: BranchRecord | undefined;
-		for (const b of this.branches) {
-			if (b.branch !== land.branch || !samePath(b.repo, land.repo) || b.at > land.at) continue;
-			if (!owner || b.at >= owner.at) owner = b;
-		}
-		return owner;
-	}
-
 	async of(task: EvidenceTask): Promise<UiTaskEvidence> {
 		const file = task.file;
 		if (!file) return NOT_RECORDED;
-		const mine = this.branches.filter((b) => this.madeBy(b, file));
+		const mine = this.index.madeBy(file);
 		if (!mine.length) return NOT_RECORDED;
-		const mySet = new Set(mine);
-		let land: LandRecord | undefined;
-		for (const l of this.lands) {
-			const owner = this.ownerOf(l);
-			if (owner && mySet.has(owner) && (!land || l.at >= land.at)) land = l;
-		}
+		const land = this.index.newestLand(mine);
 		const newest = mine.reduce((a, b) => (b.at >= a.at ? b : a));
 		const repo = land?.repo ?? newest.repo;
 		const tracked = samePath(repo, this.paths.deployLive);
@@ -311,6 +364,8 @@ export class RolesEvidence {
 	private readonly marker: CachedFile<LiveMarker | null>;
 	/** "outer\0inner" -> whether outer contains inner (only definite answers are kept). */
 	private readonly known = new Map<string, boolean>();
+	/** The join of the record files as last read; made again only when one of them changed. */
+	private index: EvidenceIndex | null = null;
 
 	constructor(
 		private readonly paths: () => RolesEvidencePaths,
@@ -358,6 +413,10 @@ export class RolesEvidence {
 			}
 			return v;
 		};
-		return new EvidenceView(paths, branches, lands, installs, live, contains);
+		// An unchanged file gives the same array again (CachedFile), so the join is reused.
+		if (!this.index || this.index.branches !== branches || this.index.lands !== lands) {
+			this.index = new EvidenceIndex(branches, lands);
+		}
+		return new EvidenceView(paths, this.index, installs, live, contains);
 	}
 }
