@@ -100,7 +100,9 @@ import {
 import type { GuardedToolName, ToolPostRequest, ToolPreRequest } from "./plugin-tool-guard.js";
 import { buildPluginJobArgs, confirmPluginInstall, inspectInstallSpec, PluginInstaller } from "./plugin-installer.js";
 import { syncPluginCatalog } from "./plugin-catalog-sync.js";
-import { proxyHttp } from "./plugin-proxy.js";
+import { proxyForwardPath, proxyHttp } from "./plugin-proxy.js";
+import { OwnerFrontDoor, sessionFileIn } from "./owner-front-door.js";
+import type { DecisionRecords } from "./decision-records.js";
 import type { ServerLang } from "./i18n.js";
 import { McpBridge } from "./mcp-bridge.js";
 import { createMcpHotReload } from "./mcp-hot-reload.js";
@@ -835,7 +837,15 @@ app.use((req, res, next) => {
 		next();
 		return;
 	}
-	proxyHttp(hit, req, res);
+	// showtell-owner-answer (ops #883): a request that may be the owner's action is watched to its answer.
+	const observe = ownerFrontDoor?.observerFor({
+		pluginId: hit.pluginId,
+		method: req.method,
+		path: proxyForwardPath(hit, req.url ?? "/"),
+		headers: req.headers,
+		body: (req as { body?: unknown }).body,
+	});
+	proxyHttp(hit, req, res, undefined, observe);
 });
 app.get("/plugins/:id/client/*splat", (req, res) => {
 	// 多段子路径（插件 vendor/分包）的 splat 是数组（见 splatParam），拼回 "/"。
@@ -1435,6 +1445,8 @@ export interface DispatchSession {
 export interface EngineService {
 	/** W2: exact client + conversation catalog; unsupported engines do not mount the route. */
 	toolInspectorDependencies?(): ToolInspectorDependencies;
+	/** showtell-owner-answer (ops #883): the decision records and chats' folder for the owner front door. */
+	ownerAnswerStore?(): { records: DecisionRecords; sessionsRoot: string };
 	attach(clientId: string, send: (msg: ServerMessage) => void): Promise<DispatchSession>;
 	detach(clientId: string, send: (msg: ServerMessage) => void): void;
 	get(clientId: string): DispatchSession | undefined;
@@ -1647,6 +1659,15 @@ loadServerStrings(DATA_DIR);
 // Optional UI plugins (<dataDir>/plugins/<id>/): scanned on every client
 // attach so freshly dropped plugins appear without a server restart.
 const pluginMgr = new PluginManager(DATA_DIR, CWD, join(pkgRoot, "plugins", "catalog.json"));
+// showtell-owner-answer (ops #883): the owner's own actions through a plugin's proxy become his recorded answer.
+const ownerAnswerStore = service.ownerAnswerStore?.();
+const ownerFrontDoor = ownerAnswerStore
+	? new OwnerFrontDoor({
+			records: ownerAnswerStore.records,
+			sessionFileOf: (id) => sessionFileIn(ownerAnswerStore.sessionsRoot, id),
+		})
+	: undefined;
+pluginMgr.ownerFrontDoor = ownerFrontDoor;
 // 插件作业（安装/更新/卸载）后台执行：不占用户终端、不打断设置面板（issue #152）。
 // 真正干活的是 CLI（<pkgRoot>/bin/pi-web-ui.mjs），这里只做进程编排 + 进度转发。
 const pluginInstaller = new PluginInstaller({ dataDir: DATA_DIR, pkgRoot, managed: MANAGED });

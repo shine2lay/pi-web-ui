@@ -4,8 +4,8 @@
  * an agent tool, a repeat or a forged receipt never write one. Real DecisionRecords on a temp dir, stand-in
  * proxy exchanges, no model call. Seam: ~/ops-checks/owner-answers-2026-11-13/showtell-seam.md.
  *
- * Ops #882 writes each case as `notBuilt(` (passing only while the stub throws); ops #883 turns every
- * `notBuilt(` into `it(` and never weakens or deletes an assertion.
+ * Ops #882 wrote each case as a not-built check (passing only while the stub threw); ops #883 built the seam and
+ * turned each into `it(`, never weakening or deleting an assertion.
  */
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
@@ -15,30 +15,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { DecisionRecords } from "../../server/decision-records.js";
 import {
 	type FrontDoorExchange,
-	OWNER_FRONT_DOOR_NOT_BUILT,
 	type OwnerActionReceipt,
 	type OwnerActionRecordFields,
 	type OwnerActionWatch,
 	OwnerFrontDoor,
 	RECEIPT_TTL_MS,
 } from "../../server/owner-front-door.js";
-
-/** Passes only while the seam is a stub; built, it fails and names what to do. */
-function notBuilt(name: string, fn: () => unknown | Promise<unknown>): void {
-	it(`[not built] ${name}`, async () => {
-		let error: unknown;
-		try {
-			await fn();
-		} catch (e) {
-			error = e;
-		}
-		if (!(error instanceof Error) || error.message !== OWNER_FRONT_DOOR_NOT_BUILT) {
-			throw new Error(
-				`owner front door is built (or failed otherwise): turn this notBuilt( into it( (ops #883); got ${String(error)}`,
-			);
-		}
-	});
-}
 
 const PLUGIN = "show-and-tell";
 const T0 = Date.UTC(2025, 0, 2, 12);
@@ -145,7 +127,7 @@ const commentFields = (): OwnerActionRecordFields => ({
 });
 
 describe("owner front door (ops #882 seam)", () => {
-	notBuilt("Mark done through the front door: one receipt, then one owner answer record with his word", () => {
+	it("Mark done through the front door: one receipt, then one owner answer record with his word", () => {
 		const r = rig();
 		r.door.observe(markDone());
 		expect(r.receipts).toHaveLength(1);
@@ -194,7 +176,7 @@ describe("owner front door (ops #882 seam)", () => {
 		expect(r.door.recordIdFor("showtell:b_sgoxttej4o")).toBe(id);
 	});
 
-	notBuilt("a sent comment batch: his comments verbatim, in number order, joined as the summary", () => {
+	it("a sent comment batch: his comments verbatim, in number order, joined as the summary", () => {
 		const r = rig();
 		r.door.observe(sendComments());
 		expect(r.receipts.map((x) => [x.ref, x.params.doc])).toEqual([["showtell:b_gtfqa7ywlo", "d_3zmrwvqhsm"]]);
@@ -211,7 +193,7 @@ describe("owner front door (ops #882 seam)", () => {
 		});
 	});
 
-	notBuilt("no receipt without the browser's same-origin header (a script on the machine, curl)", () => {
+	it("no receipt without the browser's same-origin header (a script on the machine, curl)", () => {
 		const r = rig();
 		r.door.observe(markDone({ headers: { "content-type": "application/json" } }));
 		r.door.observe(markDone({ headers: { ...BROWSER, "sec-fetch-site": "cross-site" } }));
@@ -219,7 +201,7 @@ describe("owner front door (ops #882 seam)", () => {
 		expect(r.lines()).toEqual([]);
 	});
 
-	notBuilt("no receipt for a non-2xx answer, another path, another body value, or no ref field", () => {
+	it("no receipt for a non-2xx answer, another path, another body value, or no ref field", () => {
 		const r = rig();
 		r.door.observe(markDone({ status: 409, responseText: JSON.stringify({ error: "conflict" }) }));
 		r.door.observe(markDone({ body: { status: "open" }, responseText: JSON.stringify({ ok: true, status: "open" }) }));
@@ -233,13 +215,13 @@ describe("owner front door (ops #882 seam)", () => {
 		expect(r.receipts).toEqual([]);
 	});
 
-	notBuilt("no receipt for another plugin's proxy, which declared nothing", () => {
+	it("no receipt for another plugin's proxy, which declared nothing", () => {
 		const r = rig();
 		r.door.observe(markDone({ pluginId: "notes" }));
 		expect(r.receipts).toEqual([]);
 	});
 
-	notBuilt("an agent tool or a direct server call has no receipt: record() with a made-up id writes nothing", () => {
+	it("an agent tool or a direct server call has no receipt: record() with a made-up id writes nothing", () => {
 		const r = rig();
 		const res = r.door.record(PLUGIN, "fd-made-up", approvedFields());
 		expect(res.ok).toBe(false);
@@ -247,7 +229,7 @@ describe("owner front door (ops #882 seam)", () => {
 		expect(r.door.recordIdFor("showtell:b_sgoxttej4o")).toBeUndefined();
 	});
 
-	notBuilt("a receipt is single use, its own plugin's only, for its own doc, and expires", () => {
+	it("a receipt is single use, its own plugin's only, for its own doc, and expires", () => {
 		const r = rig();
 		r.door.observe(markDone());
 		const id = r.receipts[0]!.id;
@@ -265,7 +247,7 @@ describe("owner front door (ops #882 seam)", () => {
 		expect(r.lines()).toHaveLength(1);
 	});
 
-	notBuilt("the same batch again writes nothing and gives the same id", () => {
+	it("the same batch again writes nothing and gives the same id", () => {
 		const r = rig();
 		r.door.observe(markDone());
 		r.door.observe(markDone());
@@ -278,7 +260,7 @@ describe("owner front door (ops #882 seam)", () => {
 		expect(r.lines()).toHaveLength(1);
 	});
 
-	notBuilt("an unknown sharer session still writes the record, without a chat file", () => {
+	it("an unknown sharer session still writes the record, without a chat file", () => {
 		const r = rig();
 		r.door.observe(markDone());
 		const fields = { ...approvedFields(), sharer: { sessionId: "unknown-session", role: "design" } };

@@ -87,6 +87,7 @@ import {
 	type ProjectCreateResult,
 } from "./plugin-project.js";
 import type { Request, Response } from "express";
+import type { OwnerFrontDoor, PluginOwnerActions } from "./owner-front-door.js";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -488,6 +489,9 @@ export interface PluginHost {
 	 *  目标只允许回环地址（防 SSRF），鉴权继承主站 PI_WEB_TOKEN。
 	 *  前缀如 "/liveserver"，需要能力 "http"。返回注销函数，反激活时自动注销。 */
 	registerProxy(prefix: string, target: number | { port: number; host?: string }): () => void;
+	/** showtell-owner-answer (ops #883): the owner's own actions through this plugin's proxy become his recorded
+	 *  answer (server/owner-front-door.ts). Needs "http"; absent when the server has no front door. */
+	ownerActions?: PluginOwnerActions;
 	/** 受限工作区文件访问（读/写/列/删）：路径永远锚定「当前工作区根」
 	 *  （活值，跟随 set_cwd），越界拒绝——与插件自己 import node:fs 不同，
 	 *  这一层是宿主强制执行的。需要能力 "fs"。 */
@@ -1675,6 +1679,8 @@ export class PluginManager {
 	private readonly domWants = new Map<string, boolean>();
 	/** 由 index.ts 注入：向浏览器请求「插件要访问这个目录」的用户确认。 */
 	pathAccessRequester: ((pluginId: string, dir: string, reason?: string) => Promise<boolean>) | undefined = undefined;
+	/** showtell-owner-answer (ops #883): set by index.ts; plugins reach it as host.ownerActions. */
+	ownerFrontDoor: OwnerFrontDoor | undefined = undefined;
 	/** 由 index.ts 注入：授权表**变了**（新授权落表）时触发 —— 设置面板的「已授权目录」
 	 *  靠它即时刷新（以前只在 attach / 撤销时推，「点了允许但列表里还没出现」很难不被当成 bug）。 */
 	onGrantsChanged: (() => void) | undefined = undefined;
@@ -3860,6 +3866,10 @@ export class PluginManager {
 					self.unregisterProxy(info.id, p);
 				});
 			},
+			// showtell-owner-answer (ops #883): his own actions through this plugin's proxy, as his recorded answer.
+			...(self.ownerFrontDoor && can("http")
+				? { ownerActions: self.ownerFrontDoor.forPlugin(info.id, (key, undo) => effects.add(key, undo)) }
+				: {}),
 			// 包一层：插件反激活时自动注销它注册的全部 AI 工具，不留悬挂项。
 			registerAgentTool: (tool) => {
 				if (!can("tools")) return () => {};

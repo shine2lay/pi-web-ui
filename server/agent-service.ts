@@ -21182,6 +21182,11 @@ export class AgentService {
 		return this.clients.get(clientId);
 	}
 
+	/** showtell-owner-answer (ops #883): where the owner front door writes his answers, and the chats' folder. */
+	ownerAnswerStore(): { records: DecisionRecords; sessionsRoot: string } {
+		return { records: this.decisions, sessionsRoot: decisionsSessionsRoot() };
+	}
+
 	toolInspectorDependencies(): ToolInspectorDependencies {
 		return {
 			store: toolInspectorStoreFor(this.stateStore.dataDir),

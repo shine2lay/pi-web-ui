@@ -12,8 +12,18 @@ export function proxyForwardPath(hit: ProxyHit, url: string): string {
 	return fwd || "/";
 }
 
-/** timeoutMs: the upstream socket idle timeout (default 30000, as before); tests pass a short one. */
-export function proxyHttp(hit: ProxyHit, req: Request, res: Response, timeoutMs = 30000): void {
+/** showtell-owner-answer (ops #883): told the upstream's status and answer (its first `max` bytes) once it ended. */
+export type ProxyObserver = { max: number; done(status: number, responseText: string): void };
+
+/** timeoutMs: the upstream socket idle timeout (default 30000, as before); tests pass a short one.
+ *  observe: only for a request that may be an owner action (server/owner-front-door.ts). */
+export function proxyHttp(
+	hit: ProxyHit,
+	req: Request,
+	res: Response,
+	timeoutMs = 30000,
+	observe?: ProxyObserver,
+): void {
 	const fwdPath = proxyForwardPath(hit, req.url ?? "/");
 	const headers: Record<string, string | string[]> = {};
 	for (const [k, v] of Object.entries(req.headers)) {
@@ -62,6 +72,22 @@ export function proxyHttp(hit: ProxyHit, req: Request, res: Response, timeoutMs 
 				out[k] = v as string | string[];
 			}
 			res.writeHead(r.statusCode ?? 502, out);
+			if (observe) {
+				const chunks: Buffer[] = [];
+				let size = 0;
+				r.on("data", (c: Buffer) => {
+					if (size >= observe.max) return;
+					chunks.push(c);
+					size += c.length;
+				});
+				r.on("end", () => {
+					try {
+						observe.done(r.statusCode ?? 502, Buffer.concat(chunks).subarray(0, observe.max).toString("utf8"));
+					} catch (err) {
+						console.error(`[proxy:${hit.prefix}] observer failed:`, err);
+					}
+				});
+			}
 			r.pipe(res);
 		},
 	);

@@ -307,6 +307,43 @@ export interface PluginHost {
 	): () => void;
 	/** 注册通用反向代理前缀（子路径去前缀透传到 127.0.0.1:port；要 "http" 能力；返回注销函数）。 */
 	registerProxy(prefix: string, target: number | { port: number; host?: string }): () => void;
+	/** showtell-owner-answer (ops #883): the owner's own actions through this plugin's proxy become his recorded
+	 *  answer. Needs "http"; absent when the server has none. Types: server/owner-front-door.ts. */
+	ownerActions?: {
+		watch(
+			watch: {
+				answeredIn: string;
+				actions: { method: "POST" | "PUT" | "PATCH" | "DELETE"; path: string; body?: Record<string, string>; refField: string }[];
+			},
+			handler: (receipt: {
+				id: string;
+				pluginId: string;
+				answeredIn: string;
+				method: string;
+				path: string;
+				params: Record<string, string>;
+				ref: string;
+				at: number;
+			}) => void,
+		): () => void;
+		record(
+			receiptId: string,
+			fields: {
+				doc: {
+					id: string;
+					title: string;
+					version: number;
+					latestVersion: number;
+					kind: "approved" | "comments";
+					words: string[];
+					link: string;
+					batchId: string;
+				};
+				sharer?: { sessionId?: string; role?: string; chat?: string };
+			},
+		): { ok: true; id: string; added: boolean } | { ok: false; error: string };
+		recordIdFor(ref: string): string | undefined;
+	};
 	ui: PluginHostUi;
 	llm: PluginHostLlm;
 	storage: {

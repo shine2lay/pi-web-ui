@@ -7,7 +7,8 @@
  * (source, ref). Text only, no cap. Four sources:
  *   - message: a role message, when it is sent (role-messages.ts);
  *   - board:   a Board post or order, when it is posted (role-board.ts);
- *   - answer:  the owner's answer to a question, a pop-up or a queued task that needed him (asks.ts);
+ *   - answer:  the owner's answer to a question, a pop-up or a queued task that needed him (asks.ts), or his
+ *              own Mark done / sent comments through a plugin's front door (owner-front-door.ts; ops #883);
  *   - plan:    a queue plan added, changed or done (pi-queue's "queue" entries in the chats' transcripts,
  *              read incrementally about once a minute; offsets in <dataDir>/decisions/scan-state.json).
  *   - tldr:    a chat's TL;DR line (pi-tldr's "tldr" entries, read by the same scan; task #85), kept only
@@ -25,6 +26,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { open, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { Ask, AskFieldAnswer } from "./asks.js";
+import type { FrontDoorDoc } from "./owner-front-door.js";
 import type { UiBoardPost } from "./protocol.js";
 import type { RoleMessageRecord } from "./role-messages.js";
 
@@ -134,7 +136,7 @@ export interface DecisionRecord {
 	via?: string;
 
 	// answer
-	ask?: "question" | "dialog" | "stuck";
+	ask?: "question" | "dialog" | "stuck" | "showtell";
 	body?: string;
 	questions?: AnswerQuestion[];
 	/** Where the owner answered: browser, telegram, … */
@@ -143,6 +145,8 @@ export interface DecisionRecord {
 	file?: string;
 	/** answer, backfilled: "<ask line>-><answer line>" in `file`. */
 	lines?: string;
+	/** answer from a plugin's front door (owner-front-door.ts): the doc, version and words he acted on. */
+	doc?: FrontDoorDoc;
 
 	// plan
 	task?: number;

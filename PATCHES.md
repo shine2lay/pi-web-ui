@@ -8902,12 +8902,20 @@ no decision record was written for it.
    request through the front door (browser `sec-fetch-site: same-origin`, upstream 2xx) gives the plugin a
    single-use receipt, and only with it pi-web-ui writes one `answer` record (`answeredIn` and `ask` "showtell",
    ref `showtell:<batch_id>`, his words verbatim in `doc.words`). Agent tools and direct calls to the plugin's
-   server never pass the proxy. Seam only: throws `owner front door: not built (ops #883)`.
+   server never pass the proxy. Built by ops #883; `sessionFileIn` finds the sharer's chat file by session id.
+2. `server/plugin-proxy.ts` `proxyHttp`: optional observer, told a watched request's status and first 64 KB
+   of the answer once it ended (the browser's stream is unchanged); `server/index.ts` asks the front door
+   (`observerFor`) per proxied request, so only POST/PUT/PATCH/DELETE to a plugin that declared actions is kept.
+3. `server/plugins.ts` `PluginHost.ownerActions` (optional, needs "http"; watch undone on unload) and
+   `plugin-sdk/index.d.ts` the same type; `server/agent-service.ts` `ownerAnswerStore()` hands the front door
+   the live `DecisionRecords` and the chats' folder; `server/decision-records.ts` `ask: "showtell"`, `doc`.
 
 ### How it was checked
 
-- `tests/unit/owner-front-door.test.ts`: 9 `notBuilt` cases (pass only while the stub throws); ops #883 turns
-  them into `it` without weakening an assertion. Seam: ~/ops-checks/owner-answers-2026-11-13/showtell-seam.md.
+- `tests/unit/owner-front-door.test.ts`: the 9 ops #882 acceptance cases, built and green with no assertion
+  changed. `tests/unit/owner-front-door-proxy.test.ts`: proxy wiring (body unchanged, one receipt; none without
+  the header or straight to the plugin's server; GET never kept; session file lookup).
+  Seam: ~/ops-checks/owner-answers-2026-11-13/showtell-seam.md.
 
 ### When syncing
 
