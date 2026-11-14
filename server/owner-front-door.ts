@@ -11,7 +11,8 @@
 import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { basename, join } from "node:path";
-import { type DecisionRecords, recordId } from "./decision-records.js";
+import { DecisionRecords, recordId } from "./decision-records.js";
+import { proxyForwardPath, type ProxyHit, type ProxyObserver } from "./plugin-proxy.js";
 
 /** A receipt is good for this long after the upstream answered. */
 export const RECEIPT_TTL_MS = 10 * 60_000;
@@ -201,15 +202,23 @@ export class OwnerFrontDoor {
 		return false;
 	}
 
-	/** The proxy's observer for a forwarded request that may be an owner action (plugin-proxy.ts proxyHttp), else
-	 *  undefined so the proxy keeps nothing. */
+	/** The proxy's observer for a request it forwards on `hit` (plugin-proxy.ts pluginProxyMiddleware), or
+	 *  undefined when it can't be an owner action, so the proxy keeps nothing. */
 	observerFor(
-		req: Omit<FrontDoorExchange, "status" | "responseText">,
-	): { max: number; done(status: number, responseText: string): void } | undefined {
-		if (!this.watches(req.pluginId, req.method)) return undefined;
+		hit: ProxyHit,
+		req: { method: string; url?: string; headers: FrontDoorExchange["headers"]; body?: unknown },
+	): ProxyObserver | undefined {
+		if (!this.watches(hit.pluginId, req.method)) return undefined;
+		const sent = {
+			pluginId: hit.pluginId,
+			method: req.method,
+			path: proxyForwardPath(hit, req.url ?? "/"),
+			headers: req.headers,
+			body: req.body,
+		};
 		return {
 			max: FRONT_DOOR_RESPONSE_MAX,
-			done: (status, responseText) => this.observe({ ...req, status, responseText }),
+			done: (status, responseText) => this.observe({ ...sent, status, responseText }),
 		};
 	}
 
@@ -315,6 +324,13 @@ export class OwnerFrontDoor {
 	private prune(now: number): void {
 		for (const [id, r] of this.receipts) if (now > r.at + RECEIPT_TTL_MS) this.receipts.delete(id);
 	}
+}
+
+/** index.ts: the front door over the engine's decision records (`decisions`), or undefined for an engine with none. */
+export function ownerFrontDoorFor(engine: object, sessionsRoot: () => string): OwnerFrontDoor | undefined {
+	const records = (engine as { decisions?: unknown }).decisions;
+	if (!(records instanceof DecisionRecords)) return undefined;
+	return new OwnerFrontDoor({ records, sessionFileOf: (id) => sessionFileIn(sessionsRoot(), id) });
 }
 
 /** A pi chat file is `<time>_<session id>.jsonl` in a folder under the sessions root: the one for `sessionId`. */

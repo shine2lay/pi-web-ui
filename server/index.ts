@@ -37,7 +37,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { VERSION, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { sdkCopies, sdkOriginNote } from "./sdk-origin.js";
 import { PROTOCOL_VERSION } from "./protocol-version.js";
-import { AgentService, workspacePath, QuiesceRejectedError } from "./agent-service.js";
+import { AgentService, decisionsSessionsRoot, workspacePath, QuiesceRejectedError } from "./agent-service.js";
 import { describeError, errorMessage, guardCalls, installProcessGuards } from "./crash-guard.js";
 import type { BusyConversation, NewChatOutcome } from "./agent-service.js";
 import type { ParticipantTarget } from "./participant-lifecycle.js";
@@ -100,9 +100,8 @@ import {
 import type { GuardedToolName, ToolPostRequest, ToolPreRequest } from "./plugin-tool-guard.js";
 import { buildPluginJobArgs, confirmPluginInstall, inspectInstallSpec, PluginInstaller } from "./plugin-installer.js";
 import { syncPluginCatalog } from "./plugin-catalog-sync.js";
-import { proxyForwardPath, proxyHttp } from "./plugin-proxy.js";
-import { OwnerFrontDoor, sessionFileIn } from "./owner-front-door.js";
-import type { DecisionRecords } from "./decision-records.js";
+import { pluginProxyMiddleware } from "./plugin-proxy.js";
+import { ownerFrontDoorFor } from "./owner-front-door.js";
 import type { ServerLang } from "./i18n.js";
 import { McpBridge } from "./mcp-bridge.js";
 import { createMcpHotReload } from "./mcp-hot-reload.js";
@@ -827,26 +826,9 @@ app.all(["/plugins-api/:id/*splat", "/plugins-api/:id"], (req, res) => {
 	const rest = splatParam(req);
 	pluginMgr.handleHttp(String(req.params.id ?? ""), req.method, rest, req, res);
 });
-/** 通用插件代理（host.registerProxy 注册的前缀落到这里）：去前缀后原样透传到
- *  127.0.0.1:port——相对路径/Range/SSE 天然可用。PI_WEB_TOKEN 鉴权已在上方覆盖。
- *  必须站在静态资源与 SPA catch-all 之前，否则子路径被 index.html 吞掉。
- *  proxyHttp lives in server/plugin-proxy.ts (Ops #633: it frees the upstream when the browser goes away). */
-app.use((req, res, next) => {
-	const hit = pluginMgr.findProxy(req.path);
-	if (!hit) {
-		next();
-		return;
-	}
-	// showtell-owner-answer (ops #883): a request that may be the owner's action is watched to its answer.
-	const observe = ownerFrontDoor?.observerFor({
-		pluginId: hit.pluginId,
-		method: req.method,
-		path: proxyForwardPath(hit, req.url ?? "/"),
-		headers: req.headers,
-		body: (req as { body?: unknown }).body,
-	});
-	proxyHttp(hit, req, res, undefined, observe);
-});
+/** 通用插件代理（host.registerProxy 注册的前缀落到这里）：PI_WEB_TOKEN 鉴权已在上方覆盖；必须站在静态资源与 SPA
+ *  catch-all 之前。server/plugin-proxy.ts (Ops #633 frees the upstream; ops #883 watches owner actions). */
+app.use(pluginProxyMiddleware(() => pluginMgr));
 app.get("/plugins/:id/client/*splat", (req, res) => {
 	// 多段子路径（插件 vendor/分包）的 splat 是数组（见 splatParam），拼回 "/"。
 	const rest = splatParam(req);
@@ -1445,8 +1427,6 @@ export interface DispatchSession {
 export interface EngineService {
 	/** W2: exact client + conversation catalog; unsupported engines do not mount the route. */
 	toolInspectorDependencies?(): ToolInspectorDependencies;
-	/** showtell-owner-answer (ops #883): the decision records and chats' folder for the owner front door. */
-	ownerAnswerStore?(): { records: DecisionRecords; sessionsRoot: string };
 	attach(clientId: string, send: (msg: ServerMessage) => void): Promise<DispatchSession>;
 	detach(clientId: string, send: (msg: ServerMessage) => void): void;
 	get(clientId: string): DispatchSession | undefined;
@@ -1659,15 +1639,7 @@ loadServerStrings(DATA_DIR);
 // Optional UI plugins (<dataDir>/plugins/<id>/): scanned on every client
 // attach so freshly dropped plugins appear without a server restart.
 const pluginMgr = new PluginManager(DATA_DIR, CWD, join(pkgRoot, "plugins", "catalog.json"));
-// showtell-owner-answer (ops #883): the owner's own actions through a plugin's proxy become his recorded answer.
-const ownerAnswerStore = service.ownerAnswerStore?.();
-const ownerFrontDoor = ownerAnswerStore
-	? new OwnerFrontDoor({
-			records: ownerAnswerStore.records,
-			sessionFileOf: (id) => sessionFileIn(ownerAnswerStore.sessionsRoot, id),
-		})
-	: undefined;
-pluginMgr.ownerFrontDoor = ownerFrontDoor;
+pluginMgr.ownerFrontDoor = ownerFrontDoorFor(service, decisionsSessionsRoot); // ops #883: his plugin actions
 // 插件作业（安装/更新/卸载）后台执行：不占用户终端、不打断设置面板（issue #152）。
 // 真正干活的是 CLI（<pkgRoot>/bin/pi-web-ui.mjs），这里只做进程编排 + 进度转发。
 const pluginInstaller = new PluginInstaller({ dataDir: DATA_DIR, pkgRoot, managed: MANAGED });

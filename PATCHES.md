@@ -8904,11 +8904,15 @@ no decision record was written for it.
    ref `showtell:<batch_id>`, his words verbatim in `doc.words`). Agent tools and direct calls to the plugin's
    server never pass the proxy. Built by ops #883; `sessionFileIn` finds the sharer's chat file by session id.
 2. `server/plugin-proxy.ts` `proxyHttp`: optional observer, told a watched request's status and first 64 KB
-   of the answer once it ended (the browser's stream is unchanged); `server/index.ts` asks the front door
-   (`observerFor`) per proxied request, so only POST/PUT/PATCH/DELETE to a plugin that declared actions is kept.
-3. `server/plugins.ts` `PluginHost.ownerActions` (optional, needs "http"; watch undone on unload) and
-   `plugin-sdk/index.d.ts` the same type; `server/agent-service.ts` `ownerAnswerStore()` hands the front door
-   the live `DecisionRecords` and the chats' folder; `server/decision-records.ts` `ask: "showtell"`, `doc`.
+   of the answer once it ended (the browser's stream is unchanged). The proxy middleware moved from
+   `server/index.ts` to `plugin-proxy.ts` `pluginProxyMiddleware`; it asks the front door (`observerFor`) per
+   request, so only POST/PUT/PATCH/DELETE to a plugin that declared actions is kept. The proxy prefix helpers
+   (`normalizeProxyPrefix`, `normalizeProxyTarget`, `matchProxyPrefix`) moved unchanged from `plugins.ts` to
+   `plugin-proxy.ts`, keeping `plugins.ts` at its size (wt check ratchet).
+3. `server/plugins.ts` `PluginHost.ownerActions` (optional, needs "http"; watch undone on unload; Ops108 pin
+   re-pinned) and `plugin-sdk/index.d.ts` the same type; `owner-front-door.ts` `ownerFrontDoorFor` builds it on
+   `AgentService.decisions` (now readonly public) and `decisionsSessionsRoot` (now exported);
+   `server/decision-records.ts` `ask: "showtell"`, `doc`.
 
 ### How it was checked
 

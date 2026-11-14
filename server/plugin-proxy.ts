@@ -1,5 +1,60 @@
 import { request as proxyRequest, type IncomingMessage } from "node:http";
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
+
+// The prefix rules moved here from server/plugins.ts (showtell-owner-answer, ops #883, keeps plugins.ts at its size).
+/** 通用代理前缀的保留字：命中即拒绝注册（宿主自用路径，代理抢了会吞掉主站功能）。 */
+export const PROXY_RESERVED_PREFIXES = [
+	"/api",
+	"/ws",
+	"/plugins",
+	"/plugins-api",
+	"/assets",
+	"/icons",
+	"/themes",
+] as const;
+
+/** 代理目标（只允许回环，防 SSRF：插件借宿主端口只能把本机服务露出来）。 */
+export interface PluginProxyTarget {
+	host: string;
+	port: number;
+}
+
+/** 校验并归一化代理前缀：合法返回去尾斜杠的小写形式，否则返回 null（纯函数，单测覆盖）。 */
+export function normalizeProxyPrefix(prefix: string): string | null {
+	if (typeof prefix !== "string") return null;
+	let p = prefix.trim();
+	if (!p.startsWith("/") || p.length < 2) return null;
+	// 去尾斜杠（"/liveserver/" → "/liveserver"）
+	while (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
+	if (!/^[A-Za-z0-9/_-]+$/.test(p) || p.includes("//")) return null;
+	const lower = p.toLowerCase();
+	for (const r of PROXY_RESERVED_PREFIXES) {
+		if (lower === r || lower.startsWith(`${r}/`)) return null;
+	}
+	return lower;
+}
+
+/** 校验代理目标：只收 127.0.0.1/localhost + 合法端口（纯函数，单测覆盖）。 */
+export function normalizeProxyTarget(target: unknown): PluginProxyTarget | null {
+	const port = typeof target === "number" ? target : (target as { port?: unknown })?.port;
+	const hostRaw =
+		typeof target === "number" ? "127.0.0.1" : String((target as { host?: unknown })?.host ?? "127.0.0.1");
+	const host = hostRaw.trim().toLowerCase();
+	if (host !== "127.0.0.1" && host !== "localhost") return null;
+	if (!Number.isInteger(port) || (port as number) < 1 || (port as number) > 65535) return null;
+	return { host: "127.0.0.1", port: port as number };
+}
+
+/** 在请求路径上做最长前缀匹配（边界对齐：prefix 本身或 prefix + "/" 开头才算命中）。 */
+export function matchProxyPrefix(path: string, prefixes: Iterable<string>): string | undefined {
+	let best: string | undefined;
+	for (const p of prefixes) {
+		if (path === p || path.startsWith(`${p}/`)) {
+			if (!best || p.length > best.length) best = p;
+		}
+	}
+	return best;
+}
 
 /** 通用插件代理（host.registerProxy 注册的前缀落到这里）：去前缀后原样透传到
  *  127.0.0.1:port——相对路径/Range/SSE 天然可用。PI_WEB_TOKEN 鉴权由 server/index.ts 的上游中间件覆盖。
@@ -14,6 +69,28 @@ export function proxyForwardPath(hit: ProxyHit, url: string): string {
 
 /** showtell-owner-answer (ops #883): told the upstream's status and answer (its first `max` bytes) once it ended. */
 export type ProxyObserver = { max: number; done(status: number, responseText: string): void };
+
+/** What the proxy middleware needs of the plugin manager (server/plugins.ts PluginManager). */
+export interface ProxyRoutes {
+	findProxy(path: string): ProxyHit | undefined;
+	/** showtell-owner-answer (ops #883): server/owner-front-door.ts OwnerFrontDoor. */
+	ownerFrontDoor?: { observerFor(hit: ProxyHit, req: Request): ProxyObserver | undefined };
+}
+
+/** 通用插件代理（host.registerProxy 注册的前缀落到这里）：去前缀后原样透传到 127.0.0.1:port。必须站在静态资源与
+ *  SPA catch-all 之前，否则子路径被 index.html 吞掉 (server/index.ts). A request that may be the owner's own
+ *  action through a plugin's front door is watched to its answer (ops #883). `routesOf` is read per request. */
+export function pluginProxyMiddleware(routesOf: () => ProxyRoutes) {
+	return (req: Request, res: Response, next: NextFunction): void => {
+		const routes = routesOf();
+		const hit = routes.findProxy(req.path);
+		if (!hit) {
+			next();
+			return;
+		}
+		proxyHttp(hit, req, res, undefined, routes.ownerFrontDoor?.observerFor(hit, req));
+	};
+}
 
 /** timeoutMs: the upstream socket idle timeout (default 30000, as before); tests pass a short one.
  *  observe: only for a request that may be an owner action (server/owner-front-door.ts). */

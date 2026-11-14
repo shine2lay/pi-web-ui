@@ -2852,7 +2852,7 @@ export function piSessionsRoot(): string | undefined {
 }
 
 /** decision-records: the folder the transcripts are in (flat env dir, or <agentDir>/sessions). */
-function decisionsSessionsRoot(): string {
+export function decisionsSessionsRoot(): string {
 	return piSessionsRoot() ?? join(process.env.PI_CODING_AGENT_DIR ?? getAgentDir(), "sessions");
 }
 
@@ -18884,7 +18884,7 @@ export class AgentService {
 	// kept as they happen (decision-records.ts)
 	// -----------------------------------------------------------------------
 
-	private readonly decisions: DecisionRecords;
+	readonly decisions: DecisionRecords; // also server/owner-front-door.ts ownerFrontDoorFor (ops #883)
 	private readonly queueScanner: QueueScanner;
 	private decisionChatTitles = new Map<string, string>();
 	private stopDecisionAnswers: (() => void) | null = null;
@@ -21180,11 +21180,6 @@ export class AgentService {
 
 	get(clientId: string): ClientSession | undefined {
 		return this.clients.get(clientId);
-	}
-
-	/** showtell-owner-answer (ops #883): where the owner front door writes his answers, and the chats' folder. */
-	ownerAnswerStore(): { records: DecisionRecords; sessionsRoot: string } {
-		return { records: this.decisions, sessionsRoot: decisionsSessionsRoot() };
 	}
 
 	toolInspectorDependencies(): ToolInspectorDependencies {

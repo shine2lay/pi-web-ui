@@ -44,7 +44,10 @@ describe("Ops108 baseline", () => {
 		// Re-pinned by scheduler-fold-wake (Ops #788, owner via COO rm-efb868f4): it only adds PluginToolCallerContext
 		// (conversationId, sessionFile, cwd, role) on PluginAgentTool.execute; no Ops108 routing line changed.
 		// Was 1b94c3fe….
-		expect(sha("server/plugins.ts")).toBe("f30f2f463eb6844086541a08bb2fe9e31819d303fa33bcf83a692ea0bc2e59ba");
+		// Re-pinned by showtell-owner-answer (Ops #883, COO rm-f03ad615): it only adds the optional host.ownerActions
+		// (the owner front door, server/owner-front-door.ts) and PluginManager.ownerFrontDoor, and moves the proxy prefix
+		// helpers unchanged to server/plugin-proxy.ts (imported back); no Ops108 routing line changed. Was f30f2f46….
+		expect(sha("server/plugins.ts")).toBe("aec29bdbdf7f53a6180c4932cf64ce74ef20ca122cc718dd2705a9b676f1e50e");
 		// Re-pinned by owner-card-brief (Ops #682, owner via COO rm-d2c1f9b2): it only adds the display-only
 		// renderBrief and puts its lines first in renderAsk's message and short form; its diff removes only renderAsk's
 		// doc comment and the two joined part lists (now with the brief); no Ops108 routing line changed. Was 91637612….

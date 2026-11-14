@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DecisionRecords } from "../../server/decision-records.js";
 import { type OwnerActionReceipt, OwnerFrontDoor, sessionFileIn } from "../../server/owner-front-door.js";
-import { proxyForwardPath, proxyHttp, type ProxyHit } from "../../server/plugin-proxy.js";
+import { pluginProxyMiddleware, type ProxyHit } from "../../server/plugin-proxy.js";
 
 const servers: Server[] = [];
 const dirs: string[] = [];
@@ -54,16 +54,9 @@ async function rig() {
 	const hit: ProxyHit = { prefix: "/showtell", pluginId: "show-and-tell", host: "127.0.0.1", port: upPort };
 	const app = express();
 	app.use(express.json());
-	app.use((req, res) => {
-		const observe = door.observerFor({
-			pluginId: hit.pluginId,
-			method: req.method,
-			path: proxyForwardPath(hit, req.url),
-			headers: req.headers,
-			body: (req as { body?: unknown }).body,
-		});
-		proxyHttp(hit, req, res, undefined, observe);
-	});
+	const routes = { findProxy: (p: string) => (p.startsWith("/showtell/") ? hit : undefined), ownerFrontDoor: door };
+	app.use(pluginProxyMiddleware(() => routes));
+	app.use((_req, res) => res.status(404).end("no proxy"));
 	const port = await listen(createServer(app));
 	return { door, receipts, port, upPort };
 }
@@ -103,10 +96,11 @@ describe("owner front door wiring (ops #883)", () => {
 
 	it("a GET is never watched, so the proxy keeps nothing", async () => {
 		const r = await rig();
+		const hit = (pluginId: string): ProxyHit => ({ prefix: "/p", pluginId, host: "127.0.0.1", port: r.upPort });
 		expect(
-			r.door.observerFor({ pluginId: "show-and-tell", method: "GET", path: "/api/docs/d_proxy0001", headers: {} }),
-		).toBeUndefined();
-		expect(r.door.observerFor({ pluginId: "notes", method: "POST", path: "/x", headers: {} })).toBeUndefined();
+			r.door.observerFor(hit("show-and-tell"), { method: "GET", url: "/p/api/docs/d_proxy0001", headers: {} }),
+		).toBe(undefined);
+		expect(r.door.observerFor(hit("notes"), { method: "POST", url: "/p/x", headers: {} })).toBeUndefined();
 	});
 
 	it("sessionFileIn finds a chat's file by its session id", () => {

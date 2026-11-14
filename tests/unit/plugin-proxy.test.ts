@@ -6,7 +6,8 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PluginManager, normalizeProxyPrefix, normalizeProxyTarget, matchProxyPrefix } from "../../server/plugins.js";
+import { PluginManager } from "../../server/plugins.js";
+import { normalizeProxyPrefix, normalizeProxyTarget, matchProxyPrefix } from "../../server/plugin-proxy.js";
 
 describe("normalizeProxyPrefix", () => {
 	it("常规前缀归一（去尾斜杠 + 小写）", () => {
