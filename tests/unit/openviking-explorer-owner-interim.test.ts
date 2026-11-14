@@ -73,6 +73,17 @@ describe("read routes with the production gate", () => {
 		expect(x.fake.calls).toEqual([]);
 	});
 
+	it("the owner gate runs before the setup-file lock: identity.md under a role root is OWNER_ONLY, under a shared one SETUP_FILE_LOCKED", async () => {
+		const x = await start();
+		expectOwnerOnly(await x.call("GET", `/api/openviking/note?uri=${q(`${QA_ROOT}/identity.md`)}&level=full`));
+		const shared = await x.call(
+			"GET",
+			`/api/openviking/note?uri=${q("viking://user/default/memories/identity.md")}&level=full`,
+		);
+		expect([shared.status, shared.body.error.code]).toEqual([403, "SETUP_FILE_LOCKED"]);
+		expect(x.fake.calls).toEqual([]);
+	});
+
 	it("tree, note and search on the shared roots: 200", async () => {
 		const x = await start();
 		x.fake.state.findHits.push({ uri: NOTE, score: 0.5, abstract: "money" });

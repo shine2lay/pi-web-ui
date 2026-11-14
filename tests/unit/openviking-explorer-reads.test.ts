@@ -1,6 +1,7 @@
 /**
  * Memory Explorer read routes (backend #162): what the acceptance file does not pin — other methods, paging refusals,
- * recent[] ties, the not-ready mark only on abstracts, exact-search truncation and a folder too big to count.
+ * recent[] ties, the not-ready mark only on abstracts, exact-search truncation and a folder too big to count
+ * (served with null counts and `counts_reason: "truncated"`, architecture a979afb3).
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { textWithReason } from "../../server/openviking/explorer-daemon.js";
@@ -50,11 +51,23 @@ describe("read routes: methods and paging", () => {
 		expect([past.status, past.body.total, past.body.children]).toEqual([200, 1, []]);
 	});
 
-	it("a folder holding more than node_limit nodes is 502 MEMORY_ERROR, never a short count", async () => {
+	it("a folder too big to count still serves its level: null counts, counts_reason truncated, never a short count", async () => {
 		const x = await start();
 		for (let i = 0; i < 20_000; i++) x.fake.store.put(`${QA_ROOT}/cases/n${i}.md`, "x");
 		const reply = await x.call("GET", `/api/openviking/tree?uri=${q(QA_ROOT)}`);
-		expect([reply.status, reply.body.error.code]).toEqual([502, "MEMORY_ERROR"]);
+		expect(reply.status).toBe(200);
+		expect(reply.body).toMatchObject({ notes: null, folders: null, counts_reason: "truncated", last_change: null });
+		const cases = reply.body.children.find((c: any) => c.name === "cases");
+		expect(cases).toMatchObject({ is_folder: true, notes: null });
+	});
+
+	it("a folder counted in full has counts_reason null", async () => {
+		const x = await start();
+		const reply = await x.call("GET", `/api/openviking/tree?uri=${q(PREFS)}`);
+		expect(reply.status).toBe(200);
+		expect(reply.body.counts_reason).toBeNull();
+		expect(typeof reply.body.notes).toBe("number");
+		expect(typeof reply.body.folders).toBe("number");
 	});
 });
 

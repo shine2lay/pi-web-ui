@@ -142,7 +142,7 @@ export interface OpenVikingTreeChild {
 	kind: OpenVikingExplorerKind;
 	size: number | null;
 	mod_time: string | null;
-	/** Folders: notes below; files: null. */
+	/** Folders: notes below (null when the parent's count walk was truncated); files: null. */
 	notes: number | null;
 	abstract: string | null;
 	abstract_reason: OpenVikingAbstractReason | null;
@@ -153,8 +153,11 @@ export interface OpenVikingTreeChild {
 export interface OpenVikingTreeFolderResponse {
 	uri: string;
 	root: string;
-	notes: number;
-	folders: number;
+	/** null when `counts_reason` is "truncated": never a short count. */
+	notes: number | null;
+	folders: number | null;
+	/** "truncated": the count walk returned `node_limit` nodes, so the level is served without counts; else null. */
+	counts_reason: "truncated" | null;
 	last_change: string | null;
 	abstract: string | null;
 	abstract_reason: OpenVikingAbstractReason | null;

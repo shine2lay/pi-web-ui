@@ -94,7 +94,7 @@ export function recentNotes(
 	return rows.sort(newestFirst).slice(0, EXPLORER_RECENT_COUNT);
 }
 
-/** A folder walk the explorer must count in full: `NOT_FOUND` and truncation are refusals, never a short count. */
+/** A folder walk the explorer must list in full: `NOT_FOUND` and truncation are refusals, never a short list. */
 function folderItems(walk: OpenVikingTreeWalk, uri: string): OpenVikingLsItem[] {
 	if (walk.state === "read") return walk.items;
 	if (walk.state === "absent") throw explorerRefusal("NOT_FOUND", "No memory at this uri.");
@@ -106,7 +106,7 @@ function folderItems(walk: OpenVikingTreeWalk, uri: string): OpenVikingLsItem[] 
 function treeChild(
 	item: OpenVikingLsItem,
 	root: OpenVikingExplorerRoot,
-	notesBelow: ReadonlyMap<string, number>,
+	notesBelow: ReadonlyMap<string, number> | null,
 ): OpenVikingTreeChild {
 	const locked = isSetupFile(item.uri);
 	const text = locked
@@ -121,10 +121,38 @@ function treeChild(
 		kind: explorerKindOf(item.uri, root),
 		size: item.isDir ? null : item.size,
 		mod_time: isoModTime(item.modTime),
-		notes: item.isDir ? (notesBelow.get(item.uri) ?? 0) : null,
+		notes: item.isDir && notesBelow !== null ? (notesBelow.get(item.uri) ?? 0) : null,
 		abstract: text.text,
 		abstract_reason: text.reason,
 		locked,
+	};
+}
+
+/**
+ * A folder's counts from its deep walk. A truncated walk has none: notes, folders, each child folder's notes and
+ * last_change are null with `counts_reason: "truncated"`, and the level is still served (spec-explorer.md a979afb3).
+ */
+function folderCounts(deep: OpenVikingTreeWalk, uri: string) {
+	if (deep.state === "truncated") {
+		return { notes: null, folders: null, counts_reason: "truncated" as const, last_change: null, notesBelow: null };
+	}
+	const below = folderItems(deep, uri);
+	const notesBelow = new Map<string, number>();
+	for (const item of below) {
+		if (item.isDir) continue;
+		const child = `${uri}/${item.uri.slice(uri.length + 1).split("/")[0]}`;
+		notesBelow.set(child, (notesBelow.get(child) ?? 0) + 1);
+	}
+	const notes = below.filter((i) => !i.isDir).length;
+	const newest = below
+		.map((i) => msOf(isoModTime(i.modTime)))
+		.reduce((a, b) => Math.max(a, b), Number.NEGATIVE_INFINITY);
+	return {
+		notes,
+		folders: below.length - notes,
+		counts_reason: null,
+		last_change: Number.isFinite(newest) ? new Date(newest).toISOString() : null,
+		notesBelow,
 	};
 }
 
@@ -144,27 +172,18 @@ export async function buildTreeFolder(
 		walkTree(http, uri, headers, EXPLORER_ROOT_WALK),
 		http.result("/api/v1/content/abstract", { uri }, headers),
 	]);
-	const below = folderItems(deep, uri);
-	const notesBelow = new Map<string, number>();
-	for (const item of below) {
-		if (item.isDir) continue;
-		const child = `${uri}/${item.uri.slice(uri.length + 1).split("/")[0]}`;
-		notesBelow.set(child, (notesBelow.get(child) ?? 0) + 1);
-	}
+	const counts = folderCounts(deep, uri);
 	const children = folderItems(level, uri)
-		.map((item) => treeChild(item, root, notesBelow))
+		.map((item) => treeChild(item, root, counts.notesBelow))
 		.sort(newestFirst);
-	const notes = below.filter((i) => !i.isDir).length;
-	const newest = below
-		.map((i) => msOf(isoModTime(i.modTime)))
-		.reduce((a, b) => Math.max(a, b), Number.NEGATIVE_INFINITY);
 	const ownText = textWithReason(own);
 	return {
 		uri,
 		root: root.uri,
-		notes,
-		folders: below.length - notes,
-		last_change: Number.isFinite(newest) ? new Date(newest).toISOString() : null,
+		notes: counts.notes,
+		folders: counts.folders,
+		counts_reason: counts.counts_reason,
+		last_change: counts.last_change,
 		abstract: ownText.text,
 		abstract_reason: ownText.reason,
 		total: children.length,
