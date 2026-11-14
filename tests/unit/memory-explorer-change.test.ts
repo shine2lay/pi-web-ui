@@ -29,12 +29,13 @@ afterEach(() => {
 
 const openCase = async (c: HTMLElement) =>
 	click(byRole(c, "button").find((b) => b.getAttribute("data-note") === CASE_URI) as HTMLElement);
+const FULL_TEXT_BOX = /^Full text of /;
 const dialog = () => byRole(document.body, "dialog")[0] ?? null;
 
 async function editTo(c: HTMLElement, value: string): Promise<void> {
 	await openCase(c);
 	await click(oneByRole(c, "button", "Edit"));
-	const box = oneByRole(c, "textbox", "Full text") as HTMLTextAreaElement;
+	const box = oneByRole(c, "textbox", FULL_TEXT_BOX) as HTMLTextAreaElement;
 	expect(box.value).toBe(CASE_FULL_TEXT);
 	await typeInto(box, value);
 	await click(oneByRole(c, "button", "Save changes"));
@@ -61,7 +62,7 @@ describe("edit", () => {
 		await openCase(page.container);
 		await click(oneByRole(page.container, "button", "Edit"));
 		await click(oneByRole(page.container, "button", "Cancel"));
-		expect(maybeByRole(page.container, "textbox", "Full text")).toBeNull();
+		expect(maybeByRole(page.container, "textbox", FULL_TEXT_BOX)).toBeNull();
 		expect(api.save).not.toHaveBeenCalled();
 	});
 
@@ -72,7 +73,7 @@ describe("edit", () => {
 		await click(oneByRole(dialog() as HTMLElement, "button", "Save"));
 		const alert = oneByRole(page.container, "alert");
 		expect(text(alert)).toContain("Couldn't save: memory didn't answer. Your text is still here.");
-		expect((oneByRole(page.container, "textbox", "Full text") as HTMLTextAreaElement).value).toBe("Kept draft");
+		expect((oneByRole(page.container, "textbox", FULL_TEXT_BOX) as HTMLTextAreaElement).value).toBe("Kept draft");
 		await click(oneByRole(alert, "button", "Try again"));
 		expect(api.save).toHaveBeenCalledTimes(2);
 	});
@@ -82,7 +83,7 @@ describe("edit", () => {
 		await editTo(page.container, "Kept draft");
 		await click(oneByRole(dialog() as HTMLElement, "button", "Save"));
 		expect(text(oneByRole(page.container, "alert"))).toContain("changed since you opened it");
-		expect((oneByRole(page.container, "textbox", "Full text") as HTMLTextAreaElement).value).toBe("Kept draft");
+		expect((oneByRole(page.container, "textbox", FULL_TEXT_BOX) as HTMLTextAreaElement).value).toBe("Kept draft");
 	});
 });
 

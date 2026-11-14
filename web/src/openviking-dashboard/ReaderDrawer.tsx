@@ -8,7 +8,7 @@
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactElement } from "react";
 import type { OpenVikingDisclosureTier } from "../../../server/openviking/types.js";
-import { holdBackgroundInert } from "./modal-inert.js";
+import { holdBackgroundInert } from "../memory-explorer/modal-inert.js";
 import { nextTabIndex } from "./view-composition.js";
 import type { OpenVikingDrawerModel } from "./view-model-types.js";
 

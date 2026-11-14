@@ -1,0 +1,331 @@
+/* The Memory page's work area (design #316): Find and the lists (recent notes, results, a folder's
+   contents). The reader, the confirm and the toast live in `memory-explorer-reader.css`. */
+
+/* Find */
+.mx-find {
+	padding: 16px 24px;
+}
+.mx-find-label {
+	display: block;
+	font-size: var(--mx-section);
+	font-weight: 600;
+	margin-bottom: 8px;
+}
+.mx-find-box {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+.mx-find-box input {
+	flex: 1;
+	min-width: 0;
+	background: var(--bg);
+	border: 2px solid var(--border);
+	border-radius: var(--mx-r-md);
+	padding: 8px 12px;
+	font-size: 18px;
+	min-height: 44px;
+}
+.mx-find-box input:focus {
+	border-color: var(--accent);
+	outline: none;
+}
+.mx-clear {
+	background: none;
+	border: 0;
+	cursor: pointer;
+	color: var(--text-dim);
+	width: 32px;
+	height: 32px;
+	display: grid;
+	place-items: center;
+	flex: none;
+}
+.mx-clear path {
+	stroke: currentColor;
+	stroke-width: 2;
+	stroke-linecap: round;
+}
+.mx-find-ways {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 16px;
+	margin-top: 12px;
+	font-size: var(--mx-control);
+}
+.mx-seg {
+	display: inline-flex;
+	border: 1px solid var(--border);
+	border-radius: var(--mx-r-sm);
+	overflow: hidden;
+}
+.mx-seg button {
+	background: none;
+	border: 0;
+	padding: 6px 12px;
+	min-height: 36px;
+	cursor: pointer;
+	color: var(--text-dim);
+	font-size: var(--mx-control);
+}
+.mx-seg button[aria-pressed="true"] {
+	background: var(--bg-elev2);
+	color: var(--text);
+	font-weight: 600;
+	box-shadow: inset 0 -2px 0 var(--accent);
+}
+.mx-scope {
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--mx-r-sm);
+	min-height: 36px;
+	padding: 4px 8px;
+	font-size: var(--mx-control);
+	max-width: 100%;
+}
+.mx-find-hint {
+	margin: 8px 0 0;
+	font-size: var(--mx-meta);
+}
+.mx-tries {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 12px;
+	align-items: center;
+	font-size: var(--mx-meta);
+}
+.mx-chip {
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 4px 12px;
+	min-height: 32px;
+	cursor: pointer;
+	font-size: var(--mx-meta);
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	text-align: left;
+}
+.mx-chip:hover {
+	border-color: var(--accent);
+}
+
+/* The view: recent list, results, reader */
+.mx-view {
+	margin-top: 16px;
+	padding: 16px 24px 24px;
+	min-width: 0;
+}
+.mx-vhead {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 8px 16px;
+	margin-bottom: 12px;
+	font-size: var(--mx-meta);
+}
+.mx-vhead h2,
+.mx-empty h2 {
+	font-size: var(--mx-section);
+	font-weight: 600;
+	margin: 0;
+}
+.mx-rows {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.mx-rows > li + li {
+	border-top: 1px solid var(--border-soft);
+}
+.mx-row {
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1fr) auto;
+	gap: 2px 12px;
+	width: 100%;
+	padding: 12px 8px;
+	background: none;
+	border: 0;
+	border-radius: var(--mx-r-sm);
+	text-align: left;
+	cursor: pointer;
+}
+.mx-row:hover {
+	background: var(--bg-elev2);
+}
+.mx-row .mx-icon {
+	grid-row: span 4;
+	padding-top: 2px;
+	color: var(--text-dim);
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.6;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+}
+.mx-row-title {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.mx-row-side {
+	text-align: right;
+	white-space: nowrap;
+}
+.mx-row-where {
+	grid-column: 2 / 4;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 6px;
+	font-size: var(--mx-meta);
+	color: var(--text-dim);
+}
+.mx-row-where .mx-num {
+	margin-left: auto;
+	padding-left: 16px;
+}
+.mx-kind-dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	display: inline-block;
+	flex: none;
+}
+.mx-row-sum {
+	grid-column: 2 / 4;
+	color: var(--text-dim);
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	max-width: 90ch;
+}
+.mx-row .mx-path {
+	grid-column: 2 / 4;
+}
+.mx-match {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--mx-small);
+	font-weight: 600;
+}
+.mx-match-dots {
+	display: inline-flex;
+	gap: 2px;
+}
+.mx-match-dots i {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--border);
+	display: inline-block;
+}
+.mx-match-dots i.on {
+	background: var(--accent);
+}
+.mx-empty {
+	padding: 24px 0;
+	max-width: 60ch;
+}
+.mx-empty p {
+	margin: 8px 0 12px;
+}
+.mx-missing {
+	color: var(--text-dim);
+	font-style: italic;
+	margin: 0;
+}
+.mx-error {
+	color: var(--mx-bad-ink);
+	font-size: var(--mx-control);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+.mx-more {
+	margin-top: 12px;
+}
+.mx-skeleton {
+	display: block;
+	background: var(--bg-elev2);
+	border-radius: var(--mx-r-sm);
+	height: 14px;
+	margin: 8px 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+	.mx-skeleton {
+		animation: mx-pulse 1.2s ease-in-out infinite;
+	}
+	@keyframes mx-pulse {
+		50% {
+			opacity: 0.55;
+		}
+	}
+}
+
+/* Narrow screens: the tree goes below the work area */
+@media (max-width: 1000px) {
+	.mx-layout {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.mx-layout > .mx-work {
+		grid-column: 1;
+		grid-row: 1;
+	}
+	.mx-layout > .mx-tree {
+		grid-column: 1;
+		grid-row: 2;
+		position: static;
+		max-height: none;
+	}
+}
+@media (max-width: 640px) {
+	.mx-page {
+		padding: 16px 12px;
+	}
+	.mx-find,
+	.mx-view {
+		padding-left: 16px;
+		padding-right: 16px;
+	}
+	.mx-find-box {
+		flex-wrap: wrap;
+	}
+	.mx-find-box input {
+		flex-basis: calc(100% - 40px);
+		font-size: 17px;
+	}
+	.mx-find-box .mx-btn-solid {
+		flex: 1 1 100%;
+	}
+	.mx-row {
+		grid-template-columns: 24px minmax(0, 1fr);
+		padding: 12px 0;
+	}
+	.mx-row-side {
+		grid-column: 2;
+		text-align: left;
+	}
+	.mx-row-where,
+	.mx-row-sum,
+	.mx-row .mx-path {
+		grid-column: 2;
+	}
+	.mx-row-where .mx-num {
+		margin-left: 0;
+		padding-left: 0;
+	}
+	.mx-find-hint {
+		display: none;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.mx-tree-toggle svg {
+		transition: none;
+	}
+}

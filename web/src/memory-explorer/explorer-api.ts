@@ -101,7 +101,7 @@ export interface MemoryHealth {
 
 export type ChangeAction = "edit" | "delete";
 
-/** One owner change, as kept in memory's change record (G7). */
+/** One owner change, as written to memory's change record (G7). */
 export interface ChangeRecord {
 	readonly id: string;
 	readonly action: ChangeAction;
@@ -113,13 +113,7 @@ export interface ChangeRecord {
 }
 
 export type ExplorerErrorCode =
-	| "MEMORY_DOWN"
-	| "CHANGED_SINCE_OPENED"
-	| "LOCKED"
-	| "OUTSIDE_ROOTS"
-	| "NOT_FOUND"
-	| "UNDO_EXPIRED"
-	| "FAILED";
+	"MEMORY_DOWN" | "CHANGED_SINCE_OPENED" | "LOCKED" | "OUTSIDE_ROOTS" | "NOT_FOUND" | "UNDO_EXPIRED" | "FAILED";
 
 export class ExplorerApiError extends Error {
 	constructor(
@@ -144,8 +138,6 @@ export interface MemoryExplorerApi {
 	save(uri: string, fullText: string, changedAt: string | null): Promise<ChangeRecord>;
 	remove(uri: string): Promise<ChangeRecord>;
 	undo(changeId: string): Promise<ChangeRecord>;
-	/** The owner's changes from the change record, newest first. */
-	changes(signal?: AbortSignal): Promise<readonly ChangeRecord[]>;
 }
 
 export function errorCode(error: unknown): ExplorerErrorCode {

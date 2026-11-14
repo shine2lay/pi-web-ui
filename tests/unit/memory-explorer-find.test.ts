@@ -71,7 +71,10 @@ describe("search by exact words", () => {
 		expect(oneByRole(find(page.container), "button", "Exact words").getAttribute("aria-pressed")).toBe("true");
 		expect(text(find(page.container))).toContain("Finds these exact words and shows the line.");
 		await ask(page.container, "find things");
-		expect(api.search).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "words", query: "find things" }), expect.anything());
+		expect(api.search).toHaveBeenLastCalledWith(
+			expect.objectContaining({ mode: "words", query: "find things" }),
+			expect.anything(),
+		);
 		oneByRole(page.container, "heading", "1 matching line in 1 note");
 		expect(text(rows(page.container)[0])).toContain("Owner asked to find things");
 	});
@@ -94,9 +97,12 @@ describe("no results", () => {
 		page = await mountExplorer(api);
 		await choose(oneByRole(find(page.container), "combobox", "Where to search") as HTMLSelectElement, SHARED);
 		await ask(page.container, "nothing at all");
-		oneByRole(page.container, "heading", /Nothing matches/);
+		oneByRole(page.container, "heading", /^Nothing found for “nothing at all”$/);
 		await click(oneByRole(page.container, "button", "Search everything"));
-		expect(api.search).toHaveBeenLastCalledWith(expect.objectContaining({ scope: "all", query: "nothing at all" }), expect.anything());
+		expect(api.search).toHaveBeenLastCalledWith(
+			expect.objectContaining({ scope: "all", query: "nothing at all" }),
+			expect.anything(),
+		);
 		await click(oneByRole(page.container, "button", "Try Exact words"));
 		expect(api.search).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "words" }), expect.anything());
 	});
@@ -109,7 +115,9 @@ describe("try examples and clear", () => {
 		const chip = byRole(find(page.container), "button").find((b) => b.hasAttribute("data-try")) as HTMLElement;
 		await click(chip);
 		expect(api.search).toHaveBeenCalledTimes(1);
-		expect((oneByRole(find(page.container), "searchbox") as HTMLInputElement).value).toBe(chip.getAttribute("data-try"));
+		expect((oneByRole(find(page.container), "searchbox") as HTMLInputElement).value).toBe(
+			chip.getAttribute("data-try"),
+		);
 		await click(oneByRole(find(page.container), "button", "Clear search"));
 		oneByRole(page.container, "heading", "Changed most recently");
 	});

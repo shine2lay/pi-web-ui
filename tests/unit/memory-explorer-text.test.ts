@@ -24,7 +24,8 @@ const minutesAgo = (m: number) => new Date(NOW_MS - m * 60_000).toISOString();
 
 describe("summaryText: one-line summaries read as clean text", () => {
 	it("drops heading marks, bold and code marks, link targets and bullets", () => {
-		const raw = "# Case: memory page redesign\n**Role:** design. Uses `search-first` and [the brief](./brief.md).\n- Picked P";
+		const raw =
+			"# Case: memory page redesign\n**Role:** design. Uses `search-first` and [the brief](./brief.md).\n- Picked P";
 		expect(summaryText(raw)).toBe("Case: memory page redesign Role: design. Uses search-first and the brief. Picked P");
 	});
 	it("drops the store's own label before an abstract", () => {

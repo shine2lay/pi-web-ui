@@ -37,8 +37,10 @@ export const SETUP_URI = `${DESIGN}/identity.md`;
 export const DOC_URI = `${PROJECTS}/pi-web-ui/README.md`;
 
 /** A stored one-line summary exactly as the store keeps it: markdown marks and all. */
-export const RAW_CASE_SUMMARY = "# Case: memory page redesign\n**Role:** design. Owner wants a `search-first` explorer.";
-export const CASE_FULL_TEXT = "# Case: memory page redesign\n\n**Role:** design\n\n- Owner asked to find things\n- Picked P";
+export const RAW_CASE_SUMMARY =
+	"# Case: memory page redesign\n**Role:** design. Owner wants a `search-first` explorer.";
+export const CASE_FULL_TEXT =
+	"# Case: memory page redesign\n\n**Role:** design\n\n- Owner asked to find things\n- Picked P";
 
 function note(uri: string, minutes: number, size: number, summary: string | null): MemoryItem {
 	return { uri, isFolder: false, size, changedAt: minutesAgo(minutes), summary };
@@ -64,7 +66,10 @@ export const ROOTS: readonly MemoryRoot[] = [
 ];
 
 const FOLDERS: Record<string, MemoryItem[]> = {
-	[SHARED]: [folder(`${SHARED}/events`, 30, 1, null), folder(`${SHARED}/preferences`, 90, 1, "Rules every chat follows.")],
+	[SHARED]: [
+		folder(`${SHARED}/events`, 30, 1, null),
+		folder(`${SHARED}/preferences`, 90, 1, "Rules every chat follows."),
+	],
 	[`${SHARED}/preferences`]: [NOTES[2]],
 	[`${SHARED}/events`]: [],
 	[PROJECTS]: [folder(`${PROJECTS}/pi-web-ui`, 600, 1, "pi-web-ui L0 abstract: fork architecture")],
@@ -80,7 +85,9 @@ export const MEANING_HITS: readonly SearchHit[] = [
 	{ item: NOTES[2], score: 0.871 },
 	{ item: NOTES[1], score: 0.84 },
 ];
-export const WORD_HITS: readonly SearchHit[] = [{ item: NOTES[0], line: "- Owner asked to find things", lineNumber: 5 }];
+export const WORD_HITS: readonly SearchHit[] = [
+	{ item: NOTES[0], line: "- Owner asked to find things", lineNumber: 5 },
+];
 
 export interface FakeOptions {
 	health?: MemoryHealth["state"];
@@ -124,7 +131,8 @@ export function fakeApi(options: FakeOptions = {}): FakeApi {
 				totalNotes: options.empty ? 0 : 6,
 				lastSeenUpAt: options.health === "down" ? minutesAgo(65) : null,
 			})),
-		roots: () => guard("roots", () => (options.empty ? ROOTS.map((r) => ({ ...r, noteCount: 0, kindCounts: {} })) : ROOTS)),
+		roots: () =>
+			guard("roots", () => (options.empty ? ROOTS.map((r) => ({ ...r, noteCount: 0, kindCounts: {} })) : ROOTS)),
 		folder: (uri) =>
 			guard("folder", (): FolderListing => {
 				const items = options.empty ? [] : (FOLDERS[uri] ?? []);
@@ -137,9 +145,7 @@ export function fakeApi(options: FakeOptions = {}): FakeApi {
 			}),
 		recent: (scope, limit) =>
 			guard("recent", () =>
-				options.empty
-					? []
-					: NOTES.filter((n) => scope === "all" || n.uri.startsWith(`${scope}/`)).slice(0, limit),
+				options.empty ? [] : NOTES.filter((n) => scope === "all" || n.uri.startsWith(`${scope}/`)).slice(0, limit),
 			),
 		read: (uri) =>
 			guard("read", (): NoteDetail => {
@@ -168,7 +174,6 @@ export function fakeApi(options: FakeOptions = {}): FakeApi {
 				changes[i] = undone;
 				return undone;
 			}),
-		changes: () => guard("changes", () => [...changes]),
 	};
 	for (const key of Object.keys(api) as (keyof MemoryExplorerApi)[]) {
 		(api as unknown as Record<string, unknown>)[key] = vi.fn(api[key]);
