@@ -17,7 +17,7 @@ import { explorerRefusal, isSetupFile, parseExplorerUri } from "./explorer-rules
 import { parseSearchRequest, runSearch } from "./explorer-search.js";
 import { buildTreeFolder, buildTreeRoots } from "./explorer-tree-read.js";
 import { EXPLORER_FOLDER_LIMIT, type OpenVikingExplorerUri, type OpenVikingSearchRequest } from "./explorer-types.js";
-import { assertOwner, type OpenVikingOwnerGate } from "./owner-gate.js";
+import { assertOwner, type OpenVikingOwnerGate, ownerMayRead } from "./owner-gate.js";
 import { methodNotAllowedResult, okResult, sendRouteResult, toErrorResult } from "./route-result.js";
 import { OpenVikingDashboardError } from "./types.js";
 
@@ -87,7 +87,7 @@ export function registerExplorerReadRoutes(
 
 	route("/api/openviking/tree/roots", "GET", async (req) => {
 		assertOwner(gate, req, { kind: "read", roots: [] });
-		return buildTreeRoots(http, client.now(), (root) => gate(req, { kind: "read", roots: [root] }));
+		return buildTreeRoots(http, client.now(), (root) => ownerMayRead(gate, req, [root]));
 	});
 
 	route("/api/openviking/tree", "GET", async (req) => {

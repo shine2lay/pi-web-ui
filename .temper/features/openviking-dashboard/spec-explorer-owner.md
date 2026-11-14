@@ -33,16 +33,24 @@ All under `/api/openviking/owner/`:
 | `session/logout` | end the session |
 | `DELETE passkey` | remove a passkey |
 
-Request and response bodies are owned by backend #166 (`owner-session-types.ts`); this file is amended with them when #166 lands. Until then the table above is the route list only, not a body contract.
+Request and response bodies: `server/openviking/owner-session-types.ts` (backend #166), the one contract the page (frontend #290) imports. In short:
 
-## Interim, Until Backend #166 Deploys
+| Route | Request | Answer |
+|---|---|---|
+| `POST passkey/code` | `{}` | `202 { sent, rp_id, expires_at }`; the code goes only to the owner's Telegram |
+| `POST passkey/enroll/options` | `{ code }` | `200 { challenge_id, expires_at, options }` (WebAuthn creation options) |
+| `POST passkey/enroll/verify` | `{ challenge_id, response }` | `201 { passkey: { id, rp_id, created_at } }` |
+| `POST session/options` | `{}` | `200 { challenge_id, expires_at, options }` (WebAuthn request options) |
+| `POST session/verify` | `{ challenge_id, response }` | `200 { expires_at, idle_ms, passkey_id, passkeys }` + the session cookie |
+| `POST write/options` | `{ op }` (session) | `200 { challenge_id, expires_at, options }`, the challenge bound to `op` |
+| `POST session/logout` | `{}` | `200 { signed_out: true }`, cookie cleared |
+| `DELETE passkey?id=` | write headers | `200 { removed }` |
 
-- **R-OWNER-INTERIM-1 (no new exposure before the session exists):** the read routes go live in backend #162 serving only what `/api/openviking/entries` already shows without a session:
-  - `tree/roots`: all 17 rows with counts;
-  - `tree`, `note` and `search`: the two shared roots only (`viking://resources`, `viking://user/default/memories`);
-  - a role root (`viking://user/<role>/memories`) on `tree`, `note` or `search`: `403 OWNER_ONLY`.
-- *Why:* spec.md's cross-role rule withholds another role's note text from `/entries` today. Serving role notes with no session, even briefly, would move that line before the check that justifies moving it. Architecture's earlier note to Backend (`rm-6cbea5da`) said the read routes had "the same exposure as the existing routes"; that was wrong for note text and search hits on role roots, and this rule replaces it.
-- When #166 deploys, `R-OWNER-READ-1` applies to all 17 roots and this section is deleted in the same change.
+- The host is the request's `Origin`, exactly one of the two origins; a passkey belongs to its host, so the owner enrolls once per host.
+- The session cookie `pi_owner_session`: 256-bit random id, `HttpOnly; Secure; SameSite=Strict; Path=/api/openviking`, memory only (a restart signs out).
+- A write sends `X-Owner-Write: 1` and `X-Owner-Assertion`: base64url of the JSON `{ challenge_id, response }` (WebAuthn assertion). `op.body_sha256` is the lowercase hex sha256 of the exact request body bytes (a DELETE: of no bytes).
+- Enrollment needs the single-use code (7 words, 10 minutes, memory only) the server sends to the owner's Telegram; with no passkey stored, every explorer route answers `403 OWNER_ONLY`. Every passkey added or removed sends the owner a Telegram notice.
+- Options, verify and assertion calls: at most 10 a minute each; codes: 3 per 10 minutes.
 
 ## Residual Risks (Security, verbatim, `rm-8841fede`)
 

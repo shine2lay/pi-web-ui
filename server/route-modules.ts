@@ -4,11 +4,22 @@
  */
 import type { Express } from "express";
 import { registerFileTransferRoutes } from "./file-transfer-routes.js";
-import { ownerCheckPending, registerOpenVikingRoutes, systemExplorerClock } from "./openviking/index.js";
+import { ownerCheckMissing, registerOpenVikingRoutes, systemExplorerClock } from "./openviking/index.js";
+import { createOwnerCheck } from "./openviking/owner-check.js";
+import { type OwnerTelegramTool, ownerTelegramSender } from "./owner-telegram.js";
 
-/** `startBackgroundWork`: server start only — the OpenViking Memory list's background build (#155). */
-export interface RouteModuleOptions {
-	startBackgroundWork?: boolean;
+/** The JSON parser's `verify` hook a write's passkey assertion needs (the exact received body bytes). */
+export { keepOwnerWriteBody } from "./openviking/owner-write-op.js";
+
+/**
+ * The running server, given at server start only: then the OpenViking Memory list's background build runs (#155) and
+ * the passkey owner check (OI-1) keeps `owner-passkeys.json` in `dataDir` and sends through the Telegram plugin's tool.
+ * Without it the explorer refuses everyone (fail closed).
+ */
+export interface RouteModuleServer {
+	dataDir: string;
+	/** The plugin manager, read when a notice is sent (it starts after the routes are mounted). */
+	plugins: () => { agentToolOf(pluginId: string, name: string): OwnerTelegramTool | undefined };
 }
 
 export interface RouteModules {
@@ -16,24 +27,40 @@ export interface RouteModules {
 	stop(): Promise<void>;
 }
 
+/** The passkey owner check, its undo asks handed to the explorer's writes once they register (R-OWNER-UNDO-1). */
+function ownerCheckOf({ dataDir, plugins }: RouteModuleServer) {
+	let askUndo: ((operationId: string, untilMs: number) => void) | null = null;
+	const check = createOwnerCheck({
+		dataDir,
+		telegram: (notice) => ownerTelegramSender(plugins(), "owner-check")(notice),
+		clock: systemExplorerClock,
+		log: (line) => console.log(`[openviking] ${line}`),
+		writeListener: { undoAsked: (operationId, untilMs) => askUndo?.(operationId, untilMs) },
+	});
+	return { check, onUndoAsk: (ask: typeof askUndo) => void (askUndo = ask) };
+}
+
 export function registerRouteModules(
 	app: Express,
 	getCwd: (clientId: string) => string | undefined,
-	options: RouteModuleOptions = {},
+	server?: RouteModuleServer,
 ): RouteModules {
 	registerFileTransferRoutes(app, getCwd);
 	const shutdownHooks: Array<() => Promise<void>> = [];
-	// OpenViking Memory Dashboard (GET overview/entries/audit) and Memory Explorer. Until the owner session deploys
-	// the gate is R-OWNER-INTERIM-1's: shared-root reads only, every write refused (R-OWNER-FAIL-CLOSED-1).
+	const owner = server ? ownerCheckOf(server) : null;
+	owner?.check.register(app);
+	// OpenViking Memory Dashboard (GET overview/entries/audit) and the Memory Explorer behind the owner check (OI-1);
+	// with no owner check every explorer route refuses (R-OWNER-FAIL-CLOSED-1).
 	const openViking = registerOpenVikingRoutes(app, {
 		explorer: {
-			ownerGate: ownerCheckPending,
+			ownerGate: owner?.check.gate ?? ownerCheckMissing,
 			clock: systemExplorerClock,
 			onShutdown: (hook) => shutdownHooks.push(hook),
+			onUndoAsk: owner?.onUndoAsk ?? (() => {}),
 		},
 	});
 	const stop = () => Promise.all(shutdownHooks.map((hook) => hook())).then(() => undefined);
-	if (options.startBackgroundWork) {
+	if (owner) {
 		openViking.startEntriesSnapshot();
 		// Exits that skip shutdown() (the systemd quit, restart_service) still end the held deletes: that part of
 		// the hook is synchronous; a second call after shutdown() finds nothing left to end.

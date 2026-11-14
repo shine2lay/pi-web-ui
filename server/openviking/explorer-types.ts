@@ -354,9 +354,14 @@ export interface OpenVikingExplorerClock {
 
 /** What the explorer routes are given (no env or fixture branch decides any of it, rule 29). */
 export interface OpenVikingExplorerOptions {
-	/** OI-1; production passes `ownerCheckPending` (R-OWNER-INTERIM-1) until the owner session (#165) deploys. */
+	/** OI-1; production passes the passkey owner check's gate (owner-check.ts, R-OWNER-READ-1/R-OWNER-WRITE-1). */
 	ownerGate: OpenVikingOwnerGate;
 	clock: OpenVikingExplorerClock;
 	/** Receives the hook that ends every pending delete as `not_applied_restart` when the server stops. */
 	onShutdown: (hook: () => Promise<void>) => void;
+	/**
+	 * Receives the writes' undo ask (R-OWNER-UNDO-1): the owner check calls it when `owner/write/options` is asked for
+	 * an undo, with the challenge's end; a held delete freezes until then.
+	 */
+	onUndoAsk: (ask: (operationId: string, untilMs: number) => void) => void;
 }

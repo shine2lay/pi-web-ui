@@ -3,8 +3,8 @@
  * - PUT    /api/openviking/note    `{ uri, content, opened_mod_time }`  edit, applied now, undo for 10 s
  * - DELETE /api/openviking/note?uri=                                  delete, held 10 s (`202`)
  * - POST   /api/openviking/undo    `{ operation_id }`
- * Each asks the one owner gate first (R-OWNER-WRITE-1; production refuses every write until the owner session
- * deploys, R-OWNER-FAIL-CLOSED-1), then the uri rule, the setup-file lock (G8) and the body, then `/health`; the
+ * Each asks the one owner gate first with the exact op it will execute (R-OWNER-WRITE-1/2: the session plus its own
+ * passkey assertion bound to that op, owner-check.ts), then the uri rule, the setup-file lock (G8) and the body, then `/health`; the
  * operations (explorer-operations.ts) do the rest. These are pi-web-ui's only writes to the store (R-EXPLORER-WRITE-1):
  * `content/write` and `DELETE /api/v1/fs`, through `writeResult`. GET /note is the read routes'.
  */
@@ -22,7 +22,8 @@ import {
 	type OpenVikingNoteEditRequest,
 	type OpenVikingUndoRequest,
 } from "./explorer-types.js";
-import { assertOwner, type OpenVikingOwnerGate } from "./owner-gate.js";
+import { assertOwnerWrite, type OpenVikingOwnerGate } from "./owner-gate.js";
+import { receivedNoteOp, receivedUndoOp } from "./owner-write-op.js";
 import {
 	acceptedResult,
 	methodNotAllowedResult,
@@ -70,9 +71,9 @@ export function daemonNoteStore(http: OpenVikingDaemonHttp): ExplorerNoteStore {
 	};
 }
 
-/** A uri the request may change: the gate passed a write, inside the roots, not a locked setup file. */
-function writableUri(gate: OpenVikingOwnerGate, req: Request, raw: unknown): OpenVikingExplorerUri {
-	assertOwner(gate, req, { kind: "write" });
+/** A uri the request may change: the gate passed this write, inside the roots, not a locked setup file. */
+async function writableUri(gate: OpenVikingOwnerGate, req: Request, raw: unknown): Promise<OpenVikingExplorerUri> {
+	await assertOwnerWrite(gate, req, receivedNoteOp(req));
 	const target = parseExplorerUri(raw);
 	if (isSetupFile(target.uri)) {
 		throw explorerRefusal("SETUP_FILE_LOCKED", "Identity and soul files are not changed here.", { uri: target.uri });
@@ -108,6 +109,7 @@ export function registerExplorerWriteRoutes(
 		clock: explorer.clock,
 	});
 	explorer.onShutdown(() => operations.shutdown());
+	explorer.onUndoAsk((operationId, untilMs) => void operations.askUndo(operationId, untilMs));
 
 	const answer =
 		(handler: (req: Request) => Promise<OpenVikingRouteResult<unknown>>) => async (req: Request, res: Response) => {
@@ -122,7 +124,7 @@ export function registerExplorerWriteRoutes(
 		"/api/openviking/note",
 		answer(async (req) => {
 			const body = bodyOf<OpenVikingNoteEditRequest>(req);
-			const target = writableUri(gate, req, body.uri);
+			const target = await writableUri(gate, req, body.uri);
 			const { content, openedModTime } = editFields(body);
 			await assertMemoryReachable(http);
 			return okResult(await operations.edit(target, content, openedModTime));
@@ -132,7 +134,7 @@ export function registerExplorerWriteRoutes(
 	app.delete(
 		"/api/openviking/note",
 		answer(async (req) => {
-			const target = writableUri(gate, req, req.query.uri);
+			const target = await writableUri(gate, req, req.query.uri);
 			await assertMemoryReachable(http);
 			return acceptedResult(await operations.requestDelete(target));
 		}),
@@ -144,7 +146,7 @@ export function registerExplorerWriteRoutes(
 			if (req.method.toUpperCase() !== "POST") {
 				return methodNotAllowedResult(req.method, "/api/openviking/undo", ["POST"]);
 			}
-			assertOwner(gate, req, { kind: "write" });
+			await assertOwnerWrite(gate, req, receivedUndoOp(req));
 			return okResult(await operations.undo(bodyOf<OpenVikingUndoRequest>(req).operation_id));
 		}),
 	);

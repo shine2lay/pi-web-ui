@@ -15,7 +15,7 @@ import { systemExplorerClock } from "./explorer-clock.js";
 import { registerExplorerReadRoutes } from "./explorer-read-routes.js";
 import type { OpenVikingExplorerOptions } from "./explorer-types.js";
 import { registerExplorerWriteRoutes } from "./explorer-write-routes.js";
-import { ownerCheckPending } from "./owner-gate.js";
+import { ownerCheckMissing } from "./owner-gate.js";
 import {
 	methodNotAllowedResult,
 	okResult,
@@ -120,11 +120,12 @@ export function registerOpenVikingRoutes(
 		sendRouteResult(res, result);
 	});
 
-	// Until the owner session (backend #165) deploys, the server's gate is R-OWNER-INTERIM-1's: every write refused.
+	// Production passes the passkey owner check's gate (route-modules.ts); without one, nobody passes (fail closed).
 	const explorer: OpenVikingExplorerOptions = options.explorer ?? {
-		ownerGate: ownerCheckPending,
+		ownerGate: ownerCheckMissing,
 		clock: systemExplorerClock,
 		onShutdown: () => {},
+		onUndoAsk: () => {},
 	};
 	registerExplorerReadRoutes(app, client, explorer.ownerGate);
 	registerExplorerWriteRoutes(app, client, explorer);

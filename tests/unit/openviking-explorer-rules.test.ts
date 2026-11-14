@@ -8,6 +8,7 @@ import type { Request } from "express";
 import { describe, expect, it } from "vitest";
 import {
 	assertOwner,
+	assertOwnerWrite,
 	escapeRegex,
 	explorerKindOf,
 	explorerRefusal,
@@ -21,7 +22,8 @@ import {
 	OpenVikingDashboardError,
 	operationIdOf,
 	OPERATION_ID_RE,
-	ownerCheckPending,
+	ownerCheckMissing,
+	ownerMayRead,
 	parseExplorerUri,
 	sameModTime,
 } from "../../server/openviking/index.js";
@@ -231,15 +233,32 @@ describe("refusals", () => {
 
 describe("owner gate (OI-1)", () => {
 	const req = {} as Request;
-	it("fails closed in production on writes and role roots until the owner session (#165, R-OWNER-INTERIM-1)", () => {
-		const write = { kind: "write" } as const;
-		expect(ownerCheckPending(req, write)).toBe(false);
-		expect(refusalOf(() => assertOwner(ownerCheckPending, req, write))).toEqual({ code: "OWNER_ONLY", status: 403 });
-		const roleRead = { kind: "read", roots: ["viking://user/qa/memories"] } as const;
-		expect(refusalOf(() => assertOwner(ownerCheckPending, req, roleRead))).toEqual({ code: "OWNER_ONLY", status: 403 });
+	const write = { method: "POST", operation_id: "op-1-00000000" } as const;
+	const ownerOnly = { code: "OWNER_ONLY", statusCode: 403 };
+
+	it("fails closed with no owner check wired: every read (role, shared, counts) and every write refused", async () => {
+		for (const roots of [[], ["viking://resources"], ["viking://user/qa/memories"]]) {
+			expect(ownerCheckMissing(req, { kind: "read", roots })).toBe(false);
+			expect(refusalOf(() => assertOwner(ownerCheckMissing, req, { kind: "read", roots }))).toEqual({
+				code: "OWNER_ONLY",
+				status: 403,
+			});
+		}
+		await expect(assertOwnerWrite(ownerCheckMissing, req, write)).rejects.toMatchObject(ownerOnly);
 	});
 
-	it("passes a request the injected gate allows", () => {
-		expect(() => assertOwner(() => true, req, { kind: "write" })).not.toThrow();
+	it("passes a request the injected gate allows", async () => {
+		expect(() => assertOwner(() => true, req, { kind: "read", roots: [] })).not.toThrow();
+		await expect(assertOwnerWrite(() => true, req, write)).resolves.toBeUndefined();
+		await expect(assertOwnerWrite(async () => true, req, write)).resolves.toBeUndefined();
+	});
+
+	it("a read is answered synchronously: a promise, even of true, refuses it; a gate that throws refuses a write", async () => {
+		expect(ownerMayRead(async () => true, req, [])).toBe(false);
+		const throws = () => {
+			throw new Error("boom");
+		};
+		await expect(assertOwnerWrite(throws, req, write)).rejects.toMatchObject(ownerOnly);
+		await expect(assertOwnerWrite(async () => false, req, write)).rejects.toMatchObject(ownerOnly);
 	});
 });

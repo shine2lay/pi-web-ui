@@ -45,7 +45,7 @@ import { chatImageHeaders, parseChatImageAddress, type ChatImage } from "./chat-
 import { isAbsoluteWirePath, wireToAbs } from "./files-service.js";
 import { WS_SERVER_OPTIONS } from "./ws-server-options.js";
 import { httpHostAllowed } from "./host-guard.js";
-import { registerRouteModules } from "./route-modules.js";
+import { keepOwnerWriteBody, registerRouteModules } from "./route-modules.js";
 import { initAttachmentStore, readAttachment } from "./attachment-store.js";
 import { isAudioFile, previewKind } from "./text-sniff.js";
 import { startControlServer } from "./control-socket.js";
@@ -344,7 +344,7 @@ app.use((req, res, next) => {
 	}
 	next();
 });
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "10mb", verify: keepOwnerWriteBody }));
 
 /** 从请求中提取候选 token：头 / 查询参数 / cookie（浏览器导航场景靠 cookie 续命）。 */
 function requestTokens(req: { headers: IncomingMessage["headers"]; url?: string }): string[] {
@@ -469,8 +469,8 @@ startCgroupSplit();
 const SERVICE_INFO = toServiceInfo(ORIGIN);
 /** PI_WEB_TABS: the tabs this instance offers. null = all of them, as before. */
 const TABS = parseTabs();
-
-const routeModules = registerRouteModules(app, (clientId) => service.get(clientId)?.cwd, { startBackgroundWork: true });
+const routeServer = { dataDir: DATA_DIR, plugins: () => pluginMgr };
+const routeModules = registerRouteModules(app, (clientId) => service.get(clientId)?.cwd, routeServer);
 
 app.get("/api/health", (_req, res) => {
 	// 审查 #352：该端点对未鉴权开放（监控探针需要），故只保留版本/引擎与 SDK

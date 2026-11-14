@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
 import {
-	ownerCheckPending,
+	ownerCheckMissing,
 	registerOpenVikingRoutes,
 	type OpenVikingDashboardOptions,
 	type OpenVikingOwnerGate,
@@ -41,15 +41,15 @@ export interface ExplorerHarness {
 	close(): Promise<void>;
 }
 
-/** `production`: the gate the server runs with when no test injects one (R-OWNER-INTERIM-1 until backend #165). */
+/** `production`: the gate the server runs with when no owner check is wired (fail closed). */
 const GATES: Record<"allow" | "deny" | "production", OpenVikingOwnerGate> = {
 	allow: () => true,
 	deny: () => false,
-	production: ownerCheckPending,
+	production: ownerCheckMissing,
 };
 
 export async function explorerHarness(
-	opts: { gate?: "allow" | "deny" | "production"; mode?: DaemonMode } = {},
+	opts: { gate?: "allow" | "deny" | "production" | OpenVikingOwnerGate; mode?: DaemonMode } = {},
 ): Promise<ExplorerHarness> {
 	const fake = daemon(opts.mode ?? "up", { explorer: true });
 	const stateDir = mkdtempSync(join(tmpdir(), "ov-explorer-"));
@@ -60,9 +60,11 @@ export async function explorerHarness(
 		fetchImpl: fake.fetchImpl,
 		now: fake.clock.now,
 		explorer: {
-			ownerGate: GATES[opts.gate ?? "allow"],
+			ownerGate: typeof opts.gate === "function" ? opts.gate : GATES[opts.gate ?? "allow"],
 			clock: fake.clock,
 			onShutdown: (hook) => hooks.push(hook),
+			// Undo asks come from the owner check's write/options (openviking-owner-write.test.ts covers them).
+			onUndoAsk: () => {},
 		},
 	};
 	const app = express();
