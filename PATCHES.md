@@ -8886,3 +8886,30 @@ selector"; then "A new button beside it", "Lead and task chats", "Until you chan
 - Needs pi-queue's built effort levels (pi-queue 81079ca, ops #877, or later); older pi-queue: no button.
 - Undo: revert this entry's commits, then `pi-web-deploy`.
 
+## showtell-owner-answer
+
+**Status**: `local` (seam: ops #882; build: ops #883)
+**Baseline**: `mine` at b66a9744, pi 1.5.2
+
+**Why** (COO rm-f03ad615, 2026-11-13; owner on record): clicking "Mark done" (Approved) or sending comments in
+Show&Tell is his answer, passed to the sharer; Design #308, #312 and #315 asked him the same thing again because
+no decision record was written for it.
+
+### Changes
+
+1. `server/owner-front-door.ts` (seam): a generic plugin-host addition. A plugin declares owner actions on its
+   `host.registerProxy` prefix (method, path, body values, the response field naming the action); a matching
+   request through the front door (browser `sec-fetch-site: same-origin`, upstream 2xx) gives the plugin a
+   single-use receipt, and only with it pi-web-ui writes one `answer` record (`answeredIn` and `ask` "showtell",
+   ref `showtell:<batch_id>`, his words verbatim in `doc.words`). Agent tools and direct calls to the plugin's
+   server never pass the proxy. Seam only: throws `owner front door: not built (ops #883)`.
+
+### How it was checked
+
+- `tests/unit/owner-front-door.test.ts`: 9 `notBuilt` cases (pass only while the stub throws); ops #883 turns
+  them into `it` without weakening an assertion. Seam: ~/ops-checks/owner-answers-2026-11-13/showtell-seam.md.
+
+### When syncing
+
+- Undo: revert this entry's commits.
+
