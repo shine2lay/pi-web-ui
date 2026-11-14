@@ -4,10 +4,10 @@
  * - GET  /api/openviking/tree?uri=&offset=&limit=
  * - GET  /api/openviking/note?uri=&level=
  * - POST /api/openviking/search
- * Each asks the one owner gate (owner-gate.ts) with the roots whose content its answer would show, before any daemon
- * call: tree/roots `[]` for its counts (and each root again for `recent[]`), tree and note the uri's root, search
- * the requested roots. Then the uri rule, the setup-file lock (G8), `/health`, and the daemon reads. Other methods: 405,
- * except PUT and DELETE on `/note`, which go on to the write routes (explorer-write-routes.ts).
+ * Each asks the one owner gate (owner-gate.ts) first, before it reads its input (R-OWNER-GATE-1; Security
+ * rm-b52897e2 L1): a request without a session learns nothing, not even whether its uri is valid. Then the uri rule,
+ * the query or body, the setup-file lock (G8), `/health`, and the daemon reads. Other methods: 405, except PUT and
+ * DELETE on `/note`, which go on to the write routes (explorer-write-routes.ts).
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import type { OpenVikingDaemonClient } from "./client.js";
@@ -17,7 +17,7 @@ import { explorerRefusal, isSetupFile, parseExplorerUri } from "./explorer-rules
 import { parseSearchRequest, runSearch } from "./explorer-search.js";
 import { buildTreeFolder, buildTreeRoots } from "./explorer-tree-read.js";
 import { EXPLORER_FOLDER_LIMIT, type OpenVikingExplorerUri, type OpenVikingSearchRequest } from "./explorer-types.js";
-import { assertOwner, type OpenVikingOwnerGate, ownerMayRead } from "./owner-gate.js";
+import { assertOwner, type OpenVikingOwnerGate } from "./owner-gate.js";
 import { methodNotAllowedResult, okResult, sendRouteResult, toErrorResult } from "./route-result.js";
 import { OpenVikingDashboardError } from "./types.js";
 
@@ -26,10 +26,9 @@ type Handler = (req: Request) => Promise<unknown>;
 /** `/note` methods the write routes (registered after these) answer. */
 const NOTE_WRITE_METHODS: readonly string[] = ["PUT", "DELETE"];
 
-/** A uri the request may read: inside the roots, the gate passes its root, and not a locked setup file. */
-function readableUri(gate: OpenVikingOwnerGate, req: Request, raw: unknown): OpenVikingExplorerUri {
+/** A uri the request may read (the gate already passed it): inside the roots, and not a locked setup file. */
+function readableUri(raw: unknown): OpenVikingExplorerUri {
 	const target = parseExplorerUri(raw);
-	assertOwner(gate, req, { kind: "read", roots: [target.root.uri] });
 	if (isSetupFile(target.uri)) {
 		throw explorerRefusal("SETUP_FILE_LOCKED", "Identity and soul files are not opened here.", { uri: target.uri });
 	}
@@ -78,6 +77,7 @@ export function registerExplorerReadRoutes(
 				return;
 			}
 			try {
+				assertOwner(gate, req);
 				sendRouteResult(res, okResult(await handler(req)));
 			} catch (err) {
 				sendRouteResult(res, toErrorResult(toExplorerError(err)));
@@ -85,13 +85,10 @@ export function registerExplorerReadRoutes(
 		});
 	};
 
-	route("/api/openviking/tree/roots", "GET", async (req) => {
-		assertOwner(gate, req, { kind: "read", roots: [] });
-		return buildTreeRoots(http, client.now(), (root) => ownerMayRead(gate, req, [root]));
-	});
+	route("/api/openviking/tree/roots", "GET", async () => buildTreeRoots(http, client.now()));
 
 	route("/api/openviking/tree", "GET", async (req) => {
-		const target = readableUri(gate, req, req.query.uri);
+		const target = readableUri(req.query.uri);
 		const page = folderPage(req);
 		await assertMemoryReachable(http);
 		return buildTreeFolder(http, target, page);
@@ -101,7 +98,7 @@ export function registerExplorerReadRoutes(
 		"/api/openviking/note",
 		"GET",
 		async (req) => {
-			const target = readableUri(gate, req, req.query.uri);
+			const target = readableUri(req.query.uri);
 			const level = parseNoteLevel(req.query.level);
 			await assertMemoryReachable(http);
 			return buildNote(http, client.statePaths, target, level);
@@ -111,7 +108,6 @@ export function registerExplorerReadRoutes(
 
 	route("/api/openviking/search", "POST", async (req) => {
 		const plan = parseSearchRequest(req.body as OpenVikingSearchRequest | undefined);
-		assertOwner(gate, req, { kind: "read", roots: plan.roots.map((r) => r.uri) });
 		await assertMemoryReachable(http);
 		return runSearch(http, plan, client.now());
 	});

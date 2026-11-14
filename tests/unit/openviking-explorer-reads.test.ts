@@ -103,17 +103,13 @@ describe("tree readers", () => {
 		expect(treeRootRow(qa, { state: "absent" })).toMatchObject({ read: true, notes: 0, folders: 0 });
 	});
 
-	it("recent[] orders equal times by uri and skips roots the request may not show", () => {
+	it("recent[] orders equal times by uri", () => {
 		const walks = OPENVIKING_EXPLORER_ROOTS.map((r) =>
 			r.uri === QA_ROOT
 				? { state: "read" as const, items: [file(`${QA_ROOT}/cases/b.md`, NOW), file(`${QA_ROOT}/cases/a.md`, NOW)] }
 				: null,
 		);
-		expect(recentNotes(walks, () => true).map((r) => r.uri)).toEqual([
-			`${QA_ROOT}/cases/a.md`,
-			`${QA_ROOT}/cases/b.md`,
-		]);
-		expect(recentNotes(walks, (root) => root !== QA_ROOT)).toEqual([]);
+		expect(recentNotes(walks).map((r) => r.uri)).toEqual([`${QA_ROOT}/cases/a.md`, `${QA_ROOT}/cases/b.md`]);
 	});
 
 	it("the not-ready mark is a reason on abstracts only; a note's own text is never replaced", () => {

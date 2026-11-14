@@ -1,11 +1,12 @@
 /**
  * Memory Explorer — the owner check's routes (OI-1, spec-explorer-owner.md), all under `/api/openviking/owner/`;
  * bodies in owner-session-types.ts. Every failure answers `403 OWNER_ONLY` with one body (R-OWNER-REFUSE-1) and logs
- * a reason code only. Enrollment needs the single-use code sent to the owner's Telegram; there is no first-come
+ * a reason code only. A `Host` or `Origin` whose host ends in "." is refused first (rm-638da86a). Enrollment needs the single-use code sent to the owner's Telegram; there is no first-come
  * enrollment. Each passkey added or removed sends the owner a Telegram notice (host and time, no secrets).
  */
 import type { Express, Request, Response } from "express";
 import type { OwnerCheckState } from "./owner-check.js";
+import { ownerAddressAllowed } from "./owner-gate.js";
 import type { OwnerPasskey } from "./owner-passkey-store.js";
 import { OwnerRefusal } from "./owner-refusal.js";
 import {
@@ -70,6 +71,7 @@ export function registerOwnerRoutes(app: Express, s: OwnerCheckState): void {
 		app[method](`${BASE}/${path}`, async (req: Request, res: Response) => {
 			res.setHeader("Cache-Control", "no-store");
 			try {
+				if (!ownerAddressAllowed(req)) throw new OwnerRefusal("bad_address");
 				const answer = await handler(req);
 				if (answer.cookie !== undefined) res.setHeader("Set-Cookie", answer.cookie);
 				res.status(answer.status).json(answer.body);

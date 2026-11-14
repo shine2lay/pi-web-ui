@@ -1,16 +1,12 @@
 /**
  * R-OWNER-READ-1 (spec-explorer-owner.md; Security rm-8841fede), backend #166, replacing #162's interim rule: every
  * read needs the passkey owner session, shared roots included. The server's gate with no owner check wired
- * (`ownerCheckMissing`) refuses every read and every write. tree/roots asks the gate per root for `recent[]`, so a
- * gate that passes some roots only never leaks a file name from the others.
+ * (`ownerCheckMissing`) refuses every read and every write. A session reads every root, so a read asks the gate once,
+ * before its input is checked (backend #170, Security rm-b52897e2 L1).
  */
 import type { Request } from "express";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-	OPENVIKING_EXPLORER_ROOTS,
-	type OpenVikingOwnerGate,
-	ownerCheckMissing,
-} from "../../server/openviking/index.js";
+import { ownerCheckMissing } from "../../server/openviking/index.js";
 import { NOW } from "./openviking-daemon-fake.js";
 import { explorerHarness, q, type ExplorerHarness } from "./openviking-explorer-harness.js";
 
@@ -20,16 +16,12 @@ const QA_NOTE = `${QA_ROOT}/cases/c1.md`;
 const NOTE = "viking://user/default/memories/preferences/backend_code.md";
 const req = {} as Request;
 
-/** A gate that passes counts and the shared roots only (to prove `recent[]` follows the gate root by root). */
-const sharedOnly: OpenVikingOwnerGate = (_req, access) =>
-	access.kind === "read" && access.roots.every((root) => SHARED.includes(root));
-
 let h: ExplorerHarness | null = null;
 afterEach(async () => {
 	await h?.close();
 	h = null;
 });
-const start = async (gate: "production" | OpenVikingOwnerGate) => {
+const start = async (gate: "production" | "allow" | "deny") => {
 	h = await explorerHarness({ gate });
 	return h;
 };
@@ -45,12 +37,8 @@ describe("owner gate with no owner check wired: ownerCheckMissing (R-OWNER-READ-
 		);
 	});
 
-	it("refuses every read: counts only, shared roots and each role root", () => {
-		expect(ownerCheckMissing(req, { kind: "read", roots: [] })).toBe(false);
-		expect(ownerCheckMissing(req, { kind: "read", roots: SHARED })).toBe(false);
-		for (const root of OPENVIKING_EXPLORER_ROOTS) {
-			expect(ownerCheckMissing(req, { kind: "read", roots: [root.uri] })).toBe(false);
-		}
+	it("refuses every read", () => {
+		expect(ownerCheckMissing(req, { kind: "read" })).toBe(false);
 	});
 });
 
@@ -72,45 +60,32 @@ describe("read routes with the production default gate", () => {
 	});
 });
 
-describe("read routes ask the gate per root", () => {
-	it("tree/roots: 17 rows with counts; recent[] holds no uri from a root the gate refuses", async () => {
-		const x = await start(sharedOnly);
-		// The newest files are in role roots: recent[] must still skip them.
+describe("read routes with a gate that passes", () => {
+	it("tree/roots: 17 rows with counts; recent[] holds the newest files of every root", async () => {
+		const x = await start("allow");
 		for (let i = 0; i < 14; i++) x.fake.store.put(`viking://user/ops/memories/events/e${i}.md`, `e${i}`, NOW - i);
 		const { status, body } = await x.call("GET", "/api/openviking/tree/roots");
 		expect(status).toBe(200);
 		expect(body.roots).toHaveLength(17);
 		expect(body.roots.every((r: any) => r.read === true && typeof r.notes === "number")).toBe(true);
 		expect(body.notes_total).toBe(body.roots.reduce((n: number, r: any) => n + r.notes, 0));
-		expect(body.recent.map((r: any) => r.uri).sort()).toEqual(
-			[NOTE, "viking://resources/pi-web-ui/README.md", "viking://user/default/memories/entities/pi-web-ui.md"].sort(),
-		);
-		expect(body.recent.every((r: any) => SHARED.includes(r.root))).toBe(true);
+		expect(body.recent.length).toBeGreaterThan(0);
+		expect(body.recent.every((r: any) => r.root === "viking://user/ops/memories")).toBe(true);
 	});
 
-	it("tree, note and search on a root the gate refuses: 403 OWNER_ONLY, nothing sent", async () => {
-		const x = await start(sharedOnly);
-		expectOwnerOnly(await x.call("GET", `/api/openviking/tree?uri=${q(QA_ROOT)}`));
-		expectOwnerOnly(await x.call("GET", `/api/openviking/note?uri=${q(QA_NOTE)}&level=full`));
-		expectOwnerOnly(
-			await x.call("POST", "/api/openviking/search", { mode: "exact", query: "q", roots: [...SHARED, QA_ROOT] }),
-		);
-		expect(x.fake.calls).toEqual([]);
+	it("the owner gate runs before the setup-file lock: identity.md refused is OWNER_ONLY, passed SETUP_FILE_LOCKED", async () => {
+		const path = `/api/openviking/note?uri=${q(`${QA_ROOT}/identity.md`)}&level=full`;
+		const refused = await start("deny");
+		expectOwnerOnly(await refused.call("GET", path));
+		await refused.close();
+		const x = await start("allow");
+		const locked = await x.call("GET", path);
+		expect([locked.status, locked.body.error.code]).toEqual([403, "SETUP_FILE_LOCKED"]);
+		expect([...refused.fake.calls, ...x.fake.calls]).toEqual([]);
 	});
 
-	it("the owner gate runs before the setup-file lock: identity.md under a refused root is OWNER_ONLY, under a passed one SETUP_FILE_LOCKED", async () => {
-		const x = await start(sharedOnly);
-		expectOwnerOnly(await x.call("GET", `/api/openviking/note?uri=${q(`${QA_ROOT}/identity.md`)}&level=full`));
-		const shared = await x.call(
-			"GET",
-			`/api/openviking/note?uri=${q("viking://user/default/memories/identity.md")}&level=full`,
-		);
-		expect([shared.status, shared.body.error.code]).toEqual([403, "SETUP_FILE_LOCKED"]);
-		expect(x.fake.calls).toEqual([]);
-	});
-
-	it("tree, note and search on roots the gate passes: 200", async () => {
-		const x = await start(sharedOnly);
+	it("tree, note and search: 200", async () => {
+		const x = await start("allow");
 		x.fake.state.findHits.push({ uri: NOTE, score: 0.5, abstract: "money" });
 		const tree = await x.call("GET", `/api/openviking/tree?uri=${q("viking://user/default/memories")}`);
 		expect(tree.status).toBe(200);

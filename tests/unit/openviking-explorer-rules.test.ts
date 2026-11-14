@@ -22,8 +22,8 @@ import {
 	OpenVikingDashboardError,
 	operationIdOf,
 	OPERATION_ID_RE,
+	ownerAddressAllowed,
 	ownerCheckMissing,
-	ownerMayRead,
 	parseExplorerUri,
 	sameModTime,
 } from "../../server/openviking/index.js";
@@ -232,29 +232,60 @@ describe("refusals", () => {
 });
 
 describe("owner gate (OI-1)", () => {
-	const req = {} as Request;
+	const at = (host: string | undefined, origin?: string) => ({ headers: { host, origin } }) as unknown as Request;
+	const req = at("127.0.0.1:8787");
 	const write = { method: "POST", operation_id: "op-1-00000000" } as const;
 	const ownerOnly = { code: "OWNER_ONLY", statusCode: 403 };
 
-	it("fails closed with no owner check wired: every read (role, shared, counts) and every write refused", async () => {
-		for (const roots of [[], ["viking://resources"], ["viking://user/qa/memories"]]) {
-			expect(ownerCheckMissing(req, { kind: "read", roots })).toBe(false);
-			expect(refusalOf(() => assertOwner(ownerCheckMissing, req, { kind: "read", roots }))).toEqual({
-				code: "OWNER_ONLY",
-				status: 403,
-			});
-		}
+	it("fails closed with no owner check wired: every read and every write refused", async () => {
+		expect(ownerCheckMissing(req, { kind: "read" })).toBe(false);
+		expect(refusalOf(() => assertOwner(ownerCheckMissing, req))).toEqual({ code: "OWNER_ONLY", status: 403 });
 		await expect(assertOwnerWrite(ownerCheckMissing, req, write)).rejects.toMatchObject(ownerOnly);
 	});
 
+	it("a Host or Origin whose host ends in a dot (raw or percent-encoded), or that does not parse, is refused", () => {
+		for (const ok of [
+			at("pi.wai2shine.com"),
+			at("spark.tailbb5055.ts.net:8787", "https://spark.tailbb5055.ts.net:8787"),
+		]) {
+			expect(ownerAddressAllowed(ok)).toBe(true);
+		}
+		for (const bad of [
+			at("pi.wai2shine.com."),
+			at("spark.tailbb5055.ts.net.:8787"),
+			at("pi.wai2shine.com%2E"),
+			at(undefined),
+			at(""),
+			at("pi.wai2shine.com", "https://pi.wai2shine.com."),
+			at("pi.wai2shine.com", "https://spark.tailbb5055.ts.net.:8787"),
+			at("pi.wai2shine.com", "https://pi.wai2shine.com%2e"),
+			at("pi.wai2shine.com", "null"),
+		]) {
+			expect(ownerAddressAllowed(bad)).toBe(false);
+			expect(refusalOf(() => assertOwner(() => true, bad))).toEqual({ code: "OWNER_ONLY", status: 403 });
+		}
+	});
+
+	it("a refused address never asks the gate, read or write", async () => {
+		const asked: string[] = [];
+		const gate = (_r: Request, access: { kind: string }) => {
+			asked.push(access.kind);
+			return true;
+		};
+		const dotted = at("pi.wai2shine.com.");
+		expect(refusalOf(() => assertOwner(gate, dotted))).toEqual({ code: "OWNER_ONLY", status: 403 });
+		await expect(assertOwnerWrite(gate, dotted, write)).rejects.toMatchObject(ownerOnly);
+		expect(asked).toEqual([]);
+	});
+
 	it("passes a request the injected gate allows", async () => {
-		expect(() => assertOwner(() => true, req, { kind: "read", roots: [] })).not.toThrow();
+		expect(() => assertOwner(() => true, req)).not.toThrow();
 		await expect(assertOwnerWrite(() => true, req, write)).resolves.toBeUndefined();
 		await expect(assertOwnerWrite(async () => true, req, write)).resolves.toBeUndefined();
 	});
 
 	it("a read is answered synchronously: a promise, even of true, refuses it; a gate that throws refuses a write", async () => {
-		expect(ownerMayRead(async () => true, req, [])).toBe(false);
+		expect(refusalOf(() => assertOwner(async () => true, req))).toEqual({ code: "OWNER_ONLY", status: 403 });
 		const throws = () => {
 			throw new Error("boom");
 		};

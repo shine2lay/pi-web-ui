@@ -76,10 +76,11 @@ export class OwnerEnrollCodes {
 		this.live = null;
 		const bytes = (this.deps.randomBytes ?? randomBytes)(OWNER_ENROLL_CODE_WORDS);
 		const code = Array.from(bytes, (b) => WORDS[b]).join(" ");
+		// Security rm-b52897e2 L2: the owner can tell a code someone else asked for from his own.
 		const text =
-			`Passkey code for ${rp.rpID}:\n\n${code}\n\n` +
-			"Type it on the memory explorer's enroll page. It works once, for 10 minutes. " +
-			"If you didn't ask for one, ignore this message.";
+			`Passkey code for the memory explorer on ${rp.rpID}:\n\n${code}\n\n` +
+			`Only enter this on ${rp.rpID}, on the memory explorer's enroll page. It works once, for 10 minutes.\n\n` +
+			"If you didn't ask for a code, someone else did: ignore it and don't enter it anywhere.";
 		let delivered = false;
 		try {
 			const sent = await this.deps.telegram({ text, from: "pi-web-ui owner check" });

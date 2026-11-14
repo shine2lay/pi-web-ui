@@ -51,12 +51,8 @@ export function treeRootRow(root: OpenVikingExplorerRoot, walk: OpenVikingTreeWa
 	return { ...base, read: true, notes, folders: items.length - notes, kinds };
 }
 
-/** `GET /api/openviking/tree/roots`. `showsRoot`: whether this request may list a root's files in `recent[]`. */
-export async function buildTreeRoots(
-	http: OpenVikingDaemonHttp,
-	nowMs: number,
-	showsRoot: (rootUri: string) => boolean,
-): Promise<OpenVikingTreeRootsResponse> {
+/** `GET /api/openviking/tree/roots` (the owner gate passed: its session reads every root, R-OWNER-READ-1). */
+export async function buildTreeRoots(http: OpenVikingDaemonHttp, nowMs: number): Promise<OpenVikingTreeRootsResponse> {
 	const checked_at = new Date(nowMs).toISOString();
 	const reachable = await isMemoryReachable(http);
 	const walks = reachable
@@ -71,19 +67,16 @@ export async function buildTreeRoots(
 		unread_count,
 		roots_partial: unread_count > 0,
 		roots,
-		recent: recentNotes(walks, showsRoot),
+		recent: recentNotes(walks),
 	};
 }
 
-/** The newest files over the read roots this request may show. */
-export function recentNotes(
-	walks: readonly (OpenVikingTreeWalk | null)[],
-	showsRoot: (rootUri: string) => boolean,
-): OpenVikingRecentNote[] {
+/** The newest files over the read roots. */
+export function recentNotes(walks: readonly (OpenVikingTreeWalk | null)[]): OpenVikingRecentNote[] {
 	const rows: OpenVikingRecentNote[] = [];
 	OPENVIKING_EXPLORER_ROOTS.forEach((root, i) => {
 		const walk = walks[i];
-		if (walk?.state !== "read" || !showsRoot(root.uri)) return;
+		if (walk?.state !== "read") return;
 		for (const item of walk.items) {
 			const mod_time = isoModTime(item.modTime);
 			if (item.isDir || mod_time === null || item.size === null) continue;

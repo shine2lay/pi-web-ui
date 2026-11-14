@@ -6,6 +6,7 @@ export type OwnerRefusalReason =
 	| "no_session"
 	| "passkey_gone"
 	| "bad_origin"
+	| "bad_address"
 	| "no_write_header"
 	| "rate_limited"
 	| "no_assertion"

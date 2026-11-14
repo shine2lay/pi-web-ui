@@ -6,7 +6,7 @@
  * on the same data folder (memory gone, passkey file kept).
  */
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +45,33 @@ export interface OwnerCall {
 	cookie?: string | null;
 	origin?: string | null;
 	headers?: Record<string, string>;
+	/** The `Host` header to send instead of the server's address (fetch cannot set it, so node:http does). */
+	host?: string;
+}
+
+/** One request through node:http, which sends the `Host` header it is given. */
+function sendWithHost(
+	url: string,
+	method: string,
+	headers: Record<string, string>,
+	body: string | undefined,
+): Promise<{ status: number; text: string; setCookie: string | null }> {
+	return new Promise((resolve, reject) => {
+		const req = httpRequest(url, { method, headers }, (res) => {
+			const chunks: Buffer[] = [];
+			res.on("data", (c: Buffer) => chunks.push(c));
+			res.on("end", () => {
+				const cookie = res.headers["set-cookie"];
+				resolve({
+					status: res.statusCode ?? 0,
+					text: Buffer.concat(chunks).toString("utf8"),
+					setCookie: cookie ? cookie.join(", ") : null,
+				});
+			});
+		});
+		req.on("error", reject);
+		req.end(body);
+	});
 }
 
 export async function ownerHarness(
@@ -94,16 +121,22 @@ export async function ownerHarness(
 		if (c.cookie) headers.Cookie = c.cookie;
 		const payload = c.rawBody ?? (c.body === undefined ? undefined : JSON.stringify(c.body));
 		if (payload !== undefined) headers["Content-Type"] = "application/json";
-		const res = await fetch(`${base}${path}`, { method, headers, body: payload });
-		const text = await res.text();
-		responses.push(text, res.headers.get("set-cookie") ?? "");
+		let res: { status: number; text: string; setCookie: string | null };
+		if (c.host !== undefined) {
+			res = await sendWithHost(`${base}${path}`, method, { ...headers, Host: c.host }, payload);
+		} else {
+			const fetched = await fetch(`${base}${path}`, { method, headers, body: payload });
+			res = { status: fetched.status, text: await fetched.text(), setCookie: fetched.headers.get("set-cookie") };
+		}
+		const text = res.text;
+		responses.push(text, res.setCookie ?? "");
 		let body: unknown = text;
 		try {
 			body = text === "" ? null : JSON.parse(text);
 		} catch {
 			body = text;
 		}
-		return { status: res.status, body, text, setCookie: res.headers.get("set-cookie") };
+		return { status: res.status, body, text, setCookie: res.setCookie };
 	};
 
 	/** The cookie pair (`name=value`) a session/verify set. */
