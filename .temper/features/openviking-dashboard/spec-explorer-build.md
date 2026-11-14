@@ -32,16 +32,13 @@ Live sizes: 17 roots = 6,146 nodes, 5,781 files, walked without abstracts in 199
 
 ## Obsolete Code and Tests to Delete (Rule 23)
 
-Moved byte-identically from spec.md (architecture #541):
+Nothing left to delete. Done, with no shims:
 
-- **Delete:** `parseQueueDepth` + drift test + `/api/v1/observer/queue` fetch (`server/openviking/observer.ts`, G1); folder-count `isDegraded` condition (`server/openviking/overview.ts`); the reader of the file nothing writes, `resourceSyncStateJsonPath` + `readResourceSyncState` (`server/openviking/state-files.ts`) and its fixture (`server/openviking-dashboard.test.ts`). Else greenfield; no shims (Rule 23).
+- **Backend #164 (`78ef5693`):** the `/api/openviking/entries` route with its two modules, client methods and three unit tests; every `/overview` field the explorer does not read (`metrics`, `changelog`, `slots`, `auxiliary`, `live_activity`, and `observer.*` other than the three kept), with their builders, readers and asserts.
+- **Earlier (backend #136, #153):** the queue-depth scraper and its drift test; the folder-count degraded condition; the reader of the sync-state file nothing writes.
+- **Design #316 / #318:** the old dashboard view, its view-models and tests; the old prototype, check script and screenshots.
 
-Dead when the explorer page replaces the dashboard view (grep 2026-11-14; delete in that change, with the spec rows that describe them):
-- **`GET /api/openviking/entries`:** only reader `web/src/components/OpenVikingDashboardPage.tsx:48,158`. Delete the route (`server/openviking/routes.ts`), `server/openviking/entries.ts`, `server/openviking/entries-snapshot.ts`, the entries methods of `server/openviking/client.ts`, `tests/unit/openviking-entries-{partial,snapshot,read-units}.test.ts`; spec §3a, §4a and the `entries*` rows.
-- **`/overview` fields the explorer does not read** (it reads `health_state`, `observer.{checked_at,last_commit_at,last_reachable_at}`): `metrics`, `changelog`, `slots`, `auxiliary`, `live_activity`, other `observer.*` (incl. `store_counts`; G1). Only readers are under `web/src/openviking-dashboard/`. Delete their builders in `server/openviking/overview.ts`, readers only they use in `server/openviking/state-files.ts`, and their asserts in `server/openviking-dashboard.test.ts`.
-- **Old view:** `web/src/openviking-dashboard/{OpenVikingDashboardView,ExplorerPanel,ReaderDrawer,MountMapPanel,SummaryCards}.tsx`, `{explorer,drawer}-view-model.ts`, `summary-cards.ts`, and any module the new page does not import, with `tests/openviking-dashboard/*`; design #316 lists them from its import graph.
-
-`/overview` (health line) and `/audit` (G7) stay.
+`/overview` (`screen_state`, `health_state`, `observer.{checked_at,last_commit_at,last_reachable_at}`) and `/audit` (G7) stay. A new reader of a removed field is a new feature and needs a spec line first.
 
 ## Prototype-Only Chrome Excluded from Production
 

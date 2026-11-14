@@ -1,9 +1,6 @@
----
-max_tokens: 2300 # contract outgrew the 2000 default (architecture #521)
----
 # Architecture Spec: OpenViking Memory Dashboard (`openviking-dashboard`)
 
-Pinned to `.temper/features/openviking-dashboard/design.md` (`design #274`, `28c2c672`), `.temper/features/openviking-dashboard/brief.md` (`product #65`, `a69a2470`), and `/home/shinelay/architecture-dept/conventions/openviking-contract.md`.
+Follows `.temper/features/openviking-dashboard/design.md` (the memory explorer, design #316 / #318), `.temper/features/openviking-dashboard/brief-v3.md`, and `/home/shinelay/architecture-dept/conventions/openviking-contract.md`.
 
 Parts (architecture #531, text moved byte-identically): [spec-states.md](spec-states.md) holds §4 Operational States; [spec-commits-and-gaps.md](spec-commits-and-gaps.md) holds Session Commits and Contract-vs-Live Gaps for Ops. Explorer (#541): [spec-explorer.md](spec-explorer.md) G1-G4, [spec-explorer-writes.md](spec-explorer-writes.md) G5-G7, [spec-explorer-build.md](spec-explorer-build.md) daemon, gaps, deletes, chrome.
 
@@ -20,7 +17,7 @@ Parts (architecture #531, text moved byte-identically): [spec-states.md](spec-st
 
 ### 3. Endpoints
 - **`GET /api/openviking/overview` (`200`):** `{ screen_state: "live"|"stale"|"empty"|"error", health_state, observer: { checked_at, last_commit_at, last_reachable_at } }` (§4); the explorer's health line reads it.
-- **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|"pending sync"|null, events }` (`action`: `"commit"|"role_memory_write"|"promote_shared"|"reject_noise"|"sidecar_timeout"|"owner_edit"|"owner_delete"` (G7), `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
+- **`GET /api/openviking/audit?limit=50` (`200`, `15m`):** `{ panel_updated_at, health_state, stale_badge: "> 15m"|"pending sync"|null, owner_events: "included"|"withheld", events }`; owner events need the owner check (`R-AUDIT-OWNER-1`, [spec-explorer-writes.md](spec-explorer-writes.md)) (`action`: `"commit"|"role_memory_write"|"promote_shared"|"reject_noise"|"sidecar_timeout"|"owner_edit"|"owner_delete"` (G7), `guard_verdict`: `"allowed"|"rejected"|"degraded_skip"`).
 
 ### 4. Operational States (Never Conflated)
 In [spec-states.md](spec-states.md).
@@ -44,7 +41,7 @@ One list for the feature, in [spec-explorer-build.md](spec-explorer-build.md).
 
 ## Prototype-Only Chrome Excluded from Production
 
-Verbatim from `.temper/features/openviking-dashboard/design.md`:
+The list is `.temper/features/openviking-dashboard/design.md` §Prototype-only exclusions, with each marked element and faked behaviour named in [spec-explorer-build.md](spec-explorer-build.md). The standing rules from the first prototype still hold:
 
 - **`#stateStrip` (`<div id="stateStrip">`):** Never render, mount, or CSS-hide `#stateStrip`; `document.getElementById("stateStrip")` must be `null`. *Prod:* Omit `#stateStrip`.
 - **`data-st-state` (`[data-st-state]`):** Never emit `data-st-state` on any element. *Prod:* Bind `data-health-state` and `data-screen-state`.

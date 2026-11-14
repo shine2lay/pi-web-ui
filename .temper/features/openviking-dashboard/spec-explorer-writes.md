@@ -66,4 +66,5 @@ Contract `§7.4b` `R-CHANGELOG-1e` (`/home/shinelay/architecture-dept/convention
 - `events[].action` gains `"owner_edit" | "owner_delete"`; `owner_undo` lines are not events.
 - New fields on every event: `operation_id`, `outcome`, `undone` (`string | null`, `boolean | null`; `null` on non-owner events). `undone` is derived: a later `owner_undo` with the same `operation_id` and `outcome: "applied"`.
 - `?owner_only=true` returns only owner events (the "Changes you made" list), so other writes never push them past `limit`.
+- **`R-AUDIT-OWNER-1` (QA `rm-27a4d002`):** owner events are served only to a caller that passes the owner check for reads (`R-EXPLORER-OWNER-1`). Without it, `?owner_only=true` answers `403 OWNER_ONLY`, and plain `/audit` answers `200` with owner events left out and `owner_events: "withheld"` (else `"included"`), so a withheld list never reads as "no changes". Why: the list names notes in every role's private memory and shows a pending delete; that is the cross-root view only the owner has.
 - Owner lines never count as session commits, promotions or rejections in `/overview`.
