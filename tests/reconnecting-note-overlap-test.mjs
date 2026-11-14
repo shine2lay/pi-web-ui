@@ -27,7 +27,7 @@ const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 const PORT = 30000 + Math.floor(Math.random() * 10000);
 const WIDTHS = [320, 390, 1440];
 const VIEWS = [
-	{ name: "memory", path: "/?view=openviking", title: ".ovk-status-title" },
+	{ name: "memory", path: "/?view=openviking", title: ".mx-head h1" },
 	{ name: "roles", path: "/?view=roles", title: ".view-pane:not(.hidden) .brand-title" },
 	{ name: "chat", path: "/", title: null },
 ];

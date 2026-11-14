@@ -125,12 +125,13 @@ function coverage() {
 	return { bar: true, pane: true, covered };
 }
 
-/* The tabs QA named: reachable means the page can bring each one into its box and a real click at the
-   tab's own centre then lands on the tab — not on the status bar lying over it. */
+/* The page's controls (the tabs QA named are gone with the old page, design #316): reachable means the
+   page can bring each one into its box and a real click at its own centre then lands on it — not on
+   the status bar lying over it. */
 function tabReach() {
 	const pane = document.querySelector(".openviking-pane");
 	if (!pane) return [];
-	return [...pane.querySelectorAll("[role='tab'], .ovk-tab")].map((el) => {
+	return [...pane.querySelectorAll(".mx-page button")].map((el) => {
 		el.scrollIntoView({ block: "center", inline: "nearest" });
 		const r = el.getBoundingClientRect();
 		const text = (el.textContent ?? "").trim();
@@ -160,11 +161,16 @@ function scrollToEnd() {
 const browser = await chromium.launch({ executablePath: CHROME_PATH });
 const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
 await page.goto(`http://localhost:${PORT}/?view=openviking`);
-await page.waitForSelector(".ovk-status-title", { timeout: 20000 });
+await page.waitForSelector(".mx-head h1", { timeout: 20000 });
 await sleep(1500);
 // A fresh profile opens the shell's first-run setup modal over everything; this test is about the
 // status bar, so it is closed before anything is measured.
 await page.evaluate(() => document.querySelector(".modal-backdrop .modal-close")?.click());
+await sleep(400);
+// Memory opens only with the owner's passkey: "Not now" leaves the signed-out page to measure.
+await page.evaluate(() =>
+	[...document.querySelectorAll(".mx-scrim button")].find((b) => b.textContent?.trim() === "Not now")?.click(),
+);
 await sleep(400);
 
 /** Control: with the pane's scroll box taken away, the overlap QA reported must be caught. */
@@ -203,7 +209,7 @@ for (const { w, h } of SIZES) {
 		const tabs = await page.evaluate(tabReach);
 		const unreachable = tabs.filter((t) => !t.reachable);
 		check(
-			`${w}x${h} ${where}: every tab is reachable (${tabs.length} tabs)`,
+			`${w}x${h} ${where}: every control is reachable (${tabs.length} controls)`,
 			tabs.length > 0 && unreachable.length === 0,
 			unreachable.length === 0 ? tabs.map((t) => t.text).join(", ") : JSON.stringify(unreachable),
 		);
