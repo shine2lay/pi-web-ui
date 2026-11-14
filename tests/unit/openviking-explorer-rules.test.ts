@@ -21,7 +21,7 @@ import {
 	OpenVikingDashboardError,
 	operationIdOf,
 	OPERATION_ID_RE,
-	ownerCheckMissing,
+	ownerCheckPending,
 	parseExplorerUri,
 	sameModTime,
 } from "../../server/openviking/index.js";
@@ -231,12 +231,15 @@ describe("refusals", () => {
 
 describe("owner gate (OI-1)", () => {
 	const req = {} as Request;
-	it("fails closed in production until Security names the check", () => {
-		expect(ownerCheckMissing(req)).toBe(false);
-		expect(refusalOf(() => assertOwner(ownerCheckMissing, req))).toEqual({ code: "OWNER_ONLY", status: 403 });
+	it("fails closed in production on writes and role roots until the owner session (#165, R-OWNER-INTERIM-1)", () => {
+		const write = { kind: "write" } as const;
+		expect(ownerCheckPending(req, write)).toBe(false);
+		expect(refusalOf(() => assertOwner(ownerCheckPending, req, write))).toEqual({ code: "OWNER_ONLY", status: 403 });
+		const roleRead = { kind: "read", roots: ["viking://user/qa/memories"] } as const;
+		expect(refusalOf(() => assertOwner(ownerCheckPending, req, roleRead))).toEqual({ code: "OWNER_ONLY", status: 403 });
 	});
 
 	it("passes a request the injected gate allows", () => {
-		expect(() => assertOwner(() => true, req)).not.toThrow();
+		expect(() => assertOwner(() => true, req, { kind: "write" })).not.toThrow();
 	});
 });

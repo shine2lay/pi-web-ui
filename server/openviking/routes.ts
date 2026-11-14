@@ -6,66 +6,29 @@
  * - GET /api/openviking/entries
  * - GET /api/openviking/audit
  * Non-GET requests return HTTP 405 Method Not Allowed (Allow: GET).
+ * The Memory Explorer's read routes (tree/roots, tree, note, search) are registered from explorer-read-routes.ts.
  */
 import type { Express, Request, Response } from "express";
 import { createOpenVikingClient, OpenVikingDaemonClient } from "./client.js";
+import { registerExplorerReadRoutes } from "./explorer-read-routes.js";
+import { ownerCheckPending } from "./owner-gate.js";
 import {
-	OpenVikingDashboardError,
-	type OpenVikingAuditQuery,
-	type OpenVikingAuditResponse,
-	type OpenVikingDashboardOptions,
-	type OpenVikingEntriesQuery,
-	type OpenVikingEntriesResponse,
-	type OpenVikingHttpErrorBody,
-	type OpenVikingOverviewResponse,
+	methodNotAllowedResult,
+	okResult,
+	sendRouteResult,
+	toErrorResult,
+	type OpenVikingRouteResult,
+} from "./route-result.js";
+import type {
+	OpenVikingAuditQuery,
+	OpenVikingAuditResponse,
+	OpenVikingDashboardOptions,
+	OpenVikingEntriesQuery,
+	OpenVikingEntriesResponse,
+	OpenVikingOverviewResponse,
 } from "./types.js";
 
-export interface OpenVikingRouteResult<T> {
-	status: number;
-	headers?: Record<string, string>;
-	body: T | OpenVikingHttpErrorBody;
-}
-
-function methodNotAllowedResult(method: string, path: string): OpenVikingRouteResult<never> {
-	return {
-		status: 405,
-		headers: { Allow: "GET", "Cache-Control": "no-store" },
-		body: {
-			error: {
-				code: "METHOD_NOT_ALLOWED",
-				message: `OpenViking dashboard endpoint ${path} is strictly read-only (received ${method}; only GET is allowed).`,
-				details: { method, path, allowed: ["GET"] },
-			},
-		},
-	};
-}
-
-function toErrorResult(err: unknown): OpenVikingRouteResult<never> {
-	if (err instanceof OpenVikingDashboardError) {
-		return {
-			status: err.statusCode,
-			headers: { "Cache-Control": "no-store" },
-			body: {
-				error: {
-					code: err.code,
-					message: err.message,
-					...(err.details ? { details: err.details } : {}),
-				},
-			},
-		};
-	}
-	const message = err instanceof Error ? err.message : String(err);
-	return {
-		status: 500,
-		headers: { "Cache-Control": "no-store" },
-		body: {
-			error: {
-				code: "INTERNAL_ERROR",
-				message,
-			},
-		},
-	};
-}
+export type { OpenVikingRouteResult } from "./route-result.js";
 
 export async function handleOpenVikingOverviewRequest(
 	client: OpenVikingDaemonClient,
@@ -75,12 +38,7 @@ export async function handleOpenVikingOverviewRequest(
 		return methodNotAllowedResult(method, "/api/openviking/overview");
 	}
 	try {
-		const body = await client.getOverview();
-		return {
-			status: 200,
-			headers: { "Cache-Control": "no-store" },
-			body,
-		};
+		return okResult(await client.getOverview());
 	} catch (err) {
 		return toErrorResult(err);
 	}
@@ -95,12 +53,7 @@ export async function handleOpenVikingEntriesRequest(
 		return methodNotAllowedResult(method, "/api/openviking/entries");
 	}
 	try {
-		const body = await client.getEntries(query);
-		return {
-			status: 200,
-			headers: { "Cache-Control": "no-store" },
-			body,
-		};
+		return okResult(await client.getEntries(query));
 	} catch (err) {
 		return toErrorResult(err);
 	}
@@ -115,30 +68,17 @@ export async function handleOpenVikingAuditRequest(
 		return methodNotAllowedResult(method, "/api/openviking/audit");
 	}
 	try {
-		const body = await client.getAudit(query);
-		return {
-			status: 200,
-			headers: { "Cache-Control": "no-store" },
-			body,
-		};
+		return okResult(await client.getAudit(query));
 	} catch (err) {
 		return toErrorResult(err);
 	}
-}
-
-function sendRouteResult<T>(res: Response, result: OpenVikingRouteResult<T>): void {
-	if (result.headers) {
-		for (const [k, v] of Object.entries(result.headers)) {
-			res.setHeader(k, v);
-		}
-	}
-	res.status(result.status).json(result.body);
 }
 
 export function registerOpenVikingRoutes(
 	app: Express,
 	optionsOrClient: OpenVikingDashboardOptions | OpenVikingDaemonClient = {},
 ): OpenVikingDaemonClient {
+	const options = optionsOrClient instanceof OpenVikingDaemonClient ? {} : optionsOrClient;
 	const client =
 		optionsOrClient instanceof OpenVikingDaemonClient ? optionsOrClient : createOpenVikingClient(optionsOrClient);
 
@@ -174,6 +114,9 @@ export function registerOpenVikingRoutes(
 		);
 		sendRouteResult(res, result);
 	});
+
+	// Until the owner session (backend #165) deploys, the server's gate is R-OWNER-INTERIM-1's.
+	registerExplorerReadRoutes(app, client, options.explorer?.ownerGate ?? ownerCheckPending);
 
 	return client;
 }

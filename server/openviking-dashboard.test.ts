@@ -135,7 +135,6 @@ function createDaemonTransport(overrides: { healthy?: boolean; onlineRoles?: rea
 		}
 		const queueComp = { name: "queue", is_healthy: true, has_errors: false, status: QUEUE_ASCII_TABLE };
 		const retrievalComp = { name: "retrieval", is_healthy: true, has_errors: false, status: RETRIEVAL_ASCII_TABLE };
-		if (u.pathname === "/api/v1/observer/queue") return jsonRes({ status: "ok", result: queueComp });
 		if (u.pathname === "/api/v1/observer/system") {
 			const sys = { is_healthy: true, errors: [], components: { queue: queueComp, retrieval: retrievalComp } };
 			return jsonRes({ status: "ok", result: sys });

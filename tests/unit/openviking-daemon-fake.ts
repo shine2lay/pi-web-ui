@@ -12,7 +12,6 @@ import {
 
 export const NOW = Date.parse("2026-11-11T08:30:00.000Z");
 export const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
-const QUEUE = ["| Queue | Pending | In Progress | Processed |", "| TOTAL | 4 | 1 | 99 |"].join("\n");
 
 export interface DaemonCall {
 	url: URL;
@@ -128,7 +127,6 @@ export function daemon(initial: DaemonMode = "up", options: { explorer?: boolean
 			);
 		}
 		if (url.pathname === "/health") return ok(undefined, mode !== "unhealthy");
-		if (url.pathname === "/api/v1/observer/queue") return ok({ status: QUEUE });
 		if (url.pathname === "/api/v1/observer/system") return ok({ components: {} });
 		if (url.pathname === "/api/v1/fs/ls") {
 			const uri = url.searchParams.get("uri") ?? "";

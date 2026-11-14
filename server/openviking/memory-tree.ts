@@ -1,9 +1,14 @@
 /**
- * OpenViking Memory Dashboard — the one walker over `/api/v1/fs/ls` (metadata only: names, sizes,
- * modTime). Shared trees read as `default`; each role's tree reads with that role's headers
- * (R-URI-REWRITE-1). It never calls `/api/v1/content/*`.
+ * OpenViking Memory Dashboard — the one tree reader: the walker over `/api/v1/fs/ls` (metadata only: names, sizes,
+ * modTime) and, for the Memory Explorer, `walkTree` over `/api/v1/fs/tree`. Shared trees read as `default`; each
+ * role's tree reads with that role's headers (R-URI-REWRITE-1). It never calls `/api/v1/content/*`.
  */
-import { mapWithLimit, OpenVikingDaemonRequestError, type OpenVikingDaemonHttp } from "./daemon-http.js";
+import {
+	DAEMON_BAD_RESPONSE,
+	mapWithLimit,
+	OpenVikingDaemonRequestError,
+	type OpenVikingDaemonHttp,
+} from "./daemon-http.js";
 import type { OpenVikingExplorerRoot } from "./explorer-types.js";
 import { OPENVIKING_ROLES, OpenVikingDashboardError } from "./types.js";
 import { resolveRequestHeaders } from "./uri.js";
@@ -83,6 +88,49 @@ function toLsItems(result: unknown): OpenVikingLsItem[] {
 			},
 		];
 	});
+}
+
+/** `/api/v1/fs/tree` params (spec-explorer.md G2). */
+export interface OpenVikingTreeWalkParams {
+	include_abstract: boolean;
+	level_limit: number;
+	node_limit: number;
+}
+
+/**
+ * One `fs/tree` walk. `absent`: the daemon says there is no such folder (`NOT_FOUND`). `truncated`: the walk returned
+ * `node_limit` nodes, so the folder may hold more than it shows — never a short count (G2). Every other failure throws.
+ */
+export type OpenVikingTreeWalk =
+	{ state: "read"; items: OpenVikingLsItem[] } | { state: "absent" } | { state: "truncated" };
+
+export async function walkTree(
+	http: OpenVikingDaemonHttp,
+	uri: string,
+	headers: Record<string, string>,
+	params: OpenVikingTreeWalkParams,
+): Promise<OpenVikingTreeWalk> {
+	let result: unknown;
+	try {
+		result = await http.result(
+			"/api/v1/fs/tree",
+			{
+				uri,
+				include_abstract: String(params.include_abstract),
+				level_limit: String(params.level_limit),
+				node_limit: String(params.node_limit),
+			},
+			headers,
+		);
+	} catch (err) {
+		if (saysFolderIsNotThere(err)) return { state: "absent" };
+		throw err;
+	}
+	if (!Array.isArray(result)) {
+		throw new OpenVikingDashboardError(`fs/tree of ${uri} did not answer a list`, 502, DAEMON_BAD_RESPONSE, { uri });
+	}
+	if (result.length >= params.node_limit) return { state: "truncated" };
+	return { state: "read", items: toLsItems(result) };
 }
 
 export async function listDir(

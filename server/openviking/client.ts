@@ -37,7 +37,8 @@ export class OpenVikingDaemonClient {
 	readonly timeoutMs: number;
 	readonly fetchImpl: typeof fetch;
 	readonly now: () => number;
-	private readonly http: OpenVikingDaemonHttp;
+	/** The one `:1933` transport of this server process; the Memory Explorer routes read through it too. */
+	readonly http: OpenVikingDaemonHttp;
 	/** One held store-count walk per server process, refreshed at the observer cadence (#147). */
 	private readonly tree = new OpenVikingMemoryTreeCache();
 	/** The Memory list, built in the background at the entries cadence and sliced per request (#155). */

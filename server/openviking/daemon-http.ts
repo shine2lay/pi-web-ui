@@ -1,7 +1,7 @@
 /**
  * OpenViking Memory Dashboard — read-only HTTP transport to the `:1933` daemon.
  *
- * Every call is a GET with its own 2000 ms deadline. A missed deadline is retried once with a
+ * Every call is a GET, or a POST to a read-only search (`/api/v1/search/{find,grep}`), with its own 2000 ms deadline. A missed deadline is retried once with a
  * fresh deadline: pi-web-ui's own event loop can stall for ~2 s, and the timer then fires before
  * an answer that already arrived is read. A transport failure (refused, or timed out twice) is
  * `OpenVikingDaemonUnreachableError`; an answer that is not `{status: "ok"}` is
@@ -14,6 +14,9 @@
 import { OpenVikingDashboardError } from "./types.js";
 
 const DEADLINE_ATTEMPTS = 2;
+
+/** A daemon answer a reader could not use (a malformed `fs/stat` or `fs/tree`). */
+export const DAEMON_BAD_RESPONSE = "DAEMON_BAD_RESPONSE";
 
 const isDeadlineMiss = (err: unknown): boolean =>
 	err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
@@ -68,11 +71,11 @@ export class OpenVikingDaemonHttp {
 		return this.lastHealthyMs === null ? null : new Date(this.lastHealthyMs).toISOString();
 	}
 
-	/** One GET under its own deadline, body read included. */
-	private async attempt(path: string, url: string, headers: Record<string, string>) {
+	/** One call under its own deadline, body read included. */
+	private async attempt(path: string, url: string, init: RequestInit) {
 		let res: Response;
 		try {
-			res = await this.fetchImpl(url, { method: "GET", headers, signal: AbortSignal.timeout(this.timeoutMs) });
+			res = await this.fetchImpl(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) });
 		} catch (err) {
 			throw new OpenVikingDaemonUnreachableError(this.daemonUrl, path, err);
 		}
@@ -85,10 +88,10 @@ export class OpenVikingDaemonHttp {
 	}
 
 	/** `attempt`, repeated once when only the deadline was missed; a refused connection is final. */
-	private async send(path: string, url: string, headers: Record<string, string>) {
+	private async send(path: string, url: string, init: RequestInit) {
 		for (let attempt = 1; ; attempt++) {
 			try {
-				return await this.attempt(path, url, headers);
+				return await this.attempt(path, url, init);
 			} catch (err) {
 				const retry = err instanceof OpenVikingDaemonUnreachableError && err.deadlineMiss;
 				if (!retry || attempt >= DEADLINE_ATTEMPTS) throw err;
@@ -96,10 +99,23 @@ export class OpenVikingDaemonHttp {
 		}
 	}
 
-	private async envelope(path: string, params: Record<string, string>, headers: Record<string, string>) {
+	private async envelope(
+		path: string,
+		params: Record<string, string>,
+		headers: Record<string, string>,
+		post?: Record<string, unknown>,
+	) {
 		const query = new URLSearchParams(params).toString();
 		const url = `${this.daemonUrl}${path}${query ? `?${query}` : ""}`;
-		const { res, body } = await this.send(path, url, headers);
+		const init: RequestInit =
+			post === undefined
+				? { method: "GET", headers }
+				: {
+						method: "POST",
+						headers: { ...headers, "Content-Type": "application/json" },
+						body: JSON.stringify(post),
+					};
+		const { res, body } = await this.send(path, url, init);
 		if (!res.ok || body === null || typeof body !== "object" || body.status !== "ok") {
 			const code = typeof body?.error?.code === "string" ? body.error.code : `HTTP_${res.status}`;
 			const message = typeof body?.error?.message === "string" ? body.error.message : "request failed";
@@ -115,6 +131,15 @@ export class OpenVikingDaemonHttp {
 		headers: Record<string, string> = {},
 	): Promise<unknown> {
 		return (await this.envelope(path, params, headers)).result;
+	}
+
+	/** The `result` of a read-only search POST (`/api/v1/search/{find,grep}`) answered `{status: "ok"}`. */
+	async searchResult(
+		path: "/api/v1/search/find" | "/api/v1/search/grep",
+		body: Record<string, unknown>,
+		headers: Record<string, string> = {},
+	): Promise<unknown> {
+		return (await this.envelope(path, {}, headers, body)).result;
 	}
 
 	/** `/health` answers `{status: "ok", healthy: true}`; anything else counts as down. */

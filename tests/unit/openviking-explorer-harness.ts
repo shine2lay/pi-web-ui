@@ -10,7 +10,12 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
-import { registerOpenVikingRoutes, type OpenVikingDashboardOptions } from "../../server/openviking/index.js";
+import {
+	ownerCheckPending,
+	registerOpenVikingRoutes,
+	type OpenVikingDashboardOptions,
+	type OpenVikingOwnerGate,
+} from "../../server/openviking/index.js";
 import { daemon, type DaemonCall, type DaemonMode } from "./openviking-daemon-fake.js";
 
 export const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -36,8 +41,15 @@ export interface ExplorerHarness {
 	close(): Promise<void>;
 }
 
+/** `production`: the gate the server runs with when no test injects one (R-OWNER-INTERIM-1 until backend #165). */
+const GATES: Record<"allow" | "deny" | "production", OpenVikingOwnerGate> = {
+	allow: () => true,
+	deny: () => false,
+	production: ownerCheckPending,
+};
+
 export async function explorerHarness(
-	opts: { gate?: "allow" | "deny"; mode?: DaemonMode } = {},
+	opts: { gate?: "allow" | "deny" | "production"; mode?: DaemonMode } = {},
 ): Promise<ExplorerHarness> {
 	const fake = daemon(opts.mode ?? "up", { explorer: true });
 	const stateDir = mkdtempSync(join(tmpdir(), "ov-explorer-"));
@@ -48,7 +60,7 @@ export async function explorerHarness(
 		fetchImpl: fake.fetchImpl,
 		now: fake.clock.now,
 		explorer: {
-			ownerGate: opts.gate === "deny" ? () => false : () => true,
+			ownerGate: GATES[opts.gate ?? "allow"],
 			clock: fake.clock,
 			onShutdown: (hook) => hooks.push(hook),
 		},

@@ -51,7 +51,7 @@ const edit = (x: ExplorerHarness, uri: string, content: string, opened = storeMo
 // ---------------------------------------------------------------- reads
 
 describe("reads: owner check and uri rule", () => {
-	it("reads: 403 OWNER_ONLY on every read route with a deny gate, before any daemon call", TODO, async () => {
+	it("reads: 403 OWNER_ONLY on every read route with a deny gate, before any daemon call", async () => {
 		const x = await start({ gate: "deny" });
 		for (const [method, path, body] of [
 			["GET", "/api/openviking/tree/roots"],
@@ -64,7 +64,7 @@ describe("reads: owner check and uri rule", () => {
 		expect(x.fake.calls).toEqual([]);
 	});
 
-	it("reads: 400 URI_INVALID and 400 URI_OUTSIDE_ROOTS on tree and note, nothing sent", TODO, async () => {
+	it("reads: 400 URI_INVALID and 400 URI_OUTSIDE_ROOTS on tree and note, nothing sent", async () => {
 		const x = await start();
 		expectRefusal(
 			await x.call("GET", `/api/openviking/tree?uri=${q("viking://resources/a/../b")}`),
@@ -89,7 +89,7 @@ describe("reads: owner check and uri rule", () => {
 		expect(x.fake.calls.filter((c) => c.url.pathname !== "/health")).toEqual([]);
 	});
 
-	it("reads: 503 MEMORY_UNREACHABLE on tree, note and search when /health is down", TODO, async () => {
+	it("reads: 503 MEMORY_UNREACHABLE on tree, note and search when /health is down", async () => {
 		for (const mode of ["down", "unhealthy"] as const) {
 			const x = await start({ mode });
 			expectRefusal(await x.call("GET", `/api/openviking/tree?uri=${q(PREFS)}`), 503, "MEMORY_UNREACHABLE");
@@ -107,7 +107,7 @@ describe("reads: owner check and uri rule", () => {
 });
 
 describe("reads: G2 tree", () => {
-	it("reads: tree/roots answers the 17 roots in constant order with counts and kinds", TODO, async () => {
+	it("reads: tree/roots answers the 17 roots in constant order with counts and kinds", async () => {
 		const x = await start();
 		const { status, body } = await x.call("GET", "/api/openviking/tree/roots");
 		expect(status).toBe(200);
@@ -152,27 +152,23 @@ describe("reads: G2 tree", () => {
 		}
 	});
 
-	it(
-		"reads: tree/roots keeps an unread root with null counts, NOT_FOUND root reads 0, notes_total null",
-		TODO,
-		async () => {
-			const x = await start();
-			x.fake.state.failures.push({ path: "/api/v1/fs/tree", uri: QA_ROOT, status: 503, code: "UNAVAILABLE" });
-			for (const k of x.fake.store.nodes.keys()) if (k.startsWith("viking://user/coo/memories")) x.fake.store.remove(k);
-			const { body } = await x.call("GET", "/api/openviking/tree/roots");
-			expect(body.roots).toHaveLength(17);
-			expect(body.roots.find((r: any) => r.uri === QA_ROOT)).toMatchObject({
-				read: false,
-				notes: null,
-				folders: null,
-				kinds: null,
-			});
-			expect(body.roots.find((r: any) => r.role === "coo")).toMatchObject({ read: true, notes: 0, folders: 0 });
-			expect(body).toMatchObject({ notes_total: null, unread_count: 1, roots_partial: true });
-		},
-	);
+	it("reads: tree/roots keeps an unread root with null counts, NOT_FOUND root reads 0, notes_total null", async () => {
+		const x = await start();
+		x.fake.state.failures.push({ path: "/api/v1/fs/tree", uri: QA_ROOT, status: 503, code: "UNAVAILABLE" });
+		for (const k of x.fake.store.nodes.keys()) if (k.startsWith("viking://user/coo/memories")) x.fake.store.remove(k);
+		const { body } = await x.call("GET", "/api/openviking/tree/roots");
+		expect(body.roots).toHaveLength(17);
+		expect(body.roots.find((r: any) => r.uri === QA_ROOT)).toMatchObject({
+			read: false,
+			notes: null,
+			folders: null,
+			kinds: null,
+		});
+		expect(body.roots.find((r: any) => r.role === "coo")).toMatchObject({ read: true, notes: 0, folders: 0 });
+		expect(body).toMatchObject({ notes_total: null, unread_count: 1, roots_partial: true });
+	});
 
-	it("reads: tree/roots counts a root whose walk hits node_limit as unread, never short", TODO, async () => {
+	it("reads: tree/roots counts a root whose walk hits node_limit as unread, never short", async () => {
 		const x = await start();
 		for (let i = 0; i < 20_000; i++) x.fake.store.put(`viking://user/data/memories/cases/n${i}.md`, "x");
 		const { body } = await x.call("GET", "/api/openviking/tree/roots");
@@ -180,7 +176,7 @@ describe("reads: G2 tree", () => {
 		expect(body).toMatchObject({ notes_total: null, unread_count: 1, roots_partial: true });
 	});
 
-	it("reads: tree/roots recent is the 12 newest files over read roots, locked ones flagged", TODO, async () => {
+	it("reads: tree/roots recent is the 12 newest files over read roots, locked ones flagged", async () => {
 		const x = await start();
 		for (let i = 0; i < 14; i++)
 			x.fake.store.put(`viking://user/ops/memories/events/e${i}.md`, `event ${i}`, NOW - (20 - i) * 1000);
@@ -203,27 +199,23 @@ describe("reads: G2 tree", () => {
 		expect(body.recent.slice(1).every((r: any) => r.kind === "event" && r.locked === false)).toBe(true);
 	});
 
-	it(
-		"reads: tree on a file is 400 NOT_A_FOLDER; limit outside 1-200 is 400; paging by offset/limit",
-		TODO,
-		async () => {
-			const x = await start();
-			expectRefusal(await x.call("GET", `/api/openviking/tree?uri=${q(NOTE)}`), 400, "NOT_A_FOLDER");
-			for (const limit of ["0", "201", "x"]) {
-				expect((await x.call("GET", `/api/openviking/tree?uri=${q(PREFS)}&limit=${limit}`)).status).toBe(400);
-			}
-			for (let i = 0; i < 35; i++) x.fake.store.put(`${PREFS}/p${i}.md`, `p${i}`, NOW - i * 1000);
-			const first = await x.call("GET", `/api/openviking/tree?uri=${q(PREFS)}`);
-			expect(first.status).toBe(200);
-			expect(first.body.total).toBe(36);
-			expect(first.body.children).toHaveLength(30);
-			expect(first.body.children[0].uri).toBe(`${PREFS}/p0.md`);
-			const rest = await x.call("GET", `/api/openviking/tree?uri=${q(PREFS)}&offset=30&limit=200`);
-			expect(rest.body.children).toHaveLength(6);
-		},
-	);
+	it("reads: tree on a file is 400 NOT_A_FOLDER; limit outside 1-200 is 400; paging by offset/limit", async () => {
+		const x = await start();
+		expectRefusal(await x.call("GET", `/api/openviking/tree?uri=${q(NOTE)}`), 400, "NOT_A_FOLDER");
+		for (const limit of ["0", "201", "x"]) {
+			expect((await x.call("GET", `/api/openviking/tree?uri=${q(PREFS)}&limit=${limit}`)).status).toBe(400);
+		}
+		for (let i = 0; i < 35; i++) x.fake.store.put(`${PREFS}/p${i}.md`, `p${i}`, NOW - i * 1000);
+		const first = await x.call("GET", `/api/openviking/tree?uri=${q(PREFS)}`);
+		expect(first.status).toBe(200);
+		expect(first.body.total).toBe(36);
+		expect(first.body.children).toHaveLength(30);
+		expect(first.body.children[0].uri).toBe(`${PREFS}/p0.md`);
+		const rest = await x.call("GET", `/api/openviking/tree?uri=${q(PREFS)}&offset=30&limit=200`);
+		expect(rest.body.children).toHaveLength(6);
+	});
 
-	it("reads: tree abstract_reason is not_ready / none / locked, never placeholder text", TODO, async () => {
+	it("reads: tree abstract_reason is not_ready / none / locked, never placeholder text", async () => {
 		const x = await start();
 		x.fake.store.folder("viking://user/default/memories/entities", "Entities L0");
 		x.fake.store.folder("viking://user/default/memories/events", "");
@@ -268,47 +260,43 @@ describe("reads: G2 tree", () => {
 });
 
 describe("reads: G3 note", () => {
-	it("reads: note 400 LEVEL_INVALID, 400 NOT_A_FILE for full on a folder", TODO, async () => {
+	it("reads: note 400 LEVEL_INVALID, 400 NOT_A_FILE for full on a folder", async () => {
 		const x = await start();
 		expectRefusal(await x.call("GET", `/api/openviking/note?uri=${q(NOTE)}&level=L2`), 400, "LEVEL_INVALID");
 		expectRefusal(await x.call("GET", `/api/openviking/note?uri=${q(NOTE)}`), 400, "LEVEL_INVALID");
 		expectRefusal(await x.call("GET", `/api/openviking/note?uri=${q(PREFS)}&level=full`), 400, "NOT_A_FILE");
 	});
 
-	it(
-		"reads: note full is the file's text; abstract/overview of a file are its folder's, text_of says so (D1)",
-		TODO,
-		async () => {
-			const x = await start();
-			x.fake.store.folder(PREFS, "Preferences L0", "Preferences L1");
-			const full = await x.call("GET", `/api/openviking/note?uri=${q(NOTE)}&level=full`);
-			expect(full.body).toMatchObject({
-				uri: NOTE,
-				root: "viking://user/default/memories",
-				kind: "rule",
-				is_folder: false,
-				size: 30,
-				mod_time: storeModTime(x, NOTE),
-				level: "full",
-				text: "Money in integer minor units.\n",
-				text_reason: null,
-				text_of: NOTE,
-			});
-			const abstract = await x.call("GET", `/api/openviking/note?uri=${q(NOTE)}&level=abstract`);
-			expect(abstract.body).toMatchObject({ level: "abstract", text: "Preferences L0", text_of: PREFS });
-			const overview = await x.call("GET", `/api/openviking/note?uri=${q(NOTE)}&level=overview`);
-			expect(overview.body).toMatchObject({ level: "overview", text: "Preferences L1", text_of: PREFS });
-			x.fake.store.folder(PREFS);
-			const notReady = await x.call("GET", `/api/openviking/note?uri=${q(PREFS)}&level=abstract`);
-			expect(notReady.body).toMatchObject({ is_folder: true, text: null, text_reason: "not_ready", text_of: PREFS });
-			// fs/stat backs every note read.
-			const statted = x.daemonCalls("/api/v1/fs/stat").map((c) => c.url.searchParams.get("uri"));
-			expect(statted.filter((u) => u === NOTE).length).toBeGreaterThanOrEqual(3);
-			expect(statted).toContain(PREFS);
-		},
-	);
+	it("reads: note full is the file's text; abstract/overview of a file are its folder's, text_of says so (D1)", async () => {
+		const x = await start();
+		x.fake.store.folder(PREFS, "Preferences L0", "Preferences L1");
+		const full = await x.call("GET", `/api/openviking/note?uri=${q(NOTE)}&level=full`);
+		expect(full.body).toMatchObject({
+			uri: NOTE,
+			root: "viking://user/default/memories",
+			kind: "rule",
+			is_folder: false,
+			size: 30,
+			mod_time: storeModTime(x, NOTE),
+			level: "full",
+			text: "Money in integer minor units.\n",
+			text_reason: null,
+			text_of: NOTE,
+		});
+		const abstract = await x.call("GET", `/api/openviking/note?uri=${q(NOTE)}&level=abstract`);
+		expect(abstract.body).toMatchObject({ level: "abstract", text: "Preferences L0", text_of: PREFS });
+		const overview = await x.call("GET", `/api/openviking/note?uri=${q(NOTE)}&level=overview`);
+		expect(overview.body).toMatchObject({ level: "overview", text: "Preferences L1", text_of: PREFS });
+		x.fake.store.folder(PREFS);
+		const notReady = await x.call("GET", `/api/openviking/note?uri=${q(PREFS)}&level=abstract`);
+		expect(notReady.body).toMatchObject({ is_folder: true, text: null, text_reason: "not_ready", text_of: PREFS });
+		// fs/stat backs every note read.
+		const statted = x.daemonCalls("/api/v1/fs/stat").map((c) => c.url.searchParams.get("uri"));
+		expect(statted.filter((u) => u === NOTE).length).toBeGreaterThanOrEqual(3);
+		expect(statted).toContain(PREFS);
+	});
 
-	it("reads: note last_write is the newest changelog line for the uri, else null", TODO, async () => {
+	it("reads: note last_write is the newest changelog line for the uri, else null", async () => {
 		const x = await start();
 		x.seedChangelog([
 			{
@@ -353,7 +341,7 @@ describe("reads: G3 note", () => {
 		expect(other.body.last_write).toBeNull();
 	});
 
-	it("reads: note 403 SETUP_FILE_LOCKED on identity.md / soul.md in any case, no content read", TODO, async () => {
+	it("reads: note 403 SETUP_FILE_LOCKED on identity.md / soul.md in any case, no content read", async () => {
 		const x = await start();
 		for (const uri of [IDENTITY, SOUL]) {
 			for (const level of ["abstract", "overview", "full"]) {
@@ -367,7 +355,7 @@ describe("reads: G3 note", () => {
 		expect(x.fake.calls.filter((c) => c.url.pathname.startsWith("/api/v1/content/"))).toEqual([]);
 	});
 
-	it("reads: note 404 NOT_FOUND for a missing uri, 502 MEMORY_ERROR for another daemon failure", TODO, async () => {
+	it("reads: note 404 NOT_FOUND for a missing uri, 502 MEMORY_ERROR for another daemon failure", async () => {
 		const x = await start();
 		expectRefusal(
 			await x.call("GET", `/api/openviking/note?uri=${q(`${PREFS}/missing.md`)}&level=full`),
@@ -383,7 +371,7 @@ describe("reads: G3 note", () => {
 describe("reads: G4 search", () => {
 	const search = (x: ExplorerHarness, body: object) => x.call("POST", "/api/openviking/search", body);
 
-	it("reads: search 400 ROOT_UNKNOWN for a root that is not exactly one of the 17", TODO, async () => {
+	it("reads: search 400 ROOT_UNKNOWN for a root that is not exactly one of the 17", async () => {
 		const x = await start();
 		for (const roots of [["viking://agent/memories"], [`${QA_ROOT}/cases`], [QA_ROOT, "viking://user/memories"]]) {
 			expectRefusal(await search(x, { mode: "meaning", query: "money", roots }), 400, "ROOT_UNKNOWN");
@@ -391,7 +379,7 @@ describe("reads: G4 search", () => {
 		expect(x.daemonCalls("/api/v1/search/find")).toEqual([]);
 	});
 
-	it("reads: search 400 SEARCH_INVALID for mode, query, roots and limit outside the contract", TODO, async () => {
+	it("reads: search 400 SEARCH_INVALID for mode, query, roots and limit outside the contract", async () => {
 		const x = await start();
 		const good = { mode: "meaning", query: "money", roots: [QA_ROOT], limit: 12 };
 		for (const bad of [
@@ -410,7 +398,7 @@ describe("reads: G4 search", () => {
 		expect((await search(x, { ...good, query: ` ${"x".repeat(500)} ` })).status).toBe(200);
 	});
 
-	it("reads: meaning search is one find; relative = score / max computed server-side; stat per uri", TODO, async () => {
+	it("reads: meaning search is one find; relative = score / max computed server-side; stat per uri", async () => {
 		const x = await start();
 		x.fake.state.findHits.push(
 			{ uri: NOTE, score: 0.8, abstract: "money rule" },
@@ -455,7 +443,7 @@ describe("reads: G4 search", () => {
 		});
 	});
 
-	it("reads: exact search greps each root with the query regex-escaped, case-insensitive", TODO, async () => {
+	it("reads: exact search greps each root with the query regex-escaped, case-insensitive", async () => {
 		const x = await start();
 		x.fake.store.put(`${QA_ROOT}/cases/literal.md`, "first line\nsee A.B(c here\n");
 		x.fake.store.put(`${QA_ROOT}/cases/regex.md`, "aXb(c only matches as a regex\n");
@@ -486,32 +474,28 @@ describe("reads: G4 search", () => {
 		]);
 	});
 
-	it(
-		"reads: a failed grep root is in unread_roots and results_partial; a failed find is 502 MEMORY_ERROR",
-		TODO,
-		async () => {
-			const x = await start();
-			x.fake.store.put(`${QA_ROOT}/cases/money.md`, "money\n");
-			x.fake.state.failures.push({
-				path: "/api/v1/search/grep",
-				uri: "viking://resources",
-				status: 503,
-				code: "UNAVAILABLE",
-			});
-			const exact = await search(x, { mode: "exact", query: "money", roots: [QA_ROOT, "viking://resources"] });
-			expect(exact.status).toBe(200);
-			expect(exact.body).toMatchObject({
-				results_partial: true,
-				unread_count: 1,
-				unread_roots: ["viking://resources"],
-			});
-			expect(exact.body.hits.map((hit: any) => hit.uri)).toEqual([`${QA_ROOT}/cases/money.md`]);
-			x.fake.state.failures.push({ path: "/api/v1/search/find", status: 500, code: "INTERNAL" });
-			expectRefusal(await search(x, { mode: "meaning", query: "money", roots: ALL_ROOTS }), 502, "MEMORY_ERROR");
-		},
-	);
+	it("reads: a failed grep root is in unread_roots and results_partial; a failed find is 502 MEMORY_ERROR", async () => {
+		const x = await start();
+		x.fake.store.put(`${QA_ROOT}/cases/money.md`, "money\n");
+		x.fake.state.failures.push({
+			path: "/api/v1/search/grep",
+			uri: "viking://resources",
+			status: 503,
+			code: "UNAVAILABLE",
+		});
+		const exact = await search(x, { mode: "exact", query: "money", roots: [QA_ROOT, "viking://resources"] });
+		expect(exact.status).toBe(200);
+		expect(exact.body).toMatchObject({
+			results_partial: true,
+			unread_count: 1,
+			unread_roots: ["viking://resources"],
+		});
+		expect(exact.body.hits.map((hit: any) => hit.uri)).toEqual([`${QA_ROOT}/cases/money.md`]);
+		x.fake.state.failures.push({ path: "/api/v1/search/find", status: 500, code: "INTERNAL" });
+		expectRefusal(await search(x, { mode: "meaning", query: "money", roots: ALL_ROOTS }), 502, "MEMORY_ERROR");
+	});
 
-	it("reads: search drops locked hits and counts them in locked_hidden_count", TODO, async () => {
+	it("reads: search drops locked hits and counts them in locked_hidden_count", async () => {
 		const x = await start();
 		x.fake.state.findHits.push(
 			{ uri: IDENTITY, score: 0.9, abstract: "identity" },

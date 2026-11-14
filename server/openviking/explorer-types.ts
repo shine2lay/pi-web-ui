@@ -345,7 +345,7 @@ export interface OpenVikingExplorerClock {
 
 /** What the explorer routes are given (no env or fixture branch decides any of it, rule 29). */
 export interface OpenVikingExplorerOptions {
-	/** OI-1; production passes `ownerCheckMissing` until Security names the check. */
+	/** OI-1; production passes `ownerCheckPending` (R-OWNER-INTERIM-1) until the owner session (#165) deploys. */
 	ownerGate: OpenVikingOwnerGate;
 	clock: OpenVikingExplorerClock;
 	/** Receives the hook that ends every pending delete as `not_applied_restart` when the server stops. */
