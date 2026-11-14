@@ -39,11 +39,11 @@ function setViewParam(on: boolean): void {
 export function MemoryExplorerPage({ active, fetch, webauthn }: MemoryExplorerPageProps) {
 	const session = useMemo(() => createOwnerSession({ fetch, webauthn }), [fetch, webauthn]);
 	const access = useOwnerAccess(session);
-	const { onOwnerOnly, ownerAssertion, generation } = access;
+	const { onReadAccepted, onOwnerOnly, ownerAssertion, generation } = access;
 	// A new seam per sign-in or sign-out by hand: nothing read before carries over.
 	const api = useMemo(
-		() => createHttpExplorerApi({ fetch, onOwnerOnly, ownerAssertion }),
-		[fetch, onOwnerOnly, ownerAssertion, generation],
+		() => createHttpExplorerApi({ fetch, onReadAccepted, onOwnerOnly, ownerAssertion }),
+		[fetch, onReadAccepted, onOwnerOnly, ownerAssertion, generation],
 	);
 	useEffect(() => {
 		if (!active) return;
@@ -57,7 +57,7 @@ export function MemoryExplorerPage({ active, fetch, webauthn }: MemoryExplorerPa
 		</button>
 	);
 	const account =
-		access.state === "signed-out" ? null : (
+		access.state !== "signed-in" ? null : (
 			<div className="mx-account">
 				<button type="button" className="mx-btn" onClick={(e) => access.openPasskeys(e.currentTarget)}>
 					Passkeys

@@ -5,6 +5,7 @@
 // `?state=` picks the case: live (default), loading, empty, error, down, degraded, signed-out,
 // results, reader, confirm.
 import { createRoot } from "react-dom/client";
+import { MemoryExplorerPage } from "../web/src/components/MemoryExplorerPage";
 import { MemoryExplorerView } from "../web/src/memory-explorer/MemoryExplorerView";
 import { fakeApi, NOW_MS, type FakeOptions } from "./unit/memory-explorer/fake-api";
 import "../web/src/styles.css";
@@ -36,7 +37,32 @@ const signIn = (
 		Sign in
 	</button>
 );
-createRoot(host).render(<MemoryExplorerView api={fakeApi(OPTIONS[state] ?? {})} now={() => NOW_MS} signIn={signIn} />);
+// Auth cases exercise the actual page and session hook, not a hand-built account slot.
+const ownerFetch = async (url: string): Promise<Response> => {
+	if (state === "checking") return new Promise(() => {});
+	const at = new Date(NOW_MS).toISOString();
+	const body = url.includes("/tree/roots")
+		? {
+				checked_at: at,
+				health_state: "healthy",
+				notes_total: 0,
+				unread_count: 0,
+				roots_partial: false,
+				roots: [],
+				recent: [],
+			}
+		: url.includes("/audit")
+			? { panel_updated_at: at, health_state: "healthy", stale_badge: null, events: [] }
+			: { health_state: "healthy", observer: { checked_at: at, last_commit_at: at, last_reachable_at: at } };
+	return new Response(JSON.stringify(body), { status: 200 });
+};
+createRoot(host).render(
+	state === "checking" || state === "signed-in" ? (
+		<MemoryExplorerPage active fetch={ownerFetch} />
+	) : (
+		<MemoryExplorerView api={fakeApi(OPTIONS[state] ?? {})} now={() => NOW_MS} signIn={signIn} />
+	),
+);
 
 const settle = () => new Promise((r) => setTimeout(r, 150));
 const click = (el: Element | null | undefined) => (el as HTMLElement | null | undefined)?.click();

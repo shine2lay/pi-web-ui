@@ -130,6 +130,46 @@ async function mountPage(server: ReturnType<typeof fakeServer>, webauthn: OwnerW
 
 const dialog = () => byRole(document.body, "dialog")[0] ?? null;
 
+describe("checking sign-in", () => {
+	it("has no account buttons until a successful read confirms the existing session", async () => {
+		const server = fakeServer({ signedIn: true });
+		const fetch = server.fetch;
+		let release!: () => void;
+		const waiting = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const delayed = {
+			...server,
+			fetch: vi.fn(async (url: string, init?: RequestInit) => {
+				await waiting;
+				return fetch(url, init);
+			}),
+		};
+		const page = await mountPage(delayed, passkeyPrompt());
+		oneByRole(page, "status", /Checking memory/);
+		expect(maybeByRole(page, "button", "Sign out")).toBeNull();
+		expect(maybeByRole(page, "button", "Passkeys")).toBeNull();
+		await act(async () => {
+			release();
+		});
+		await flush();
+		oneByRole(page, "button", "Sign out");
+		oneByRole(page, "button", "Passkeys");
+		expect(server.sent).not.toContain("POST /owner/session/verify");
+	});
+
+	it("removes account buttons when a later read says the session ended", async () => {
+		const server = fakeServer({ signedIn: true });
+		const page = await mountPage(server, passkeyPrompt());
+		oneByRole(page, "button", "Sign out");
+		server.state.signedIn = false;
+		await click(byRole(page, "button").find((b) => b.getAttribute("data-note") === NOTE) as HTMLElement);
+		expect(dialog()).not.toBeNull();
+		expect(maybeByRole(page, "button", "Sign out")).toBeNull();
+		expect(maybeByRole(page, "button", "Passkeys")).toBeNull();
+	});
+});
+
 describe("signed out", () => {
 	it("opens a modal sign-in naming why, and shows memory once the passkey answers", async () => {
 		const server = fakeServer();

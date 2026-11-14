@@ -56,6 +56,7 @@ export interface OwnerAccess {
 	readonly passkeys: KnownPasskeys | null;
 	/** Changes when the page should load again from the start (signed in or out by hand). */
 	readonly generation: number;
+	readonly onReadAccepted: () => void;
 	readonly onOwnerOnly: () => Promise<void>;
 	readonly ownerAssertion: (op: OwnerWriteOp) => Promise<string>;
 	openSignIn(opener: HTMLElement | null): void;
@@ -92,7 +93,10 @@ export function useOwnerAccess(session: OwnerSessionClient): OwnerAccess {
 		setGeneration((g) => g + 1);
 	}, [knowPasskeys]);
 
+	const onReadAccepted = useCallback(() => setState("signed-in"), []);
+
 	const askToSignIn = useCallback((): Promise<void> => {
+		setState("signed-out");
 		if (quiet.current) return Promise.reject(new ExplorerApiError("OWNER_ONLY", "Signed out."));
 		return new Promise<void>((resolve, reject) => {
 			if (waiters.current.length === 0) setBox({ kind: "sign-in", opener: null });
@@ -140,6 +144,7 @@ export function useOwnerAccess(session: OwnerSessionClient): OwnerAccess {
 			box,
 			passkeys,
 			generation,
+			onReadAccepted,
 			onOwnerOnly: askToSignIn,
 			ownerAssertion,
 			openSignIn: (opener) => setBox({ kind: "sign-in", opener }),
@@ -164,6 +169,19 @@ export function useOwnerAccess(session: OwnerSessionClient): OwnerAccess {
 			},
 			closeBox,
 		}),
-		[state, box, passkeys, generation, askToSignIn, ownerAssertion, signIn, session, signedOut, knowPasskeys, closeBox],
+		[
+			state,
+			box,
+			passkeys,
+			generation,
+			onReadAccepted,
+			askToSignIn,
+			ownerAssertion,
+			signIn,
+			session,
+			signedOut,
+			knowPasskeys,
+			closeBox,
+		],
 	);
 }

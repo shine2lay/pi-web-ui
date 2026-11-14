@@ -18,7 +18,20 @@ import { build } from "esbuild";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const outDir = process.argv[2] ?? "/tmp/memory-explorer-ui-check";
-const STATES = ["live", "loading", "empty", "error", "down", "degraded", "signed-out", "results", "reader", "confirm"];
+const STATES = process.argv[3]?.split(",") ?? [
+	"live",
+	"loading",
+	"empty",
+	"error",
+	"down",
+	"degraded",
+	"signed-out",
+	"results",
+	"reader",
+	"confirm",
+	"checking",
+	"signed-in",
+];
 
 /** The fake store's `vi.fn` wrapper is only a spy: in the browser it is the function itself. */
 const vitestStub = {

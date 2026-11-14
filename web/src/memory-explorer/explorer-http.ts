@@ -80,6 +80,8 @@ export interface HttpExplorerOptions {
 	 * signed in, and the read is asked again once; rejects when he chose not to.
 	 */
 	readonly onOwnerOnly?: () => Promise<void>;
+	/** A successful explorer read confirms the browser's existing owner session. */
+	readonly onReadAccepted?: () => void;
 }
 
 /** Lowercase hex sha256 of the exact body bytes a write sends (the op's `body_sha256`). */
@@ -211,7 +213,10 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 			...init,
 			headers: { accept: "application/json", ...init.headers },
 		});
-		if (response.ok) return (await response.json()) as T;
+		if (response.ok) {
+			options.onReadAccepted?.();
+			return (await response.json()) as T;
+		}
 		const error = await refusal(response);
 		if (error.code !== "OWNER_ONLY" || !signInFirst || !options.onOwnerOnly) throw error;
 		await options.onOwnerOnly();
