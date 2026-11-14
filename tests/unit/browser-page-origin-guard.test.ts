@@ -322,3 +322,103 @@ describe("browser_page origin deny (BROWSER-ORIGIN-DENY-1)", () => {
 		for (const c of v.texts) expect(deniedOriginInText(c.text, DENIED), c.text).toBe(c.denied);
 	});
 });
+
+// Ops #901 (Security rm-5784ad7b): an encoded host (L1) or a trailing-dot host (L2) is refused before the call.
+describe("browser_page origin deny: encoded and trailing-dot hosts (Ops #901)", () => {
+	/** The same pin sits in pi-worktree tests/browser-origin-guard.test.ts. */
+	const ENCODED_VECTORS_SHA256 = "cd9defe4397edf95475964d91ceb9f72ffab393cad1e8dd20f794df65b7f82b8";
+	const raw = readFileSync(new URL("./browser-origin-encoded-vectors.json", import.meta.url), "utf8");
+	const encoded = JSON.parse(raw) as {
+		urls: { url: string; origin: string | null; denied: boolean }[];
+		texts: { text: string; denied: string | null }[];
+	};
+	/** Every arg a denied text can ride in before the call. */
+	const carriers = (s: string): [string, Record<string, unknown>][] => [
+		["goto", { url: s }],
+		["eval", { code: s }],
+		["type", { selector: "input", text: s }],
+		["wait", { text: s }],
+	];
+
+	it("encoded-host vectors: parse and match as pinned, file identical to pi-worktree's", () => {
+		expect(sha(raw)).toBe(ENCODED_VECTORS_SHA256);
+		for (const c of encoded.urls) {
+			expect(browserOriginOf(c.url), c.url).toBe(c.origin);
+			expect(c.origin !== null && DENIED.includes(c.origin), c.url).toBe(c.denied);
+		}
+		for (const c of encoded.texts) expect(deniedOriginInText(c.text, DENIED), JSON.stringify(c.text)).toBe(c.denied);
+	});
+
+	for (const c of encoded.texts) {
+		const denied = c.denied;
+		if (denied) {
+			it(`${JSON.stringify(c.text)} in any arg on example.com: refused before the call, no frame read`, async () => {
+				const probe = new FakeProbe(paired("https://example.com"));
+				for (const [op, args] of carriers(c.text)) {
+					expectRefused(
+						await checkBrowserPageCall(req(op, "https://example.com", args), { denied: DENIED, probe }),
+						denied,
+					);
+				}
+				expect(probe.frameReads).toEqual([]);
+			});
+		} else {
+			it(`${JSON.stringify(c.text)} in any arg on example.com: still allowed`, async () => {
+				const probe = new FakeProbe(paired("https://example.com"));
+				for (const [op, args] of carriers(c.text)) {
+					expect(
+						await checkBrowserPageCall(req(op, "https://example.com", args), { denied: DENIED, probe }),
+						`${op} ${JSON.stringify(args)}`,
+					).toEqual({ ok: true });
+				}
+			});
+		}
+	}
+
+	for (const c of encoded.urls.filter((u) => u.denied)) {
+		it(`target ${JSON.stringify(c.url)}: refused as ${c.origin}, its frames never read`, async () => {
+			const probe = new FakeProbe(paired("https://example.com"));
+			expectRefused(
+				await checkBrowserPageCall(req("read", c.url, { what: "text" }), { denied: DENIED, probe }),
+				c.origin as string,
+			);
+			expect(probe.frameReads).toEqual([]);
+		});
+	}
+
+	for (const origin of DENIED) {
+		const u = new URL(origin);
+		const dotted = `${u.protocol}//${u.hostname}.${u.port ? `:${u.port}` : ""}`;
+
+		it(`omitted target while ${dotted} is a paired page: refused as ${origin}`, async () => {
+			const probe = new FakeProbe(paired(dotted));
+			expectRefused(
+				await checkBrowserPageCall(req("read", undefined, { what: "text" }), { denied: DENIED, probe }),
+				origin,
+			);
+		});
+
+		it(`example.com holding a frame of ${dotted}: refused as ${origin}`, async () => {
+			const frames = { "https://example.com": ["https://example.com/", `${dotted}/embed/chat`] };
+			const probe = new FakeProbe(paired("https://example.com"), frames);
+			expectRefused(
+				await checkBrowserPageCall(req("read", "https://example.com", { what: "text" }), { denied: DENIED, probe }),
+				origin,
+			);
+		});
+
+		it(`a result naming ${dotted}: replaced by the refusal; pages lists it by host only`, () => {
+			const out = checkBrowserPageResult(
+				req("goto", "https://example.com"),
+				{ ok: true, result: { navigating: true, url: `${dotted}/c/secret` } },
+				DENIED,
+			);
+			expect(out.ok).toBe(false);
+			expect(out.ok ? "" : out.error).toContain(origin);
+			const listing = { pages: [{ origin: dotted, title: SECRET_TITLE, open: true }] };
+			const listed = checkBrowserPageResult(req("pages"), { ok: true, result: listing }, DENIED);
+			expect(JSON.stringify(listed)).not.toContain(SECRET_TITLE);
+			expect(JSON.stringify(listed)).toContain(BROWSER_ORIGIN_DENY_RULE);
+		});
+	}
+});

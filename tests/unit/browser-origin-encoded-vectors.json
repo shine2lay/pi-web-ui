@@ -1,0 +1,82 @@
+{
+	"about": "Ops #901 BROWSER-ORIGIN-DENY-1 (Security rm-5784ad7b L1 encoded hosts, L2 trailing dot): the same vectors in pi-worktree tests/fixtures/ and pi-web-ui tests/unit/; both test files pin this file's sha256. urls: originOf / browserOriginOf. texts: deniedOriginIn / deniedOriginInText, and every tool input that carries them. Denied = the two built-in origins.",
+	"urls": [
+		{ "url": "https://pi.wai2shine.com./", "origin": "https://pi.wai2shine.com", "denied": true },
+		{ "url": "https://PI.WAI2SHINE.COM./c/1", "origin": "https://pi.wai2shine.com", "denied": true },
+		{
+			"url": "https://spark.tailbb5055.ts.net.:8787/",
+			"origin": "https://spark.tailbb5055.ts.net:8787",
+			"denied": true
+		},
+		{ "url": "https://pi%2Ewai2shine.com/", "origin": "https://pi.wai2shine.com", "denied": true },
+		{ "url": "https://pi\u3002wai2shine.com/", "origin": "https://pi.wai2shine.com", "denied": true },
+		{
+			"url": "https://spark%2Etailbb5055.ts.net:8787/",
+			"origin": "https://spark.tailbb5055.ts.net:8787",
+			"denied": true
+		},
+		{ "url": "https://pi.wai2shine.com:0443/", "origin": "https://pi.wai2shine.com", "denied": true },
+		{ "url": "https://notpi.wai2shine.com/", "origin": "https://notpi.wai2shine.com", "denied": false },
+		{
+			"url": "https://pi.wai2shine.com.evil.example./",
+			"origin": "https://pi.wai2shine.com.evil.example",
+			"denied": false
+		},
+		{ "url": "https://example.com./", "origin": "https://example.com", "denied": false },
+		{ "url": "http://localhost.:8787/", "origin": "http://localhost:8787", "denied": false }
+	],
+	"texts": [
+		{ "text": "https://pi%2Ewai2shine.com/", "denied": "https://pi.wai2shine.com" },
+		{ "text": "https://spark%2Etailbb5055.ts.net:8787/", "denied": "https://spark.tailbb5055.ts.net:8787" },
+		{ "text": "https://pi\u3002wai2shine.com/", "denied": "https://pi.wai2shine.com" },
+		{ "text": "https://spark\u3002tailbb5055.ts.net:8787/", "denied": "https://spark.tailbb5055.ts.net:8787" },
+		{ "text": "https://pi.wai2shine.com./", "denied": "https://pi.wai2shine.com" },
+		{ "text": "https://spark.tailbb5055.ts.net.:8787/", "denied": "https://spark.tailbb5055.ts.net:8787" },
+		{ "text": "HTTPS://PI.WAI2SHINE.COM/", "denied": "https://pi.wai2shine.com" },
+		{ "text": "HTTPS://SPARK.TAILBB5055.TS.NET:8787/", "denied": "https://spark.tailbb5055.ts.net:8787" },
+		{ "text": "HTTPS://PI.WAI2SHINE.COM./C/1", "denied": "https://pi.wai2shine.com" },
+		{
+			"text": "fetch(\"https://pi%2Ewai2shine.com/api/chats\").then((r) => r.text())",
+			"denied": "https://pi.wai2shine.com"
+		},
+		{
+			"text": "window.open('https://spark%2Etailbb5055.ts.net:8787/api/chats')",
+			"denied": "https://spark.tailbb5055.ts.net:8787"
+		},
+		{ "text": "open https://pi\u3002wai2shine.com/c/1 and read it", "denied": "https://pi.wai2shine.com" },
+		{
+			"text": "then open https://spark\u3002tailbb5055.ts.net:8787/api/chats please",
+			"denied": "https://spark.tailbb5055.ts.net:8787"
+		},
+		{ "text": "location.href = \"https://pi.wai2shine.com./c/1\"", "denied": "https://pi.wai2shine.com" },
+		{
+			"text": "then go to https://spark.tailbb5055.ts.net.:8787/api/chats please",
+			"denied": "https://spark.tailbb5055.ts.net:8787"
+		},
+		{ "text": "Look at HTTPS://PI.WAI2SHINE.COM/C/1 now", "denied": "https://pi.wai2shine.com" },
+		{ "text": "https://pi.wai2shine.com:0443/", "denied": "https://pi.wai2shine.com" },
+		{ "text": "https://pi%2Ewai2shine.com:443/", "denied": "https://pi.wai2shine.com" },
+		{ "text": "https://user:pw@pi%2Ewai2shine.com/", "denied": "https://pi.wai2shine.com" },
+		{ "text": "https:\\\\pi%2Ewai2shine.com\\c\\1", "denied": "https://pi.wai2shine.com" },
+		{ "text": "https://pi.wai2\tshine.com/", "denied": "https://pi.wai2shine.com" },
+		{ "text": "https://spark.tailbb5055\n.ts.net:8787/", "denied": "https://spark.tailbb5055.ts.net:8787" },
+		{ "text": "fetch(\"https://pi.wai2\tshine.com/api/chats\")", "denied": "https://pi.wai2shine.com" },
+		{
+			"text": "https://%70%69%2e%77%61%69%32%73%68%69%6e%65%2e%63%6f%6d/",
+			"denied": "https://pi.wai2shine.com"
+		},
+		{ "text": "https://\uff50\uff49.wai2shine.com/", "denied": "https://pi.wai2shine.com" },
+		{ "text": "https:pi%2Ewai2shine.com/c/1", "denied": "https://pi.wai2shine.com" },
+		{ "text": "location = '//pi%2Ewai2shine.com/'", "denied": "https://pi.wai2shine.com" },
+		{ "text": "http://127.0.0.1:8787/chat", "denied": null },
+		{ "text": "http://localhost:8787/", "denied": null },
+		{ "text": "localhost:8787", "denied": null },
+		{ "text": "https://example.com/", "denied": null },
+		{ "text": "https://pi.wai2shine.com.evil.example/", "denied": null },
+		{ "text": "https://notpi.wai2shine.com/", "denied": null },
+		{ "text": "https://pi%2Ewai2shine.com.evil.example/", "denied": null },
+		{ "text": "https://notpi%2Ewai2shine.com/", "denied": null },
+		{ "text": "https://pi.wai2shine.community/", "denied": null },
+		{ "text": "the chat app (pi dot wai2shine dot com)", "denied": null }
+	]
+}
