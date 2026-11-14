@@ -4,20 +4,40 @@
  */
 import type { Express } from "express";
 import { registerFileTransferRoutes } from "./file-transfer-routes.js";
-import { registerOpenVikingRoutes } from "./openviking/index.js";
+import { ownerCheckPending, registerOpenVikingRoutes, systemExplorerClock } from "./openviking/index.js";
 
 /** `startBackgroundWork`: server start only — the OpenViking Memory list's background build (#155). */
 export interface RouteModuleOptions {
 	startBackgroundWork?: boolean;
 }
 
+export interface RouteModules {
+	/** Server stop: the modules' shutdown hooks (the Memory Explorer ends its held deletes, spec-explorer-writes.md). */
+	stop(): Promise<void>;
+}
+
 export function registerRouteModules(
 	app: Express,
 	getCwd: (clientId: string) => string | undefined,
 	options: RouteModuleOptions = {},
-): void {
+): RouteModules {
 	registerFileTransferRoutes(app, getCwd);
-	// OpenViking Memory Dashboard: read-only GET /api/openviking/{overview,entries,audit} (spec 6ec68dc).
-	const openViking = registerOpenVikingRoutes(app);
-	if (options.startBackgroundWork) openViking.startEntriesSnapshot();
+	const shutdownHooks: Array<() => Promise<void>> = [];
+	// OpenViking Memory Dashboard (GET overview/entries/audit) and Memory Explorer. Until the owner session deploys
+	// the gate is R-OWNER-INTERIM-1's: shared-root reads only, every write refused (R-OWNER-FAIL-CLOSED-1).
+	const openViking = registerOpenVikingRoutes(app, {
+		explorer: {
+			ownerGate: ownerCheckPending,
+			clock: systemExplorerClock,
+			onShutdown: (hook) => shutdownHooks.push(hook),
+		},
+	});
+	const stop = () => Promise.all(shutdownHooks.map((hook) => hook())).then(() => undefined);
+	if (options.startBackgroundWork) {
+		openViking.startEntriesSnapshot();
+		// Exits that skip shutdown() (the systemd quit, restart_service) still end the held deletes: that part of
+		// the hook is synchronous; a second call after shutdown() finds nothing left to end.
+		process.once("exit", () => void stop());
+	}
+	return { stop };
 }

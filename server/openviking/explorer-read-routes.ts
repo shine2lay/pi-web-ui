@@ -6,9 +6,10 @@
  * - POST /api/openviking/search
  * Each asks the one owner gate (owner-gate.ts) with the roots whose content its answer would show, before any daemon
  * call: tree/roots `[]` for its counts (and each root again for `recent[]`), tree and note the uri's root, search
- * the requested roots. Then the uri rule, the setup-file lock (G8), `/health`, and the daemon reads. Other methods: 405.
+ * the requested roots. Then the uri rule, the setup-file lock (G8), `/health`, and the daemon reads. Other methods: 405,
+ * except PUT and DELETE on `/note`, which go on to the write routes (explorer-write-routes.ts).
  */
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import type { OpenVikingDaemonClient } from "./client.js";
 import { assertMemoryReachable, toExplorerError } from "./explorer-daemon.js";
 import { buildNote, parseNoteLevel } from "./explorer-note-read.js";
@@ -21,6 +22,9 @@ import { methodNotAllowedResult, okResult, sendRouteResult, toErrorResult } from
 import { OpenVikingDashboardError } from "./types.js";
 
 type Handler = (req: Request) => Promise<unknown>;
+
+/** `/note` methods the write routes (registered after these) answer. */
+const NOTE_WRITE_METHODS: readonly string[] = ["PUT", "DELETE"];
 
 /** A uri the request may read: inside the roots, the gate passes its root, and not a locked setup file. */
 function readableUri(gate: OpenVikingOwnerGate, req: Request, raw: unknown): OpenVikingExplorerUri {
@@ -62,10 +66,15 @@ export function registerExplorerReadRoutes(
 	gate: OpenVikingOwnerGate,
 ): void {
 	const { http } = client;
-	const route = (path: string, method: "GET" | "POST", handler: Handler) => {
-		app.all(path, async (req: Request, res: Response) => {
-			if (req.method.toUpperCase() !== method) {
-				sendRouteResult(res, methodNotAllowedResult(req.method, path, [method]));
+	const route = (path: string, method: "GET" | "POST", handler: Handler, servedLater: readonly string[] = []) => {
+		app.all(path, async (req: Request, res: Response, next: NextFunction) => {
+			const received = req.method.toUpperCase();
+			if (received !== method) {
+				if (servedLater.includes(received)) {
+					next();
+					return;
+				}
+				sendRouteResult(res, methodNotAllowedResult(req.method, path, [method, ...servedLater]));
 				return;
 			}
 			try {
@@ -88,12 +97,17 @@ export function registerExplorerReadRoutes(
 		return buildTreeFolder(http, target, page);
 	});
 
-	route("/api/openviking/note", "GET", async (req) => {
-		const target = readableUri(gate, req, req.query.uri);
-		const level = parseNoteLevel(req.query.level);
-		await assertMemoryReachable(http);
-		return buildNote(http, client.statePaths, target, level);
-	});
+	route(
+		"/api/openviking/note",
+		"GET",
+		async (req) => {
+			const target = readableUri(gate, req, req.query.uri);
+			const level = parseNoteLevel(req.query.level);
+			await assertMemoryReachable(http);
+			return buildNote(http, client.statePaths, target, level);
+		},
+		NOTE_WRITE_METHODS,
+	);
 
 	route("/api/openviking/search", "POST", async (req) => {
 		const plan = parseSearchRequest(req.body as OpenVikingSearchRequest | undefined);

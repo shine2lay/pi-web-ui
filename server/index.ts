@@ -470,7 +470,7 @@ const SERVICE_INFO = toServiceInfo(ORIGIN);
 /** PI_WEB_TABS: the tabs this instance offers. null = all of them, as before. */
 const TABS = parseTabs();
 
-registerRouteModules(app, (clientId) => service.get(clientId)?.cwd, { startBackgroundWork: true });
+const routeModules = registerRouteModules(app, (clientId) => service.get(clientId)?.cwd, { startBackgroundWork: true });
 
 app.get("/api/health", (_req, res) => {
 	// 审查 #352：该端点对未鉴权开放（监控探针需要），故只保留版本/引擎与 SDK
@@ -4728,10 +4728,10 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 		/* best effort */
 	}
 	console.log("\nshutting down…");
-	// pages-fresh: no new background round while the server goes down.
-	pagesRefresher.stop();
+	pagesRefresher.stop(); // pages-fresh: no new background round while the server goes down.
 	// usage-accounting: the pass Worker finishes its pass and closes its store; waited for below, at most 3 s.
 	const usageStopped = usageAccounting?.stop().catch(() => {});
+	const modulesStopped = routeModules.stop(); // held explorer deletes end now, before their window can close
 	// Windows ConPTY 兜底看门狗（issue #215）：主线程若死锁在 native
 	// ClosePseudoConsole 里，事件循环冻结，进程内的 forceExitTimer 永远触发不了 ——
 	// 只能靠外部进程收尾。超时取 forceExit + 余量（只在进程内兜底失效时才开火）；
@@ -4782,7 +4782,7 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 		mcpHotReload.dispose();
 		mcpBridge.dispose();
 		await globalLspPool.shutdownAll();
-		await service.disposeAll();
+		await Promise.all([service.disposeAll(), modulesStopped]);
 		if (usageStopped) await Promise.race([usageStopped, new Promise((done) => setTimeout(done, 3000).unref())]);
 		// Don't let dead browsers hold the exit open: half-open WebSocket /
 		// keep-alive HTTP connections (e.g. test clients killed without

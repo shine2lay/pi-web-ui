@@ -12,6 +12,7 @@
 import type {
 	OpenVikingAuditAction,
 	OpenVikingAuditEvent,
+	OpenVikingAuditEventAction,
 	OpenVikingDisclosureTier,
 	OpenVikingEntryProvenance,
 	OpenVikingExplorerEntry,
@@ -169,7 +170,7 @@ export interface OpenVikingMemoryGroupModel {
 
 export interface OpenVikingAuditRowModel {
 	readonly key: string;
-	readonly action: OpenVikingAuditAction;
+	readonly action: OpenVikingAuditEventAction;
 	/** Badge text for the action; a `role_memory_write` is never labelled a commit. */
 	readonly actionLabel: string;
 	readonly roleLabel: string;

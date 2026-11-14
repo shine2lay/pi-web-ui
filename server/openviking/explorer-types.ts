@@ -283,9 +283,13 @@ export interface OpenVikingUndoRequest {
 export type OpenVikingUndoResponse =
 	{ operation_id: string; state: "cancelled" } | { operation_id: string; state: "undone"; mod_time: string };
 
-/** Operation states (spec-explorer-writes.md "Operation States"); in memory only. */
+/**
+ * Operation states (spec-explorer-writes.md "Operation States"); in memory only. `undo_pending`: a held delete
+ * whose undo was asked for (R-OWNER-UNDO-1); it never runs from there.
+ */
 export type OpenVikingOperationState =
 	| "pending"
+	| "undo_pending"
 	| "applied"
 	| "failed"
 	| "cancelled"
@@ -301,7 +305,9 @@ export const OWNER_EXPLORER_SOURCE = "owner_explorer";
 export const OWNER_EXPLORER_ROLE = "owner";
 export const OWNER_EXPLORER_ACTIONS = ["owner_edit", "owner_delete", "owner_undo"] as const;
 export type OwnerExplorerAction = (typeof OWNER_EXPLORER_ACTIONS)[number];
-export type OwnerExplorerOutcome = "applied" | "cancelled" | "not_applied_restart" | "failed" | "refused";
+/** `unconfirmed`: an `owner_undo` whose confirmation was asked for and never given (R-OWNER-UNDO-1). */
+export type OwnerExplorerOutcome =
+	"applied" | "cancelled" | "not_applied_restart" | "failed" | "refused" | "unconfirmed";
 
 /** One line of `memory-changelog.jsonl` written by the explorer: hashes and sizes, never the text. */
 export interface OwnerExplorerChangelogLine {

@@ -18,7 +18,6 @@ import {
 import { NOW } from "./openviking-daemon-fake.js";
 import { eventually, explorerHarness, q, settle, sha256, type ExplorerHarness } from "./openviking-explorer-harness.js";
 
-const TODO = { todo: true };
 const NOTE = "viking://user/default/memories/preferences/backend_code.md";
 const PREFS = "viking://user/default/memories/preferences";
 const IDENTITY = "viking://user/backend/memories/identity.md";
@@ -514,66 +513,58 @@ describe("reads: G4 search", () => {
 // ---------------------------------------------------------------- writes
 
 describe("writes: owner check, uri rule, lock", () => {
-	it(
-		"writes: 403 OWNER_ONLY on edit, delete and undo with a deny gate; nothing sent, nothing logged",
-		TODO,
-		async () => {
-			const x = await start({ gate: "deny" });
-			expectRefusal(
-				await x.call("PUT", "/api/openviking/note", {
-					uri: NOTE,
-					content: "x",
-					opened_mod_time: new Date(NOW).toISOString(),
-				}),
-				403,
-				"OWNER_ONLY",
-			);
-			expectRefusal(await x.call("DELETE", `/api/openviking/note?uri=${q(NOTE)}`), 403, "OWNER_ONLY");
-			expectRefusal(await x.call("POST", "/api/openviking/undo", { operation_id: "op-1-00000000" }), 403, "OWNER_ONLY");
-			expect(x.fake.calls).toEqual([]);
-			expect(x.changelog()).toEqual([]);
-		},
-	);
+	it("writes: 403 OWNER_ONLY on edit, delete and undo with a deny gate; nothing sent, nothing logged", async () => {
+		const x = await start({ gate: "deny" });
+		expectRefusal(
+			await x.call("PUT", "/api/openviking/note", {
+				uri: NOTE,
+				content: "x",
+				opened_mod_time: new Date(NOW).toISOString(),
+			}),
+			403,
+			"OWNER_ONLY",
+		);
+		expectRefusal(await x.call("DELETE", `/api/openviking/note?uri=${q(NOTE)}`), 403, "OWNER_ONLY");
+		expectRefusal(await x.call("POST", "/api/openviking/undo", { operation_id: "op-1-00000000" }), 403, "OWNER_ONLY");
+		expect(x.fake.calls).toEqual([]);
+		expect(x.changelog()).toEqual([]);
+	});
 
-	it(
-		"writes: 400 URI_INVALID / URI_OUTSIDE_ROOTS and 403 SETUP_FILE_LOCKED on edit and delete, store untouched",
-		TODO,
-		async () => {
-			const x = await start();
-			const opened = new Date(NOW).toISOString();
+	it("writes: 400 URI_INVALID / URI_OUTSIDE_ROOTS and 403 SETUP_FILE_LOCKED on edit and delete, store untouched", async () => {
+		const x = await start();
+		const opened = new Date(NOW).toISOString();
+		expectRefusal(
+			await x.call("PUT", "/api/openviking/note", {
+				uri: "viking://resources/../x",
+				content: "x",
+				opened_mod_time: opened,
+			}),
+			400,
+			"URI_INVALID",
+		);
+		expectRefusal(
+			await x.call("DELETE", `/api/openviking/note?uri=${q("viking://agent/memories/cases/c1.md")}`),
+			400,
+			"URI_OUTSIDE_ROOTS",
+		);
+		for (const uri of [IDENTITY, SOUL]) {
 			expectRefusal(
-				await x.call("PUT", "/api/openviking/note", {
-					uri: "viking://resources/../x",
-					content: "x",
-					opened_mod_time: opened,
-				}),
-				400,
-				"URI_INVALID",
+				await x.call("PUT", "/api/openviking/note", { uri, content: "x", opened_mod_time: storeModTime(x, uri) }),
+				403,
+				"SETUP_FILE_LOCKED",
 			);
-			expectRefusal(
-				await x.call("DELETE", `/api/openviking/note?uri=${q("viking://agent/memories/cases/c1.md")}`),
-				400,
-				"URI_OUTSIDE_ROOTS",
-			);
-			for (const uri of [IDENTITY, SOUL]) {
-				expectRefusal(
-					await x.call("PUT", "/api/openviking/note", { uri, content: "x", opened_mod_time: storeModTime(x, uri) }),
-					403,
-					"SETUP_FILE_LOCKED",
-				);
-				expectRefusal(await x.call("DELETE", `/api/openviking/note?uri=${q(uri)}`), 403, "SETUP_FILE_LOCKED");
-			}
-			x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS + 1);
-			await settle();
-			expect(x.daemonCalls("/api/v1/content/write")).toEqual([]);
-			expect(x.daemonCalls("/api/v1/fs", "DELETE")).toEqual([]);
-			expect(x.changelog()).toEqual([]);
-		},
-	);
+			expectRefusal(await x.call("DELETE", `/api/openviking/note?uri=${q(uri)}`), 403, "SETUP_FILE_LOCKED");
+		}
+		x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS + 1);
+		await settle();
+		expect(x.daemonCalls("/api/v1/content/write")).toEqual([]);
+		expect(x.daemonCalls("/api/v1/fs", "DELETE")).toEqual([]);
+		expect(x.changelog()).toEqual([]);
+	});
 });
 
 describe("writes: G5 edit", () => {
-	it("writes: edit 413 CONTENT_TOO_LARGE over 1 MiB of UTF-8, 400 EDIT_INVALID for a bad body", TODO, async () => {
+	it("writes: edit 413 CONTENT_TOO_LARGE over 1 MiB of UTF-8, 400 EDIT_INVALID for a bad body", async () => {
 		const x = await start();
 		expectRefusal(await edit(x, NOTE, "é".repeat(524_289)), 413, "CONTENT_TOO_LARGE");
 		for (const body of [
@@ -587,7 +578,7 @@ describe("writes: G5 edit", () => {
 		expect((await edit(x, NOTE, "a".repeat(1024 * 1024))).status).toBe(200);
 	});
 
-	it("writes: edit 409 NOTE_CHANGED when mod_time differs as ms; nothing written, nothing logged", TODO, async () => {
+	it("writes: edit 409 NOTE_CHANGED when mod_time differs as ms; nothing written, nothing logged", async () => {
 		const x = await start();
 		const current = storeModTime(x, NOTE);
 		const later = new Date(Date.parse(current) + 1).toISOString();
@@ -601,7 +592,7 @@ describe("writes: G5 edit", () => {
 		expect((await edit(x, NOTE, "new text", current.replace(".000Z", "Z"))).status).toBe(200);
 	});
 
-	it("writes: edit with the same text is 200 changed:false, no write, no line", TODO, async () => {
+	it("writes: edit with the same text is 200 changed:false, no write, no line", async () => {
 		const x = await start();
 		const reply = await edit(x, NOTE, "Money in integer minor units.\n");
 		expect(reply).toEqual({ status: 200, body: { changed: false } });
@@ -609,7 +600,7 @@ describe("writes: G5 edit", () => {
 		expect(x.changelog()).toEqual([]);
 	});
 
-	it("writes: edit applies now, writes replace/manual, appends one owner_edit line", TODO, async () => {
+	it("writes: edit applies now, writes replace/manual, appends one owner_edit line", async () => {
 		const x = await start();
 		const before = "Money in integer minor units.\n";
 		const reply = await edit(x, NOTE, "Money in cents.\n");
@@ -653,14 +644,14 @@ describe("writes: G5 edit", () => {
 		]);
 	});
 
-	it("writes: edit 502 MEMORY_WRITE_FAILED when the store refuses; nothing logged", TODO, async () => {
+	it("writes: edit 502 MEMORY_WRITE_FAILED when the store refuses; nothing logged", async () => {
 		const x = await start();
 		x.fake.state.failures.push({ path: "/api/v1/content/write", status: 500, code: "INTERNAL" });
 		expectRefusal(await edit(x, NOTE, "Money in cents.\n"), 502, "MEMORY_WRITE_FAILED");
 		expect(x.changelog()).toEqual([]);
 	});
 
-	it("writes: a failed changelog append answers audit_recorded:false and the change stands", TODO, async () => {
+	it("writes: a failed changelog append answers audit_recorded:false and the change stands", async () => {
 		const x = await start();
 		mkdirSync(x.changelogPath);
 		const reply = await edit(x, NOTE, "Money in cents.\n");
@@ -671,7 +662,7 @@ describe("writes: G5 edit", () => {
 });
 
 describe("writes: G6 delete", () => {
-	it("writes: delete a folder is 400 FOLDER_DELETE_REFUSED; a missing note 404 NOT_FOUND", TODO, async () => {
+	it("writes: delete a folder is 400 FOLDER_DELETE_REFUSED; a missing note 404 NOT_FOUND", async () => {
 		const x = await start();
 		expectRefusal(await x.call("DELETE", `/api/openviking/note?uri=${q(PREFS)}`), 400, "FOLDER_DELETE_REFUSED");
 		expectRefusal(await x.call("DELETE", `/api/openviking/note?uri=${q(`${PREFS}/missing.md`)}`), 404, "NOT_FOUND");
@@ -680,41 +671,37 @@ describe("writes: G6 delete", () => {
 		expect(x.daemonCalls("/api/v1/fs", "DELETE")).toEqual([]);
 	});
 
-	it(
-		"writes: delete is held 10 000 ms, then exactly one DELETE recursive=false and an owner_delete applied line",
-		TODO,
-		async () => {
-			const x = await start();
-			const reply = await x.call("DELETE", `/api/openviking/note?uri=${q(NOTE)}`);
-			expect(reply).toEqual({
-				status: 202,
-				body: {
-					operation_id: expect.stringMatching(/^op-\d+-[0-9a-f]{8}$/),
-					uri: NOTE,
-					state: "pending",
-					applies_at: new Date(NOW + EXPLORER_UNDO_WINDOW_MS).toISOString(),
-				},
-			});
-			x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS - 1);
-			await settle();
-			expect(x.daemonCalls("/api/v1/fs", "DELETE")).toEqual([]);
-			expect(x.changelog()).toEqual([]);
-			x.fake.clock.advance(1);
-			await eventually(() => expect(x.changelog()).toHaveLength(1));
-			const deletes = x.daemonCalls("/api/v1/fs", "DELETE");
-			expect(deletes).toHaveLength(1);
-			expect(Object.fromEntries(deletes[0].url.searchParams)).toMatchObject({ uri: NOTE, recursive: "false" });
-			expect(x.fake.store.nodes.has(NOTE)).toBe(false);
-			expect(x.changelog()[0]).toMatchObject({
-				action: "owner_delete",
-				operation_id: reply.body.operation_id,
-				outcome: "applied",
-				after_sha256: null,
-			});
-		},
-	);
+	it("writes: delete is held 10 000 ms, then exactly one DELETE recursive=false and an owner_delete applied line", async () => {
+		const x = await start();
+		const reply = await x.call("DELETE", `/api/openviking/note?uri=${q(NOTE)}`);
+		expect(reply).toEqual({
+			status: 202,
+			body: {
+				operation_id: expect.stringMatching(/^op-\d+-[0-9a-f]{8}$/),
+				uri: NOTE,
+				state: "pending",
+				applies_at: new Date(NOW + EXPLORER_UNDO_WINDOW_MS).toISOString(),
+			},
+		});
+		x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS - 1);
+		await settle();
+		expect(x.daemonCalls("/api/v1/fs", "DELETE")).toEqual([]);
+		expect(x.changelog()).toEqual([]);
+		x.fake.clock.advance(1);
+		await eventually(() => expect(x.changelog()).toHaveLength(1));
+		const deletes = x.daemonCalls("/api/v1/fs", "DELETE");
+		expect(deletes).toHaveLength(1);
+		expect(Object.fromEntries(deletes[0].url.searchParams)).toMatchObject({ uri: NOTE, recursive: "false" });
+		expect(x.fake.store.nodes.has(NOTE)).toBe(false);
+		expect(x.changelog()[0]).toMatchObject({
+			action: "owner_delete",
+			operation_id: reply.body.operation_id,
+			outcome: "applied",
+			after_sha256: null,
+		});
+	});
 
-	it("writes: a store error when the window closes is owner_delete failed", TODO, async () => {
+	it("writes: a store error when the window closes is owner_delete failed", async () => {
 		const x = await start();
 		x.fake.state.failures.push({ path: "/api/v1/fs", method: "DELETE", status: 500, code: "INTERNAL" });
 		const reply = await x.call("DELETE", `/api/openviking/note?uri=${q(NOTE)}`);
@@ -728,7 +715,7 @@ describe("writes: G6 delete", () => {
 		expect(x.fake.store.nodes.has(NOTE)).toBe(true);
 	});
 
-	it("writes: 409 DELETE_PENDING on an edit or a second delete of a uri with a pending delete", TODO, async () => {
+	it("writes: 409 DELETE_PENDING on an edit or a second delete of a uri with a pending delete", async () => {
 		const x = await start();
 		const pending = await x.call("DELETE", `/api/openviking/note?uri=${q(NOTE)}`);
 		const again = await x.call("DELETE", `/api/openviking/note?uri=${q(NOTE)}`);
@@ -740,31 +727,27 @@ describe("writes: G6 delete", () => {
 		expect(x.daemonCalls("/api/v1/content/write")).toEqual([]);
 	});
 
-	it(
-		"writes: the shutdown hook ends a pending delete as owner_delete not_applied_restart, nothing deleted",
-		TODO,
-		async () => {
-			const x = await start();
-			const pending = await x.call("DELETE", `/api/openviking/note?uri=${q(NOTE)}`);
-			await x.shutdown();
-			x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS + 1);
-			await settle();
-			expect(x.daemonCalls("/api/v1/fs", "DELETE")).toEqual([]);
-			expect(x.changelog()).toEqual([
-				expect.objectContaining({
-					action: "owner_delete",
-					operation_id: pending.body.operation_id,
-					outcome: "not_applied_restart",
-				}),
-			]);
-		},
-	);
+	it("writes: the shutdown hook ends a pending delete as owner_delete not_applied_restart, nothing deleted", async () => {
+		const x = await start();
+		const pending = await x.call("DELETE", `/api/openviking/note?uri=${q(NOTE)}`);
+		await x.shutdown();
+		x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS + 1);
+		await settle();
+		expect(x.daemonCalls("/api/v1/fs", "DELETE")).toEqual([]);
+		expect(x.changelog()).toEqual([
+			expect.objectContaining({
+				action: "owner_delete",
+				operation_id: pending.body.operation_id,
+				outcome: "not_applied_restart",
+			}),
+		]);
+	});
 });
 
 describe("writes: undo", () => {
 	const undo = (x: ExplorerHarness, operation_id: unknown) => x.call("POST", "/api/openviking/undo", { operation_id });
 
-	it("writes: undo a delete cancels it: owner_undo then owner_delete cancelled, no store call", TODO, async () => {
+	it("writes: undo a delete cancels it: owner_undo then owner_delete cancelled, no store call", async () => {
 		const x = await start();
 		const pending = await x.call("DELETE", `/api/openviking/note?uri=${q(NOTE)}`);
 		const id = pending.body.operation_id;
@@ -779,7 +762,7 @@ describe("writes: undo", () => {
 		]);
 	});
 
-	it("writes: undo an edit writes back the pre-edit text and appends owner_undo applied", TODO, async () => {
+	it("writes: undo an edit writes back the pre-edit text and appends owner_undo applied", async () => {
 		const x = await start();
 		const before = "Money in integer minor units.\n";
 		const edited = await edit(x, NOTE, "Money in cents.\n");
@@ -798,50 +781,42 @@ describe("writes: undo", () => {
 		]);
 	});
 
-	it(
-		"writes: undo an edit is 409 UNDO_REFUSED when the note changed since; owner_undo refused, nothing written",
-		TODO,
-		async () => {
-			const x = await start();
-			const edited = await edit(x, NOTE, "Money in cents.\n");
-			x.fake.store.put(NOTE, "someone else wrote this\n", NOW + 3_000);
-			const reply = await undo(x, edited.body.operation_id);
-			expectRefusal(reply, 409, "UNDO_REFUSED");
-			expect(reply.body.error.details).toEqual({ current_mod_time: storeModTime(x, NOTE) });
-			expect(x.daemonCalls("/api/v1/content/write", "POST")).toHaveLength(1);
-			expect(x.fake.store.nodes.get(NOTE)?.content).toBe("someone else wrote this\n");
-			expect(x.changelog().map((l) => [l.action, l.outcome, l.undo_of])).toEqual([
-				["owner_edit", "applied", null],
-				["owner_undo", "refused", "edit"],
-			]);
-		},
-	);
+	it("writes: undo an edit is 409 UNDO_REFUSED when the note changed since; owner_undo refused, nothing written", async () => {
+		const x = await start();
+		const edited = await edit(x, NOTE, "Money in cents.\n");
+		x.fake.store.put(NOTE, "someone else wrote this\n", NOW + 3_000);
+		const reply = await undo(x, edited.body.operation_id);
+		expectRefusal(reply, 409, "UNDO_REFUSED");
+		expect(reply.body.error.details).toEqual({ current_mod_time: storeModTime(x, NOTE) });
+		expect(x.daemonCalls("/api/v1/content/write", "POST")).toHaveLength(1);
+		expect(x.fake.store.nodes.get(NOTE)?.content).toBe("someone else wrote this\n");
+		expect(x.changelog().map((l) => [l.action, l.outcome, l.undo_of])).toEqual([
+			["owner_edit", "applied", null],
+			["owner_undo", "refused", "edit"],
+		]);
+	});
 
-	it(
-		"writes: undo after the window or after the operation ended is 410 UNDO_WINDOW_CLOSED with its state",
-		TODO,
-		async () => {
-			const x = await start();
-			const edited = await edit(x, NOTE, "Money in cents.\n");
-			x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS + 1);
-			const late = await undo(x, edited.body.operation_id);
-			expectRefusal(late, 410, "UNDO_WINDOW_CLOSED");
-			expect(late.body.error.details).toHaveProperty("state");
-			const deleted = await x.call("DELETE", `/api/openviking/note?uri=${q("viking://resources/pi-web-ui/README.md")}`);
-			x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS);
-			await eventually(() => expect(x.changelog().some((l) => l.action === "owner_delete")).toBe(true));
-			const applied = await undo(x, deleted.body.operation_id);
-			expectRefusal(applied, 410, "UNDO_WINDOW_CLOSED");
-			expect(applied.body.error.details).toEqual({ state: "applied" });
-			const second = await edit(x, NOTE, "Money in euros.\n");
-			expect((await undo(x, second.body.operation_id)).status).toBe(200);
-			const twice = await undo(x, second.body.operation_id);
-			expectRefusal(twice, 410, "UNDO_WINDOW_CLOSED");
-			expect(twice.body.error.details).toEqual({ state: "undone" });
-		},
-	);
+	it("writes: undo after the window or after the operation ended is 410 UNDO_WINDOW_CLOSED with its state", async () => {
+		const x = await start();
+		const edited = await edit(x, NOTE, "Money in cents.\n");
+		x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS + 1);
+		const late = await undo(x, edited.body.operation_id);
+		expectRefusal(late, 410, "UNDO_WINDOW_CLOSED");
+		expect(late.body.error.details).toHaveProperty("state");
+		const deleted = await x.call("DELETE", `/api/openviking/note?uri=${q("viking://resources/pi-web-ui/README.md")}`);
+		x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS);
+		await eventually(() => expect(x.changelog().some((l) => l.action === "owner_delete")).toBe(true));
+		const applied = await undo(x, deleted.body.operation_id);
+		expectRefusal(applied, 410, "UNDO_WINDOW_CLOSED");
+		expect(applied.body.error.details).toEqual({ state: "applied" });
+		const second = await edit(x, NOTE, "Money in euros.\n");
+		expect((await undo(x, second.body.operation_id)).status).toBe(200);
+		const twice = await undo(x, second.body.operation_id);
+		expectRefusal(twice, 410, "UNDO_WINDOW_CLOSED");
+		expect(twice.body.error.details).toEqual({ state: "undone" });
+	});
 
-	it("writes: undo an unknown operation id is 404 OPERATION_UNKNOWN", TODO, async () => {
+	it("writes: undo an unknown operation id is 404 OPERATION_UNKNOWN", async () => {
 		const x = await start();
 		for (const id of ["op-1794631805120-3f9a1c2e", "not-an-id", 42]) {
 			expectRefusal(await undo(x, id), 404, "OPERATION_UNKNOWN");
@@ -851,7 +826,7 @@ describe("writes: undo", () => {
 });
 
 describe("writes: G7 change record and /audit", () => {
-	it("writes: changelog lines carry sha256 only, never the note text; file is 0600", TODO, async () => {
+	it("writes: changelog lines carry sha256 only, never the note text; file is 0600", async () => {
 		const x = await start();
 		const secret = "SECRET-NOTE-TEXT-7f3a";
 		x.fake.store.put(`${QA_ROOT}/cases/s.md`, `old ${secret} old\n`);
@@ -871,49 +846,45 @@ describe("writes: G7 change record and /audit", () => {
 		expect(statSync(x.changelogPath).mode & 0o777).toBe(0o600);
 	});
 
-	it(
-		"writes: /audit shows owner_edit / owner_delete with operation_id, outcome, derived undone; owner_only filters",
-		TODO,
-		async () => {
-			const x = await start();
-			x.seedChangelog([
-				{
-					timestamp: new Date(NOW - 60_000).toISOString(),
-					action: "update",
-					source: "lead_direct",
-					role: "qa",
-					uri: `${QA_ROOT}/cases/c1.md`,
-					summary: "qa wrote",
-				},
-			]);
-			const undone = await edit(x, NOTE, "Money in cents.\n");
-			await x.call("POST", "/api/openviking/undo", { operation_id: undone.body.operation_id });
-			const kept = await edit(x, "viking://resources/pi-web-ui/README.md", "# readme v2\n");
-			const deleted = await x.call("DELETE", `/api/openviking/note?uri=${q(`${QA_ROOT}/cases/c1.md`)}`);
-			x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS);
-			await eventually(() => expect(x.changelog().some((l) => l.action === "owner_delete")).toBe(true));
-			const all = await x.call("GET", "/api/openviking/audit?limit=50");
-			expect(all.status).toBe(200);
-			const byOp = (id: string) => all.body.events.filter((e: any) => e.operation_id === id);
-			expect(byOp(undone.body.operation_id)).toEqual([
-				expect.objectContaining({ action: "owner_edit", outcome: "applied", undone: true }),
-			]);
-			expect(byOp(kept.body.operation_id)).toEqual([
-				expect.objectContaining({ action: "owner_edit", outcome: "applied", undone: false }),
-			]);
-			expect(byOp(deleted.body.operation_id)).toEqual([
-				expect.objectContaining({ action: "owner_delete", outcome: "applied", undone: false }),
-			]);
-			expect(all.body.events.some((e: any) => e.action === "owner_undo" || e.raw_action === "owner_undo")).toBe(false);
-			expect(all.body.events.find((e: any) => e.source === "lead_direct")).toMatchObject({
-				operation_id: null,
-				outcome: null,
-				undone: null,
-			});
-			const mine = await x.call("GET", "/api/openviking/audit?limit=50&owner_only=true");
-			expect(mine.body.events.map((e: any) => e.action).sort()).toEqual(["owner_delete", "owner_edit", "owner_edit"]);
-		},
-	);
+	it("writes: /audit shows owner_edit / owner_delete with operation_id, outcome, derived undone; owner_only filters", async () => {
+		const x = await start();
+		x.seedChangelog([
+			{
+				timestamp: new Date(NOW - 60_000).toISOString(),
+				action: "update",
+				source: "lead_direct",
+				role: "qa",
+				uri: `${QA_ROOT}/cases/c1.md`,
+				summary: "qa wrote",
+			},
+		]);
+		const undone = await edit(x, NOTE, "Money in cents.\n");
+		await x.call("POST", "/api/openviking/undo", { operation_id: undone.body.operation_id });
+		const kept = await edit(x, "viking://resources/pi-web-ui/README.md", "# readme v2\n");
+		const deleted = await x.call("DELETE", `/api/openviking/note?uri=${q(`${QA_ROOT}/cases/c1.md`)}`);
+		x.fake.clock.advance(EXPLORER_UNDO_WINDOW_MS);
+		await eventually(() => expect(x.changelog().some((l) => l.action === "owner_delete")).toBe(true));
+		const all = await x.call("GET", "/api/openviking/audit?limit=50");
+		expect(all.status).toBe(200);
+		const byOp = (id: string) => all.body.events.filter((e: any) => e.operation_id === id);
+		expect(byOp(undone.body.operation_id)).toEqual([
+			expect.objectContaining({ action: "owner_edit", outcome: "applied", undone: true }),
+		]);
+		expect(byOp(kept.body.operation_id)).toEqual([
+			expect.objectContaining({ action: "owner_edit", outcome: "applied", undone: false }),
+		]);
+		expect(byOp(deleted.body.operation_id)).toEqual([
+			expect.objectContaining({ action: "owner_delete", outcome: "applied", undone: false }),
+		]);
+		expect(all.body.events.some((e: any) => e.action === "owner_undo" || e.raw_action === "owner_undo")).toBe(false);
+		expect(all.body.events.find((e: any) => e.source === "lead_direct")).toMatchObject({
+			operation_id: null,
+			outcome: null,
+			undone: null,
+		});
+		const mine = await x.call("GET", "/api/openviking/audit?limit=50&owner_only=true");
+		expect(mine.body.events.map((e: any) => e.action).sort()).toEqual(["owner_delete", "owner_edit", "owner_edit"]);
+	});
 
 	// Live now (the current /overview already holds it); the writes slice must keep it green.
 	it("writes: owner lines never count as session commits, promotions or rejections in /overview", async () => {

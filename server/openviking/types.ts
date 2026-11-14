@@ -7,7 +7,11 @@
  * - .temper/features/openviking-dashboard/spec.md (Architecture #515)
  * - /home/shinelay/architecture-dept/conventions/openviking-contract.md
  */
-import type { OpenVikingExplorerOptions } from "./explorer-types.js";
+import type {
+	OPENVIKING_OWNER_AUDIT_ACTIONS,
+	OpenVikingExplorerOptions,
+	OpenVikingOwnerAuditFields,
+} from "./explorer-types.js";
 
 export const DEFAULT_OPENVIKING_DAEMON_URL = "http://127.0.0.1:1933";
 export const DEFAULT_OPENVIKING_DAEMON_BIND = "127.0.0.1:1933";
@@ -373,11 +377,17 @@ export interface OpenVikingAuditQuery {
 	limit?: unknown;
 	action?: unknown;
 	role?: unknown;
+	/** `"true"`: only the owner's own changes (G7 "Changes you made"), before `limit`. */
+	owner_only?: unknown;
 }
 
-export interface OpenVikingAuditEvent {
+/** `events[].action`: the contract's five, plus the owner's own edits and deletes (G7; `owner_undo` is no event). */
+export type OpenVikingAuditEventAction = OpenVikingAuditAction | (typeof OPENVIKING_OWNER_AUDIT_ACTIONS)[number];
+
+/** `operation_id`, `outcome`, `undone` (OpenVikingOwnerAuditFields) are null on every non-owner event. */
+export interface OpenVikingAuditEvent extends OpenVikingOwnerAuditFields {
 	id: string;
-	action: OpenVikingAuditAction;
+	action: OpenVikingAuditEventAction;
 	raw_action: string;
 	source: string;
 	role: string;

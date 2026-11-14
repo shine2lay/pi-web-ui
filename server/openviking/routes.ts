@@ -6,11 +6,15 @@
  * - GET /api/openviking/entries
  * - GET /api/openviking/audit
  * Non-GET requests return HTTP 405 Method Not Allowed (Allow: GET).
- * The Memory Explorer's read routes (tree/roots, tree, note, search) are registered from explorer-read-routes.ts.
+ * The Memory Explorer's read routes (tree/roots, tree, note, search) are registered from explorer-read-routes.ts,
+ * its write routes (note PUT/DELETE, undo) from explorer-write-routes.ts.
  */
 import type { Express, Request, Response } from "express";
 import { createOpenVikingClient, OpenVikingDaemonClient } from "./client.js";
+import { systemExplorerClock } from "./explorer-clock.js";
 import { registerExplorerReadRoutes } from "./explorer-read-routes.js";
+import type { OpenVikingExplorerOptions } from "./explorer-types.js";
+import { registerExplorerWriteRoutes } from "./explorer-write-routes.js";
 import { ownerCheckPending } from "./owner-gate.js";
 import {
 	methodNotAllowedResult,
@@ -109,14 +113,21 @@ export function registerOpenVikingRoutes(
 				limit: req.query.limit,
 				action: req.query.action,
 				role: req.query.role,
+				owner_only: req.query.owner_only,
 			},
 			req.method,
 		);
 		sendRouteResult(res, result);
 	});
 
-	// Until the owner session (backend #165) deploys, the server's gate is R-OWNER-INTERIM-1's.
-	registerExplorerReadRoutes(app, client, options.explorer?.ownerGate ?? ownerCheckPending);
+	// Until the owner session (backend #165) deploys, the server's gate is R-OWNER-INTERIM-1's: every write refused.
+	const explorer: OpenVikingExplorerOptions = options.explorer ?? {
+		ownerGate: ownerCheckPending,
+		clock: systemExplorerClock,
+		onShutdown: () => {},
+	};
+	registerExplorerReadRoutes(app, client, explorer.ownerGate);
+	registerExplorerWriteRoutes(app, client, explorer);
 
 	return client;
 }

@@ -1,9 +1,11 @@
 /**
  * OpenViking Memory Dashboard — `GET /api/openviking/audit`: the Audit Trail of memory writes and
  * guard verdicts from `memory-changelog.jsonl` + `metrics.jsonl`, newest first, with personal
- * summaries redacted (R-ISOLATION-1). Reads state files only; never calls `:1933`.
+ * summaries redacted (R-ISOLATION-1). Reads state files only; never calls `:1933`. `?owner_only=true` keeps only the
+ * owner's own changes (G7), filtered before `limit` so other writes never push them out.
  */
 import { buildAuditEvents } from "./activity.js";
+import { OPENVIKING_OWNER_AUDIT_ACTIONS } from "./explorer-types.js";
 import { panelHealth, pendingSyncCause } from "./overview.js";
 import {
 	readChangelogRecords,
@@ -21,6 +23,8 @@ import {
 	type OpenVikingAuditQuery,
 	type OpenVikingAuditResponse,
 } from "./types.js";
+
+const OWNER_EVENT_ACTIONS: ReadonlySet<string> = new Set(OPENVIKING_OWNER_AUDIT_ACTIONS);
 
 export const DEFAULT_AUDIT_LIMIT = 50;
 export const MAX_AUDIT_LIMIT = 500;
@@ -40,10 +44,11 @@ export interface AuditRequest {
 	limit: number;
 	action: OpenVikingAuditAction | undefined;
 	role: string | undefined;
+	ownerOnly: boolean;
 }
 
 export function parseAuditQuery(query: OpenVikingAuditQuery): AuditRequest {
-	const { limit, action, role } = query;
+	const { limit, action, role, owner_only: ownerOnly } = query;
 	let n = DEFAULT_AUDIT_LIMIT;
 	if (limit !== undefined && limit !== "") {
 		if (typeof limit !== "string" || !/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > MAX_AUDIT_LIMIT) {
@@ -57,10 +62,14 @@ export function parseAuditQuery(query: OpenVikingAuditQuery): AuditRequest {
 	if (role !== undefined && role !== "" && !(OPENVIKING_ROLES as readonly unknown[]).includes(role)) {
 		throw invalid("role", role, "one of the 15 role ids");
 	}
+	if (ownerOnly !== undefined && ownerOnly !== "" && ownerOnly !== "true" && ownerOnly !== "false") {
+		throw invalid("owner_only", ownerOnly, "true|false");
+	}
 	return {
 		limit: n,
 		action: action ? (action as OpenVikingAuditAction) : undefined,
 		role: role ? (role as string) : undefined,
+		ownerOnly: ownerOnly === "true",
 	};
 }
 
@@ -80,6 +89,7 @@ export async function buildAudit(
 	const in24h = all.filter((e) => nowMs - Date.parse(e.ts) <= WINDOW_24H_MS).length;
 	const events = all
 		.filter((e) => (req.action ? e.action === req.action : true) && (req.role ? e.role === req.role : true))
+		.filter((e) => !req.ownerOnly || OWNER_EVENT_ACTIONS.has(e.action))
 		.slice(0, req.limit);
 	return {
 		panel_updated_at: new Date(nowMs).toISOString(),

@@ -3,10 +3,11 @@
  * guard verdicts and activity rows, with R-ISOLATION-1 redaction of personal summaries.
  */
 import type { OpenVikingChangelogRecord, OpenVikingMetricsRecord } from "./state-files.js";
+import type { OpenVikingOwnerAuditFields } from "./explorer-types.js";
 import {
 	ISOLATED_AGENT_MEMORY_ABSTRACT,
-	type OpenVikingAuditAction,
 	type OpenVikingAuditEvent,
+	type OpenVikingAuditEventAction,
 	type OpenVikingGuardVerdict,
 	type OpenVikingLiveActivityItem,
 } from "./types.js";
@@ -18,13 +19,19 @@ import { isSharedUri } from "./uri.js";
  * in 24h are `changelog.session_commits_24h`. Any other add/update/delete is a shared promotion (`viking://resources/`,
  * `viking://user/default/`) or else a role memory write (`viking://user/<role>/`, alias `viking://agent/`: live
  * `migration`, `lead_direct`); a URI that cannot be classified fails closed as personal. Preference rows keep their
- * verdicts; the agent-tools sync rows fold as the contract states.
+ * verdicts; the agent-tools sync rows fold as the contract states. R-CHANGELOG-1e: the owner's own lines
+ * (`source: owner_explorer`, any URI) are `owner_edit` / `owner_delete` events, never a commit, promotion or
+ * rejection; `owner_undo` lines are no event (they only mark the operation they undo).
  */
-export function auditActionOf(r: OpenVikingChangelogRecord): OpenVikingAuditAction | null {
+export function auditActionOf(r: OpenVikingChangelogRecord): OpenVikingAuditEventAction | null {
 	if (r.sessionCommit) return "commit";
 	switch (r.action) {
 		case null:
+		case "owner_undo":
 			return null;
+		case "owner_edit":
+		case "owner_delete":
+			return r.action;
 		case "reject_preference_candidate":
 			return "reject_noise";
 		case "promote_preference_candidate":
@@ -39,7 +46,7 @@ export function auditActionOf(r: OpenVikingChangelogRecord): OpenVikingAuditActi
 	}
 }
 
-export function guardVerdictOf(action: OpenVikingAuditAction): OpenVikingGuardVerdict {
+export function guardVerdictOf(action: OpenVikingAuditEventAction): OpenVikingGuardVerdict {
 	if (action === "reject_noise") return "rejected";
 	if (action === "sidecar_timeout") return "degraded_skip";
 	return "allowed";
@@ -76,11 +83,32 @@ function newestFirst<T>(rows: Timed<T>[], limit: number): T[] {
 		.map((r) => r.item);
 }
 
+const NOT_OWNER: OpenVikingOwnerAuditFields = { operation_id: null, outcome: null, undone: null };
+
+/** G7: per operation id, the line of its last `owner_undo` that applied. */
+function appliedUndoLines(changelog: readonly OpenVikingChangelogRecord[]): Map<string, number> {
+	const lines = new Map<string, number>();
+	for (const r of changelog) {
+		if (r.action !== "owner_undo" || r.owner?.outcome !== "applied" || r.owner.operationId === null) continue;
+		lines.set(r.owner.operationId, Math.max(r.line, lines.get(r.owner.operationId) ?? -1));
+	}
+	return lines;
+}
+
+/** `undone` is derived, never stored: a later `owner_undo` of the same operation that applied. */
+function ownerFieldsOf(r: OpenVikingChangelogRecord, undoLines: Map<string, number>): OpenVikingOwnerAuditFields {
+	if (r.owner === null) return NOT_OWNER;
+	const { operationId, outcome } = r.owner;
+	const undoLine = operationId === null ? undefined : undoLines.get(operationId);
+	return { operation_id: operationId, outcome, undone: undoLine !== undefined && undoLine > r.line };
+}
+
 export function buildAuditEvents(
 	changelog: readonly OpenVikingChangelogRecord[],
 	metrics: readonly OpenVikingMetricsRecord[],
 ): OpenVikingAuditEvent[] {
 	const rows: Timed<OpenVikingAuditEvent>[] = [];
+	const undoLines = appliedUndoLines(changelog);
 	for (const r of changelog) {
 		const action = auditActionOf(r);
 		if (!action) continue;
@@ -89,6 +117,7 @@ export function buildAuditEvents(
 			tsMs: r.tsMs,
 			order: r.line,
 			item: {
+				...ownerFieldsOf(r, undoLines),
 				id: `changelog:${r.line}`,
 				action,
 				raw_action: r.rawAction,
@@ -108,6 +137,7 @@ export function buildAuditEvents(
 			tsMs: m.tsMs,
 			order: m.line,
 			item: {
+				...NOT_OWNER,
 				id: `metrics:${m.line}`,
 				action: "sidecar_timeout",
 				raw_action: m.event,

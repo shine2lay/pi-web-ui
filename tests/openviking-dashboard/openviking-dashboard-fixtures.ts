@@ -381,6 +381,9 @@ const auditEvent = (
 	summary_1line: "Session commit recorded by the commit guard",
 	guard_verdict: "allowed",
 	ts: minutesAgo(5),
+	operation_id: null,
+	outcome: null,
+	undone: null,
 	...over,
 });
 

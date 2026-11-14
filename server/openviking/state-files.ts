@@ -4,11 +4,12 @@
  * History lines are never rewritten, so each reader accepts the contract names (Ops #808-#810)
  * first and the older live names second (G2, G4, G5, G6, G7). JSONL envelopes are read by the contract's key names
  * only (Architecture #523, rm-0964900e): `timestamp`, and on changelog lines `action`/`role`/`uri`/`source`.
- * Read-only: nothing here writes.
+ * Nothing here writes; the Memory Explorer's owner lines are appended by changelog-append.ts and read back here.
  */
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { OWNER_EXPLORER_SOURCE, type OwnerExplorerAction, type OwnerExplorerOutcome } from "./explorer-types.js";
 import type { OpenVikingPendingWtLandSync } from "./types.js";
 import { isSessionUri } from "./uri.js";
 
@@ -227,9 +228,24 @@ export type OpenVikingChangelogAction =
 	| "reject_preference_candidate"
 	| "promote_preference_candidate"
 	| "sync_resource"
-	| "sync_failed";
+	| "sync_failed"
+	| OwnerExplorerAction;
 
+const OWNER_ACTIONS: ReadonlySet<string> = new Set<OwnerExplorerAction>(["owner_edit", "owner_delete", "owner_undo"]);
+const OWNER_OUTCOMES: ReadonlySet<string> = new Set<OwnerExplorerOutcome>([
+	"applied",
+	"cancelled",
+	"not_applied_restart",
+	"failed",
+	"refused",
+	"unconfirmed",
+]);
+
+/** Known raw actions; an owner action counts only on an `owner_explorer` line, which carries no other (R-CHANGELOG-1e). */
 const CHANGELOG_ACTIONS: Record<string, OpenVikingChangelogAction> = {
+	owner_edit: "owner_edit",
+	owner_delete: "owner_delete",
+	owner_undo: "owner_undo",
 	add: "add",
 	update: "update",
 	delete: "delete",
@@ -260,8 +276,36 @@ function isSessionCommit(r: Omit<OpenVikingChangelogRecord, "sessionCommit">): b
 	return r.action === "add" && SESSION_COMMIT_SOURCES.has(r.source) && isSessionUri(r.uri);
 }
 
-/** A memory write: a known action other than a failed resource sync, which wrote nothing (Ops #810). */
-export const isMemoryWrite = (r: OpenVikingChangelogRecord): boolean => r.action !== null && r.action !== "sync_failed";
+function changelogActionOf(rawAction: string, source: string): OpenVikingChangelogAction | null {
+	if (!Object.hasOwn(CHANGELOG_ACTIONS, rawAction)) return null;
+	return OWNER_ACTIONS.has(rawAction) === (source === OWNER_EXPLORER_SOURCE) ? CHANGELOG_ACTIONS[rawAction] : null;
+}
+
+/**
+ * A memory write: a known action other than a failed resource sync, which wrote nothing (Ops #810). An owner line
+ * only when its outcome is `applied`, and an `owner_undo` only when it wrote an edit back (R-CHANGELOG-1e).
+ */
+export function isMemoryWrite(r: OpenVikingChangelogRecord): boolean {
+	if (r.action === null || r.action === "sync_failed") return false;
+	if (r.owner === null) return true;
+	return r.owner.outcome === "applied" && (r.action !== "owner_undo" || r.owner.undoOf === "edit");
+}
+
+/** What an `owner_explorer` line adds (G7); `undone` is derived by its readers, never stored. */
+export interface OpenVikingOwnerChangelogFields {
+	operationId: string | null;
+	outcome: OwnerExplorerOutcome | null;
+	undoOf: "edit" | "delete" | null;
+}
+
+function ownerFieldsOf(obj: Record<string, unknown>): OpenVikingOwnerChangelogFields {
+	const outcome = str(obj.outcome);
+	return {
+		operationId: str(obj.operation_id),
+		outcome: outcome !== null && OWNER_OUTCOMES.has(outcome) ? (outcome as OwnerExplorerOutcome) : null,
+		undoOf: obj.undo_of === "edit" || obj.undo_of === "delete" ? obj.undo_of : null,
+	};
+}
 
 export interface OpenVikingChangelogRecord {
 	line: number;
@@ -277,22 +321,27 @@ export interface OpenVikingChangelogRecord {
 	taskId: string | number | null;
 	uri: string;
 	summary: string;
+	/** Set on a classified owner line (`source: owner_explorer`), null on every other. */
+	owner: OpenVikingOwnerChangelogFields | null;
 }
 
 export async function readChangelogRecords(paths: OpenVikingStatePaths): Promise<OpenVikingChangelogRecord[]> {
 	return (await readJsonl(paths.changelogJsonlPath)).map(({ line, ts, tsMs, obj }) => {
 		const rawAction = str(obj.action) ?? "unknown";
+		const source = str(obj.source) ?? "unknown";
+		const action = changelogActionOf(rawAction, source);
 		const record = {
 			line,
 			ts,
 			tsMs,
 			rawAction,
-			action: CHANGELOG_ACTIONS[rawAction] ?? null,
-			source: str(obj.source) ?? "unknown",
+			action,
+			source,
 			role: str(obj.role),
 			taskId: taskIdOf(obj),
 			uri: str(obj.uri) ?? "",
 			summary: str(obj.summary) ?? "",
+			owner: action !== null && OWNER_ACTIONS.has(action) ? ownerFieldsOf(obj) : null,
 		};
 		return { ...record, sessionCommit: isSessionCommit(record) };
 	});

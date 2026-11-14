@@ -1,9 +1,10 @@
 /**
- * OpenViking Memory Dashboard — read-only HTTP transport to the `:1933` daemon.
+ * OpenViking Memory Dashboard — HTTP transport to the `:1933` daemon.
  *
- * Every call is a GET, or a POST to a read-only search (`/api/v1/search/{find,grep}`), with its own 2000 ms deadline. A missed deadline is retried once with a
+ * Every read is a GET, or a POST to a read-only search (`/api/v1/search/{find,grep}`), with its own 2000 ms deadline. A missed deadline is retried once with a
  * fresh deadline: pi-web-ui's own event loop can stall for ~2 s, and the timer then fires before
- * an answer that already arrived is read. A transport failure (refused, or timed out twice) is
+ * an answer that already arrived is read. The Memory Explorer's two store writes (`writeResult`) are never retried:
+ * a missed answer may have been applied. A transport failure (refused, or timed out twice) is
  * `OpenVikingDaemonUnreachableError`; an answer that is not `{status: "ok"}` is
  * `OpenVikingDaemonRequestError` carrying the upstream error code.
  *
@@ -103,19 +104,22 @@ export class OpenVikingDaemonHttp {
 		path: string,
 		params: Record<string, string>,
 		headers: Record<string, string>,
-		post?: Record<string, unknown>,
+		send: { method: "GET" | "POST" | "DELETE"; body?: Record<string, unknown>; retry: boolean } = {
+			method: "GET",
+			retry: true,
+		},
 	) {
 		const query = new URLSearchParams(params).toString();
 		const url = `${this.daemonUrl}${path}${query ? `?${query}` : ""}`;
 		const init: RequestInit =
-			post === undefined
-				? { method: "GET", headers }
+			send.body === undefined
+				? { method: send.method, headers }
 				: {
-						method: "POST",
+						method: send.method,
 						headers: { ...headers, "Content-Type": "application/json" },
-						body: JSON.stringify(post),
+						body: JSON.stringify(send.body),
 					};
-		const { res, body } = await this.send(path, url, init);
+		const { res, body } = send.retry ? await this.send(path, url, init) : await this.attempt(path, url, init);
 		if (!res.ok || body === null || typeof body !== "object" || body.status !== "ok") {
 			const code = typeof body?.error?.code === "string" ? body.error.code : `HTTP_${res.status}`;
 			const message = typeof body?.error?.message === "string" ? body.error.message : "request failed";
@@ -139,7 +143,25 @@ export class OpenVikingDaemonHttp {
 		body: Record<string, unknown>,
 		headers: Record<string, string> = {},
 	): Promise<unknown> {
-		return (await this.envelope(path, {}, headers, body)).result;
+		return (await this.envelope(path, {}, headers, { method: "POST", body, retry: true })).result;
+	}
+
+	/**
+	 * The `result` of one of the Memory Explorer's two store writes (spec-explorer-writes.md, R-EXPLORER-WRITE-1):
+	 * `POST /api/v1/content/write` with a JSON body, or `DELETE /api/v1/fs` with query params. One attempt only.
+	 */
+	async writeResult(
+		write:
+			| { method: "POST"; path: "/api/v1/content/write"; body: Record<string, unknown> }
+			| { method: "DELETE"; path: "/api/v1/fs"; params: Record<string, string> },
+		headers: Record<string, string>,
+	): Promise<unknown> {
+		const send =
+			write.method === "POST"
+				? { method: write.method, body: write.body, retry: false }
+				: { method: write.method, retry: false };
+		const params = write.method === "DELETE" ? write.params : {};
+		return (await this.envelope(write.path, params, headers, send)).result;
 	}
 
 	/** `/health` answers `{status: "ok", healthy: true}`; anything else counts as down. */

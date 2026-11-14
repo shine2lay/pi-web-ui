@@ -4,8 +4,8 @@
  */
 
 import type {
-	OpenVikingAuditAction,
 	OpenVikingAuditEvent,
+	OpenVikingAuditEventAction,
 	OpenVikingAuditResponse,
 	OpenVikingGuardVerdict,
 } from "../../../server/openviking/types.js";
@@ -36,12 +36,14 @@ export function buildAuditStatus(audit: OpenVikingSlice<OpenVikingAuditResponse>
  * The five contract actions (spec.md §3). A `role_memory_write` is a role writing its own memory —
  * only a session committing its own work is a commit, so the two never share a word.
  */
-const ACTION_LABELS: Record<OpenVikingAuditAction, string> = {
+const ACTION_LABELS: Record<OpenVikingAuditEventAction, string> = {
 	commit: "Session commit",
 	role_memory_write: "Role memory write",
 	promote_shared: "Promoted to shared",
 	reject_noise: "Rejected as noise",
 	sidecar_timeout: "Sidecar timeout",
+	owner_edit: "Owner edit",
+	owner_delete: "Owner delete",
 };
 
 const GUARD_LABELS: Record<OpenVikingGuardVerdict, string> = {

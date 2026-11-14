@@ -17,6 +17,11 @@ export function okResult<T>(body: T): OpenVikingRouteResult<T> {
 	return { status: 200, headers: NO_STORE, body };
 }
 
+/** `202`: taken, not done yet (the Memory Explorer's held delete). */
+export function acceptedResult<T>(body: T): OpenVikingRouteResult<T> {
+	return { status: 202, headers: NO_STORE, body };
+}
+
 export function methodNotAllowedResult(
 	method: string,
 	path: string,
