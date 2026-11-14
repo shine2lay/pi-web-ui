@@ -1,0 +1,38 @@
+{
+	"about": "Ops #895 BROWSER-ORIGIN-DENY-1: the same vectors in pi-worktree tests/fixtures/ and pi-web-ui tests/unit/; both test files pin this file's sha256, so the two origin matchers stay in step. Denied = the two built-in origins.",
+	"urls": [
+		{ "url": "https://pi.wai2shine.com", "origin": "https://pi.wai2shine.com", "denied": true },
+		{ "url": "https://pi.wai2shine.com/c/123?x=1#y", "origin": "https://pi.wai2shine.com", "denied": true },
+		{ "url": "https://PI.Wai2Shine.com:443/", "origin": "https://pi.wai2shine.com", "denied": true },
+		{ "url": "https://user:pw@pi.wai2shine.com/", "origin": "https://pi.wai2shine.com", "denied": true },
+		{
+			"url": "https://spark.tailbb5055.ts.net:8787/",
+			"origin": "https://spark.tailbb5055.ts.net:8787",
+			"denied": true
+		},
+		{
+			"url": "https://spark.tailbb5055.ts.net:8787/api/chats",
+			"origin": "https://spark.tailbb5055.ts.net:8787",
+			"denied": true
+		},
+		{ "url": "https://example.com/", "origin": "https://example.com", "denied": false },
+		{ "url": "http://127.0.0.1:8787/", "origin": "http://127.0.0.1:8787", "denied": false },
+		{ "url": "http://localhost:8787/chat", "origin": "http://localhost:8787", "denied": false },
+		{
+			"url": "https://pi.wai2shine.com.evil.example/",
+			"origin": "https://pi.wai2shine.com.evil.example",
+			"denied": false
+		},
+		{ "url": "https://evil.example/?next=https://pi.wai2shine.com", "origin": "https://evil.example", "denied": false },
+		{ "url": "about:blank", "origin": null, "denied": false },
+		{ "url": "not a url", "origin": null, "denied": false }
+	],
+	"texts": [
+		{ "text": "fetch(\"https://pi.wai2shine.com/api/chats\")", "denied": "https://pi.wai2shine.com" },
+		{ "text": "location = '//PI.WAI2SHINE.COM/'", "denied": "https://pi.wai2shine.com" },
+		{ "text": "open spark.tailbb5055.ts.net:8787/api", "denied": "https://spark.tailbb5055.ts.net:8787" },
+		{ "text": "go to http://127.0.0.1:8787/chat", "denied": null },
+		{ "text": "https://example.com/page", "denied": null },
+		{ "text": "http://localhost:8787/", "denied": null }
+	]
+}
