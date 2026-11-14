@@ -132,6 +132,28 @@ describe("delete", () => {
 	});
 });
 
+describe("each change is confirmed with the owner's passkey", () => {
+	it("a save the owner didn't confirm keeps his text and says why", async () => {
+		page = await mountExplorer(fakeApi({ fail: { save: "NOT_CONFIRMED" } }));
+		await editTo(page.container, "Shorter text");
+		await click(oneByRole(dialog() as HTMLElement, "button", "Save"));
+		const said = text(oneByRole(page.container, "alert"));
+		expect(said).toContain("Not saved: you didn't confirm with your passkey. Your text is still here.");
+		expect((oneByRole(page.container, "textbox", FULL_TEXT_BOX) as HTMLTextAreaElement).value).toBe("Shorter text");
+	});
+
+	it("a delete the owner didn't confirm leaves the note", async () => {
+		page = await mountExplorer(fakeApi({ fail: { remove: "NOT_CONFIRMED" } }));
+		await openCase(page.container);
+		await click(oneByRole(page.container, "button", "Delete"));
+		await click(oneByRole(dialog() as HTMLElement, "button", "Delete note"));
+		expect(text(oneByRole(page.container, "alert"))).toContain(
+			"Not deleted: you didn't confirm with your passkey. The note is still there.",
+		);
+		expect(text(page.container)).not.toContain("This note was deleted");
+	});
+});
+
 describe("undo and the change list", () => {
 	it("Undo within the window reverts the change and the list marks it undone", async () => {
 		const api = fakeApi();
@@ -159,6 +181,26 @@ describe("undo and the change list", () => {
 		vi.advanceTimersByTime(1_100);
 		await flush();
 		expect(maybeByRole(page.container, "button", "Undo")).toBeNull();
+	});
+
+	it("an Undo of a delete the owner didn't confirm still keeps the note (R-OWNER-UNDO-1)", async () => {
+		const api = fakeApi({ fail: { undo: "NOT_CONFIRMED" } });
+		page = await mountExplorer(api);
+		await openCase(page.container);
+		await click(oneByRole(page.container, "button", "Delete"));
+		await click(oneByRole(dialog() as HTMLElement, "button", "Delete note"));
+		await click(oneByRole(oneByRole(page.container, "status", /Deleted/), "button", "Undo"));
+		const said = text(oneByRole(page.container, "alert", /Undo/));
+		expect(said).toContain("You didn't confirm Undo, but the delete was stopped: the note is kept.");
+		expect(text(page.container)).not.toContain("This note was deleted");
+	});
+
+	it("an Undo of an edit the owner didn't confirm keeps the change", async () => {
+		page = await mountExplorer(fakeApi({ fail: { undo: "NOT_CONFIRMED" } }));
+		await editTo(page.container, "Shorter text");
+		await click(oneByRole(dialog() as HTMLElement, "button", "Save"));
+		await click(oneByRole(oneByRole(page.container, "status", /Saved/), "button", "Undo"));
+		expect(text(oneByRole(page.container, "alert", /Undo/))).toContain("You didn't confirm Undo, so your change stays.");
 	});
 
 	it("hides Changes you made until the first change", async () => {

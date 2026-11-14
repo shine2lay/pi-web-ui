@@ -70,6 +70,31 @@ describe("reads", () => {
 		await expect(api.roots()).rejects.toMatchObject({ code: "OWNER_ONLY" });
 	});
 
+	it("pauses a read the owner check refused until he signs in, then asks again once", async () => {
+		let signedIn = false;
+		const fetch = vi.fn(async () =>
+			signedIn
+				? new Response(JSON.stringify(ROOTS), { status: 200 })
+				: new Response(JSON.stringify({ error: { code: "OWNER_ONLY" } }), { status: 403 }),
+		);
+		const onOwnerOnly = vi.fn(async () => {
+			signedIn = true;
+		});
+		const roots = await createHttpExplorerApi({ fetch, onOwnerOnly }).roots();
+		expect(roots).toHaveLength(1);
+		expect(onOwnerOnly).toHaveBeenCalledTimes(1);
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it("answers OWNER_ONLY when the owner closes the sign-in instead", async () => {
+		const { fetch, sent } = server({ "GET /tree/roots": { status: 403, body: { error: { code: "OWNER_ONLY" } } } });
+		const onOwnerOnly = vi.fn(async () => {
+			throw new ExplorerApiError("OWNER_ONLY", "not now");
+		});
+		await expect(createHttpExplorerApi({ fetch, onOwnerOnly }).roots()).rejects.toMatchObject({ code: "OWNER_ONLY" });
+		expect(sent).toHaveLength(1);
+	});
+
 	it("keeps a folder too big to count as not counted, never 0", async () => {
 		const { fetch } = server({
 			"GET /tree": {
