@@ -21,6 +21,7 @@ import {
 	type PageCallRequest,
 	type PageCallResult,
 } from "../../server/agent-service.js";
+import { ORIGIN_CHECK_ARG } from "../../server/browser-page-origin-guard.js";
 import { AGENT_TOOL_CATALOG, BROWSER_PAGE_TOOL_NAME, defaultDisabledAgentTools } from "../../server/tool-manager.js";
 
 /** 页面调用桥的真实实现 + 只补最小私有字段（见文件头取舍说明）。 */
@@ -41,7 +42,10 @@ function pageBridge(opts: { sinks?: number; disposed?: boolean } = {}) {
 	return calls;
 }
 
-/** 构造最小 clientSession mock：记录收到的请求，返回预设结果。 */
+/** 构造最小 clientSession mock：记录收到的请求，返回预设结果。
+ *  The origin guard's own read-only probe (BROWSER-ORIGIN-DENY-1, Ops #896) is answered here as an
+ *  ordinary allowed page (no paired pages, no frames) and not recorded; its own cases live in
+ *  browser-page-origin-guard.test.ts. */
 function mockSession(behave: (req: PageCallRequest) => Promise<PageCallResult>) {
 	const invoked = {
 		reqs: [] as PageCallRequest[],
@@ -50,7 +54,10 @@ function mockSession(behave: (req: PageCallRequest) => Promise<PageCallResult>) 
 	};
 	return {
 		invoked,
-		pageCall: (req: PageCallRequest, sig: { aborted?: boolean }, ownerId?: string) => {
+		pageCall: async (req: PageCallRequest, sig: { aborted?: boolean }, ownerId?: string): Promise<PageCallResult> => {
+			if (req.args?.[ORIGIN_CHECK_ARG] !== undefined) {
+				return req.op === "pages" ? { ok: true, result: { pages: [] } } : { ok: true, result: { count: 0 } };
+			}
 			invoked.reqs.push(req);
 			invoked.ownerIds.push(ownerId);
 			invoked.sig = sig;

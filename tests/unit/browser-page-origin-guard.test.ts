@@ -1,8 +1,7 @@
 /**
  * browser_page refuses the chat app's origins (rule BROWSER-ORIGIN-DENY-1, Ops #895, Security rm-868b482d R2):
- * the acceptance cases, written by the seam task (rule 18 Task 1) before the guard is built. Each is marked
- * `todo` so the suite stays green while it fails; task 2 removes TODO and turns them green, and may never
- * weaken or delete an assertion. To see them fail now: BROWSER_ORIGIN_DENY_ACCEPTANCE=1 npx vitest run <this file>.
+ * the acceptance cases, written by the seam task (rule 18 Task 1) before the guard was built. Built in Ops #896:
+ * every case now runs (no longer `todo`); none may be weakened or deleted.
  * The owner's browser is a fake probe and a fake page bridge in this file: no browser, extension or page is touched.
  */
 import { createHash } from "node:crypto";
@@ -24,7 +23,8 @@ import {
 	type PairedPage,
 } from "../../server/browser-page-origin-guard.js";
 
-const TODO = { todo: process.env.BROWSER_ORIGIN_DENY_ACCEPTANCE !== "1" };
+/** Test options for every acceptance case: none are `todo` any more (Ops #896 built the guard). */
+const TODO = {};
 const DENIED = ["https://pi.wai2shine.com", "https://spark.tailbb5055.ts.net:8787"];
 const ALLOWED = ["https://example.com", "http://127.0.0.1:8787", "http://localhost:8787"];
 const SECRET_TITLE = "Owner's secret chat";

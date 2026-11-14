@@ -61,6 +61,7 @@ import {
 import { FOLD_QUIET_MS, foldedMessagesOf, isAcpFoldEntry, isAcpFoldResult } from "./acp-fold.js";
 import { Type } from "typebox";
 import { BgServerTracker } from "./bg-servers.js";
+import { originGuardedPageCall } from "./browser-page-origin-guard.js";
 import { MAX_OPEN_CONVERSATIONS } from "./conversation-limits.js";
 import {
 	BlankChatSweep,
@@ -1791,16 +1792,15 @@ export function makeBrowserPageTool(
 			if (!op) {
 				throw new Error('browser_page requires a non-empty `op` (e.g. "pages", "read", "click").');
 			}
-			const resolved = await clientSession.pageCall(
+			const resolved = await originGuardedPageCall(
+				(r, s, c) => clientSession.pageCall(r, s, c),
 				{
 					op,
 					args: collectBrowserPageArgs(p),
 					target: typeof p.target === "string" && p.target.length > 0 ? p.target : undefined,
 					timeoutMs: normalizePageCallTimeoutMs(p.timeoutMs),
 				},
-				{
-					aborted: signal?.aborted,
-				},
+				{ aborted: signal?.aborted },
 				ownerId,
 			);
 			if (!resolved.ok) {
