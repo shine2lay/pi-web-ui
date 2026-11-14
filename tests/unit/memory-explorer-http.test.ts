@@ -164,7 +164,9 @@ describe("writes are confirmed by the owner's passkey, one operation at a time",
 
 	it("confirms a delete and an undo with their own operations", async () => {
 		const { fetch, sent } = server({
-			"DELETE /note": { body: { operation_id: "op-2", uri: NOTE, state: "pending", applies_at: "2026-11-14T01:26:10Z" } },
+			"DELETE /note": {
+				body: { operation_id: "op-2", uri: NOTE, state: "pending", applies_at: "2026-11-14T01:26:10Z" },
+			},
 			"POST /undo": { body: { operation_id: "op-2", state: "cancelled" } },
 		});
 		const ops: OwnerWriteOp[] = [];

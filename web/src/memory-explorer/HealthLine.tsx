@@ -13,6 +13,15 @@ export function HealthLine({ health, nowMs, onRetry }: { health: Load<MemoryHeal
 			</p>
 		);
 	}
+	if (health.status === "failed" && health.code === "OWNER_ONLY") {
+		return (
+			<p className="mx-health" data-tone="wait" role="status">
+				<span className="mx-dot" aria-hidden="true" />
+				<b>Signed out</b>
+				<span>memory opens with your passkey</span>
+			</p>
+		);
+	}
 	const h = health.data;
 	if (health.status === "failed" || !h || h.state === "down") {
 		const since = h?.lastSeenUpAt ? `since ${clock(h.lastSeenUpAt)} · ` : "";

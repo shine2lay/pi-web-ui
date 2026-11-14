@@ -9,10 +9,7 @@
  * owner sign-in supplies (`ownerAssertion`, spec-explorer-owner.md); the browser adds the `Origin`.
  */
 
-import type {
-	OpenVikingAuditResponse,
-	OpenVikingOverviewResponse,
-} from "../../../server/openviking/types.js";
+import type { OpenVikingAuditResponse, OpenVikingOverviewResponse } from "../../../server/openviking/types.js";
 import type {
 	OpenVikingNoteDeleteResponse,
 	OpenVikingNoteEditResponse,
@@ -43,6 +40,7 @@ import {
 	type SearchHit,
 	type SearchRequest,
 } from "./explorer-api.js";
+import { explorerErrorOf } from "./owner-session.js";
 
 const API = "/api/openviking";
 /** One `tree/roots` answer serves health, the places and the recent list asked within this time. */
@@ -77,6 +75,11 @@ export interface HttpExplorerOptions {
 	 * it every write is refused before anything is sent.
 	 */
 	readonly ownerAssertion?: (op: OwnerWriteOp) => Promise<string>;
+	/**
+	 * A read was refused because the owner isn't signed in (no session, or it ended): resolves once he
+	 * signed in, and the read is asked again once; rejects when he chose not to.
+	 */
+	readonly onOwnerOnly?: () => Promise<void>;
 }
 
 /** Lowercase hex sha256 of the exact body bytes a write sends (the op's `body_sha256`). */
@@ -203,13 +206,16 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 	const now = options.now ?? Date.now;
 	let shared: { at: number; answer: Promise<OpenVikingTreeRootsResponse> } | null = null;
 
-	async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
+	async function call<T>(path: string, init: RequestInit = {}, signInFirst = true): Promise<T> {
 		const response = await fetchImpl(appUrl(`${API}${path}`), {
 			...init,
 			headers: { accept: "application/json", ...init.headers },
 		});
-		if (!response.ok) throw await refusal(response);
-		return (await response.json()) as T;
+		if (response.ok) return (await response.json()) as T;
+		const error = await refusal(response);
+		if (error.code !== "OWNER_ONLY" || !signInFirst || !options.onOwnerOnly) throw error;
+		await options.onOwnerOnly();
+		return call<T>(path, init, false);
 	}
 	/**
 	 * One write: the owner confirms this exact operation with his passkey first (R-OWNER-WRITE-2), then
@@ -217,16 +223,26 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 	 */
 	async function write<T>(path: string, op: OwnerWriteOp, body: string | undefined): Promise<T> {
 		if (!options.ownerAssertion) throw new ExplorerApiError("OWNER_ONLY", "Owner sign-in isn't set up on this page.");
-		const assertion = await options.ownerAssertion(op);
-		return call<T>(path, {
-			method: op.method,
-			headers: {
-				"content-type": "application/json",
-				[OWNER_WRITE_HEADER]: "1",
-				[OWNER_ASSERTION_HEADER]: assertion,
+		let assertion: string;
+		try {
+			assertion = await options.ownerAssertion(op);
+		} catch (error) {
+			throw explorerErrorOf(error);
+		}
+		// The assertion is single-use: a refused write is not asked again.
+		return call<T>(
+			path,
+			{
+				method: op.method,
+				headers: {
+					"content-type": "application/json",
+					[OWNER_WRITE_HEADER]: "1",
+					[OWNER_ASSERTION_HEADER]: assertion,
+				},
+				...(body === undefined ? {} : { body }),
 			},
-			...(body === undefined ? {} : { body }),
-		});
+			false,
+		);
 	}
 
 	/** Not tied to one caller's signal: health, places and recent share it. */
@@ -289,17 +305,30 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 			const [answer, overview, places] = await Promise.all([
 				call<OpenVikingTreeFolderResponse>(`/tree?${query}`, { signal }),
 				// Only the first page shows the folder's overview; a missing one never fails the listing.
-				offset === 0 ? note(uri, "overview", signal).then((n) => n.text, () => null) : Promise.resolve(null),
+				offset === 0
+					? note(uri, "overview", signal).then(
+							(n) => n.text,
+							() => null,
+						)
+					: Promise.resolve(null),
 				roots().catch(() => []),
 			]);
-			return listingFromFolder(answer, overview, offset, places.find((r) => r.uri === uri));
+			return listingFromFolder(
+				answer,
+				overview,
+				offset,
+				places.find((r) => r.uri === uri),
+			);
 		},
 		async read(uri, signal): Promise<NoteDetail> {
 			try {
 				// A note's own one-line summary exists only in search hits; the store answers its folder's (D1).
 				const [full, overview, abstract] = await Promise.all([
 					note(uri, "full", signal),
-					note(uri, "overview", signal).then((n) => n.text, () => null),
+					note(uri, "overview", signal).then(
+						(n) => n.text,
+						() => null,
+					),
 					note(uri, "abstract", signal).then(
 						(n) => n,
 						() => null,

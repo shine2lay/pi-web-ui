@@ -51,7 +51,15 @@ function saveFailedText(code: ExplorerErrorCode): string {
 	if (code === "CHANGED_SINCE_OPENED") {
 		return "Couldn't save: this note changed since you opened it. Your text is still here; copy it, then open the note again.";
 	}
+	if (code === "NOT_CONFIRMED") return "Not saved: you didn't confirm with your passkey. Your text is still here.";
+	if (code === "OWNER_ONLY") return "Not saved: your passkey wasn't accepted. Your text is still here.";
 	return "Couldn't save: memory didn't answer. Your text is still here.";
+}
+
+function deleteFailedText(code: ExplorerErrorCode): string {
+	if (code === "NOT_CONFIRMED") return "Not deleted: you didn't confirm with your passkey. The note is still there.";
+	if (code === "OWNER_ONLY") return "Not deleted: your passkey wasn't accepted. The note is still there.";
+	return "Couldn't delete: memory didn't answer. The note is still there.";
 }
 
 function changedByWords(role: string | null): string {
@@ -64,7 +72,7 @@ export function NoteReader(props: NoteReaderProps) {
 	const note = useLoad(uri, (signal) => api.read(uri, signal));
 	const [draft, setDraft] = useState<string | null>(null);
 	const [saveError, setSaveError] = useState<ExplorerErrorCode | null>(null);
-	const [deleteFailed, setDeleteFailed] = useState(false);
+	const [deleteFailed, setDeleteFailed] = useState<ExplorerErrorCode | null>(null);
 	const [deleted, setDeleted] = useState(false);
 	const [editedAt, setEditedAt] = useState<string | null>(null);
 	const titleRef = useFocusOnOpen<HTMLHeadingElement>(note.load.status === "ready", uri);
@@ -127,7 +135,7 @@ export function NoteReader(props: NoteReaderProps) {
 		}
 	};
 	const remove = async () => {
-		setDeleteFailed(false);
+		setDeleteFailed(null);
 		try {
 			const record = await api.remove(uri);
 			setDeleted(true);
@@ -135,8 +143,8 @@ export function NoteReader(props: NoteReaderProps) {
 				setDeleted(false);
 				note.reload();
 			});
-		} catch {
-			setDeleteFailed(true);
+		} catch (error) {
+			setDeleteFailed(errorCode(error));
 		}
 	};
 	const askSave = () => {
@@ -243,7 +251,7 @@ export function NoteReader(props: NoteReaderProps) {
 			) : null}
 			{deleteFailed ? (
 				<p className="mx-error" role="alert">
-					Couldn't delete: memory didn't answer. The note is still there.{" "}
+					{deleteFailedText(deleteFailed)}{" "}
 					<button type="button" className="mx-btn" onClick={() => void remove()}>
 						Try again
 					</button>
@@ -255,9 +263,7 @@ export function NoteReader(props: NoteReaderProps) {
 					["Kind", kindWord(uri)],
 					[
 						"Changed",
-						editedAt
-							? "just now, by you"
-							: `${ago(detail.item.changedAt, nowMs)}${changedByWords(detail.changedBy)}`,
+						editedAt ? "just now, by you" : `${ago(detail.item.changedAt, nowMs)}${changedByWords(detail.changedBy)}`,
 					],
 					["Length", lengthWords(detail.item.size)],
 				]}

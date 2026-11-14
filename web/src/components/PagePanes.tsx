@@ -14,9 +14,7 @@ const RolesExactView = lazy(() => import("./RolesExactView").then((m) => ({ defa
 // initiatives-page-exact (#225): the supplied design; the old InitiativesView stays in source, unmounted.
 const InitiativesPage = lazy(() => import("./InitiativesPage").then((m) => ({ default: m.InitiativesPage })));
 // openviking-dashboard: the Memory tab, a memory explorer (design #316).
-const MemoryExplorerPage = lazy(() =>
-	import("./MemoryExplorerPage").then((m) => ({ default: m.MemoryExplorerPage })),
-);
+const MemoryExplorerPage = lazy(() => import("./MemoryExplorerPage").then((m) => ({ default: m.MemoryExplorerPage })));
 
 export interface PagePanesProps {
 	/** The view shown right now (any of the app's views, not only these three). */

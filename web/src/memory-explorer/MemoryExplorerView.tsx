@@ -16,7 +16,13 @@ import {
 	type UndoOffer,
 	UndoToast,
 } from "./ChangeParts.js";
-import type { MemoryExplorerApi, MemoryItem, SearchMode, SearchScope } from "./explorer-api.js";
+import {
+	errorCode,
+	type MemoryExplorerApi,
+	type MemoryItem,
+	type SearchMode,
+	type SearchScope,
+} from "./explorer-api.js";
 import { ExplorerTree } from "./ExplorerTree.js";
 import { clock, folderLabel } from "./explorer-text.js";
 import { FindPanel } from "./FindPanel.js";
@@ -41,6 +47,8 @@ export interface MemoryExplorerViewProps {
 	readonly now?: () => number;
 	/** The owner's passkey sign-in, shown in place of the notes while memory asks who is looking. */
 	readonly signIn?: ReactNode;
+	/** The owner's Sign out and Passkeys, at the end of the header. */
+	readonly account?: ReactNode;
 }
 
 function OwnerOnly({ signIn }: { signIn: ReactNode }) {
@@ -59,7 +67,7 @@ function backLabel(previous: Place | undefined, searching: boolean): string | nu
 	return `Back to ${folderLabel(previous.uri)}`;
 }
 
-export function MemoryExplorerView({ api, now = Date.now, signIn }: MemoryExplorerViewProps) {
+export function MemoryExplorerView({ api, now = Date.now, signIn, account }: MemoryExplorerViewProps) {
 	const health = useLoad("health", (signal) => api.health(signal));
 	const roots = useLoad("roots", (signal) => api.roots(signal));
 	const recorded = useLoad("changes", (signal) => api.changes(signal));
@@ -79,7 +87,7 @@ export function MemoryExplorerView({ api, now = Date.now, signIn }: MemoryExplor
 	const [ask, setAsk] = useState<ConfirmAsk | null>(null);
 	const [offer, setOffer] = useState<UndoOffer | null>(null);
 	const [changes, setChanges] = useState<MadeChange[]>([]);
-	const [undoFailed, setUndoFailed] = useState(false);
+	const [undoFailed, setUndoFailed] = useState<string | null>(null);
 	const workRef = useRef<HTMLDivElement>(null);
 	const seqRef = useRef(0);
 	const nowMs = now();
@@ -126,21 +134,30 @@ export function MemoryExplorerView({ api, now = Date.now, signIn }: MemoryExplor
 	const host: ChangeHost = {
 		confirm: setAsk,
 		made(change, record, afterUndo) {
-			setUndoFailed(false);
+			setUndoFailed(null);
 			setChanges((list) => [{ ...change, when: clock(record.at), undone: false }, ...list]);
 			recent.reload();
 			setOffer({
 				id: record.id,
 				message: `${change.what === "Deleted" ? "Deleted" : "Saved"} “${change.title}”.`,
 				onUndo: () => {
-					api.undo(record.id).then(
-						() => {
-							setChanges((list) => list.map((c) => (c.id === change.id ? { ...c, undone: true } : c)));
-							recent.reload();
-							afterUndo();
-						},
-						() => setUndoFailed(true),
-					);
+					const undone = () => {
+						setChanges((list) => list.map((c) => (c.id === change.id ? { ...c, undone: true } : c)));
+						recent.reload();
+						afterUndo();
+					};
+					api.undo(record.id).then(undone, (error: unknown) => {
+						const deleting = change.what === "Deleted";
+						if (errorCode(error) !== "NOT_CONFIRMED") {
+							setUndoFailed("Couldn't undo: memory didn't answer. The change stays.");
+						} else if (deleting) {
+							// Asking to undo holds a delete; a hold the owner didn't confirm cancels it (R-OWNER-UNDO-1).
+							undone();
+							setUndoFailed("You didn't confirm Undo, but the delete was stopped: the note is kept.");
+						} else {
+							setUndoFailed("You didn't confirm Undo, so your change stays.");
+						}
+					});
 				},
 			});
 		},
@@ -212,7 +229,10 @@ export function MemoryExplorerView({ api, now = Date.now, signIn }: MemoryExplor
 							Everything your chats have saved: find it, read it, see where it lives, fix or delete it.
 						</p>
 					</div>
-					<HealthLine health={health.load} nowMs={nowMs} onRetry={reloadAll} />
+					<div className="mx-head-side">
+						<HealthLine health={health.load} nowMs={nowMs} onRetry={reloadAll} />
+						{account}
+					</div>
 				</header>
 				<div className="mx-layout">
 					<div className="mx-work" ref={workRef}>
@@ -245,7 +265,7 @@ export function MemoryExplorerView({ api, now = Date.now, signIn }: MemoryExplor
 			{offer ? <UndoToast offer={offer} onGone={dropOffer} /> : null}
 			{undoFailed ? (
 				<p className="mx-toast" role="alert">
-					Couldn't undo: memory didn't answer. The change stays.
+					{undoFailed}
 				</p>
 			) : null}
 		</>

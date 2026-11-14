@@ -200,7 +200,9 @@ describe("undo and the change list", () => {
 		await editTo(page.container, "Shorter text");
 		await click(oneByRole(dialog() as HTMLElement, "button", "Save"));
 		await click(oneByRole(oneByRole(page.container, "status", /Saved/), "button", "Undo"));
-		expect(text(oneByRole(page.container, "alert", /Undo/))).toContain("You didn't confirm Undo, so your change stays.");
+		expect(text(oneByRole(page.container, "alert", /Undo/))).toContain(
+			"You didn't confirm Undo, so your change stays.",
+		);
 	});
 
 	it("hides Changes you made until the first change", async () => {

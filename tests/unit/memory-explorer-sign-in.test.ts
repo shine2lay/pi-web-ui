@@ -11,7 +11,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryExplorerPage } from "../../web/src/components/MemoryExplorerPage.js";
 import type { OwnerWebAuthn } from "../../web/src/memory-explorer/owner-session.js";
-import { byRole, click, flush, maybeByRole, oneByRole, pressKey, text, typeInto } from "./memory-explorer/explorer-dom.js";
+import {
+	byRole,
+	click,
+	flush,
+	maybeByRole,
+	oneByRole,
+	pressKey,
+	text,
+	typeInto,
+} from "./memory-explorer/explorer-dom.js";
 
 const SHARED = "viking://user/default/memories";
 const NOTE = `${SHARED}/preferences/ui_ux_design.md`;

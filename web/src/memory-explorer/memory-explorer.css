@@ -13,6 +13,7 @@
 
 @import "./memory-explorer-work.css";
 @import "./memory-explorer-reader.css";
+@import "./memory-explorer-owner.css";
 
 .openviking-pane {
 	overflow-y: auto;

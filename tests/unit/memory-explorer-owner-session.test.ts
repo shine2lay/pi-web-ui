@@ -75,7 +75,9 @@ describe("sign in", () => {
 		const { fetch } = server({ "POST session/options": { body: CEREMONY } });
 		const webauthn = prompt();
 		const inner = Object.assign(new Error("denied"), { name: "NotAllowedError" });
-		webauthn.authenticate.mockRejectedValueOnce(Object.assign(new Error("wrapped"), { name: "WebAuthnError", cause: inner }));
+		webauthn.authenticate.mockRejectedValueOnce(
+			Object.assign(new Error("wrapped"), { name: "WebAuthnError", cause: inner }),
+		);
 		await expect(createOwnerSession({ fetch, webauthn }).signIn()).rejects.toMatchObject({ code: "CANCELLED" });
 	});
 });

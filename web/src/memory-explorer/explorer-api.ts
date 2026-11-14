@@ -137,6 +137,8 @@ export interface ChangeRecord {
 export type ExplorerErrorCode =
 	| "MEMORY_DOWN"
 	| "OWNER_ONLY"
+	/** The owner closed his passkey prompt for this change: nothing was written. */
+	| "NOT_CONFIRMED"
 	| "CHANGED_SINCE_OPENED"
 	| "LOCKED"
 	| "OUTSIDE_ROOTS"

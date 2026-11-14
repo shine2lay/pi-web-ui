@@ -1,0 +1,76 @@
+/* The owner's sign-in, passkeys and account buttons on the Memory page (design #316). The boxes use
+   the confirm's look (`.mx-confirm` in `memory-explorer-reader.css`). */
+
+.mx-head-side {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 16px;
+}
+.mx-account {
+	display: flex;
+	gap: 8px;
+}
+.mx-account .mx-btn {
+	min-height: 36px;
+}
+.mx-owner .mx-actions {
+	align-items: center;
+}
+.mx-owner-alt {
+	margin: 16px 0 0;
+	padding-top: 12px;
+	border-top: 1px solid var(--border-soft);
+	font-size: var(--mx-meta);
+}
+.mx-owner-alt .mx-link {
+	min-height: 32px;
+}
+.mx-owner-form label {
+	display: block;
+	font-weight: 600;
+	margin-bottom: 6px;
+	color: var(--text);
+}
+.mx-owner-form input {
+	width: 100%;
+	box-sizing: border-box;
+	min-height: 44px;
+	padding: 8px 12px;
+	background: var(--bg);
+	color: var(--text);
+	border: 2px solid var(--border);
+	border-radius: var(--mx-r-md);
+	font: inherit;
+}
+.mx-owner-form input:focus {
+	border-color: var(--accent);
+	outline: none;
+}
+.mx-owner .mx-error {
+	margin-top: 12px;
+}
+.mx-passkeys {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.mx-passkeys li {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 0;
+}
+.mx-passkeys li + li {
+	border-top: 1px solid var(--border-soft);
+}
+@media (max-width: 640px) {
+	.mx-head-side {
+		width: 100%;
+		justify-content: space-between;
+	}
+	.mx-owner .mx-actions .mx-btn {
+		flex: 1 1 auto;
+	}
+}

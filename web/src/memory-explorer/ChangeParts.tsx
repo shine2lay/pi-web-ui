@@ -3,10 +3,10 @@
  * Escape closes, focus goes back where it was), the 10 s Undo toast, and "Changes you made".
  */
 
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { ChangeRecord } from "./explorer-api.js";
 import { clock, keptIn, noteTitle } from "./explorer-text.js";
-import { holdBackgroundInert } from "./modal-inert.js";
+import { ModalBox } from "./ModalBox.js";
 
 export const UNDO_WINDOW_MS = 10_000;
 
@@ -19,74 +19,27 @@ export interface ConfirmAsk {
 }
 
 export function ConfirmDialog({ ask, onClose }: { ask: ConfirmAsk; onClose(): void }) {
-	const boxRef = useRef<HTMLDivElement>(null);
 	const cancelRef = useRef<HTMLButtonElement>(null);
-
-	useEffect(() => {
-		const box = boxRef.current as HTMLDivElement;
-		const doc = box.ownerDocument;
-		const returnTo = doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
-		const release = holdBackgroundInert(box);
-		cancelRef.current?.focus();
-		const closeOnEscape = (event: KeyboardEvent) => {
-			if (event.key !== "Escape" || event.defaultPrevented) return;
-			event.preventDefault();
-			onClose();
-		};
-		doc.addEventListener("keydown", closeOnEscape);
-		return () => {
-			doc.removeEventListener("keydown", closeOnEscape);
-			release();
-			if (returnTo?.isConnected) returnTo.focus();
-		};
-	}, [onClose]);
-
-	// Tab and Shift+Tab stay inside the confirm.
-	const keepFocusInside = (event: ReactKeyboardEvent) => {
-		if (event.key !== "Tab") return;
-		const buttons = [...(boxRef.current?.querySelectorAll<HTMLElement>("button") ?? [])];
-		const first = buttons[0];
-		const last = buttons[buttons.length - 1];
-		const active = boxRef.current?.ownerDocument.activeElement;
-		if (!event.shiftKey && active === last) {
-			event.preventDefault();
-			first?.focus();
-		} else if (event.shiftKey && active === first) {
-			event.preventDefault();
-			last?.focus();
-		}
-	};
-
 	return (
-		<div className="mx-scrim">
-			<div
-				ref={boxRef}
-				className="mx-confirm"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="mx-confirm-title"
-				aria-describedby="mx-confirm-body"
-				onKeyDown={keepFocusInside}
-			>
-				<h2 id="mx-confirm-title">{ask.title}</h2>
-				<p id="mx-confirm-body">{ask.body}</p>
-				<div className="mx-actions">
-					<button ref={cancelRef} type="button" className="mx-btn" onClick={onClose}>
-						Cancel
-					</button>
-					<button
-						type="button"
-						className={ask.danger ? "mx-btn mx-btn-danger" : "mx-btn mx-btn-solid"}
-						onClick={() => {
-							onClose();
-							ask.onYes();
-						}}
-					>
-						{ask.yes}
-					</button>
-				</div>
+		<ModalBox labelledBy="mx-confirm-title" describedBy="mx-confirm-body" initialFocus={cancelRef} onClose={onClose}>
+			<h2 id="mx-confirm-title">{ask.title}</h2>
+			<p id="mx-confirm-body">{ask.body}</p>
+			<div className="mx-actions">
+				<button ref={cancelRef} type="button" className="mx-btn" onClick={onClose}>
+					Cancel
+				</button>
+				<button
+					type="button"
+					className={ask.danger ? "mx-btn mx-btn-danger" : "mx-btn mx-btn-solid"}
+					onClick={() => {
+						onClose();
+						ask.onYes();
+					}}
+				>
+					{ask.yes}
+				</button>
 			</div>
-		</div>
+		</ModalBox>
 	);
 }
 
