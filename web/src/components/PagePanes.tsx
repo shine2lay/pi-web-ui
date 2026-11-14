@@ -13,9 +13,9 @@ import type { UsefulOpenTarget } from "../roles-useful-model";
 const RolesExactView = lazy(() => import("./RolesExactView").then((m) => ({ default: m.RolesExactView })));
 // initiatives-page-exact (#225): the supplied design; the old InitiativesView stays in source, unmounted.
 const InitiativesPage = lazy(() => import("./InitiativesPage").then((m) => ({ default: m.InitiativesPage })));
-// openviking-dashboard: the Memory tab (what OpenViking injects and commits, and what memory holds).
-const OpenVikingDashboardPage = lazy(() =>
-	import("./OpenVikingDashboardPage").then((m) => ({ default: m.OpenVikingDashboardPage })),
+// openviking-dashboard: the Memory tab, a memory explorer (design #316).
+const MemoryExplorerPage = lazy(() =>
+	import("./MemoryExplorerPage").then((m) => ({ default: m.MemoryExplorerPage })),
 );
 
 export interface PagePanesProps {
@@ -61,11 +61,11 @@ export function PagePanes({ view, dialogs, onOpen, onAbout }: PagePanesProps): R
 					</Suspense>
 				)}
 			</div>
-			{/* openviking-dashboard: what OpenViking is injecting and committing, and what the memory holds. */}
+			{/* openviking-dashboard: find, read, fix or delete what memory holds, and see where it lives. */}
 			<div className={`view-pane openviking-pane ${view === "openviking" ? "" : "hidden"}`}>
 				{openVikingSeen && (
 					<Suspense fallback={null}>
-						<OpenVikingDashboardPage active={view === "openviking"} />
+						<MemoryExplorerPage active={view === "openviking"} />
 					</Suspense>
 				)}
 			</div>

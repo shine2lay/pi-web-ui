@@ -4,6 +4,8 @@
  */
 
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef } from "react";
+import type { ChangeRecord } from "./explorer-api.js";
+import { clock, keptIn, noteTitle } from "./explorer-text.js";
 import { holdBackgroundInert } from "./modal-inert.js";
 
 export const UNDO_WINDOW_MS = 10_000;
@@ -125,6 +127,24 @@ export interface MadeChange {
 	/** Clock time it was made, e.g. "9:05 PM". */
 	readonly when: string;
 	readonly undone: boolean;
+}
+
+/** A change read back from memory's change record, in the list's words. */
+export function madeFromRecord(record: ChangeRecord): MadeChange {
+	return {
+		id: record.id,
+		what: record.action === "delete" ? "Deleted" : "Changed",
+		title: noteTitle(record.uri),
+		where: keptIn(record.uri),
+		when: clock(record.at),
+		undone: record.undone,
+	};
+}
+
+/** This visit's changes first, then earlier ones from the change record (each once). */
+export function mergeChanges(made: readonly MadeChange[], recorded: readonly ChangeRecord[]): MadeChange[] {
+	const seen = new Set(made.map((c) => c.id));
+	return [...made, ...recorded.filter((r) => !seen.has(r.id)).map(madeFromRecord)];
 }
 
 export function ChangesYouMade({ changes }: { changes: readonly MadeChange[] }) {

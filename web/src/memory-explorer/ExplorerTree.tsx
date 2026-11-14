@@ -32,7 +32,7 @@ function SubFolders({ api, uri, current, onOpen }: TreeProps & { uri: string }) 
 	if (load.status === "failed") {
 		return (
 			<p className="mx-tree-note">
-				{load.code === "OWNER_ONLY" ? "Opens once owner sign-in is on." : "Couldn't open this folder."}
+				{load.code === "OWNER_ONLY" ? "Sign in to open this folder." : "Couldn't open this folder."}
 			</p>
 		);
 	}
@@ -113,6 +113,8 @@ export function ExplorerTree({
 						</section>
 					);
 				})
+			) : roots.status === "failed" && roots.code === "OWNER_ONLY" ? (
+				<p className="mx-tree-note">The folders open once you sign in.</p>
 			) : roots.status === "failed" ? (
 				<p className="mx-tree-note">
 					Couldn't load the folders.{" "}

@@ -4,8 +4,9 @@
  * `/api/openviking/{overview,tree/roots,tree,note,search,undo,audit}`.
  *
  * Health, the places and the recent list come from one `tree/roots` answer, shared for a few seconds
- * so the first screen asks the server once. Writes carry `X-Owner-Write: 1`; the browser adds the
- * `Origin` the owner check compares.
+ * so the first screen asks the server once. Reads ride the owner's passkey session cookie; each write
+ * carries `X-Owner-Write: 1` and a passkey assertion bound to that exact operation, which the page's
+ * owner sign-in supplies (`ownerAssertion`, spec-explorer-owner.md); the browser adds the `Origin`.
  */
 
 import type {
@@ -22,6 +23,11 @@ import type {
 	OpenVikingTreeFolderResponse,
 	OpenVikingTreeRootsResponse,
 } from "../../../server/openviking/explorer-types.js";
+import {
+	OWNER_ASSERTION_HEADER,
+	OWNER_WRITE_HEADER,
+	type OwnerWriteOp,
+} from "../../../server/openviking/owner-session-types.js";
 import { appUrl } from "../base-url";
 import {
 	type ChangeRecord,
@@ -65,6 +71,18 @@ export interface HttpExplorerOptions {
 	readonly fetch?: Fetch;
 	/** The browser's clock unless given. */
 	readonly now?: () => number;
+	/**
+	 * The owner confirms one write with his passkey: asks `owner/write/options` for a challenge bound
+	 * to `op`, runs the browser's passkey prompt, and answers the `X-Owner-Assertion` value. Without
+	 * it every write is refused before anything is sent.
+	 */
+	readonly ownerAssertion?: (op: OwnerWriteOp) => Promise<string>;
+}
+
+/** Lowercase hex sha256 of the exact body bytes a write sends (the op's `body_sha256`). */
+export async function sha256Hex(body: string): Promise<string> {
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+	return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function refusal(response: Response): Promise<ExplorerApiError> {
@@ -193,12 +211,23 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 		if (!response.ok) throw await refusal(response);
 		return (await response.json()) as T;
 	}
-	const write = <T>(path: string, method: string, body?: unknown) =>
-		call<T>(path, {
-			method,
-			headers: { "content-type": "application/json", "X-Owner-Write": "1" },
-			...(body === undefined ? {} : { body: JSON.stringify(body) }),
+	/**
+	 * One write: the owner confirms this exact operation with his passkey first (R-OWNER-WRITE-2), then
+	 * the request goes with the same bytes the confirmation was bound to.
+	 */
+	async function write<T>(path: string, op: OwnerWriteOp, body: string | undefined): Promise<T> {
+		if (!options.ownerAssertion) throw new ExplorerApiError("OWNER_ONLY", "Owner sign-in isn't set up on this page.");
+		const assertion = await options.ownerAssertion(op);
+		return call<T>(path, {
+			method: op.method,
+			headers: {
+				"content-type": "application/json",
+				[OWNER_WRITE_HEADER]: "1",
+				[OWNER_ASSERTION_HEADER]: assertion,
+			},
+			...(body === undefined ? {} : { body }),
 		});
+	}
 
 	/** Not tied to one caller's signal: health, places and recent share it. */
 	function treeRoots(): Promise<OpenVikingTreeRootsResponse> {
@@ -322,11 +351,11 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 			return { hits: answer.hits.map(hitFromSearch), missedPlaces: answer.unread_count + skipped };
 		},
 		async save(uri, fullText, changedAt) {
-			const answer = await write<OpenVikingNoteEditResponse>("/note", "PUT", {
-				uri,
-				content: fullText,
-				opened_mod_time: changedAt,
-			});
+			// Without the time it was opened at, the server can't tell whether someone saved since.
+			if (changedAt === null) throw new ExplorerApiError("CHANGED_SINCE_OPENED", "Open the note again first.");
+			const body = JSON.stringify({ uri, content: fullText, opened_mod_time: changedAt });
+			const op = { method: "PUT", uri, opened_mod_time: changedAt, body_sha256: await sha256Hex(body) } as const;
+			const answer = await write<OpenVikingNoteEditResponse>("/note", op, body);
 			if (!answer.changed) return null;
 			shared = null;
 			return {
@@ -339,7 +368,8 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 			};
 		},
 		async remove(uri) {
-			const answer = await write<OpenVikingNoteDeleteResponse>(`/note?uri=${encodeURIComponent(uri)}`, "DELETE");
+			const op = { method: "DELETE", uri, body_sha256: await sha256Hex("") } as const;
+			const answer = await write<OpenVikingNoteDeleteResponse>(`/note?uri=${encodeURIComponent(uri)}`, op, undefined);
 			shared = null;
 			return {
 				id: answer.operation_id,
@@ -351,7 +381,8 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 			};
 		},
 		async undo(changeId) {
-			await write("/undo", "POST", { operation_id: changeId });
+			const body = JSON.stringify({ operation_id: changeId });
+			await write("/undo", { method: "POST", operation_id: changeId }, body);
 			shared = null;
 		},
 		async changes(signal) {

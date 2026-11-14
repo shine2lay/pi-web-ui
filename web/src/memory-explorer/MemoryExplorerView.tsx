@@ -6,12 +6,13 @@
  * area on wide screens). Every read and change goes through the one `MemoryExplorerApi` seam.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
 	type ConfirmAsk,
 	ChangesYouMade,
 	ConfirmDialog,
 	type MadeChange,
+	mergeChanges,
 	type UndoOffer,
 	UndoToast,
 } from "./ChangeParts.js";
@@ -38,6 +39,18 @@ interface Step {
 export interface MemoryExplorerViewProps {
 	readonly api: MemoryExplorerApi;
 	readonly now?: () => number;
+	/** The owner's passkey sign-in, shown in place of the notes while memory asks who is looking. */
+	readonly signIn?: ReactNode;
+}
+
+function OwnerOnly({ signIn }: { signIn: ReactNode }) {
+	return (
+		<div className="mx-empty" data-owner-only>
+			<h2>Sign in to see memory</h2>
+			<p className="mx-dim">Memory holds every department's notes, so only you can open it, with your passkey.</p>
+			{signIn ?? <p className="mx-dim">Passkey sign-in isn't on this page yet.</p>}
+		</div>
+	);
 }
 
 function backLabel(previous: Place | undefined, searching: boolean): string | null {
@@ -46,9 +59,10 @@ function backLabel(previous: Place | undefined, searching: boolean): string | nu
 	return `Back to ${folderLabel(previous.uri)}`;
 }
 
-export function MemoryExplorerView({ api, now = Date.now }: MemoryExplorerViewProps) {
+export function MemoryExplorerView({ api, now = Date.now, signIn }: MemoryExplorerViewProps) {
 	const health = useLoad("health", (signal) => api.health(signal));
 	const roots = useLoad("roots", (signal) => api.roots(signal));
+	const recorded = useLoad("changes", (signal) => api.changes(signal));
 	const [scope, setScope] = useState<SearchScope>("all");
 	const recent = useLoad(`recent:${scope}`, (signal) => api.recent(scope, RECENT_LIMIT, signal));
 	const [query, setQuery] = useState("");
@@ -140,7 +154,10 @@ export function MemoryExplorerView({ api, now = Date.now }: MemoryExplorerViewPr
 	const previous = steps[steps.length - 2]?.place;
 	const label = backLabel(previous, asked !== null);
 	let work;
-	if (place.kind === "note") {
+	const ownerOnly = roots.load.status === "failed" && roots.load.code === "OWNER_ONLY";
+	if (ownerOnly) {
+		work = <OwnerOnly signIn={signIn} />;
+	} else if (place.kind === "note") {
 		work = (
 			<NoteReader
 				key={place.uri}
@@ -213,7 +230,7 @@ export function MemoryExplorerView({ api, now = Date.now }: MemoryExplorerViewPr
 						<section className="mx-view" aria-label="What you're looking at" aria-live="polite">
 							{work}
 						</section>
-						<ChangesYouMade changes={changes} />
+						<ChangesYouMade changes={mergeChanges(changes, recorded.load.data ?? [])} />
 					</div>
 					<ExplorerTree
 						api={api}
