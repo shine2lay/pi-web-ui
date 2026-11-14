@@ -71,7 +71,7 @@ export function MemoryExplorerPage({ active, fetch, webauthn }: MemoryExplorerPa
 
 	return (
 		<>
-			<MemoryExplorerView key={generation} api={api} signIn={signIn} account={account} />
+			<MemoryExplorerView key={generation} api={api} ownerState={access.state} signIn={signIn} account={account} />
 			{box?.kind === "sign-in" ? <SignInBox access={access} opener={box.opener} /> : null}
 			{box?.kind === "passkeys" ? <PasskeysBox access={access} opener={box.opener} /> : null}
 		</>

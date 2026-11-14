@@ -22,7 +22,9 @@ export async function mountExplorer(api: MemoryExplorerApi): Promise<Mounted> {
 	const container = document.createElement("div");
 	document.body.appendChild(container);
 	const root: Root = createRoot(container);
-	await act(async () => root.render(createElement(MemoryExplorerView, { api, now: () => NOW_MS })));
+	await act(async () =>
+		root.render(createElement(MemoryExplorerView, { api, ownerState: "signed-in", now: () => NOW_MS })),
+	);
 	await flush();
 	return {
 		container,

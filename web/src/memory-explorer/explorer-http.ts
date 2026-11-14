@@ -214,7 +214,10 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 			headers: { accept: "application/json", ...init.headers },
 		});
 		if (response.ok) {
-			options.onReadAccepted?.();
+			// Public overview/audit answers cannot establish an owner session.
+			if ((!init.method || init.method === "GET") && /^\/(tree|note)(\?|\/|$)/.test(path)) {
+				options.onReadAccepted?.();
+			}
 			return (await response.json()) as T;
 		}
 		const error = await refusal(response);

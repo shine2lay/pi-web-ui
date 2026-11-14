@@ -91,12 +91,18 @@ function TreeRow({
 
 export function ExplorerTree({
 	roots,
+	totalNotes,
 	onRetry,
 	...props
-}: TreeProps & { roots: Load<readonly MemoryRoot[]>; onRetry(): void }) {
+}: TreeProps & { roots: Load<readonly MemoryRoot[]>; totalNotes: number | null; onRetry(): void }) {
 	return (
 		<nav className="mx-tree" aria-label="Where memory keeps things">
 			<h2>Where memory keeps things</h2>
+			{totalNotes !== null && roots.data ? (
+				<p className="mx-dim">
+					{totalNotes.toLocaleString("en-US")} notes in {roots.data.length} places
+				</p>
+			) : null}
 			<KindKey />
 			{roots.data ? (
 				GROUPS.map((group) => {

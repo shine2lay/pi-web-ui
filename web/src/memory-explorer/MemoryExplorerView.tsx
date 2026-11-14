@@ -31,6 +31,7 @@ import { HealthLine, memoryAnswers } from "./HealthLine.js";
 import { type ChangeHost, NoteReader } from "./NoteReader.js";
 import { type AskedSearch, RecentList, SearchResults } from "./StartView.js";
 import { useLoad } from "./use-load.js";
+import type { OwnerState } from "./use-owner-access.js";
 
 const RECENT_LIMIT = 12;
 const SEARCH_LIMIT = 30;
@@ -44,6 +45,7 @@ interface Step {
 
 export interface MemoryExplorerViewProps {
 	readonly api: MemoryExplorerApi;
+	readonly ownerState?: OwnerState;
 	readonly now?: () => number;
 	/** The owner's passkey sign-in, shown in place of the notes while memory asks who is looking. */
 	readonly signIn?: ReactNode;
@@ -67,10 +69,17 @@ function backLabel(previous: Place | undefined, searching: boolean): string | nu
 	return `Back to ${folderLabel(previous.uri)}`;
 }
 
-export function MemoryExplorerView({ api, now = Date.now, signIn, account }: MemoryExplorerViewProps) {
+export function MemoryExplorerView({
+	api,
+	ownerState = "unknown",
+	now = Date.now,
+	signIn,
+	account,
+}: MemoryExplorerViewProps) {
 	const health = useLoad("health", (signal) => api.health(signal));
 	const roots = useLoad("roots", (signal) => api.roots(signal));
-	const recorded = useLoad("changes", (signal) => api.changes(signal));
+	const signedIn = ownerState === "signed-in";
+	const recorded = useLoad(signedIn ? "changes" : null, (signal) => api.changes(signal));
 	const [scope, setScope] = useState<SearchScope>("all");
 	const recent = useLoad(`recent:${scope}`, (signal) => api.recent(scope, RECENT_LIMIT, signal));
 	const [query, setQuery] = useState("");
@@ -104,7 +113,7 @@ export function MemoryExplorerView({ api, now = Date.now, signIn, account }: Mem
 	};
 	const changeScope = (s: SearchScope) => {
 		setScope(s);
-		if (asked) runSearch(asked.query, asked.mode, s);
+		if (asked) runSearch(query, mode, s);
 	};
 	const clearSearch = () => {
 		setQuery("");
@@ -250,11 +259,12 @@ export function MemoryExplorerView({ api, now = Date.now, signIn, account }: Mem
 						<section className="mx-view" aria-label="What you're looking at" aria-live="polite">
 							{work}
 						</section>
-						<ChangesYouMade changes={mergeChanges(changes, recorded.load.data ?? [])} />
+						{signedIn ? <ChangesYouMade changes={mergeChanges(changes, recorded.load.data ?? [])} /> : null}
 					</div>
 					<ExplorerTree
 						api={api}
 						roots={roots.load}
+						totalNotes={health.load.data?.totalNotes ?? null}
 						onRetry={roots.reload}
 						current={place.kind === "start" ? null : place.uri}
 						onOpen={openFolder}

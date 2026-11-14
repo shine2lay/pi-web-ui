@@ -60,7 +60,12 @@ createRoot(host).render(
 	state === "checking" || state === "signed-in" ? (
 		<MemoryExplorerPage active fetch={ownerFetch} />
 	) : (
-		<MemoryExplorerView api={fakeApi(OPTIONS[state] ?? {})} now={() => NOW_MS} signIn={signIn} />
+		<MemoryExplorerView
+			api={fakeApi(OPTIONS[state] ?? {})}
+			ownerState={state === "signed-out" ? "signed-out" : "signed-in"}
+			now={() => NOW_MS}
+			signIn={signIn}
+		/>
 	),
 );
 
