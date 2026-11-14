@@ -17,7 +17,8 @@
  * environment), verbose (server output to this process), prepare (an async function({ root, dataDir,
  * agentDir, workdir }) run once before the first start, after the model is set up: put plugins or
  * settings in place), stdout (keep the server's standard output too, as srv.stdout(); its
- * console.log lines go there, srv.stderr() has only its error output).
+ * console.log lines go there, srv.stderr() has only its error output), appDir (the built app to run:
+ * a folder with dist/server/index.js and web/dist; default this repo, e.g. a release's fresh build).
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
@@ -50,13 +51,14 @@ export async function ownServer(opts = {}) {
 	}
 	if (opts.prepare) await opts.prepare({ root, dataDir, agentDir, workdir });
 	const port = opts.port ?? (await freeTcpPort());
+	const appDir = opts.appDir ?? REPO;
 	let proc = null;
 	let stderr = "";
 	let stdout = "";
 
 	const start = async () => {
-		proc = spawn(process.execPath, [join(REPO, "dist", "server", "index.js")], {
-			cwd: REPO,
+		proc = spawn(process.execPath, [join(appDir, "dist", "server", "index.js")], {
+			cwd: appDir,
 			env: {
 				...process.env,
 				PI_WEB_PORT: String(port),

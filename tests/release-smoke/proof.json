@@ -1,0 +1,54 @@
+{
+	"date": "2026-11-14",
+	"smoke_files_sha256": "51d4fd5f0b197e807992f49e98712f256dcc599bd46f1072dc042dae31d80cbe",
+	"breaks": [
+		{
+			"what": "the server does not start (its entry file throws at once); before-run on a broken temp copy of the build (plant.mjs before:no-server): red F1 F2 F3 F4",
+			"exit_code": 1
+		},
+		{
+			"what": "the page bundle is broken so its socket never gets ready (it dials /wz instead of /ws); before-run on a broken temp copy of the build (plant.mjs before:socket-never-ready): red F1 F2 F3",
+			"exit_code": 1
+		},
+		{
+			"what": "the server reports another protocol version than the page, so the version banner shows; before-run on a broken temp copy of the build (plant.mjs before:version-banner): red F1",
+			"exit_code": 1
+		},
+		{
+			"what": "the page never shows a tool call's output (drawn under another class); before-run on a broken temp copy of the build (plant.mjs before:tool-call-hidden): red F2",
+			"exit_code": 1
+		},
+		{
+			"what": "the big chat's pictures are missing (the server's picture route is gone); before-run on a broken temp copy of the build (plant.mjs before:picture-missing): red F3",
+			"exit_code": 1
+		},
+		{
+			"what": "the restart loses the cut-off turn (the list of working chats is never read back); before-run on a broken temp copy of the build (plant.mjs before:restart-loses-turn): red F4",
+			"exit_code": 1
+		},
+		{
+			"what": "the model never answers a turn (stand-in model stays silent); before-run on a broken temp copy of the build (plant.mjs before:model-silent): red F2 F4",
+			"exit_code": 1
+		},
+		{
+			"what": "the server does not start (its entry file throws at once); live run on its own broken copy reached through the two address settings (plant.mjs live:no-server): red F1 F2 F3",
+			"exit_code": 1
+		},
+		{
+			"what": "the page bundle is broken so its socket never gets ready (it dials /wz instead of /ws); live run on its own broken copy reached through the two address settings (plant.mjs live:socket-never-ready): red F1 F2 F3",
+			"exit_code": 1
+		},
+		{
+			"what": "the server reports another protocol version than the page, so the version banner shows; live run on its own broken copy reached through the two address settings (plant.mjs live:version-banner): red F1",
+			"exit_code": 1
+		},
+		{
+			"what": "the big chat's pictures are missing (the server's picture route is gone); live run on its own broken copy reached through the two address settings (plant.mjs live:picture-missing): red F3",
+			"exit_code": 1
+		},
+		{
+			"what": "the model never answers a turn (stand-in model stays silent); live run on its own broken copy reached through the two address settings (plant.mjs live:model-silent): red F2",
+			"exit_code": 1
+		}
+	]
+}

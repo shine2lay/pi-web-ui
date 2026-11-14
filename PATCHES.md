@@ -8934,3 +8934,13 @@ no decision record was written for it.
 - Sync cost: none; upstream has none of these files. Checks: `test-check .` from agent-tools (level 2 when it landed; the smoke-test levels are open work between QA and Ops).
 - Undo: revert that commit and this entry (docs only; no deploy needed).
 
+## qa-release-smoke: smoke tests of the main flows, before an install and after it
+
+- `local`, never upstream (QA #161; owner rule 34, 2026-11-13: QA owns the smoke tests before and after deploy; flows and live rules from Ops rm-604985c3). Tests only: no server, web or plugin file changes.
+- New `tests/release-smoke/`: one flow-tagged test file per main flow (`f1-open-app-test.mjs` to `f4-restart-test.mjs`, `@flow:F1`..`F4` in their titles), the two release commands `before.mjs` (own copy from the folder's built `dist/` and `web/dist/`, stand-in model, F1-F4) and `live.mjs` (live app at both addresses, F1-F3, `carry-on:` client ids, throwaway chat and a copy of QA's big chat only), helpers, `fixtures/` (planted breaks, outside the checks), `proof-hash.mjs`, `proof.json`, `PROOF.md`, `README.md`. Exit 0 green, 1 red, 3 unsure.
+- `tests/lib/own-server.mjs`: optional `appDir` (the built folder to run; default this repo, unchanged for every existing test).
+- `docs/testing.md`: declares `smoke.*` (flows F1-F4, both commands, `local-start`, `qa-account`, the proof record), the flow table, the open flows F5-F7 and what each run cannot catch.
+- Not in the land gate (`scripts/check.sh` unchanged); Ops wires both commands into `pi-web-deploy`. Sync cost: none; upstream has no `tests/release-smoke/`.
+- Checks: `tests/release-smoke/PROOF.md` (10 good before-runs, every check red under a planted break, live runs on an own copy and the live app); `test-check .`.
+- Undo: revert the commit and this entry (tests and docs only; no deploy needed).
+

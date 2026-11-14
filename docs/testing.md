@@ -7,6 +7,17 @@ test_check:
       - ~/projects/agent-tools/bin/pi-web-deploy
       - ~/projects/agent-tools/lib/pi-web-deploy.mjs
       - ~/projects/agent-tools/lib/pi-web-check.mjs
+  smoke:
+    flows:
+      F1: open the app
+      F2: send a message and get a reply
+      F3: open an existing big chat with pictures
+      F4: a chat survives a restart
+    before: node tests/release-smoke/before.mjs
+    before_target: local-start
+    live: node tests/release-smoke/live.mjs
+    live_data: qa-account
+    proof: tests/release-smoke/proof.json
   quarantine: docs/testing-quarantine.md
   below_par: found-below-par.md
   miss_log: docs/testing-misses.jsonl
@@ -23,7 +34,7 @@ format is /home/shinelay/projects/agent-tools/docs/test-check-page.md. The facts
 - node:test: 1 test files, first seen at `tests/role-message-guard-acceptance/local.test.mjs:1` (facts table, 2026-11-14).
 - vitest: 659 test files, first seen at `vitest.config.ts:1` (facts table, 2026-11-14).
 - Browser test files: 141 (facts table).
-- test-check counts 916 test files: server/openviking-dashboard.test.ts, tests/accent-contrast-test.mjs, tests/adaptive-math-test.mjs, ....
+- test-check counts 916 test files.
 
 What the tests exercise:
 
@@ -32,8 +43,6 @@ What the tests exercise:
 - `tests/*-test.mjs` (node scripts): each starts its own server with a temp data folder and drives
   it; [tests/run-smoke.mjs](../tests/run-smoke.mjs) runs those that need no model and no fixed local
   paths. Browser ones (playwright-core) are run by hand.
-- `tests/terminal-bash-test.mjs` and `tests/terminal-bash-script-test.mjs`: the terminal on a real
-  PTY, in the full check only.
 - Every run of `scripts/check.sh` is sealed ([scripts/sealed.sh](../scripts/sealed.sh)): a temp home
   with no model keys, so no test can reach a real chat or a model.
 
@@ -47,42 +56,51 @@ What the tests exercise:
 | Every day at 04:00 | the whole unit suite and the build on the newest `mine`, in a throwaway checkout (`pi-web-ui-full-tests`, outside the repo); a failure messages the owner | 1.3 min on 2026-11-14 (644 files passed) | /home/shinelay/projects/agent-tools/docs/pi-web-ui-full-tests.md:37 (2026-11-14) |
 | Never on `mine` | upstream's CI workflow, nightly at 16:00 and on upstream's `main` only | not measured | .github/workflows/ci.yml:3-10 (2026-11-14) |
 
-The landing check, `scripts/check.sh --fast` ([scripts/check.sh](../scripts/check.sh)), runs beside
-each other: the protocol sync check (server and web types), the PATCHES.md check, the typecheck of
-server, web, tests, desktop shell and browser extension, oxlint, and Prettier on the changed files.
-With them it runs only the unit test files the change can reach, picked by
-`scripts/select-tests.mjs` from the import graph and a daily read map, and all of them when it can't
-be sure ([docs/gate-selected-tests.md](gate-selected-tests.md)), which keeps a land to minutes. A
-change to notes only runs the PATCHES.md check and three unit test files. The full check, plain `scripts/check.sh`, adds every unit test, the build and the
-real-PTY terminal tests; no automatic run uses it. A daily job outside the repo runs every unit test
-file and the build on the newest `mine`, so a test the landing check left out runs within a day.
+The landing check ([scripts/check.sh](../scripts/check.sh) `--fast`) runs the protocol sync check,
+the PATCHES.md check, the typechecks, oxlint and Prettier on changed files, plus only the unit test
+files the change can reach (`scripts/select-tests.mjs`; all of them when unsure,
+[docs/gate-selected-tests.md](gate-selected-tests.md)). The full check, plain `scripts/check.sh`,
+adds every unit test, the build and the real-PTY terminal tests; no automatic run uses it. Upstream's
+[.github/workflows/ci.yml](../.github/workflows/ci.yml) never runs on `mine`.
 
-The nightly schedule in [.github/workflows/ci.yml](../.github/workflows/ci.yml) is upstream's: it
-runs on upstream's `main` only, never on this fork's `mine` (lines 3 to 10).
-
-A release is an install on this machine with `pi-web-deploy` (agent-tools; every patch's Undo line in
-[PATCHES.md](../PATCHES.md) names it). Before the install it only builds the commit in a throwaway
+A release is an install on this machine with `pi-web-deploy` (agent-tools). Before the install it only builds the commit in a throwaway
 worktree: a failed or incomplete build, or a changed `package-lock.json` without `--deps-updated`,
 refuses the install. No test runs then; the unit tests last ran when the change landed. After every
-install, restart and rollback, pi-web-check looks at the live app: the server answers, the page loads
-at both addresses, a throwaway chat replies, a copy of QA's fixed big chat (Ops #885) opens with all
-its pictures, and the log has no new errors. When the server, the page or the throwaway chat still
-fails on a second try, pi-web-deploy rolls the install back by itself and checks again, then sends the
-owner one message. They touch no real chat (a throwaway chat and a copy). They are not declared as
-smoke tests here: they are not tests of the main user flows kept in this repo with a flow tag. There is no staging copy: an install goes straight live.
+install, restart and rollback, pi-web-check looks at the live app (table above, touching no real
+chat); when the server, the page or the throwaway chat still fails on a second try, pi-web-deploy
+rolls back by itself and messages the owner. There is no staging copy: an install goes straight live.
+
+## Smoke tests of the main user flows
+
+[tests/release-smoke/](../tests/release-smoke/README.md) has one test file per flow, tagged
+`@flow:<id>`. Each command prints one line per check and exits 0 (passed), 1 (failed) or 3 (unsure:
+blocked outside pi-web-ui, such as the provider).
+
+- Before the swap, `before.mjs` runs F1-F4 on its own copy of the folder's build, with temp data and
+  the zero-token stand-in model (`local-start`, about 1 min).
+- After the restart, `live.mjs` runs F1-F3 on the live app at both addresses, touching only a
+  throwaway chat and a copy of QA's big chat (`qa-account`, about 1 min).
+
+| Flow | Before | Live |
+| --- | --- | --- |
+| F1 open the app: page, socket ready, chat list, no version banner | yes | yes, both addresses |
+| F2 send a message and get a reply: it streams, a tool call shows, the turn ends | yes | one tiny reply, no tool call |
+| F3 open a big chat: it opens, scrolls back, its pictures load | yes | yes |
+| F4 a chat survives a restart: the cut-off turn carries on | yes | no (needs a turn planted before the restart) |
+
+Open flows: F5 a queued task runs, F6 a second window or phone on one chat, F7 the add-on pages
+load. The before-run sees no real add-on, model, public route or swap; the live run skips F4 and
+the tool-call display. Proof that each check goes red on a planted break:
+[PROOF.md](../tests/release-smoke/PROOF.md). Ops wires both commands into `pi-web-deploy`.
 
 ## What is not covered
 
-- The main user flows have no smoke tests: no test carries a flow tag, so nothing proves before or
-  right after a release that sending a message, answering a question, a queue task or the roles
-  pages still work. pi-web-check covers only a new chat's reply, opening a big chat and the page load.
-- The node-script tests in `tests/` are not in the landing check or the daily run; they run only by
-  hand. The browser scripts among them use fixed local paths, and the live ones need a real model.
-- The real-PTY terminal tests run only in the full check, which no automatic run uses. The build is
-  not in the landing check; the daily run and `pi-web-deploy` build it.
-- The landing check runs a subset of the unit tests. A test the import graph and the read map both
-  miss runs only in the next daily run, after the change has landed.
-- The desktop shell and browser extension are only typechecked.
+- Smoke flows F5-F7 have no test; until Ops wires the smoke into `pi-web-deploy`, a release runs
+  neither command.
+- The node-script tests in `tests/` run only by hand; the real-PTY terminal tests only in the full
+  check. The build is not in the landing check; the daily run and `pi-web-deploy` build it.
+- The landing check runs a subset of the unit tests; one it misses runs in the next daily run.
+- Desktop shell and extension: typecheck only.
 
 ## How to run
 
@@ -93,15 +111,16 @@ npm run test:freeze
 npm run test:smoke
 npm run test:smoke:core
 npm run test:unit
-test-check /home/shinelay/projects/pi-web-ui   # this page's score
+node tests/release-smoke/before.mjs   # needs a build
+node tests/release-smoke/live.mjs
+test-check /home/shinelay/projects/pi-web-ui
 ```
 
 Rules every test here keeps:
 
 - No automatic re-run. A test that fails and then passes on the same code is repaired, or pulled
-  onto [the quarantine list](testing-quarantine.md) with a fix task. (`tests/run-smoke.mjs` has a
-  `--retry-once` option; only upstream's CI passes it.) The last flake that refused lands was
-  repaired, not pulled ([docs/gate-plugin-dom-flake.md](gate-plugin-dom-flake.md)).
+  onto [the quarantine list](testing-quarantine.md) with a fix task (`tests/run-smoke.mjs`
+  `--retry-once` is upstream CI's only).
 - A skipped test says why and names the task that brings it back.
 - Past failures and complaints are checks in [found-below-par.md](../found-below-par.md); bugs that
   got past the tests are in [the miss log](testing-misses.jsonl), each with the test that catches it now.
@@ -111,6 +130,6 @@ Rules every test here keeps:
 - The builder of a change writes and keeps its tests; most patches are Ops's (PATCHES.md).
 - Ops owns the landing check (`scripts/check.sh`, pi-web-ui's entry in agent-tools' wt.yaml) and the
   release (`pi-web-deploy` and pi-web-check in agent-tools).
-- QA owns this page, the testing standard, the quarantine list, the miss log, the below-par list and
-  the fixed big chat that pi-web-check opens.
-- Upstream owns `main`, its CI and its npm releases ([docs/release.md](release.md)), none on `mine`.
+- QA owns this page, the testing standard, the smoke tests, the quarantine list, the miss log, the
+  below-par list and the fixed big chat.
+- Upstream owns `main`, its CI and its npm releases ([docs/release.md](release.md)).
