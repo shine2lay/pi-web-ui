@@ -52,7 +52,8 @@ What the tests exercise:
 | --- | --- | --- | --- |
 | Before a change lands (`wt land`, also `wt check`) | `scripts/check.sh --fast` (wt entry `pi-web-ui`); test-check: wt entry pi-web-ui: check `scripts/check.sh --fast` runs vitest (scripts/select-tests.mjs:42). A failure refuses the land. | median 1.2 min over the last 10 succeeded lands (each land: check, wait for the land slot, push) | /home/shinelay/projects/agent-tools/wt.yaml:192; land records in /home/shinelay/projects/pi-web-ui/.git/wt-land-queue/ via test-check on 3723898 (2026-11-14) |
 | Before a change that touches only notes lands | `scripts/check.sh --notes` instead of the check above, for files matching `docs/**/*.md, PATCHES.md` | not measured | /home/shinelay/projects/agent-tools/wt.yaml:202 (2026-11-14) |
-| After every install, restart and rollback (`pi-web-deploy`) | pi-web-check, outside the repo: checks server, page, reply, bigchat and log; a failure of server, page or reply rolls the install back | not measured | /home/shinelay/projects/agent-tools/lib/pi-web-check.mjs:81 and :83 (2026-11-14) |
+| Each install (`pi-web-deploy`), before the swap | the before-run on the fresh build; not green = nothing installed | 57 s | /home/shinelay/projects/agent-tools/docs/pi-web-deploy-smoke.md (2026-11-14) |
+| After every install, restart and rollback | server check, the live run, log check; red after an install rolls it back and names the last good build | 73 to 79 s | same |
 | Every day at 04:00 | the whole unit suite and the build on the newest `mine`, in a throwaway checkout (`pi-web-ui-full-tests`, outside the repo); a failure messages the owner | 1.3 min on 2026-11-14 (644 files passed) | /home/shinelay/projects/agent-tools/docs/pi-web-ui-full-tests.md:37 (2026-11-14) |
 | Never on `mine` | upstream's CI workflow, nightly at 16:00 and on upstream's `main` only | not measured | .github/workflows/ci.yml:3-10 (2026-11-14) |
 
@@ -63,12 +64,11 @@ files the change can reach (`scripts/select-tests.mjs`; all of them when unsure,
 adds every unit test, the build and the real-PTY terminal tests; no automatic run uses it. Upstream's
 [.github/workflows/ci.yml](../.github/workflows/ci.yml) never runs on `mine`.
 
-A release is an install on this machine with `pi-web-deploy` (agent-tools). Before the install it only builds the commit in a throwaway
-worktree: a failed or incomplete build, or a changed `package-lock.json` without `--deps-updated`,
-refuses the install. No test runs then; the unit tests last ran when the change landed. After every
-install, restart and rollback, pi-web-check looks at the live app (table above, touching no real
-chat); when the server, the page or the throwaway chat still fails on a second try, pi-web-deploy
-rolls back by itself and messages the owner. There is no staging copy: an install goes straight live.
+A release is an install on this machine with `pi-web-deploy` (agent-tools). It builds the commit in a throwaway
+worktree (a failed build, or a changed `package-lock.json` without `--deps-updated`, refuses the
+install), runs the before-run there, and installs only on green. After every restart it runs the
+live run once, no second try: red after an install rolls back by itself and messages the owner;
+unsure (exit 3) is neither rolled back nor recorded good. There is no staging copy.
 
 ## Smoke tests of the main user flows
 
@@ -91,12 +91,11 @@ blocked outside pi-web-ui, such as the provider).
 Open flows: F5 a queued task runs, F6 a second window or phone on one chat, F7 the add-on pages
 load. The before-run sees no real add-on, model, public route or swap; the live run skips F4 and
 the tool-call display. Proof that each check goes red on a planted break:
-[PROOF.md](../tests/release-smoke/PROOF.md). Ops wires both commands into `pi-web-deploy`.
+[PROOF.md](../tests/release-smoke/PROOF.md).
 
 ## What is not covered
 
-- Smoke flows F5-F7 have no test; until Ops wires the smoke into `pi-web-deploy`, a release runs
-  neither command.
+- Smoke flows F5-F7 have no test.
 - The node-script tests in `tests/` run only by hand; the real-PTY terminal tests only in the full
   check. The build is not in the landing check; the daily run and `pi-web-deploy` build it.
 - The landing check runs a subset of the unit tests; one it misses runs in the next daily run.
@@ -129,7 +128,7 @@ Rules every test here keeps:
 
 - The builder of a change writes and keeps its tests; most patches are Ops's (PATCHES.md).
 - Ops owns the landing check (`scripts/check.sh`, pi-web-ui's entry in agent-tools' wt.yaml) and the
-  release (`pi-web-deploy` and pi-web-check in agent-tools).
+  release (`pi-web-deploy` in agent-tools, which runs the smoke tests).
 - QA owns this page, the testing standard, the smoke tests, the quarantine list, the miss log, the
   below-par list and the fixed big chat.
 - Upstream owns `main`, its CI and its npm releases ([docs/release.md](release.md)).
