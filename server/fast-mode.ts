@@ -368,6 +368,18 @@ export class FastModeRegistry {
 	}
 }
 export const fastModeRegistry = new FastModeRegistry();
+/** This run ended on a refused fast reply that the fast-mode extension retries at normal speed right
+ *  away: the same turn going on, like the SDK's own auto-retry (moved out of agent-service.ts, line cap). */
+export function fastRetryAfter(
+	chat: { readonly session: { readonly sessionManager: FastModeSession } },
+	messages: readonly unknown[],
+): boolean {
+	try {
+		return fastModeRegistry.retryPending(chat.session.sessionManager, messages);
+	} catch {
+		return false; // runtime being replaced
+	}
+}
 type BranchEntry = { type?: unknown; id?: unknown; targetId?: unknown; message?: unknown };
 type BoundaryLike = {
 	entries: SessionBoundaryDraft[];

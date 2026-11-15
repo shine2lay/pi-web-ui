@@ -120,7 +120,7 @@ describe("stage 1: trusted accepted sources", () => {
 			'browserRoleInput(acceptedBrowser, AgentService.isPseudoClientId(clientId ?? ""))',
 		);
 		const agent = src("agent-service.ts");
-		expect(agent).toContain('if (disposition !== "handled") noteTurnCause(conv, flow, disposition === "queued")');
+		expect(agent).toContain('if (disposition !== "handled") noteTurnCause(conv, flow, disposition === "queued", text)');
 		expect(agent).toContain("collectRoleInput(rec, flow)");
 		expect(agent).toContain("const owner = isHome ? ownerTurnOf(conv.turnRecord) : null");
 		expect(agent).toContain("this.roleMessages.ownerContextFor(file, text)");

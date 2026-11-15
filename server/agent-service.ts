@@ -120,6 +120,7 @@ import {
 } from "./stuck-asks.js";
 import { briefOfAsk, stuckAskBriefs } from "./owner-card-brief.js";
 import { noteOwnerInput, ownerLastWroteOf } from "./owner-input-time.js";
+import { noteOwnerText, ownerInputMarkOnEvent } from "./owner-input-mark.js";
 import { CooOwnerQuestionDesk, type CardDelivery } from "./owner-question-coo.js";
 import type { OwnerQuestionAsker } from "./owner-question-card.js";
 import { isCooHomeChat, makeOwnerQuestionTool } from "./owner-question-tool.js";
@@ -267,6 +268,7 @@ import {
 	fastModeEntryData,
 	fastModeExtension,
 	fastModeRegistry,
+	fastRetryAfter,
 	isChatSpeed,
 	speedSupported,
 } from "./fast-mode.js";
@@ -2623,11 +2625,12 @@ interface PromptFlow {
 
 /** telegram-coo: pi took a text: the run it starts (pending until agent_start) or the running run it
  *  joined (queued) remembers who sent it and the host.roles.send id. */
-function noteTurnCause(conv: Conversation, flow: PromptFlow, joined: boolean): void {
+function noteTurnCause(conv: Conversation, flow: PromptFlow, joined: boolean, text: string): void {
 	const rec = joined && conv.turnRecord ? conv.turnRecord : (conv.turnPending ??= newTurnRecord());
 	collectRoleInput(rec, flow);
-	// owner-input-time: the time of his accepted input, for owner-question routing's 30-minute window.
+	// owner-input-time + owner-input-mark: his accepted input's time (30-minute window) and its lasting mark.
 	noteOwnerInput(conv, rec, flow.requester?.kind === "owner", Date.now());
+	if (flow.requester?.kind === "owner") noteOwnerText(conv, text, flow.requester.channel);
 	// carry-on: a text joined the running turn: the live list keeps its requester inputs.
 	if (rec === conv.turnRecord) saveRunningRequester(conv);
 	// owner-contacts: pi took the owner's message into this chat's turn.
@@ -2662,16 +2665,6 @@ function runningRef(conv: Conversation): { sessionFile: string; title: string; c
 		return file ? { sessionFile: resolve(file), title: conv.title, cwd: conv.cwd } : null;
 	} catch {
 		return null; // runtime being replaced
-	}
-}
-
-/** fast-mode: this run ended on a refused fast reply that the fast-mode extension retries at
- *  normal speed right away — the same turn going on, like the SDK's own auto-retry. */
-function fastRetryAfter(conv: Conversation, messages: readonly unknown[]): boolean {
-	try {
-		return fastModeRegistry.retryPending(conv.session.sessionManager, messages);
-	} catch {
-		return false; // runtime being replaced
 	}
 }
 
@@ -8724,6 +8717,7 @@ export class ClientSession {
 	 * same error at most once a minute) and go on; the next snapshot brings the windows up to date.
 	 */
 	private onEvent(conv: Conversation, event: AgentSessionEvent): void {
+		ownerInputMarkOnEvent(conv, event); // owner-input-mark: never throws
 		try {
 			this.onEventNow(conv, event);
 		} catch (err) {
@@ -13013,7 +13007,7 @@ export class ClientSession {
 				flow.handedOver = true;
 				flow.admission.release();
 				// telegram-coo: the run this text starts (or joins) remembers who sent it.
-				if (disposition !== "handled") noteTurnCause(conv, flow, disposition === "queued");
+				if (disposition !== "handled") noteTurnCause(conv, flow, disposition === "queued", text);
 				if (disposition === "handled") {
 					// Commands/input handlers need no user-message event, including after deferral.
 					receipt.ok();
