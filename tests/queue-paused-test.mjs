@@ -22,7 +22,7 @@
  *       on, and it finishes once its file is there.
  * Queue C (Auto start on, one lane): its paused ready task #1 is skipped and #2 starts. "Pause queue" (a
  * click): #2 gets one note and stops, #3 doesn't start; the Queue tab shows the banner and the Roles page
- * says "Queue paused by you". "Resume queue": #2 gets its back note first and finishes, then #3 runs; #1's
+ * (roles-by-project, grouped by Department) shows each of design's open tasks as Waiting, none as Needs you. "Resume queue": #2 gets its back note first and finishes, then #3 runs; #1's
  * own pause outlives the queue's, until its own Resume (a click). Order of starts: #2, #3, #1.
  * Queue D (Ops #393): D#1 "Memory notes" and D#2 "Memory index" both list the pi memory files (one lane),
  * D#3 "Side work" works meanwhile in a lane of its own. D#1 asks temper a question and is paused (a click)
@@ -1017,29 +1017,43 @@ try {
 	pageR.on("pageerror", (e) => pageErrors.push(`roles: ${e}`));
 	await pageR.goto(`${srv.http}/?view=roles`);
 	// The page first gets the last snapshot the server has (it may be from while C#2 was still finishing its
-	// step, so "busy"); the next look, moments later, has it settled. The Roles page shows each department as a
-	// card in its "Roles" frame: a button named after the role with its state chip, and "ON YOU" beside it when
-	// the role waits on the owner (the old .rv-tile page is gone; Ops #393 moved this check over).
-	const frameR = pageR.frameLocator('iframe[title="Roles"]');
-	const cardNow = async () => {
-		const card = frameR.getByRole("button", { name: /^Design / });
-		if ((await card.count().catch(() => 0)) !== 1) return null;
-		const text = await card
-			.locator("..")
-			.innerText({ timeout: 2000 })
-			.catch(() => "");
-		return text.replace(/\s+/g, " ").slice(0, 300) || null;
-	};
-	const card = await waitFor(async () => {
-		const t = await cardNow();
-		return t && /Paused by you/.test(t) ? t : null;
+	// step, so "busy"); the next look, moments later, has it settled. The Roles page (roles-by-project, frontend
+	// #299 moved this check over from the deleted Roles frame) grouped by Department: design's tile opens into its
+	// task cards, each with its state pill; a paused open task is Waiting (boardStateOf), never Needs you.
+	const rootR = pageR.locator(".rbp");
+	await rootR.getByRole("radio", { name: "Department" }).click({ timeout: 30_000 });
+	const tileR = rootR
+		.locator("button[aria-expanded]")
+		.filter({ hasText: /Design/ })
+		.first();
+	await tileR.waitFor({ timeout: 30_000 });
+	await tileR.click();
+	const cardsNow = () =>
+		rootR
+			.evaluate((el) =>
+				[...el.querySelectorAll('article.rbp-task[data-ref^="design #"]')].map((c) => [
+					c.getAttribute("data-ref"),
+					c.querySelector(".rbp-pill")?.textContent.trim() ?? null,
+				]),
+			)
+			.catch(() => []);
+	const askedR = () =>
+		rootR
+			.locator("article.rbp-askc")
+			.filter({ hasText: /design #/i })
+			.count()
+			.catch(() => 0);
+	const cards = await waitFor(async () => {
+		const c = await cardsNow();
+		const open = c.filter(([, pill]) => pill !== "Done");
+		return open.length === 3 && open.every(([, pill]) => pill === "Waiting") ? c : null;
 	}, 40_000);
 	check(
-		"Roles page: design's card says 'Paused by you' and isn't waiting on the owner",
-		!!card && !/ON YOU/.test(card),
-		JSON.stringify(card ?? (await cardNow()) ?? { frames: await pageR.locator('iframe[title="Roles"]').count() }),
+		"Roles page: design's three open tasks (#1 paused, #2 and #3 with the queue) show as Waiting, none on the owner",
+		!!cards && (await askedR()) === 0,
+		JSON.stringify({ cards: cards ?? (await cardsNow()), asked: await askedR() }),
 	);
-	await shot(pageR, "roles-paused.png", 'iframe[title="Roles"]');
+	await shot(pageR, "roles-paused.png", ".rbp");
 	await ctxR.close();
 
 	await sleep(4000);

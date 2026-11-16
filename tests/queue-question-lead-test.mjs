@@ -647,8 +647,25 @@ try {
 	);
 	check('the Queue tab says task #1 is "Asking systems\'s lead"', !!qLine);
 	const rPage = await openPage("ql-browser-r", `${srv.http}/?view=roles`);
-	const rLine = await waitFor(() => bodyHas(rPage, "question with systems's lead"), 30_000);
-	check("the Roles page says the question is with systems's lead", !!rLine);
+	// The Roles page (roles-by-project, frontend #299 moved this check off the deleted Roles view): grouped by
+	// Department, systems's tile opens to task #1 Waiting, "Waits for its lead to answer" (its queue's lead).
+	const rRoot = rPage.locator(".rbp");
+	await rRoot.getByRole("radio", { name: "Department" }).click({ timeout: 30_000 });
+	const rTile = rRoot.locator("button[aria-expanded]").filter({ hasText: "Systems" }).first();
+	await rTile.waitFor({ timeout: 30_000 });
+	await rTile.click();
+	const rLine = await waitFor(
+		() =>
+			rRoot.evaluate((el) => {
+				const c = el.querySelector('article.rbp-task[data-ref="systems #1"]');
+				return (
+					c?.querySelector(".rbp-pill")?.textContent.trim() === "Waiting" &&
+					(c.textContent ?? "").includes("Waits for its lead to answer")
+				);
+			}),
+		30_000,
+	);
+	check("the Roles page shows task #1 waiting for its lead (systems) to answer", !!rLine);
 
 	WO.prompt(`TRY 1 ${card1?.tag ?? "k00000000"} ops-s1`);
 	const opsTry = await waitFor(() => seen.tries.get("ops-s1"), 30_000);

@@ -2,22 +2,26 @@
  * pages-live E2E (Ops #244, H-PAGES-LIVE-2 in docs/pages-live.md; no tokens, no live data): the Roles page
  * after coming back to its tab.
  *
+ * The Roles page is roles-by-project (root .rbp; frontend #299 moved this test over from the deleted Roles frame):
+ * it has no status pill, so "live" here is its board on screen (As of, no loading note, no error banner), and
+ * fresh means that board is shown with an overview the new socket confirmed. The old pill's "asks unknown" state
+ * has no counterpart on the new page (it keeps the last board under its error banner by design, spec-page.md).
+ *
  * The test's own server (tests/lib/own-server.mjs) with one fixture role, and headless Chrome. Each run is
  * its own browser context behind its own small TCP proxy (so the test can cut that page's socket):
- *  1. Roles open and live ("Live · updated …").
+ *  1. Roles open and live (the board with "As of").
  *  2. The tab is hidden and frozen (like a phone screen going off or a background tab), and its socket
  *     is cut while it is frozen (the close the connection log shows as 1006).
  *  3. After PAGES_LIVE_HIDDEN_MS (60 s), the tab is resumed and shown. From then on the page is sampled
- *     every 100 ms: the status pill's words and colour, the app's "Reconnecting…" note, and whether the
- *     owner's asks still say "unknown".
- * Measured: time to fresh data on screen (the pill says Live again), and whether a red or amber pill or the
- * note showed first. Runs start PAGES_LIVE_STAGGER_MS apart and overlap, so 10 take about 2.5 minutes.
+ *     every 100 ms: the page's state (board, loading or error banner) and the app's "Reconnecting…" note.
+ * Measured: time to fresh data on screen (the board, with a confirmed overview on the new socket), and whether
+ * the error banner or the note showed first. Runs start PAGES_LIVE_STAGGER_MS apart and overlap, so 10 take
+ * about 2.5 minutes.
  *
- * Checks: every run fresh within 8 s; p90 within 3 s; no red or amber pill and no note in a run that was
- * fresh within 8 s; the owner's asks never shown as known before the pill is Live; the connection log's
- * records of these returns carry view "roles" and shownMs.
- * On code without pages-live (the control), the pill turns red at once and stays unconfirmed until the
- * server's 30 s heartbeat, and the log has no view or shownMs.
+ * Checks: every run fresh within 8 s; p90 within 3 s; no error banner and no note in a run that was fresh
+ * within 8 s; the connection log's records of these returns carry view "roles" and shownMs.
+ * On code without pages-live (the control), no new overview is confirmed until the server's 30 s heartbeat,
+ * and the log has no view or shownMs.
  *
  * Usage: npm run build && node tests/run-sealed.mjs --no-build pages-live-test
  *   PAGES_LIVE_OUT=<file.jsonl>: also write each run's numbers there.
@@ -138,22 +142,17 @@ async function cutLink(target) {
 	};
 }
 
-/** The pill's words and colour and whether the asks say unknown (read from the host; the frame runs no script). */
+/** The Roles page's state: "error" (its banner), "loading" (its note), "board" (As of shown) or null. */
 function look(page) {
 	return page.evaluate(() => {
-		const doc = document.querySelector('iframe[title="Roles"]')?.contentDocument;
-		const el = doc?.querySelector('header [role="status"]');
-		const body = doc?.body?.innerText ?? "";
-		return {
-			text: el?.textContent ?? null,
-			color: el?.style.color ?? "",
-			unknown: /current (?:total|asks)[^\n]*unknown/i.test(body),
-		};
+		const root = document.querySelector(".rbp");
+		if (!root) return { text: null };
+		if (root.querySelector('[role="alert"]')) return { text: "error" };
+		if (root.querySelector(".rbp-loadnote")) return { text: "loading" };
+		return { text: root.querySelector(".rbp-asof")?.textContent?.startsWith("As of") ? "board" : null };
 	});
 }
-const RED = /255,\s*138,\s*128|#ff8a80/i;
-const AMBER = /240,\s*185,\s*90|#f0b95a/i;
-const live = (s) => typeof s?.text === "string" && s.text.startsWith("Live ·");
+const live = (s) => s?.text === "board";
 
 async function setHidden(page, hidden) {
 	await page.evaluate((h) => {
@@ -233,7 +232,7 @@ async function oneRun(i) {
 	try {
 		await page.goto(`${link.http}/?view=roles`);
 		const ready = await until(async () => live(await look(page)), 90_000);
-		if (!ready) return { run: i, error: `never live before hiding (pill: ${(await look(page)).text})` };
+		if (!ready) return { run: i, error: `never live before hiding (page: ${(await look(page)).text})` };
 		await sleep(2_000);
 		await setHidden(page, true);
 		// Frozen where Chrome honours it (headless may keep running timers); either way the socket is cut and
@@ -251,7 +250,6 @@ async function oneRun(i) {
 		let freshMs = null;
 		let alarm = null;
 		let note = false;
-		let falseAllClear = false;
 		// Until the page notices the cut socket, it still shows its screen from before (Live): measured, not judged.
 		let oldLiveMs = null;
 		let noticed = false;
@@ -280,9 +278,8 @@ async function oneRun(i) {
 			}
 			if (live(s) && !noticed) oldLiveMs = ms;
 			else noticed = true;
-			if (!alarm && (RED.test(s.color) || AMBER.test(s.color))) alarm = { ms, text: s.text };
+			if (!alarm && s.text === "error") alarm = { ms, text: s.text };
 			if (n && !note) note = ms;
-			if (!live(s) && !s.unknown) falseAllClear = true;
 			await sleep(100);
 		}
 		const next = sockets.find((k) => k.openedAt >= back && k.firstAt !== null);
@@ -300,7 +297,6 @@ async function oneRun(i) {
 			oldLiveMs,
 			alarm,
 			noteMs: note === false ? null : note,
-			falseAllClear,
 			seen,
 		};
 	} catch (err) {
@@ -339,20 +335,12 @@ try {
 	check("fresh Roles data within 3 s p90", summary.p90 !== null && summary.p90 <= 3_000, `p90 ${summary.p90} ms`);
 	const calmWhenFresh = ok.filter((r) => r.freshMs !== null && r.freshMs <= GRACE_MS);
 	check(
-		"no red or amber pill and no Reconnecting note before fresh data came back within 8 s",
+		"no error banner and no Reconnecting note before fresh data came back within 8 s",
 		calmWhenFresh.length > 0 && calmWhenFresh.every((r) => !r.alarm && r.noteMs === null),
 		calmWhenFresh
 			.filter((r) => r.alarm || r.noteMs !== null)
 			.map((r) => `run ${r.run}: ${r.alarm ? `"${r.alarm.text}" at ${r.alarm.ms} ms` : ""} ${r.noteMs ?? ""}`)
 			.join("; "),
-	);
-	check(
-		"the owner's asks are never shown as known while the pill isn't Live",
-		ok.every((r) => !r.falseAllClear),
-		ok
-			.filter((r) => r.falseAllClear)
-			.map((r) => `run ${r.run}`)
-			.join(", "),
 	);
 	// The trace: each return leaves a record whose episode ended on the Roles view, with shownMs.
 	await sleep(3_000);

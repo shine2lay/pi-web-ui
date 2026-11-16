@@ -1,5 +1,7 @@
 /* roles-answer: sealed native question -> Roles -> AskHub -> owner record, native stuck task and plan
- * confirmation. Real pi-queue, fake model, Chrome and axe; no live data or paid model. The fake model
+ * confirmation. The Roles page is roles-by-project (root .rbp): each ask is a card in "Needs you" with one Answer
+ * button (frontend #299 moved these checks over from the deleted Roles frame).
+ * Real pi-queue, fake model, Chrome and axe; no live data or paid model. The fake model
  * never inspects a request body. Output is fixed labels and counts, never model inputs or tool results.
  * Run after build: scripts/sealed.sh node tests/roles-answer-test.mjs
  * ROLES_ANSWER_SHOTS may name a directory for synthetic desktop/phone screenshots.
@@ -241,25 +243,21 @@ try {
 		pageErrors++;
 	});
 	await page.goto(`${srv.http}/?view=roles`);
-	const frame = page.frameLocator('iframe[title="Roles"]');
-	await frame.locator('button[aria-haspopup="dialog"]').first().waitFor();
-	check("the supplied Roles design remains mounted", (await frame.locator("[data-boxgrid]").count()) === 1);
-	const panel = frame.locator('[role="region"]');
+	const root = page.locator(".rbp");
+	const ready = () => root.getByRole("radio", { name: "Project" }).waitFor({ timeout: 20000 });
+	await ready();
+	check("the Roles page (roles-by-project) is mounted", (await root.count()) === 1);
+	/** The ask's card in Needs you; cards past the first row are shown with "Show N more". */
+	const cardOf = (text) => root.locator("article.rbp-askc").filter({ hasText: text });
+	const showAll = async () => {
+		const more = root.getByRole("button", { name: /^Show \d+ more$/ });
+		if (await more.count()) await more.click();
+	};
 	const clickAnswer = async (text) => {
 		if (typeof text !== "string") throw new Error("fixture ask label missing");
-		if (!(await panel.count()))
-			await frame.getByRole("button", { name: "You: open your decisions, questions and spending" }).click();
-		// Observe settlement from the host: the frame intentionally cannot execute timers/scripts.
-		await page.waitForFunction(() => {
-			const region = document.querySelector('iframe[title="Roles"]')?.contentDocument?.querySelector('[role="region"]');
-			return region?.style.overflowY === "auto";
-		});
-		await panel
-			.locator("p")
-			.filter({ hasText: text })
-			.locator("..")
-			.getByRole("button", { name: "Answer", exact: true })
-			.click();
+		await cardOf(text).first().waitFor({ state: "attached" });
+		await showAll();
+		await cardOf(text).getByRole("button", { name: "Answer", exact: true }).click();
 	};
 	const dialog = page.locator("dialog.roles-answer");
 	if (!onlyStuck && !onlyNative) {
@@ -421,29 +419,31 @@ try {
 		);
 		check("forged native permission submission is refused", forged.ok === false);
 		await page.goto(`${srv.http}/?view=roles`);
-		await frame.getByRole("button", { name: "You: open your decisions, questions and spending" }).click();
-		await page.waitForFunction(
-			() =>
-				document.querySelector('iframe[title="Roles"]')?.contentDocument?.querySelector('[role="region"]')?.style
-					.overflowY === "auto",
-		);
-		const nativeRow = (item) => panel.locator("p").filter({ hasText: item.text }).locator("..");
-		await nativeRow(native[0]).getByRole("button", { name: "Answer in chat", exact: true }).waitFor();
+		await ready();
+		// The chat handoff: the card's Answer button that opens the question in its own chat (spec-page.md §Answering).
+		const inChat = (item) => cardOf(item.text).locator('button[title^="Opens the question in its own chat"]');
+		await cardOf(native[0].text).first().waitFor({ state: "attached" });
+		await showAll();
+		await inChat(native[0]).waitFor();
 		check(
 			"later question in the same chat is truthfully navigation-only",
-			(await nativeRow(native[1]).getByRole("button", { name: "Answer in chat", exact: true }).count()) === 0 &&
-				(await nativeRow(native[1]).textContent()).includes("currently shown dialog"),
+			(await cardOf(native[1].text).getByRole("button", { name: "Answer", exact: true }).count()) === 0 &&
+				(await cardOf(native[1].text).textContent()).includes("currently shown dialog"),
 		);
 		for (const [label, width, height] of [
 			["desktop", 1440, 1000],
 			["phone", 390, 844],
 		]) {
 			await page.setViewportSize({ width, height });
-			const measure = await panel.evaluate((el) => ({
-				overflow: el.scrollWidth - el.clientWidth,
+			await inChat(native[0]).scrollIntoViewIfNeeded();
+			const measure = await root.evaluate((el) => ({
+				overflow: Math.max(
+					el.scrollWidth - el.clientWidth,
+					document.documentElement.scrollWidth - document.documentElement.clientWidth,
+				),
 				action:
-					Array.from(el.querySelectorAll("button"))
-						.find((b) => b.textContent === "Answer in chat")
+					el
+						.querySelector('article.rbp-askc button[title^="Opens the question in its own chat"]')
 						?.getBoundingClientRect().width ?? 0,
 			}));
 			check(`native handoff action fits ${label}`, measure.overflow <= 1 && measure.action >= 44);
@@ -452,7 +452,7 @@ try {
 				await page.screenshot({ path: join(shots, `roles-chat-action-${label}.png`) });
 			}
 		}
-		await nativeRow(native[0]).getByRole("button", { name: "Answer in chat", exact: true }).focus();
+		await inChat(native[0]).focus();
 		await page.keyboard.press("Enter");
 		const nativePanel = page.locator(".dialog-inline");
 		await nativePanel.getByText("Fixture permission approval", { exact: true }).waitFor();
@@ -475,15 +475,12 @@ try {
 			await until(() => !roles.asks.some((a) => a.key === native[0].key)),
 		);
 		await page.goto(`${srv.http}/?view=roles`);
-		await frame.getByRole("button", { name: "You: open your decisions, questions and spending" }).click();
-		await page.waitForFunction(
-			() =>
-				document.querySelector('iframe[title="Roles"]')?.contentDocument?.querySelector('[role="region"]')?.style
-					.overflowY === "auto",
-		);
-		await nativeRow(native[1]).getByRole("button", { name: "Answer in chat", exact: true }).waitFor();
+		await ready();
+		await cardOf(native[1].text).first().waitFor({ state: "attached" });
+		await showAll();
+		await inChat(native[1]).waitFor();
 		check("the second native question becomes actionable only when actually shown", true);
-		await nativeRow(native[1]).getByRole("button", { name: "Answer in chat", exact: true }).click();
+		await inChat(native[1]).click();
 		await nativePanel.getByText("Fixture budget approval", { exact: true }).waitFor();
 		check(
 			"second handoff preserves exact budget context",
@@ -498,20 +495,19 @@ try {
 	if (page) {
 		const diagnostic = await page
 			.evaluate(() => {
-				const d = document.querySelector('iframe[title="Roles"]')?.contentDocument;
-				const region = d?.querySelector('[role="region"]');
+				const root = document.querySelector(".rbp");
 				return {
 					viewport: { width: innerWidth, height: innerHeight },
-					region: region ? { overflow: region.style.overflowY, scroll: region.scrollTop } : null,
-					actions: Array.from(d?.querySelectorAll("button") ?? [])
-						.filter((b) => b.textContent === "Answer in chat")
-						.map((b) => {
-							const r = b.getBoundingClientRect();
-							return {
-								box: { x: r.x, y: r.y, width: r.width, height: r.height },
-								hit: d.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === b,
-							};
-						}),
+					root: !!root,
+					cards: root?.querySelectorAll("article.rbp-askc").length ?? 0,
+					actions: Array.from(root?.querySelectorAll("article.rbp-askc button") ?? []).map((b) => {
+						const r = b.getBoundingClientRect();
+						return {
+							label: b.textContent,
+							box: { x: r.x, y: r.y, width: r.width, height: r.height },
+							hit: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === b,
+						};
+					}),
 				};
 			})
 			.catch(() => null);

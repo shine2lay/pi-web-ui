@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // pages-live (Ops #244): the shared pieces (page-live.ts) and the Roles store's wait (roles-state.ts).
-// The Roles page's Updating pill: roles-exact.test.ts; the server's quick confirmation: roles-overview.test.ts;
+// The Roles page's states (board, loading, error): roles-by-project tests; the server's quick confirmation: roles-overview.test.ts;
 // the trace fields: conn-trace.test.ts and conn-events.test.ts; the real return: tests/pages-live-test.mjs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAppGlobals, setAppSend } from "../../web/src/app-globals.js";

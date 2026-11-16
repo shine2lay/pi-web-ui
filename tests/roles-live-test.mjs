@@ -1,11 +1,11 @@
-/* roles-live (Ops #272, docs/live-progress.md, H-ROLES-LIVE-1's sealed parts): one role with a working task whose
- * own chat has a TL;DR line, a done task with a queue_done summary, and a line in its home chat. On the Roles page,
- * the role's panel shows the working task's Latest progress with that line's time (it said "Not recorded"); a new
- * line written in the task chat shows within one overview refresh (at most 4 s), with its time; and Activity lists
- * the task lines ("#N <line>"), the done summary ("#N done: <summary>") and the home line, newest first, each timed.
- * Real server and page, Chrome; no model is ever asked. Until Ops #270's server sends doneRecent, the test adds it
- * on the wire exactly as #270 builds it from the same done record (the contract's fixture); a server that sends it
- * is used as it is. Output is fixed labels, counts and times only, never chat text.
+/* roles-live (Ops #272 H-ROLES-LIVE-1's sealed parts, retargeted onto the roles-by-project page by frontend #299):
+ * one role with a working task and a done task whose queue_done summary is on record. On the Roles page (root .rbp,
+ * grouped by Department), the role's opened tile shows the working task as Working and the done task with its
+ * summary; a task finished in the role's home chat (a real queue record, as pi-queue writes it) shows as Done with
+ * its own summary within one overview refresh (at most 4 s), and within 1 s of the overview that brings it.
+ * The old page's per-role "Latest progress" and "Recent activity" (TL;DR lines) are not on the new page by design
+ * (spec-page.md, design-elements.md: tiles and task maps only), so they are no longer checked here.
+ * Real server and page, Chrome; no model is ever asked. Output is fixed labels, counts and times only.
  * Run after build: scripts/sealed.sh node tests/roles-live-test.mjs
  */
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -20,36 +20,24 @@ const ROLE = "design";
 const ROLE_TITLE = "Fixture Design";
 const MIN = 60_000;
 const now = Date.now();
-/** Queue records an hour back, so the task's line (10 min back) is newer than its "started" milestone. */
 const T_OPS = now - 60 * MIN;
-const T_HOME = now - 30 * MIN;
 const T_DONE = now - 20 * MIN;
-const T_FIRST = now - 10 * MIN;
-const HOME_LINE = "Fixture home line";
-const FIRST_LINE = "Fixture first task line";
-const NEW_LINE = "Fixture newer task line";
 const DONE_SUMMARY = "Fixture done summary";
-/** What Ops #270's server sends for the seeded done record (docs/live-progress.md, UiRoleDoneTask). */
-const FIXTURE_DONE = [{ id: 2, title: "Fixture task 2", summary: DONE_SUMMARY, at: T_DONE }];
+const NEW_SUMMARY = "Fixture newer done summary";
 /** One overview refresh: the server looks every 3 s while a Roles page is open (RolesWatch fullMs). */
 const REFRESH_LIMIT_MS = 4000;
 /** The page shows what an overview brings this soon after it arrives. */
 const PAGE_LIMIT_MS = 1000;
 
-let identities, work, taskChat;
-let lastId = null;
+let identities, work, home;
+let homeLast = null;
 let failures = 0,
 	pageErrors = 0;
-const check = (name, ok) => {
-	console.log(`${ok ? "PASS" : "FAIL"} ${name}`);
+const check = (name, ok, detail = "") => {
+	console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok || !detail ? "" : ` (${detail})`}`);
 	if (!ok) failures++;
 };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const hhmm = (t) => {
-	const d = new Date(t);
-	return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
-};
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 function seed({ root, agentDir, workdir }) {
 	const settings = join(agentDir, "settings.json");
@@ -61,7 +49,7 @@ function seed({ root, agentDir, workdir }) {
 	mkdirSync(sessions, { recursive: true });
 	const idOf = (n) => `01a0f000-0000-7000-8000-${String(n).padStart(12, "0")}`;
 	const fileOf = (n) => join(sessions, `2026-10-19T00-00-${String(n).padStart(2, "0")}-000Z_${idOf(n)}.jsonl`);
-	/** A saved chat: its header, a model line, then the given custom entries (queue records, TL;DR lines). */
+	/** A saved chat: its header, a model line, then the given custom entries (queue records). */
 	function transcript(file, id, entries) {
 		let parentId = null;
 		const lines = [{ type: "session", version: 3, id, timestamp: new Date(T_OPS).toISOString(), cwd: workdir }];
@@ -76,11 +64,10 @@ function seed({ root, agentDir, workdir }) {
 		return parentId;
 	}
 	const queue = (op) => ({ type: "custom", customType: "queue", data: { v: 1, ts: T_OPS, ...op } });
-	const tldr = (text, ts) => ({ type: "custom", customType: "tldr", data: { v: 1, text, needsYou: false, ts } });
-	const home = fileOf(1);
-	taskChat = fileOf(2);
+	home = fileOf(1);
+	const taskChat = fileOf(2);
 	const doneChat = fileOf(3);
-	lastId = transcript(taskChat, idOf(2), [tldr(FIRST_LINE, T_FIRST)]);
+	transcript(taskChat, idOf(2), []);
 	transcript(doneChat, idOf(3), []);
 	const plan = (i) => ({
 		title: `Fixture task ${i}`,
@@ -91,7 +78,7 @@ function seed({ root, agentDir, workdir }) {
 		verify: "None",
 		mustNot: "Touch live state",
 	});
-	transcript(home, idOf(1), [
+	homeLast = transcript(home, idOf(1), [
 		queue({ op: "lanes", n: 2 }),
 		queue({ op: "add", id: 1, plan: plan(1), standalone: true, touches: ["fixture-1"] }),
 		queue({ op: "add", id: 2, plan: plan(2), standalone: true, touches: ["fixture-2"] }),
@@ -101,7 +88,6 @@ function seed({ root, agentDir, workdir }) {
 		queue({ op: "start", id: 2, lane: true }),
 		queue({ op: "chat", id: 2, file: doneChat, title: "Fixture task chat 2" }),
 		queue({ op: "done", id: 2, summary: DONE_SUMMARY, ts: T_DONE }),
-		tldr(HOME_LINE, T_HOME),
 	]);
 	identities = join(root, "identities");
 	work = join(agentDir, "work");
@@ -113,18 +99,18 @@ function seed({ root, agentDir, workdir }) {
 	writeFileSync(join(identities, ROLE, "about.md"), `# ${ROLE_TITLE}\n`);
 	writeFileSync(join(identities, ROLE, "notebook.md"), "");
 }
-/** Writes a TL;DR line into the task's own chat, as pi-tldr does. */
-function writeLine(text, ts) {
+/** Finishes task 1 in the role's home chat, as pi-queue's queue_done records it. */
+function finishTask(summary, ts) {
 	const row = {
 		type: "custom",
-		customType: "tldr",
-		data: { v: 1, text, needsYou: false, ts },
-		id: "f-new",
-		parentId: lastId,
+		customType: "queue",
+		data: { v: 1, ts, op: "done", id: 1, summary },
+		id: "f-done-1",
+		parentId: homeLast,
 		timestamp: new Date(ts).toISOString(),
 	};
-	appendFileSync(taskChat, `${JSON.stringify(row)}\n`);
-	lastId = row.id;
+	appendFileSync(home, `${JSON.stringify(row)}\n`);
+	homeLast = row.id;
 }
 
 const srv = await ownServer({
@@ -148,29 +134,9 @@ const hardStop = setTimeout(() => {
 	void srv.stop();
 }, 180000);
 hardStop.unref();
-/** Whether the server itself sent doneRecent (null: no overview seen yet). */
-let serverDone = null;
 let overviews = 0;
-/** When the first overview carrying the new line reached this process (on its way to the page). */
-let newLineAt = null;
-/** Server -> page: an overview passes as it is; one without doneRecent gets the contract's fixture. */
-function relay(message) {
-	if (typeof message !== "string" || !message.startsWith('{"type":"roles"')) return message;
-	let msg;
-	try {
-		msg = JSON.parse(message);
-	} catch {
-		return message;
-	}
-	const row = msg.overview?.roles?.find((r) => r?.id === ROLE);
-	if (!row) return message;
-	overviews++;
-	if (newLineAt === null && message.includes(NEW_LINE)) newLineAt = Date.now();
-	serverDone ??= "doneRecent" in row;
-	if ("doneRecent" in row) return message;
-	row.doneRecent = FIXTURE_DONE;
-	return JSON.stringify(msg);
-}
+/** When the first overview carrying the new summary reached the page. */
+let newAt = null;
 try {
 	browser = await chromium.launch({ executablePath: CHROME_PATH, headless: true });
 	const context = await browser.newContext({
@@ -178,79 +144,73 @@ try {
 		locale: "en-US",
 		timezoneId: "UTC",
 	});
-	await context.routeWebSocket(/\/ws(\?|$)/, (ws) => {
-		const server = ws.connectToServer();
-		server.onMessage((message) => ws.send(relay(message)));
-	});
 	const page = await context.newPage();
 	page.on("pageerror", () => {
 		pageErrors++;
 	});
+	page.on("websocket", (ws) =>
+		ws.on("framereceived", ({ payload }) => {
+			if (typeof payload !== "string" || !payload.startsWith('{"type":"roles"')) return;
+			overviews++;
+			if (newAt === null && payload.includes(NEW_SUMMARY)) newAt = Date.now();
+		}),
+	);
 	await page.goto(`${srv.http}/?view=roles`);
-	const frame = page.frameLocator('iframe[title="Roles"]');
-	const card = frame.locator('button[aria-haspopup="dialog"]', { hasText: ROLE_TITLE }).first();
-	await card.waitFor({ timeout: 30000 });
-	await card.click();
-	/** The open panel's Latest progress (its words and time) and its Activity rows ([time, text]). */
-	const readPanel = () =>
-		page.evaluate(() => {
-			const region = document.querySelector('iframe[title="Roles"]')?.contentDocument?.querySelector('[role="region"]');
-			if (!region) return null;
-			const dt = [...region.querySelectorAll("dt")].find((d) => d.textContent.trim() === "Latest progress");
-			const h3 = [...region.querySelectorAll("h3")].find((h) => h.textContent.trim() === "Recent activity");
-			const section = h3?.closest("section");
-			return {
-				progress: dt?.nextElementSibling?.textContent.replace(/\s+/g, " ").trim() ?? null,
-				acts: section
-					? [...section.querySelectorAll("ul > li")].map((li) =>
-							[...li.querySelectorAll(":scope > span")].map((s) => s.textContent.trim()),
-						)
-					: null,
+	const root = page.locator(".rbp");
+	await root.getByRole("radio", { name: "Department" }).click({ timeout: 30000 });
+	const tile = root.locator("button[aria-expanded]").filter({ hasText: ROLE_TITLE }).first();
+	await tile.waitFor({ timeout: 30000 });
+	await tile.click();
+	/** Task N's card on the page: its state pill's words and its text (null when absent). */
+	const readCards = () =>
+		root.evaluate((el, role) => {
+			const card = (n) => {
+				const c = el.querySelector(`article.rbp-task[data-ref="${role} #${n}"]`);
+				return c
+					? {
+							pill: c.querySelector(".rbp-pill")?.textContent.trim() ?? null,
+							text: c.textContent.replace(/\s+/g, " ").trim(),
+						}
+					: null;
 			};
-		});
+			return { one: card(1), two: card(2) };
+		}, ROLE);
 	const until = async (test, ms) => {
 		const end = Date.now() + ms;
 		for (;;) {
-			const panel = await readPanel();
-			if (panel && test(panel)) return { panel, at: Date.now() };
-			if (Date.now() >= end) return { panel, at: null };
+			const cards = await readCards();
+			if (test(cards)) return { cards, at: Date.now() };
+			if (Date.now() >= end) return { cards, at: null };
 			await sleep(50);
 		}
 	};
-	const firstProgress = `${FIRST_LINE} · ${hhmm(T_FIRST)}`;
-	const before = await until((p) => p.progress === firstProgress, 15000);
-	check("a working task's Latest progress shows its own chat's line with that line's time", before.at !== null);
-	check('its time is recorded (not "Not recorded")', !(before.panel?.progress ?? "").includes("Not recorded"));
-	const doneRow = [hhmm(T_DONE), `#2 done: ${DONE_SUMMARY}`];
+	const before = await until((c) => c.one?.pill === "Working" && !!c.two, 15000);
 	check(
-		"Activity: the task line, the done summary and the home line, newest first, each with its time",
-		same(before.panel?.acts, [[hhmm(T_FIRST), `#1 ${FIRST_LINE}`], doneRow, [hhmm(T_HOME), HOME_LINE]]),
+		"the role's opened tile shows its working task as Working",
+		before.at !== null,
+		JSON.stringify(before.cards?.one),
+	);
+	check(
+		"and its done task as Done with its queue_done summary",
+		before.cards?.two?.pill === "Done" && before.cards.two.text.includes(DONE_SUMMARY),
+		JSON.stringify(before.cards?.two),
 	);
 
-	// A new line in the task chat, as pi-tldr writes it.
+	// Task 1 finishes in the home chat, as pi-queue writes it.
 	const written = Date.now();
-	writeLine(NEW_LINE, written);
-	const after = await until((p) => p.progress === `${NEW_LINE} · ${hhmm(written)}`, 15000);
+	finishTask(NEW_SUMMARY, written);
+	const after = await until((c) => c.one?.pill === "Done" && c.one.text.includes(NEW_SUMMARY), 15000);
 	const took = after.at === null ? null : after.at - written;
-	console.log(`new line shown after ${took === null ? "never" : `${took} ms`} (${overviews} overviews seen)`);
+	console.log(`finished task shown after ${took === null ? "never" : `${took} ms`} (${overviews} overviews seen)`);
 	check(
-		`the new line shows in Latest progress with its time within ${REFRESH_LIMIT_MS} ms`,
+		`a task finished in the home chat shows as Done with its summary within ${REFRESH_LIMIT_MS} ms`,
 		took !== null && took <= REFRESH_LIMIT_MS,
+		JSON.stringify(after.cards?.one),
 	);
 	check(
 		`the page shows it within ${PAGE_LIMIT_MS} ms of the overview that brings it`,
-		after.at !== null && newLineAt !== null && after.at - newLineAt <= PAGE_LIMIT_MS,
+		after.at !== null && newAt !== null && after.at - newAt <= PAGE_LIMIT_MS,
 	);
-	check(
-		"Activity: the new line first, then the older line, the done summary and the home line",
-		same(after.panel?.acts, [
-			[hhmm(written), `#1 ${NEW_LINE}`],
-			[hhmm(T_FIRST), `#1 ${FIRST_LINE}`],
-			doneRow,
-			[hhmm(T_HOME), HOME_LINE],
-		]),
-	);
-	console.log(`doneRecent ${serverDone ? "sent by the server" : "added on the wire (the server leaves it out)"}`);
 	check("no page errors", pageErrors === 0);
 } catch (error) {
 	console.error(`FAIL ${error instanceof Error ? error.message : "fixture error"}`);

@@ -1,8 +1,8 @@
 /* roles-asks-read (Ops #268, docs/roles-asks-read.md): a role with 12 started task chats and an open dialog
  * in its 11th. The server reads every started chat (up to 40 per role) and says so per role (allChatsRead);
- * the Roles page lists that ask as waiting on the owner, and its status pill says Live, not "Asks
- * unconfirmed: some roles not read". Without the fix the server read 8 chats: the ask was missing and the
- * pill said unconfirmed. Real server, fake model, Chrome; no live data or paid model. The fake model never
+ * the Roles page (roles-by-project, root .rbp) lists that ask under "Needs you · 1" with its Answer button, and
+ * 10 s after opening shows its board (As of, no error banner, no loading note). Without the fix the server read 8
+ * chats: the ask was missing. Real server, fake model, Chrome; no live data or paid model. The fake model never
  * inspects a request body. Output is fixed labels and counts only, never chat text or model inputs.
  * Run after build: scripts/sealed.sh node tests/roles-asks-read-test.mjs
  */
@@ -19,7 +19,6 @@ const STARTED = 12;
 /** The started chat (1-based) whose model opens the dialog: past the 8 an older server read. */
 const ASKING = 11;
 const QUESTION = "Fixture question in the eleventh task chat: alpha or beta?";
-const UNCONFIRMED = "Asks unconfirmed";
 const now = Date.now();
 let home, identities, work;
 const chats = [];
@@ -184,30 +183,30 @@ try {
 	});
 	const opened = Date.now();
 	await page.goto(`${srv.http}/?view=roles`);
-	const frame = page.frameLocator('iframe[title="Roles"]');
-	await frame.locator('button[aria-haspopup="dialog"]').first().waitFor();
-	const pill = frame.locator('header [role="status"]');
-	const you = frame.getByText("1 waiting on you", { exact: true }).first();
+	const root = page.locator(".rbp");
+	await root.getByRole("radio", { name: "Project" }).waitFor({ timeout: 20000 });
+	const you = root.locator("summary").filter({ hasText: /^Needs you · 1$/ });
 	await you.waitFor({ timeout: 15000 }).catch(() => {});
-	check("the page counts the ask as waiting on you", await you.isVisible());
-	// The live check's moment: the status words 10 s after opening.
+	check("the page counts the ask: Needs you · 1", await you.isVisible());
+	// The live check's moment: the page 10 s after opening.
 	await sleep(Math.max(0, opened + 10000 - Date.now()));
-	const words = await pill.innerText();
-	check("10 s after opening the status pill says Live", words.startsWith("Live"));
-	check("and never that asks are unconfirmed", !words.includes(UNCONFIRMED));
-	await frame.getByRole("button", { name: "You: open your decisions, questions and spending" }).click();
-	const panel = frame.locator('[role="region"]');
-	const row = panel
-		.locator("p")
-		.filter({ hasText: ask?.text ?? QUESTION })
-		.locator("..");
-	await row
+	const shown = await root.evaluate((el) => ({
+		asOf: !!el.querySelector(".rbp-asof")?.textContent?.startsWith("As of"),
+		alert: el.querySelectorAll('[role="alert"]').length,
+		loading: el.querySelectorAll(".rbp-loadnote").length,
+	}));
+	check(
+		"10 s after opening the page shows its board: As of, no error banner, no loading note",
+		shown.asOf && shown.alert === 0 && shown.loading === 0,
+	);
+	const card = root.locator("article.rbp-askc").filter({ hasText: ask?.text ?? QUESTION });
+	await card
 		.first()
 		.waitFor({ timeout: 10000 })
 		.catch(() => {});
 	check(
-		"your list shows the 11th chat's question with its Answer button",
-		(await row.count()) >= 1 && (await row.getByRole("button", { name: "Answer", exact: true }).count()) >= 1,
+		"Needs you shows the 11th chat's question with its Answer button",
+		(await card.count()) >= 1 && (await card.getByRole("button", { name: "Answer", exact: true }).count()) >= 1,
 	);
 	check("no page errors", pageErrors === 0);
 } catch (error) {
