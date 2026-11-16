@@ -90,7 +90,7 @@ try {
 		.catch(() => {});
 
 	// The terminal.
-	await (await revealTopbarItem(page, '[role="tab"]:has-text("Terminal")')).click();
+	await (await revealTopbarItem(page, '.tb-tab:has-text("Terminal")')).click();
 	await page.locator(".xterm").first().waitFor({ state: "visible", timeout: 30_000 });
 	await sleep(1500);
 	await shot("terminal");

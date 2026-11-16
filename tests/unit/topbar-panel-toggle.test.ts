@@ -138,7 +138,7 @@ describe("TopBar 是单一扁直流（无按种类包裹的容器、无贴边例
 		expect(container.querySelector(".view-switch")).toBeNull();
 		expect(container.querySelector(".topbar-desktop")).toBeNull();
 		expect(container.querySelector(".topbar-actions")).toBeNull();
-		for (const sel of ['[role="tab"]', "button.panel-toggle", "button.newchat"]) {
+		for (const sel of ["button.tb-tab", "button.panel-toggle", "button.newchat"]) {
 			const el = flow!.querySelector(sel);
 			expect(el, sel).toBeTruthy();
 			expect(el!.parentElement, sel).toBe(flow);
@@ -469,10 +469,12 @@ describe("TopBar 槽位渲染（顺序即 slot 顺序，插件条目与宿主条
 			hostEntry("host:chat"),
 			hostEntry("host:terminal"),
 		]);
-		const tabs = Array.from(container.querySelectorAll('[role="tab"]'));
+		const tabs = Array.from(container.querySelectorAll(".tb-tab"));
 		expect(tabs.length).toBe(3);
 		// 选中的 terminal 落在 slot 顺序的最后一位（文案随语言包变，用选中态定位）。
-		expect(tabs.findIndex((b) => b.getAttribute("aria-selected") === "true")).toBe(2);
+		expect(tabs.findIndex((b) => b.getAttribute("aria-current") === "page")).toBe(2);
+		// frontend #295: the toolbar's view buttons are buttons, never a role=tab without a tablist.
+		expect(container.querySelectorAll('.topbar-flow [role="tab"]').length).toBe(0);
 		tabs.forEach((t) => expect(t.parentElement?.classList.contains("topbar-flow")).toBe(true));
 	});
 
@@ -482,7 +484,7 @@ describe("TopBar 槽位渲染（顺序即 slot 顺序，插件条目与宿主条
 			pluginViewEntry("mail:__view", "Mailbox", "plugin:mail"),
 			hostEntry("host:terminal"),
 		]);
-		const tabs = Array.from(container.querySelectorAll('[role="tab"]'));
+		const tabs = Array.from(container.querySelectorAll(".tb-tab"));
 		expect(tabs.length).toBe(3);
 		expect(tabs[1].classList.contains("plugin-tab")).toBe(true);
 		expect(tabs[1].textContent).toContain("Mailbox");

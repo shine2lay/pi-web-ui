@@ -169,7 +169,7 @@ try {
 			.waitFor({ state: "detached", timeout: 10_000 })
 			.catch(() => {});
 		// Terminal: loads when opened.
-		await (await revealTopbarItem(page, '[role="tab"]:has-text("Terminal")')).click();
+		await (await revealTopbarItem(page, '.tb-tab:has-text("Terminal")')).click();
 		const term = await page
 			.locator(".terminal-view .xterm")
 			.first()

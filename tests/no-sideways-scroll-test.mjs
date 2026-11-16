@@ -605,7 +605,7 @@ function unreachable(page) {
 }
 
 async function gotoView(page, label, waitFor) {
-	const tab = await revealTopbarItem(page, `[role="tab"]:has-text("${label}")`);
+	const tab = await revealTopbarItem(page, `.tb-tab:has-text("${label}")`);
 	await tab.click();
 	await page.waitForSelector(waitFor, { timeout: 15_000 });
 	await settle(page, 600);

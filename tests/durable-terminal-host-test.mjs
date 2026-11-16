@@ -99,7 +99,10 @@ try {
 	await page.goto(server.http);
 	await deadline(initialized.promise, "startup");
 	await page.waitForFunction(() => !!sessionStorage.getItem("pi-web-pending-owner-v1"));
-	await page.getByRole("tab", { name: "Terminal", exact: true }).click();
+	await page
+		.locator(".topbar-flow .tb-tab")
+		.filter({ hasText: /^Terminal$/ })
+		.click();
 	const button = page.locator(".cmd-item").filter({ hasText: command.name }).locator(".cmd-run");
 	await button.waitFor();
 	await button.click();
@@ -147,7 +150,10 @@ try {
 	attached = deferred();
 	await page.reload();
 	await deadline(initialized.promise, "reload startup");
-	await page.getByRole("tab", { name: "Terminal", exact: true }).click();
+	await page
+		.locator(".topbar-flow .tb-tab")
+		.filter({ hasText: /^Terminal$/ })
+		.click();
 	const remount = await deadline(attached.promise, "reload existing terminal replay");
 	await page.locator('[data-attach-state="attached"]').waitFor();
 	check(

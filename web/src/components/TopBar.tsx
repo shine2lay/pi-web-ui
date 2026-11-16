@@ -1015,8 +1015,7 @@ export function TopBar({
 		"host:chat": (
 			<button
 				type="button"
-				role="tab"
-				aria-selected={view === "chat"}
+				aria-current={view === "chat" ? "page" : undefined}
 				className={`tb-tab${view === "chat" ? " active" : ""}`}
 				data-tip={t("chat")}
 				onClick={() => onViewChange("chat")}
@@ -1028,8 +1027,7 @@ export function TopBar({
 		"host:terminal": tabOn("terminal") ? (
 			<button
 				type="button"
-				role="tab"
-				aria-selected={view === "terminal"}
+				aria-current={view === "terminal" ? "page" : undefined}
 				className={`tb-tab${view === "terminal" ? " active" : ""}`}
 				data-tip={t("terminal")}
 				onClick={() => onViewChange("terminal")}
@@ -1041,8 +1039,7 @@ export function TopBar({
 		"host:git": tabOn("git") ? (
 			<button
 				type="button"
-				role="tab"
-				aria-selected={view === "git"}
+				aria-current={view === "git" ? "page" : undefined}
 				className={`tb-tab${view === "git" ? " active" : ""}`}
 				data-tip={t("scmTab")}
 				onClick={() => onViewChange("git")}
@@ -1197,8 +1194,7 @@ export function TopBar({
 				<button
 					key={entry.id}
 					type="button"
-					role="tab"
-					aria-selected={view === target}
+					aria-current={view === target ? "page" : undefined}
 					className={`tb-tab plugin-tab${view === target ? " active" : ""}${meta?.error ? " broken" : ""}`}
 					data-tip={tip}
 					onClick={() => onViewChange(target as typeof view)}

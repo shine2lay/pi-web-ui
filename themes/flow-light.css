@@ -192,6 +192,12 @@
 .hljs-name {
 	color: #116329;
 }
+/* The Roles and Memory tabs' active label: styles.css gives them --link, but this theme's blue on its 8% ink
+   tint measures 4.2:1; its own ink (--accent-text, like every other active tab here) reads 14:1 (frontend #295). */
+.tb-tab.roles-tab.active,
+.tb-tab.openviking-tab.active {
+	color: var(--accent-text);
+}
 .topbar .bar-item-badge:not(.bg-task-badge) {
 	color: #ffffff;
 }

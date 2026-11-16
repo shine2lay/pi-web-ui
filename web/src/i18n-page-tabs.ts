@@ -7,7 +7,8 @@
 export const pageTabsEn = {
 	// roles-overview: the Roles page (a top bar view) and the owner's fields in Settings -> Identities.
 	rolesTab: "Roles",
-	rolesTabWaiting: "Roles, {n} waiting on you",
+	// The Roles tab's description when answers wait (its name stays its visible label, "Roles").
+	rolesTabWaiting: "{n} waiting on you",
 	rolesTabTip: "Roles: what every role is doing and what waits on you",
 	// initiatives-page: the Initiatives tab (decisions per initiative, who really decided, what they cost you).
 	initiativesTab: "Initiatives",

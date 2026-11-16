@@ -8960,3 +8960,11 @@ no decision record was written for it.
 - Checks: `tests/unit/tag-governance-acceptance.test.ts` (Ops #963's suite, moved into tests/unit unchanged except the parity peer's home: `userInfo().homedir`, since the sealed gate's HOME is temporary) and `tests/unit/role-message-tag-facts.test.ts`.
 - Sync cost: `agent-service.ts` sender binding (`rememberWorkerTask(ownTaskOf(...))`, `own` replaces `taskId`/`queueChat`) and one host line (`...roleMessageTagFacts(...)`); `role-messages.ts` import, host/input interfaces, two lines in `prepare`, `ownTaskOf` project/tags. Undo: revert the commit and this entry, then `pi-web-deploy`.
 
+## shell-a11y: the top bar's and footer's accessibility misses
+
+- `local`, never upstream (Frontend #295; Architecture rm-2bc53905). Why: the Roles page's journey (axe + 24 px targets) found four app-shell defects on e6f73258.
+- `web/src/components/TopBar.tsx`, `TopBarPageTabs.tsx`: the toolbar's view buttons (Chat, Terminal, Git, plugin views, Roles, Initiatives, Memory) drop `role="tab"`/`aria-selected` (a tab needs a tablist; the toolbar holds other buttons) and mark the one shown `aria-current="page"`. The Roles tab's name is its visible label; "{n} waiting on you" (`web/src/i18n-page-tabs.ts` `rolesTabWaiting`) is its `aria-describedby` (WCAG 2.5.3).
+- `web/src/styles.css`: the Ephemeral chat label uses `--accent-text` (the same `#a78bfa` in the default theme; light themes measured 2.4:1); the footer cwd chip gets `min-height: 24px` (it drew 23.6 px). `themes/flow-light.css`: the active Roles/Memory tab label uses `--accent-text` (its `--link` on the tint was 4.2:1).
+- Checks: `tests/shell-a11y-test.mjs` (sealed: axe `aria-required-parent`, `label-content-name-mismatch` by rule name, `color-contrast` on `.topbar` + `.footer-bar`, and the cwd chip box in one evaluate; 1440 + 390, light + dark): 27 FAIL on e6f73258, all pass after. `tests/unit/topbar-panel-toggle.test.ts` pins no `role=tab` in `.topbar-flow`. E2E selectors moved from `[role="tab"]` to `.tb-tab`.
+- Sync cost: four `role`/`aria-selected` pairs in `TopBar.tsx` if upstream edits those buttons. Undo: revert the commit and this entry, then `pi-web-deploy`.
+

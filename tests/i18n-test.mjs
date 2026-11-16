@@ -98,7 +98,7 @@ async function main() {
 	check(`page language is "en" (${htmlLang})`, htmlLang === "en");
 	const newChat = await page.locator(".lp-new-chat-action").getAttribute("aria-label");
 	check(`UI is English ("New chat")`, newChat?.includes("New chat"));
-	const enTab = await page.locator('.topbar-flow [role="tab"] span').first().textContent();
+	const enTab = await page.locator(".topbar-flow .tb-tab span").first().textContent();
 	check(`view tab shows "Chat"`, enTab?.includes("Chat"));
 
 	// model dropdown header in English

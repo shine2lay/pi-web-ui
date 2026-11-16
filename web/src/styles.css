@@ -5486,6 +5486,8 @@ body.panel-resizing .scm-divider::after {
 	font-size: 11px;
 	cursor: pointer;
 	padding: 2px 8px;
+	/* WCAG 2.2 2.5.8: the 11px line plus padding drew 23.6px (frontend #295). */
+	min-height: 24px;
 	border-radius: 5px;
 }
 .status-cwd:hover {
@@ -6657,9 +6659,10 @@ body.panel-resizing .scm-divider::after {
 .chip.newchat:hover {
 	background: var(--accent-soft);
 }
-/* 临时对话按鈕：紫色加深以区分普通新对话 */
+/* 临时对话按鈕：紫色加深以区分普通新对话. Its label is --accent-text (the same #a78bfa in the default dark
+   theme; light palettes' own ink, where #a78bfa measured 2.4:1: frontend #295). */
 .chip.ephemeral-chat-btn {
-	color: #a78bfa;
+	color: var(--accent-text);
 	border-color: rgba(139, 92, 246, 0.5);
 	background: rgba(139, 92, 246, 0.07);
 }
