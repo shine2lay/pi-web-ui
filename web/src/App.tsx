@@ -43,8 +43,7 @@ const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) =
 // first opening and stays mounted after it.
 import { PagePanes } from "./components/PagePanes";
 import { ScmPanel } from "./components/SCMPanel";
-import { PluginView } from "./components/PluginView";
-import { PluginViewFallback } from "./components/PluginViewFallback";
+import { PluginPanes } from "./components/PluginPanes";
 import {
 	createPluginHostApi,
 	emitPluginHostLocale,
@@ -2674,23 +2673,13 @@ export function App() {
 					onOpen={openFromRolesPage}
 					onAbout={aboutFromRoles}
 				/>
-				{pluginViews.map((entry) => {
-					const name = `plugin:${entry.info.id}` as ViewName;
-					return (
-						<div key={entry.info.id} className={`view-pane ${view === name ? "" : "hidden"}`}>
-							<PluginView entry={entry} />
-						</div>
-					);
-				})}
-				{/* issue #225：当前视图是没加载出来的插件 → 明确占位（加载中/失败+重试），不再整片空白。 */}
-				{view.startsWith("plugin:") && !pluginViews.some((v) => `plugin:${v.info.id}` === view) && (
-					<PluginViewFallback
-						pluginId={view.slice("plugin:".length)}
-						info={chat.plugins.find((p) => `plugin:${p.id}` === view)}
-						epoch={chat.pluginsEpoch}
-						failed={failedPluginViews.includes(view.slice("plugin:".length))}
-					/>
-				)}
+				<PluginPanes
+					view={view}
+					pluginViews={pluginViews}
+					plugins={chat.plugins}
+					epoch={chat.pluginsEpoch}
+					failedIds={failedPluginViews}
+				/>
 			</div>
 			<StatusDock chat={chat} bottombarItems={uiSlots["bottombar"]} onUiAction={onUiAction} />
 			{previewFile && (

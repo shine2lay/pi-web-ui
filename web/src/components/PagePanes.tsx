@@ -6,8 +6,9 @@
  * `wt check`'s legacy ratchet). Each page is loaded lazily with its first opening and then stays
  * mounted and hidden, exactly as before, so switching tabs never refetches or resets it.
  */
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import type { UsefulOpenTarget } from "../roles-useful-model";
+import { useVisitedViews } from "../visited-views";
 
 // roles-overview: the Roles page loads with its first opening and stays mounted after it.
 const RolesByProjectView = lazy(() =>
@@ -30,19 +31,11 @@ export interface PagePanesProps {
 type RolesProps = Parameters<typeof RolesByProjectView>[0];
 type RolesDialogs = RolesProps["dialogs"];
 
-/** True once `view` has been this page at least once (the page then stays mounted). */
-function useSeen(view: string, name: string): boolean {
-	const [seen, setSeen] = useState(false);
-	useEffect(() => {
-		if (view === name) setSeen(true);
-	}, [view, name]);
-	return seen || view === name;
-}
-
 export function PagePanes({ view, dialogs, onOpen, onAbout }: PagePanesProps): ReactNode {
-	const rolesSeen = useSeen(view, "roles");
-	const initiativesSeen = useSeen(view, "initiatives");
-	const openVikingSeen = useSeen(view, "openviking");
+	const visited = useVisitedViews(view);
+	const rolesSeen = visited.has("roles");
+	const initiativesSeen = visited.has("initiatives");
+	const openVikingSeen = visited.has("openviking");
 	return (
 		<>
 			{/* roles-overview: the Roles page: what every role is doing and what waits on the owner. */}

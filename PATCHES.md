@@ -8969,3 +8969,12 @@ no decision record was written for it.
 - Sync cost: four `role`/`aria-selected` pairs in `TopBar.tsx` if upstream edits those buttons. Undo: revert the commit and this entry, then `pi-web-deploy`.
 - Footer fit (Frontend #296): on phones (`max-width: 768px`) `.statusbar-left` wraps (`flex-wrap: wrap; row-gap: 2px`) instead of cutting its last items (ui-check UI-CLIPPED-SCROLLBARS on live 869a08dc at 320 px: 197 > 189). Two rows fit the 44 px phone bar; its height stays 45 px. Check: `tests/shell-a11y-test.mjs` S5 (live values put in, 320/390/1440, light + dark, roles + chat): 8 FAIL before, all pass after. Undo: delete the rule.
 
+## plugin-view-lazy-mount: plugin view tabs mount on first opening
+
+- `local`, never upstream (Frontend #297). Why: every enabled plugin view was mounted hidden at start, so the Temper plugin's iframe loaded temper-dev on every page; temper-dev refuses framing from the app's origin, so every page logged a framing console error (ui-check UI-CONSOLE-PAGE-ERRORS).
+- `web/src/components/PluginPanes.tsx` (new, out of `App.tsx` with the #225 `PluginViewFallback` branch): a `plugin:<id>` view mounts when it is first the current view, then stays mounted and hidden (state kept), like `PagePanes`' pages. Client bundles still load at start (`syncPluginViews`); code that must run unopened belongs in the bundle's top level (`preload: true`). Modal, fence and message-widget plugins unchanged.
+- `web/src/visited-views.ts` `useVisitedViews(view)`: the one "opened at least once" helper, used by `PagePanes` (its `useSeen` deleted) and `PluginPanes`.
+- Audit of installed views' mount(): scheduler (15 s poll of its own list, drawing only), show-and-tell (iframe), temper (iframe + retry + config message): none needs mounting before it is opened.
+- Check: `tests/plugin-view-lazy-ui-test.mjs` (sealed; a fixture view whose mount() adds an iframe): 3 FAIL on ea00ce32 (iframe, mount and frame request before opening), all pass after; first opening mounts once, switching away and back keeps the same iframe node.
+- Sync cost: if upstream edits the plugin panes in `App.tsx`, re-apply in `PluginPanes.tsx`. Undo: revert the commit and this entry, then `pi-web-deploy`.
+
