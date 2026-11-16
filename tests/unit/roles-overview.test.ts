@@ -461,7 +461,8 @@ describe("roles-links: open tasks by where they belong", () => {
 		for (let id = 9; id < 9 + ROLES_QUEUED_MAX; id++)
 			lines.push(queue({ op: "add", id, plan: plan(`Task ${id}`), project: "work-hierarchy-in-use" }));
 		const f = fake([role("ops", transcript("links-home", lines))]);
-		const q = byId(await read(f), "ops").queue;
+		const o = await read(f);
+		const q = byId(o, "ops").queue;
 		expect(q?.queued).toHaveLength(ROLES_QUEUED_MAX);
 		expect(q?.counts).toEqual({ active: 2, queued: 3 + ROLES_QUEUED_MAX, done: 1, dropped: 1 });
 		expect(q?.links).toEqual({ project: 2 + ROLES_QUEUED_MAX, initiative: 1, standalone: 1, unrecorded: 1 });
@@ -470,6 +471,18 @@ describe("roles-links: open tasks by where they belong", () => {
 		expect(l.project + l.initiative + l.standalone + l.unrecorded).toBe(
 			(q?.counts.active ?? 0) + (q?.counts.queued ?? 0),
 		);
+		// roles-by-project G2 (live): the board counts every open task the reader gathered, past the listed ones,
+		// in queue order (active first); the dropped one is not on it.
+		const board = o.taskBoard;
+		const open = (board?.tasks ?? []).filter((t) => t.state !== "done");
+		expect(board?.roleGroups.map((g) => [g.key, g.open, g.counts.blocked])).toEqual([
+			["role:ops", 5 + ROLES_QUEUED_MAX, 1],
+		]);
+		expect(open.map((t) => [t.id, t.queueIndex]).sort((a, b) => (a[1] ?? 0) - (b[1] ?? 0))[0]).toEqual([1, 0]);
+		expect(open.map((t) => t.queueIndex).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual(
+			Array.from({ length: 5 + ROLES_QUEUED_MAX }, (_, i) => i),
+		);
+		expect(board?.tasks.some((t) => t.id === 7)).toBe(false);
 	});
 	it("a queue with nothing open sends all zeros; no readable queue sends none", async () => {
 		const home = transcript("links-done", [
@@ -759,6 +772,8 @@ describe("reading transcripts", () => {
 		expect(byId(o, "linky").tldr).toEqual([]);
 		expect(byId(o, "outer").problems).toEqual(["home chat"]);
 		expect(byId(o, "good").problems).toBeUndefined();
+		// roles-by-project B10 (live): the board names the queues it couldn't read.
+		expect(o.taskBoard?.problem).toBe("Queues that could not be read: linky, outer");
 	});
 
 	it("sends no thinking, tool calls, tool results, prompts or other entries: only TL;DR lines and queue facts", async () => {
@@ -1415,7 +1430,15 @@ describe("where tasks belong (roles-panel)", () => {
 		const o = await new RolesOverviewReader(f.host).read();
 		expect(o.work).toEqual({
 			initiatives: [
-				{ id: "team-in-temper", name: "Team in Temper", lead: "architecture", status: "active", items: 1, met: 0 },
+				{
+					id: "team-in-temper",
+					name: "Team in Temper",
+					lead: "architecture",
+					status: "active",
+					items: 1,
+					met: 0,
+					doneWhen: [{ item: "It runs", met: false }],
+				},
 			],
 			projects: [
 				{
@@ -1426,9 +1449,18 @@ describe("where tasks belong (roles-panel)", () => {
 					initiative: "team-in-temper",
 					items: 2,
 					met: 1,
+					doneWhen: [
+						{ item: "Panel", met: true },
+						{ item: "Map", met: false },
+					],
 				},
 			],
 		});
+		// roles-by-project G2: the board comes with the look, a registry project with no task included.
+		expect(o.taskBoard?.asOf).toBe(o.at);
+		expect(o.taskBoard?.groups.map((g) => [g.key, g.open, g.projectStatus])).toEqual([
+			["project:roles-page", 0, "active"],
+		]);
 	});
 });
 

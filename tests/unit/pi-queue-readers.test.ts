@@ -252,11 +252,34 @@ describe("the Roles page's records with pi-queue's readers", () => {
 				["loose", record({ name: "Loose", doneWhen: ["Only"], initiative: null })],
 			],
 		);
+		// roles-by-project G1: each record's items with their marks.
+		const first = (met: boolean) => ({ item: "First", met });
+		const second = { item: "Second", met: false };
 		expect(workRecordsFromState(state)).toEqual({
-			initiatives: [{ id: "team", name: "Team", lead: "ops", status: "active", items: 2, met: 1 }],
+			initiatives: [
+				{ id: "team", name: "Team", lead: "ops", status: "active", items: 2, met: 1, doneWhen: [first(true), second] },
+			],
 			projects: [
-				{ id: "trial", name: "Trial", lead: "temper", status: "done", initiative: "team", items: 2, met: 0 },
-				{ id: "loose", name: "Loose", lead: "ops", status: "active", initiative: null, items: 1, met: 0 },
+				{
+					id: "trial",
+					name: "Trial",
+					lead: "temper",
+					status: "done",
+					initiative: "team",
+					items: 2,
+					met: 0,
+					doneWhen: [first(false), second],
+				},
+				{
+					id: "loose",
+					name: "Loose",
+					lead: "ops",
+					status: "active",
+					initiative: null,
+					items: 1,
+					met: 0,
+					doneWhen: [{ item: "Only", met: false }],
+				},
 			],
 		});
 	});
