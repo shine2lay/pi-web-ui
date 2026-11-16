@@ -190,12 +190,14 @@ export const ROLES_BY_PROJECT_CSS = `
 .rbp-lane.is-you{border-color:var(--border-gold)}
 .rbp-lh{display:flex;gap:12px;align-items:flex-start;min-width:0}
 .rbp-lh h2{margin:0;font-size:16px;font-weight:600}
-.rbp-track{display:flex;flex-wrap:wrap;gap:16px 24px;min-width:0}
-.rbp-segl{flex:0 0 auto;display:flex;flex-direction:column;gap:8px;min-width:0}
+/* A segment shrinks to the lane and its cards wrap (QA #173 D1). The dashed separator sits in the column gap; one
+   starting a wrapped row falls left of the track and is clipped, keeping 6 px for focus rings. */
+.rbp-track{display:flex;flex-wrap:wrap;gap:16px 49px;min-width:0;clip-path:inset(-100vmax -100vmax -100vmax -6px)}
+.rbp-segl{flex:0 1 auto;display:flex;flex-direction:column;gap:8px;min-width:0;position:relative}
 .rbp-segl:last-child{flex:1 1 248px}
 .rbp-segl .rbp-cards{display:flex;flex-wrap:wrap;gap:8px}
 .rbp-segl .rbp-task{width:240px}
-.rbp-segl+.rbp-segl{border-left:1px dashed var(--border-default);padding-left:24px}
+.rbp-segl+.rbp-segl::before{content:"";position:absolute;top:0;bottom:0;left:-25px;border-left:1px dashed var(--border-default)}
 .rbp-banner{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 16px;border:1px solid var(--blk-bd);background:var(--blk-bg);border-radius:12px;margin-bottom:12px}
 .rbp-banner svg.rbp-i{color:var(--blk-fg);width:16px;height:16px}
 .rbp-banner p{margin:0}.rbp-banner small{display:block;color:var(--text-secondary);font-size:12px}
@@ -226,10 +228,11 @@ export const ROLES_BY_PROJECT_CSS = `
   .rbp-gbody{padding:12px}
   .rbp-dag{flex-direction:column;gap:12px;padding-left:28px;overflow:visible}
   .rbp-dag .rbp-col{flex:none;width:100%}
-  .rbp-track{flex-direction:column;gap:12px}
+  .rbp-track{flex-direction:column;gap:12px;clip-path:none}
   .rbp-segl .rbp-cards{flex-direction:column}
   .rbp-segl .rbp-task{width:auto}
-  .rbp-segl+.rbp-segl{border-left:0;padding-left:0;border-top:1px dashed var(--border-default);padding-top:12px}
+  .rbp-segl+.rbp-segl::before{content:none}
+  .rbp-segl+.rbp-segl{border-top:1px dashed var(--border-default);padding-top:12px}
   .rbp-tasks{grid-template-columns:minmax(0,1fr)}
   .rbp-minis{grid-template-columns:minmax(0,1fr)}
   .rbp-fleet{grid-template-columns:minmax(0,1fr)}

@@ -449,6 +449,63 @@ async function l3(browser) {
 		}
 }
 
+/** QA #173 D1: a role with 2 running + 6 held cards and Up next; every card stays inside its lane at 1024/1440. */
+async function nowWidth(browser) {
+	const wide = (n, state) =>
+		data.boardTask(`qa #${n}`, "tag:wide-lane", state, `Wide lane task ${n}`, { tags: ["wide-lane"] });
+	const tasks = [
+		...data.liveTasks(),
+		...[5001, 5002].map((n) => wide(n, "working")),
+		...[5003, 5004, 5005].map((n) => wide(n, "blocked")),
+		...[5006, 5007, 5008].map((n) => wide(n, "waiting")),
+		...[5009, 5010, 5011].map((n) => wide(n, "queued")),
+	];
+	for (const width of [1024, 1440]) {
+		const { context, page } = await openPage(browser, { width, tasks });
+		try {
+			await page.getByRole("radio", { name: "Now" }).click();
+			await page.locator(".rbp-lane").first().waitFor({ timeout: 5000 });
+			const r = await page.evaluate(() => {
+				const out = [];
+				const indent = [];
+				for (const lane of document.querySelectorAll(".rbp-lane")) {
+					const l = lane.getBoundingClientRect();
+					for (const card of lane.querySelectorAll(".rbp-task")) {
+						const c = card.getBoundingClientRect();
+						if (c.left < l.left - 0.5 || c.right > l.right + 0.5)
+							out.push(`${card.textContent.slice(0, 30)} ${Math.round(c.right)}>${Math.round(l.right)}`);
+					}
+					const track = lane.querySelector(".rbp-track")?.getBoundingClientRect();
+					for (const seg of lane.querySelectorAll(".rbp-segl")) {
+						const s = seg.getBoundingClientRect();
+						const card = seg.querySelector(".rbp-task")?.getBoundingClientRect();
+						if (!track || !card || s.left - track.left > 1) continue;
+						const border = parseFloat(getComputedStyle(seg).borderLeftWidth);
+						if (card.left - track.left > 1 || border > 0)
+							indent.push(
+								`${seg.querySelector(".rbp-sec")?.textContent} indent ${Math.round(card.left - track.left)} border ${border}`,
+							);
+					}
+				}
+				const held = [...document.querySelectorAll(".rbp-sec")].some((x) => /^Held · ([5-9]|\d\d)/.test(x.textContent));
+				const d = document.documentElement;
+				return { out, indent, held, scroll: d.scrollWidth - d.clientWidth };
+			});
+			const tag = `Now-width ${width}px`;
+			check(`${tag} harness: a lane shows Held · 5 or more`, r.held);
+			check(`${tag}: every card inside its lane`, r.out.length === 0, r.out.slice(0, 3).join(" | "));
+			check(`${tag}: document scrollWidth == clientWidth`, r.scroll === 0, `${r.scroll}px`);
+			check(
+				`${tag}: a segment starting a row has no left separator or indent`,
+				r.indent.length === 0,
+				r.indent.join(" | "),
+			);
+		} finally {
+			await context.close();
+		}
+	}
+}
+
 let chrome, safari;
 try {
 	chrome = await chromium.launch({ executablePath: CHROME_PATH, headless: true });
@@ -463,6 +520,7 @@ try {
 	}
 	await overlapParity(chrome);
 	await l3(chrome);
+	await nowWidth(chrome);
 } catch (error) {
 	console.error(`FAIL ${error instanceof Error ? error.message : "fixture error"}`);
 	failures++;
