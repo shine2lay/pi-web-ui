@@ -4,18 +4,27 @@ Part of [spec.md](spec.md). The list comes from an esbuild reachability diff of 
 without `RolesExactView` (353 -> 336 modules; architecture #546), plus files only tests or the removed view use.
 Delete each item outright; no wrapper, re-export or "legacy" flag survives to keep an old test green.
 
+Status 2026-11-16: carried out by frontend #294 (written against mine e6f73258, landed as 869a08dc). The
+whole-file deletions below no longer exist on purpose; only those blocks carry doc-check's `paths-historical`
+marker, so every kept or changed file in this spec is still path-checked.
+
 ## Production code to delete (Frontend, in the build task)
 
+<!-- doc-check: paths-historical -->
 - `web/src/components/RolesExactView.tsx` (279 lines): the Roles tab's v8 mount, its legacy-fonts switch and the
-  `TaskPriorityBadge` re-exports. `PagePanes.tsx` lazy-imports the new view instead, same props
-  (`active`, `dialogs`, `onOpen`, `onAbout`).
+  `TaskPriorityBadge` re-exports.
 - `web/src/components/RolesLegacyFontsFrame.tsx` (259), `web/src/roles-exact-view.ts` (406).
 - `web/src/roles-exact/`: every file (`arrows`, `card-layout`, `department`, `host`, `instructions`,
   `owner-asks`, `owner-contacts`, `page-status`, `sent-requests`, `spending`, `view-state`, `work-progress`,
   `you-panel`; 998 lines).
 - `web/src/roles-u0/`: `fields.ts`, `layout.ts`, `mount.ts`, `native.ts`, `surface.ts`, `surface.html`.
-- `web/src/roles-exact-fonts.ts`, `web/src/roles-design-fonts.d.ts`, `web/roles-design-assets.ts`, and its
-  `rolesDesignAssets()` entry in `web/vite.config.ts`.
+- `web/src/roles-exact-fonts.ts`, `web/src/roles-design-fonts.d.ts`, `web/roles-design-assets.ts`.
+
+Changed in kept files:
+
+- `PagePanes.tsx` lazy-imports the new view instead of `RolesExactView`, same props
+  (`active`, `dialogs`, `onOpen`, `onAbout`).
+- The `rolesDesignAssets()` entry in `web/vite.config.ts`.
 - `web/src/tasks-roles-v8/role-bento-surface.ts`: `renderRolesBentoView` and `renderSvgDonut` (the old "Roles &
   Queues" tab). `renderWhyModal` stays in that file (the Initiatives prototype uses it). In `surface.ts`: the
   `#tab-roles` button, `?page=roles`, the `"roles"` page patch and the bento branch; `filters.ts` `page` becomes
@@ -32,10 +41,12 @@ Server: everything; the overview gains fields, nothing is removed.
 
 ## Tests to delete
 
+<!-- doc-check: paths-historical -->
 - Whole files: `tests/unit/roles-exact.test.ts`, `roles-live.test.ts`, `roles-current-task.test.ts`,
   `roles-evidence.test.ts`, `roles-lanes.test.ts`, `roles-u0.test.ts`,
   `roles-u0-rgba.test.ts`, `roles-exact-assets.test.ts` (all under `tests/unit/`); `tests/roles-exact-harness.tsx`,
   `tests/roles-exact-test.mjs`, and all of `tests/roles-u0/` (U0 reference pixels and fixtures).
+
 - Cases only: `tests/unit/roles-answer-actions.test.ts`'s "the Roles surface and the native dialog use the
   current-action policy" describe (it renders `createExactRolesView`; the first describe, on the kept
   `roles-answer-actions.ts`, stays); `tests/unit/roles-instructions.test.ts`'s "roles-instructions display" describe (it uses the
