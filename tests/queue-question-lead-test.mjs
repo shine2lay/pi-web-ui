@@ -16,7 +16,9 @@
  *  2. Q #1 asks (qa has no home chat): the card comes to Ops, whose answer is the decision; the task finishes.
  *  3. S #2 asks and nobody answers: one reminder to S, then once to D, then once to A, then it goes to the
  *     owner (stuck, passed on, the whole trail in his package); D answering after it went on is refused, and
- *     so is A once the owner has it; the task's chat is told once.
+ *     so is A passing it on again once the owner has it; the task's chat is told once. While the owner hasn't
+ *     answered, A (the last lead it reached) can still decide it (pi-queue ee5b7a2, Ops #753) and D still
+ *     can't: A's decision reaches the task, which finishes.
  *  4. S #3 asks what only the owner can give: S's answer is refused; S passes it on; it reaches the owner, and
  *     no lead above S or Ops gets it.
  *  Throughout: each card once, no card where it doesn't belong, nothing unexpected, no page errors.
@@ -84,7 +86,7 @@ const T = {
 };
 /** The deciders' answers; each carries a marker the task's chat looks for. */
 const ANSWER = { [T.s1]: "Use 64 MB. DECIDE-S1", [T.q1]: "Retry three times. DECIDE-Q1" };
-const MARK = { [T.s1]: "DECIDE-S1", [T.q1]: "DECIDE-Q1" };
+const MARK = { [T.s1]: "DECIDE-S1", [T.q1]: "DECIDE-Q1", [T.s2]: "TRY-ANSWER" };
 const plan = (title) => ({
 	title,
 	goal: `${title}: the agreed result is in place for the team`,
@@ -187,7 +189,7 @@ function seed({ root, agentDir, workdir: wd }) {
 	const homeOf = (role, name) => [{ identity: role }, { name }, { user: `HOME:${role}` }, { assistant: "ok" }];
 	write(files.S, [
 		...homeOf("systems", "systems"),
-		// Lanes on and touches declared, so each task runs in a chat of its own (rule 21's route needs that).
+		// Lanes on and touches declared, so each task runs in a chat of its own (rule 15's route needs that).
 		{ queue: { op: "lanes", n: 2 } },
 		{ queue: { op: "add", id: 1, plan: plan(T.s1), touches: ["s1 repo"], project: "proof-project" } },
 		{ queue: { op: "add", id: 2, plan: plan(T.s2), touches: ["s2 repo"], after: [1], project: "proof-project" } },
@@ -253,7 +255,7 @@ function seed({ root, agentDir, workdir: wd }) {
 // ---- the mock model ------------------------------------------------------------------------------------
 /** What the chats got (kept here, never printed). */
 const seen = {
-	asked: new Map(), // task title -> queue_stuck's answer, as a category
+	asked: new Map(), // task title -> ask_lead's answer, as a category
 	notes: new Map(), // task title -> [{ at, text }]: later messages in the task's own chat
 	cards: [], // cards the home chats got: [{ home, who, id, queue, kind, tag, title, at }]
 	replies: [], // the deciders' queue_reply answers: [{ home, title, step, kind }]
@@ -291,21 +293,24 @@ function replyKind(text) {
 	if (/^Not taken: this chat doesn't decide task #\d+'s question now/.test(t)) return "not-decider";
 	if (/^Not taken: task #\d+'s question went on to /.test(t)) return "went-on";
 	if (/^Not taken: task #\d+ has no open question now/.test(t)) return "no-open";
+	if (/^Not taken: task #\d+'s question was routed to another coordinator chat/.test(t)) return "other-lead";
 	if (/^Not taken: k[0-9a-f]{8} is task #/.test(t)) return "stale";
 	if (/^No question of task #\d+ came to this chat under/.test(t)) return "no-card";
 	if (/says only the owner can give this .*You can't answer it/s.test(t)) return "owner-only";
+	if (/^Task #\d+'s climbed question is already with the owner; give answer/.test(t)) return "climbed-with-owner";
 	return "other";
 }
-/** queue_stuck's answer in a task's chat, as a category. */
+/** ask_lead's answer in a task's chat, as a category. */
 function askKind(text) {
 	const t = text ?? "";
-	if (/^Asked systems's lead, your queue's department \(rule 21\)/.test(t)) return "systems";
-	if (/^Asked Ops \(rule 21\)/.test(t)) return "ops";
+	if (/^Asked systems's lead, your queue's department \(rule 15\)/.test(t)) return "systems";
+	if (/^Asked Ops \(rule 15\)/.test(t)) return "ops";
 	if (/your question is parked/.test(t)) return "parked";
 	return "other";
 }
 const CHOICES = ["Option A", "Option B"];
 const ownerContext = () => ({
+	in_short: "Should the test spend a little money on this step? Saying yes lets the test go on.",
 	goal: "Prove that a task's question reaches the right lead.",
 	progress: "Everything else is set up; only this choice is left.",
 	decided: "none yet",
@@ -321,7 +326,7 @@ const ownerContext = () => ({
 	})),
 	recommendation: "Option A, because it is the smaller step.",
 });
-function stuckArgs(title) {
+function askArgs(title) {
 	const base = {
 		question: `Which value for: ${title}?`,
 		choices: CHOICES,
@@ -375,12 +380,16 @@ function onHomeMessage(home, text, c) {
 		}
 		return;
 	}
-	const tr = /^TRY (\d+) (k[0-9a-f]{8}) (\S+)$/.exec(text);
+	// TRY: answer it (a decision); TRYUP: pass it on to the owner (question, choices and the whole package).
+	const tr = /^TRY(UP)? (\d+) (k[0-9a-f]{8}) (\S+)$/.exec(text);
 	if (tr) {
+		const id = Number(tr[2]);
 		c.todo.push({
-			label: { try: tr[3] },
+			label: { try: tr[4] },
 			tool: "queue_reply",
-			args: { id: Number(tr[1]), ask: tr[2], answer: "TRY-ANSWER" },
+			args: tr[1]
+				? { id, ask: tr[3], question: "Which value?", choices: CHOICES, owner_context: ownerContext() }
+				: { id, ask: tr[3], answer: "TRY-ANSWER" },
 		});
 		return;
 	}
@@ -426,7 +435,7 @@ async function modelReply({ payload, sideRequest }) {
 			if (c.users > 0) onHomeMessage(home, text, c);
 		} else if (c.users === 0) {
 			// The task's kickoff: it can't go on without a decision, and asks.
-			c.todo.push({ label: { asked: title }, tool: "queue_stuck", args: stuckArgs(title) });
+			c.todo.push({ label: { asked: title }, tool: "ask_lead", args: askArgs(title) });
 		} else {
 			noteOf(title).push({ at: Date.now(), text });
 			if (MARK[title] && text.includes(MARK[title]))
@@ -619,7 +628,7 @@ try {
 	if (!check("S #1 runs in a chat of its own and asks", !!asked1, `status ${statusIn(files.S, 1)}`))
 		throw new Error("S #1 didn't ask; the rest can't run");
 	check(
-		"queue_stuck tells it the question went to systems's lead, its queue's department",
+		"ask_lead tells it the question went to systems's lead, its queue's department",
 		seen.asked.get(T.s1) === "systems",
 		seen.asked.get(T.s1),
 	);
@@ -686,7 +695,7 @@ try {
 	check("task #1 goes on and finishes", !!done1, statusIn(files.S, 1));
 	const resume1 = lastOp(files.S, 1, "resume");
 	check(
-		"the queue records systems as the decider (rule 21), not Ops and not the owner",
+		"the queue records systems as the decider (rule 15), not Ops and not the owner",
 		resume1?.decider === "systems" && resume1?.by === "ops",
 		JSON.stringify({ decider: resume1?.decider ?? null, by: resume1?.by ?? null }),
 	);
@@ -711,7 +720,7 @@ try {
 	// 4. S #3 asks what only the owner can give (it starts beside #2, after #1).
 	const card3 = await waitFor(() => cardsTo("systems", T.s3, "asks")[0], 90_000);
 	check("S #3 asks; the card comes to systems's home chat", !!card3, `status ${statusIn(files.S, 3)}`);
-	check("queue_stuck tells #3 it went to systems's lead", seen.asked.get(T.s3) === "systems", seen.asked.get(T.s3));
+	check("ask_lead tells #3 it went to systems's lead", seen.asked.get(T.s3) === "systems", seen.asked.get(T.s3));
 	const try3 = await waitFor(() => reply("systems", T.s3, 1), 30_000);
 	check("systems answering it itself is refused: only the owner can give it", try3?.kind === "owner-only", try3?.kind);
 	const pass3 = await waitFor(() => reply("systems", T.s3, 2), 30_000);
@@ -775,12 +784,14 @@ try {
 		"the owner's package names everyone it went to",
 		["systems's lead", "design's lead", "architecture's lead"].every((s) => pack.includes(s)),
 	);
-	WA.prompt(`TRY 2 ${up2a?.tag ?? "k00000000"} arch-late`);
+	// pi-queue ee5b7a2 (Ops #753, dr-786672016410 Q3): a question that climbed to the owner is already his to
+	// see; architecture, the last lead it reached, can't pass it on again (it can still decide it, below).
+	WA.prompt(`TRYUP 2 ${up2a?.tag ?? "k00000000"} arch-late`);
 	const lateA = await waitFor(() => seen.tries.get("arch-late"), 30_000);
 	check(
-		"architecture answering once the owner has it is refused",
-		lateA === "no-open" || lateA === "went-on" || lateA === "stale",
-		lateA ?? "no result",
+		"architecture passing it on again once the owner has it is refused, and #2 stays with the owner",
+		lateA === "climbed-with-owner" && statusIn(files.S, 2) === "stuck",
+		JSON.stringify({ try: lateA ?? "no result", status: statusIn(files.S, 2) }),
 	);
 	const chat2 = taskChatOf(T.s2);
 	const told2 = await waitFor(() => timesIn(chat2, "went to the owner with the whole record") > 0, 20_000);
@@ -832,6 +843,24 @@ try {
 		"the Queue tab's data shows #2 and #3 waiting on the owner",
 		panel.find((t) => t.id === 2)?.status === "stuck" && panel.find((t) => t.id === 3)?.status === "stuck",
 		JSON.stringify(panel.map((t) => ({ id: t.id, status: t.status }))),
+	);
+
+	// While the owner hasn't answered #2, design (passed earlier) still can't decide it; architecture can.
+	WD.prompt(`TRY 2 ${up2d?.tag ?? "k00000000"} design-owner`);
+	const ownerD = await waitFor(() => seen.tries.get("design-owner"), 30_000);
+	check(
+		"design answering while the owner has it is still refused",
+		["other-lead", "went-on", "not-decider"].includes(ownerD) && statusIn(files.S, 2) === "stuck",
+		JSON.stringify({ try: ownerD ?? "no result", status: statusIn(files.S, 2) }),
+	);
+	WA.prompt(`TRY 2 ${up2a?.tag ?? "k00000000"} arch-decide`);
+	const decideA = await waitFor(() => seen.tries.get("arch-decide"), 30_000);
+	check("architecture, the last lead it reached, can still decide it", decideA === "decided", decideA ?? "no result");
+	const done2 = await waitFor(() => statusIn(files.S, 2) === "done", 30_000);
+	check(
+		"task #2's chat gets architecture's decision and finishes; #3 stays with the owner",
+		!!done2 && noteOf(T.s2).some((n) => n.text.includes(MARK[T.s2])) && statusIn(files.S, 3) === "stuck",
+		JSON.stringify({ s2: statusIn(files.S, 2), s3: statusIn(files.S, 3), notes: noteOf(T.s2).length }),
 	);
 	check("nothing unexpected reached the model", unexpected.length === 0, `${unexpected.length}`);
 	check("no page errors", pageErrors.length === 0, `${pageErrors.length}`);

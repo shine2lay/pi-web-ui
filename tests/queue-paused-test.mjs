@@ -26,12 +26,11 @@
  * own pause outlives the queue's, until its own Resume (a click). Order of starts: #2, #3, #1.
  * Queue D (Ops #393): D#1 "Memory notes" and D#2 "Memory index" both list the pi memory files (one lane),
  * D#3 "Side work" works meanwhile in a lane of its own. D#1 asks temper a question and is paused (a click)
- * while its turn still goes; it stops. With a pi-queue that lends a paused task's lane (Ops #380, its
- * lendWhenPaused): D#2 borrows the lane and works; the owner resumes D#1 (a click) meanwhile; D#1 gets no
- * "Back to task" while D#2 works, and temper's reply and a scheduled wake-up go into its chat without a turn
- * (pi-web-ui counts it as paused until that note); once D#2 is done, D#1 gets one "Back to task" turn that
- * reads them. With a pi-queue that doesn't lend: D#2 waits while D#1 is paused, and resumed, D#1 goes back to
- * work at once. A#1's resume, with nothing to wait for, goes back to work at once too.
+ * while its turn still goes; it stops. pi-queue lends a paused task's lane (Ops #380, its lendWhenPaused):
+ * D#2 borrows the lane and works; the owner resumes D#1 (a click) meanwhile; D#1 gets no "Back to task"
+ * while D#2 works, and temper's reply and a scheduled wake-up go into its chat without a turn (pi-web-ui
+ * counts it as paused until that note); once D#2 is done, D#1 gets one "Back to task" turn that reads them.
+ * A#1's resume, with nothing to wait for, goes back to work at once.
  * The mock's script checks what the chats get; nothing the model is sent is printed.
  *
  * Usage: npm run build && PI_QUEUE_PKG=<pi-queue checkout> node tests/run-sealed.mjs queue-paused
@@ -72,8 +71,6 @@ const BACK_RE = (id) =>
 	);
 const STALL_RE = /^\[Queue\] This chat stopped while its task was still being worked on/;
 const RELAYED_WHY = "owner on Telegram, relayed by COO (rm-0000test): pause tasks 2 and 3 to save Claude limits";
-/** Whether this pi-queue lends a paused task's lane (Ops #380, "lendWhenPaused"); older ones keep it. */
-const LENDS = readFileSync(join(PI_QUEUE, "queue.ts"), "utf8").includes("DEFAULT_LEND_WHEN_PAUSED");
 /** How soon "at once" is, for a resumed task with nothing to wait for. */
 const AT_ONCE_MS = 5000;
 
@@ -1094,9 +1091,6 @@ try {
 	await pageC.context().close();
 
 	// ---- Queue D (Ops #393): a paused task's lane lent, and its resume waiting for the borrower -------------
-	console.log(
-		`  (queue D: this pi-queue ${LENDS ? "lends a paused task's lane" : "doesn't lend a paused task's lane"})`,
-	);
 	await W.open(files.D);
 	await W.prompt("/queue start");
 	const startedD = await waitFor(
@@ -1159,108 +1153,76 @@ try {
 		return waitFor(() => customTexts(chatD1, "queue-paused").some((t) => t.includes("S-D1")), 30_000);
 	};
 
-	if (LENDS) {
-		const borrowed = await waitFor(
-			() => seen.started.has("Memory index") && opsIn(files.D).some((op) => op.op === "halted" && op.id === 1),
-			30_000,
-		);
-		must(
-			"its chat seen stopped, D#1 lends its lane: D#2 (the pi memory files too) starts while D#1 is paused",
-			!!borrowed && statusIn(files.D, 2) === "working" && statusIn(files.D, 1) === "working",
-			JSON.stringify({ status: [1, 2, 3].map((id) => statusIn(files.D, id)), ops: opsIn(files.D).map((o) => o.op) }),
-		);
-		// The owner resumes D#1 while D#2 still works.
-		await pageD.click('button.task-queue-pause[data-pause-task="1"]');
-		must("Resume (a click) lifts D#1's pause", !!(await waitFor(() => releaseOp(files.D, 1), 15_000)));
-		await sleep(3000);
-		const rowD1 = await rowOf(pageD, 1);
-		check(
-			"resumed, D#1 waits for its lane: no 'Back to task' and no turn while D#2 works; the Queue tab shows it working, as before",
+	const borrowed = await waitFor(
+		() => seen.started.has("Memory index") && opsIn(files.D).some((op) => op.op === "halted" && op.id === 1),
+		30_000,
+	);
+	must(
+		"its chat seen stopped, D#1 lends its lane: D#2 (the pi memory files too) starts while D#1 is paused",
+		!!borrowed && statusIn(files.D, 2) === "working" && statusIn(files.D, 1) === "working",
+		JSON.stringify({ status: [1, 2, 3].map((id) => statusIn(files.D, id)), ops: opsIn(files.D).map((o) => o.op) }),
+	);
+	// The owner resumes D#1 while D#2 still works.
+	await pageD.click('button.task-queue-pause[data-pause-task="1"]');
+	must("Resume (a click) lifts D#1's pause", !!(await waitFor(() => releaseOp(files.D, 1), 15_000)));
+	await sleep(3000);
+	const rowD1 = await rowOf(pageD, 1);
+	check(
+		"resumed, D#1 waits for its lane: no 'Back to task' and no turn while D#2 works; the Queue tab shows it working, as before",
+		!backOpD1() &&
+			(seen.calls.get("Memory notes") ?? 0) === callsD1 &&
+			statusIn(files.D, 2) === "working" &&
+			rowD1?.paused === "" &&
+			rowD1.button === "Pause",
+		JSON.stringify({ back: !!backOpD1(), calls: (seen.calls.get("Memory notes") ?? 0) - callsD1, row: rowD1 }),
+	);
+	// Meanwhile temper's reply and a scheduled wake-up reach D#1's chat: neither starts a turn there.
+	go.add("replyD");
+	const repliedD = await waitFor(() => customTexts(chatD1, "role-message").some((t) => t.includes("R-D1")), 30_000);
+	const wokeD = await wakeD1();
+	// Longer than the watchdog's 3 s, which looks every second while D#3 works.
+	await sleep(5000);
+	check(
+		"while D#2 works, temper's reply and a scheduled wake-up go into resumed D#1's chat without a turn; no watchdog note",
+		!!repliedD &&
+			!!wokeD &&
+			(seen.calls.get("Memory notes") ?? 0) === callsD1 &&
+			!userTexts(chatD1).some((t) => STALL_RE.test(t)) &&
 			!backOpD1() &&
-				(seen.calls.get("Memory notes") ?? 0) === callsD1 &&
-				statusIn(files.D, 2) === "working" &&
-				rowD1?.paused === "" &&
-				rowD1.button === "Pause",
-			JSON.stringify({ back: !!backOpD1(), calls: (seen.calls.get("Memory notes") ?? 0) - callsD1, row: rowD1 }),
-		);
-		// Meanwhile temper's reply and a scheduled wake-up reach D#1's chat: neither starts a turn there.
-		go.add("replyD");
-		const repliedD = await waitFor(() => customTexts(chatD1, "role-message").some((t) => t.includes("R-D1")), 30_000);
-		const wokeD = await wakeD1();
-		// Longer than the watchdog's 3 s, which looks every second while D#3 works.
-		await sleep(5000);
-		check(
-			"while D#2 works, temper's reply and a scheduled wake-up go into resumed D#1's chat without a turn; no watchdog note",
-			!!repliedD &&
-				!!wokeD &&
-				(seen.calls.get("Memory notes") ?? 0) === callsD1 &&
-				!userTexts(chatD1).some((t) => STALL_RE.test(t)) &&
-				!backOpD1() &&
-				statusIn(files.D, 2) === "working",
-			JSON.stringify({
-				replied: !!repliedD,
-				woke: !!wokeD,
-				calls: (seen.calls.get("Memory notes") ?? 0) - callsD1,
-				back: !!backOpD1(),
-				status2: statusIn(files.D, 2),
-				question: foundIn(files.T, "Q-D1"),
-				reply: { temper: foundIn(files.T, "R-D1"), home: foundIn(files.D, "R-D1"), d1: foundIn(chatD1, "R-D1") },
-				temperTail: kindsTail(files.T, 10),
-			}),
-		);
-		// D#2 finishes: now D#1 goes back to work.
-		go.add("D2");
-		const backD1 = await waitFor(() => seen.d1Back, 30_000);
-		const doneD2 = opsIn(files.D).find((op) => op.op === "done" && op.id === 2);
-		check(
-			"once D#2 is done, D#1 gets one 'Back to task #1' turn",
-			!!backD1 &&
-				!!doneD2 &&
-				(backOpD1()?.ts ?? 0) >= doneD2.ts &&
-				userTexts(chatD1).filter((t) => BACK_RE(1).test(t)).length === 1,
-			JSON.stringify({
-				back: !!backD1,
-				done2: !!doneD2,
-				after: doneD2 && backOpD1() ? backOpD1().ts - doneD2.ts : null,
-				notes: userTexts(chatD1).filter((t) => BACK_RE(1).test(t)).length,
-			}),
-		);
-		check(
-			"that turn reads what came meanwhile: temper's reply and the wake-up",
-			!!backD1?.sawReply && !!backD1?.sawWake,
-			JSON.stringify(backD1),
-		);
-	} else {
-		// A pi-queue that doesn't lend: D#1 keeps its lane while paused, and nothing keeps it from going back.
-		await sleep(5000);
-		check(
-			"no lend: D#2 doesn't start while D#1 is paused",
-			!seen.started.has("Memory index") && statusIn(files.D, 2) === "ready",
-			JSON.stringify({ status: [1, 2, 3].map((id) => statusIn(files.D, id)) }),
-		);
-		go.add("replyD");
-		const repliedD = await waitFor(() => customTexts(chatD1, "role-message").some((t) => t.includes("R-D1")), 30_000);
-		const wokeD = await wakeD1();
-		check(
-			"temper's reply and a scheduled wake-up go into paused D#1's chat without a turn",
-			!!repliedD && !!wokeD && (seen.calls.get("Memory notes") ?? 0) === callsD1,
-			JSON.stringify({ replied: !!repliedD, woke: !!wokeD, calls: (seen.calls.get("Memory notes") ?? 0) - callsD1 }),
-		);
-		await pageD.click('button.task-queue-pause[data-pause-task="1"]');
-		const releasedD1 = await waitFor(() => releaseOp(files.D, 1), 15_000);
-		const backD1 = await waitFor(() => seen.d1Back, 30_000);
-		check(
-			`Resume (a click): D#1 gets one 'Back to task #1' turn at once (within ${AT_ONCE_MS / 1000} s) that reads them`,
-			!!releasedD1 &&
-				!!backD1 &&
-				backD1.at - releasedD1.ts < AT_ONCE_MS &&
-				backD1.sawReply &&
-				backD1.sawWake &&
-				userTexts(chatD1).filter((t) => BACK_RE(1).test(t)).length === 1,
-			JSON.stringify({ back: backD1, after: backD1 && releasedD1 ? backD1.at - releasedD1.ts : null }),
-		);
-		go.add("D2");
-	}
+			statusIn(files.D, 2) === "working",
+		JSON.stringify({
+			replied: !!repliedD,
+			woke: !!wokeD,
+			calls: (seen.calls.get("Memory notes") ?? 0) - callsD1,
+			back: !!backOpD1(),
+			status2: statusIn(files.D, 2),
+			question: foundIn(files.T, "Q-D1"),
+			reply: { temper: foundIn(files.T, "R-D1"), home: foundIn(files.D, "R-D1"), d1: foundIn(chatD1, "R-D1") },
+			temperTail: kindsTail(files.T, 10),
+		}),
+	);
+	// D#2 finishes: now D#1 goes back to work.
+	go.add("D2");
+	const backD1 = await waitFor(() => seen.d1Back, 30_000);
+	const doneD2 = opsIn(files.D).find((op) => op.op === "done" && op.id === 2);
+	check(
+		"once D#2 is done, D#1 gets one 'Back to task #1' turn",
+		!!backD1 &&
+			!!doneD2 &&
+			(backOpD1()?.ts ?? 0) >= doneD2.ts &&
+			userTexts(chatD1).filter((t) => BACK_RE(1).test(t)).length === 1,
+		JSON.stringify({
+			back: !!backD1,
+			done2: !!doneD2,
+			after: doneD2 && backOpD1() ? backOpD1().ts - doneD2.ts : null,
+			notes: userTexts(chatD1).filter((t) => BACK_RE(1).test(t)).length,
+		}),
+	);
+	check(
+		"that turn reads what came meanwhile: temper's reply and the wake-up",
+		!!backD1?.sawReply && !!backD1?.sawWake,
+		JSON.stringify(backD1),
+	);
 	check(
 		"D#1 carried on and finished; its chat got one hold note and only the back note started a turn after it",
 		!!(await waitFor(() => statusIn(files.D, 1) === "done", 20_000)) &&
