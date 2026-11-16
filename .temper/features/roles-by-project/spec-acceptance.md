@@ -29,14 +29,18 @@ made them), and small hand-made cases. Each count is checked against a plain rec
 
 ## G: maps (`taskMapOf`, `miniMapOf`, `layerWindow`, `heldOnOf`)
 
-- G1 Links only from `dependsOnRefs` inside the group; a ref to another queue or a missing task is no node and
-  no edge; a duplicate ref one edge; a self-ref none.
+<!-- Lead clarification hypothesis: G1's queue wording could hide valid edges; a same-group cross-queue
+     twin must draw its edge. A missing edge falsifies the contract; G6 also pins qualifying ties. -->
+- G1 Links only from `dependsOnRefs` inside the group, including resolved cross-queue refs: same-group rows
+  get a node and edge regardless of queue. A missing or other-group row gets neither; duplicate ref one edge;
+  self-ref none.
 - G2 Cycle A -> B -> A: one layer, both kept, listed in `cycles`.
 - G3 `layerWindow(8, 5)` -> start 5, end 8, earlier 5, later 0; `layerWindow(8, 0)` -> 0, 5, 0, 3;
   `layerWindow(8, null)` -> 5, 8, 5, 0; `layerWindow(2, 0)` -> 0, 2, 0, 0 (layers 0-based).
 - G4 A layer of 7 shows 5 and "+2"; 45 loose open tasks show 40 and "+5".
 - G5 Root blocker: open with no open predecessor and 3 open tasks after it -> `waiting` 3, edges from it `root`.
-- G6 Held on: 3 blocked on Backend, 1 on QA -> Backend 3; 1 and 1 -> `null`.
+- G6 Held on: 3 blocked on Backend, 1 on QA -> Backend 3; 1 and 1 -> `null`; 2 and 2 -> the role id first in
+  lexical order with count 2 (spec-graph.md §Held on).
 - G7 Opened map holds every row of the group, done rows green, none windowed.
 
 ## P: page (jsdom, the real `useRoles` store fed payloads)
