@@ -185,15 +185,20 @@ export function workRecordsFrom(log: string): UiWorkRecords {
 
 /** The records the page shows, from the replayed ones (in the order they were made); `unknown`: a change was skipped. */
 function recordsOut(recs: Iterable<Rec>, unknown: boolean): UiWorkRecords {
-	const out = (r: Rec): UiWorkRecord => ({
-		id: r.id,
-		name: r.name,
-		lead: r.lead,
-		status: r.status,
-		...(r.kind === "project" ? { initiative: r.initiative } : {}),
-		items: r.doneWhen.length,
-		met: r.met.size,
-	});
+	const out = (r: Rec): UiWorkRecord => {
+		// roles-by-project G1: each item with its mark (by itemKey); items/met count the same list.
+		const doneWhen = r.doneWhen.map((item) => ({ item, met: r.met.has(itemKey(item)) }));
+		return {
+			id: r.id,
+			name: r.name,
+			lead: r.lead,
+			status: r.status,
+			...(r.kind === "project" ? { initiative: r.initiative } : {}),
+			items: doneWhen.length,
+			met: doneWhen.filter((m) => m.met).length,
+			doneWhen,
+		};
+	};
 	const all = [...recs];
 	const initiatives = all.filter((r) => r.kind === "initiative");
 	const projects = all.filter((r) => r.kind === "project");

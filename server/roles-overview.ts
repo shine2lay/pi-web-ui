@@ -53,6 +53,7 @@ import { readRoleInstructions } from "./roles-instructions.js";
 import { roleSettingsOf, type RoleSettings } from "./roles-config-history.js";
 import { roleAnswerKindAllowed, sortAsks } from "./roles-asks.js";
 import { linkOf, taskOf } from "./roles-task-next.js";
+import { taskBoardOf } from "./roles-by-project.js";
 import type { QueueSnapshotForDeps } from "./shared/task-blocker-resolver.js";
 import {
 	computeTagGroups,
@@ -432,8 +433,6 @@ export class RolesOverviewReader {
 		} catch {
 			approvals = undefined;
 		}
-		const tagGroups = computeTagGroups(allRoleTasks);
-		const touchSystems = computeTouchSystems(allRoleTasks);
 		const overview: UiRolesOverview = {
 			at,
 			roles,
@@ -445,8 +444,9 @@ export class RolesOverviewReader {
 			...(contacts ? { contacts } : {}),
 			...(openPairs ? { openPairs } : {}),
 			...(approvals ? { approvals } : {}),
-			tagGroups,
-			touchSystems,
+			tagGroups: computeTagGroups(allRoleTasks),
+			touchSystems: computeTouchSystems(allRoleTasks),
+			taskBoard: taskBoardOf(at, roles, allRoleTasks, work),
 		};
 		setDoneFacts(overview, doneFacts);
 		return overview;

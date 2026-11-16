@@ -19,7 +19,6 @@ import {
 import { normTags } from "../../server/shared/task-tags.js";
 import { workRecordsFrom, workRecordsFromState } from "../../server/work-records.js";
 import type { RolesByProjectFixture } from "../fixtures/roles-by-project/make-fixtures.js";
-import { notBuilt } from "./roles-by-project-not-built.js";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -126,12 +125,12 @@ describe("roles-by-project B1: group key", () => {
 		"ops #7": "none",
 	};
 
-	notBuilt("B1 groupKeyOf: registry project, project-id tag, first tag, nothing", () => {
+	it("B1 groupKeyOf: registry project, project-id tag, first tag, nothing", () => {
 		const ids = new Set(work.projects.map((p) => p.id));
 		for (const t of tasks) expect(groupKeyOf(t, ids)).toBe(expected[refOf(t.role ?? "", t.id)]);
 	});
 
-	notBuilt("B1 board: each task in one group; group open sums equal the role queues' open counts", () => {
+	it("B1 board: each task in one group; group open sums equal the role queues' open counts", () => {
 		const board = boardOf(tasks, work);
 		expectBoardInvariants(board);
 		const rows = byRef(board);
@@ -164,7 +163,7 @@ describe("roles-by-project B2: aliased tags", () => {
 		expect(normTags(["openviking"])).toEqual(["openviking-v2"]);
 		expect(normTags(["openviking-fixes"])).toEqual(["openviking-v2"]);
 	});
-	notBuilt("B2 tags folded by normTags land in one group, no twin groups", () => {
+	it("B2 tags folded by normTags land in one group, no twin groups", () => {
 		const tasks = [
 			task("backend", 1, { tags: normTags(["openviking"]) }),
 			task("frontend", 2, { status: "working", tags: normTags(["openviking-fixes"]) }),
@@ -194,11 +193,11 @@ describe("roles-by-project B3: board state and counts", () => {
 	];
 	const tasks = cases.map(([t]) => ({ ...t, tags: ["states"] }));
 
-	notBuilt("B3 boardStateOf: every status, paused open task -> waiting, dropped -> null", () => {
+	it("B3 boardStateOf: every status, paused open task -> waiting, dropped -> null", () => {
 		for (const [t, state] of cases) expect([t.id, boardStateOf(t)]).toEqual([t.id, state]);
 	});
 
-	notBuilt("B3 counts per state sum to open; dropped in no count and not sent", () => {
+	it("B3 counts per state sum to open; dropped in no count and not sent", () => {
 		const board = boardOf(tasks);
 		expectBoardInvariants(board);
 		const g = groupOf(board, "tag:states");
@@ -213,7 +212,7 @@ describe("roles-by-project B3: board state and counts", () => {
 });
 
 describe("roles-by-project B4-B5: done rows in the 14-day window", () => {
-	notBuilt("B4 40 done in 14 days: done14d 40, 6 rows sent, the 6 newest (tie: higher id)", () => {
+	it("B4 40 done in 14 days: done14d 40, 6 rows sent, the 6 newest (tie: higher id)", () => {
 		const tasks: UiRoleTask[] = [];
 		for (let id = 1; id <= 40; id++) tasks.push(doneTask("backend", id, AT - id * HOUR, { tags: ["busy-tag"] }));
 		tasks[6] = doneTask("backend", 7, AT - 6 * HOUR, { tags: ["busy-tag"] }); // ties with #6; #7 wins
@@ -224,7 +223,7 @@ describe("roles-by-project B4-B5: done rows in the 14-day window", () => {
 		expect(board.tasks.filter((t) => t.groupKey === g.key).map((t) => t.id)).toEqual([1, 2, 3, 4, 5, 7]);
 	});
 
-	notBuilt("B5 window [asOf - 14 d, asOf]: 15 d out, exactly 14 d in, no finishedAt out, future out", () => {
+	it("B5 window [asOf - 14 d, asOf]: 15 d out, exactly 14 d in, no finishedAt out, future out", () => {
 		const tasks = [
 			doneTask("qa", 1, AT - 15 * DAY, { tags: ["window"] }),
 			doneTask("qa", 2, AT - 14 * DAY, { tags: ["window"] }),
@@ -262,7 +261,7 @@ describe("roles-by-project B6-B7: done predecessors", () => {
 			dependsOnRefs: t.dependsOnRefs,
 		}));
 
-	notBuilt("B6 donePredecessors: 4 steps back from an open task, step 5 never", () => {
+	it("B6 donePredecessors: 4 steps back from an open task, step 5 never", () => {
 		expect([...donePredecessors(walkInput(chain), 4)].sort()).toEqual([
 			"backend #101",
 			"backend #102",
@@ -271,7 +270,7 @@ describe("roles-by-project B6-B7: done predecessors", () => {
 		]);
 	});
 
-	notBuilt("B6 board: chain open <- d1..d5 (30 days old): d1-d4 sent, d5 not", () => {
+	it("B6 board: chain open <- d1..d5 (30 days old): d1-d4 sent, d5 not", () => {
 		const board = boardOf(chain);
 		expectBoardInvariants(board);
 		const sent = byRef(board);
@@ -281,7 +280,7 @@ describe("roles-by-project B6-B7: done predecessors", () => {
 		expect([g.open, g.done14d, g.doneShown]).toEqual([1, 0, 4]);
 	});
 
-	notBuilt("B6 a done predecessor in another group is sent in its own group", () => {
+	it("B6 a done predecessor in another group is sent in its own group", () => {
 		const tasks = [
 			task("frontend", 1, { tags: ["front"], dependsOnRefs: ["backend #2"] }),
 			doneTask("backend", 2, old, { tags: ["back"] }),
@@ -299,11 +298,11 @@ describe("roles-by-project B6-B7: done predecessors", () => {
 		doneTask("backend", 202, old, { tags: ["loop"], dependsOnRefs: ["backend #201"] }),
 	];
 
-	notBuilt("B7 donePredecessors: cycle A -> B -> A among done predecessors ends", () => {
+	it("B7 donePredecessors: cycle A -> B -> A among done predecessors ends", () => {
 		expect([...donePredecessors(walkInput(loop), 4)].sort()).toEqual(["backend #201", "backend #202"]);
 	});
 
-	notBuilt("B7 board: cycle sent once each, every ref in tasks once", () => {
+	it("B7 board: cycle sent once each, every ref in tasks once", () => {
 		const board = boardOf(loop);
 		expectBoardInvariants(board);
 		expect(board.tasks.map((t) => t.ref).sort()).toEqual(["backend #200", "backend #201", "backend #202"]);
@@ -332,33 +331,30 @@ describe("roles-by-project B8: order and determinism", () => {
 		doneTask("ops", 17, AT - DAY, { tags: ["act-a"] }),
 	];
 
-	notBuilt("B8 same input twice (and rows in another order) -> byte-identical JSON", () => {
+	it("B8 same input twice (and rows in another order) -> byte-identical JSON", () => {
 		const rows = rowsOf(tasks);
 		const once = JSON.stringify(buildTaskBoard({ at: AT, rows, work, roster: ROSTER }));
 		expect(JSON.stringify(buildTaskBoard({ at: AT, rows, work, roster: ROSTER }))).toBe(once);
 		expect(JSON.stringify(buildTaskBoard({ at: AT, rows: [...rows].reverse(), work, roster: ROSTER }))).toBe(once);
 	});
 
-	notBuilt(
-		"B8 groups: needs-you > held > active > done-only, then open desc, then label; none last in its tier",
-		() => {
-			const board = boardOf(tasks, work);
-			expectBoardInvariants(board);
-			expect(board.groups.map((g) => g.key)).toEqual([
-				"project:p-n",
-				"tag:held-b",
-				"tag:held-a",
-				"tag:act-a",
-				"tag:act-z",
-				"none",
-				"tag:done-only",
-			]);
-			expect(groupOf(board, "none").roles).toEqual(["backend", "qa", "ops"]);
-			expect(board.asOf).toBe(AT);
-		},
-	);
+	it("B8 groups: needs-you > held > active > done-only, then open desc, then label; none last in its tier", () => {
+		const board = boardOf(tasks, work);
+		expectBoardInvariants(board);
+		expect(board.groups.map((g) => g.key)).toEqual([
+			"project:p-n",
+			"tag:held-b",
+			"tag:held-a",
+			"tag:act-a",
+			"tag:act-z",
+			"none",
+			"tag:done-only",
+		]);
+		expect(groupOf(board, "none").roles).toEqual(["backend", "qa", "ops"]);
+		expect(board.asOf).toBe(AT);
+	});
 
-	notBuilt("B8 tasks: group order, open before done, queueIndex, finishedAt desc, ref", () => {
+	it("B8 tasks: group order, open before done, queueIndex, finishedAt desc, ref", () => {
 		const board = boardOf(tasks, work);
 		const groupIndex = new Map(board.groups.map((g, i) => [g.key, i]));
 		const keyOf = (t: UiBoardTask) => [
@@ -384,7 +380,7 @@ describe("roles-by-project B8: order and determinism", () => {
 });
 
 describe("roles-by-project B9-B10: which groups, partial reads", () => {
-	notBuilt("B9 every work.projects record has a group (0-task ones included); old-done-only tags do not", () => {
+	it("B9 every work.projects record has a group (0-task ones included); old-done-only tags do not", () => {
 		const work = workOf(
 			record("p-active", "Quiet project"),
 			record("p-done", "Finished project", "done"),
@@ -410,7 +406,7 @@ describe("roles-by-project B9-B10: which groups, partial reads", () => {
 		expect(byRef(board).has("backend #2")).toBe(false);
 	});
 
-	notBuilt("B10 one unreadable queue: problem set, other groups intact, no guessed counts", () => {
+	it("B10 one unreadable queue: problem set, other groups intact, no guessed counts", () => {
 		const tasks = [
 			task("backend", 1, { tags: ["seen"] }),
 			task("backend", 2, { status: "working", tags: ["seen"] }),
@@ -487,7 +483,7 @@ describe("roles-by-project B11: done-when marks (server/work-records.ts)", () =>
 		["workRecordsFrom (log)", () => workRecordsFrom(log)],
 		["workRecordsFromState (pi-queue state)", () => workRecordsFromState(state)],
 	] as const) {
-		notBuilt(`B11 ${name}: met follows itemKey (case, outer spaces); items/met agree with the list`, () => {
+		it(`B11 ${name}: met follows itemKey (case, outer spaces); items/met agree with the list`, () => {
 			const records = read();
 			expect(records).toBeDefined();
 			const p1 = records?.projects.find((p) => p.id === "p1");
@@ -520,51 +516,48 @@ describe("roles-by-project B12: the design's real snapshots", () => {
 			expect(work?.projects.length).toBe(fixture.registry.projects.length);
 		});
 
-		notBuilt(
-			`B12 ${name}.json: open rows ${openRows}; every group count equals the recount; one group per task`,
-			() => {
-				const board = buildTaskBoard({ at: fixture.at, rows: fixture.rows, work, roster: fixture.roster });
-				expectBoardInvariants(board);
-				expect(openOf(board.tasks).length).toBe(openRows);
+		it(`B12 ${name}.json: open rows ${openRows}; every group count equals the recount; one group per task`, () => {
+			const board = buildTaskBoard({ at: fixture.at, rows: fixture.rows, work, roster: fixture.roster });
+			expectBoardInvariants(board);
+			expect(openOf(board.tasks).length).toBe(openRows);
 
-				const projectIds = new Set((work?.projects ?? []).map((p) => p.id));
-				type Tally = { open: number; counts: Record<string, number>; done14d: number };
-				const tally = new Map<string, Tally>();
-				const roleOpen = new Map<string, number>();
-				const openRefs = new Set<string>();
-				const ofKey = (key: string) => {
-					let t = tally.get(key);
-					if (!t)
-						tally.set(key, (t = { open: 0, counts: Object.fromEntries(OPEN_STATES.map((s) => [s, 0])), done14d: 0 }));
-					return t;
+			const projectIds = new Set((work?.projects ?? []).map((p) => p.id));
+			type Tally = { open: number; counts: Record<string, number>; done14d: number };
+			const tally = new Map<string, Tally>();
+			const roleOpen = new Map<string, number>();
+			const openRefs = new Set<string>();
+			const ofKey = (key: string) => {
+				let t = tally.get(key);
+				if (!t)
+					tally.set(key, (t = { open: 0, counts: Object.fromEntries(OPEN_STATES.map((s) => [s, 0])), done14d: 0 }));
+				return t;
+			};
+			for (const { task: t } of fixture.rows) {
+				const state = boardStateOf(t);
+				if (state === null) continue;
+				const g = ofKey(groupKeyOf(t, projectIds));
+				if (state === "done") {
+					if (t.finishedAt !== undefined && t.finishedAt >= fixture.at - 14 * DAY && t.finishedAt <= fixture.at)
+						g.done14d += 1;
+					continue;
+				}
+				g.open += 1;
+				g.counts[state] += 1;
+				roleOpen.set(t.role ?? "", (roleOpen.get(t.role ?? "") ?? 0) + 1);
+				openRefs.add(refOf(t.role ?? "", t.id));
+			}
+			expect(new Set(openOf(board.tasks).map((t) => t.ref))).toEqual(openRefs);
+			for (const g of board.groups) {
+				const want = tally.get(g.key) ?? {
+					open: 0,
+					counts: Object.fromEntries(OPEN_STATES.map((s) => [s, 0])),
+					done14d: 0,
 				};
-				for (const { task: t } of fixture.rows) {
-					const state = boardStateOf(t);
-					if (state === null) continue;
-					const g = ofKey(groupKeyOf(t, projectIds));
-					if (state === "done") {
-						if (t.finishedAt !== undefined && t.finishedAt >= fixture.at - 14 * DAY && t.finishedAt <= fixture.at)
-							g.done14d += 1;
-						continue;
-					}
-					g.open += 1;
-					g.counts[state] += 1;
-					roleOpen.set(t.role ?? "", (roleOpen.get(t.role ?? "") ?? 0) + 1);
-					openRefs.add(refOf(t.role ?? "", t.id));
-				}
-				expect(new Set(openOf(board.tasks).map((t) => t.ref))).toEqual(openRefs);
-				for (const g of board.groups) {
-					const want = tally.get(g.key) ?? {
-						open: 0,
-						counts: Object.fromEntries(OPEN_STATES.map((s) => [s, 0])),
-						done14d: 0,
-					};
-					expect([g.key, g.open, g.counts, g.done14d]).toEqual([g.key, want.open, want.counts, want.done14d]);
-				}
-				for (const [key, t] of tally) if (t.open > 0) expect(board.groups.some((g) => g.key === key)).toBe(true);
-				for (const g of board.roleGroups) expect([g.key, g.open]).toEqual([g.key, roleOpen.get(g.key.slice(5)) ?? 0]);
-				for (const p of projectIds) expect(board.groups.some((g) => g.key === `project:${p}`)).toBe(true);
-			},
-		);
+				expect([g.key, g.open, g.counts, g.done14d]).toEqual([g.key, want.open, want.counts, want.done14d]);
+			}
+			for (const [key, t] of tally) if (t.open > 0) expect(board.groups.some((g) => g.key === key)).toBe(true);
+			for (const g of board.roleGroups) expect([g.key, g.open]).toEqual([g.key, roleOpen.get(g.key.slice(5)) ?? 0]);
+			for (const p of projectIds) expect(board.groups.some((g) => g.key === `project:${p}`)).toBe(true);
+		});
 	}
 });
