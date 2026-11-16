@@ -30,6 +30,12 @@ const initiative = (id: string, extra: Record<string, unknown> = {}) => ({
 	lead: "architecture",
 	...extra,
 });
+// roles-by-project G1: each record's done-when items with their marks (none met by create).
+const initiativeMarks = [
+	{ item: "First thing works", met: false },
+	{ item: "Second thing works", met: false },
+];
+const projectMarks = [{ item: "It ships", met: false }];
 const project = (id: string, extra: Record<string, unknown> = {}) => ({
 	op: "project.create",
 	id,
@@ -75,7 +81,17 @@ describe("workRecordsFrom", () => {
 			),
 		);
 		expect(r).toEqual({
-			initiatives: [{ id: "fine", name: "Initiative fine", lead: "architecture", status: "active", items: 2, met: 0 }],
+			initiatives: [
+				{
+					id: "fine",
+					name: "Initiative fine",
+					lead: "architecture",
+					status: "active",
+					items: 2,
+					met: 0,
+					doneWhen: initiativeMarks,
+				},
+			],
 			projects: [],
 			problem: "unknown-change",
 		});
@@ -99,7 +115,17 @@ describe("workRecordsFrom", () => {
 	it("creates initiatives and projects with their lead, initiative and done-when count", () => {
 		const r = workRecordsFrom(log(initiative("team"), project("roles-page", { initiative: "team" }), project("solo")));
 		expect(r).toEqual({
-			initiatives: [{ id: "team", name: "Initiative team", lead: "architecture", status: "active", items: 2, met: 0 }],
+			initiatives: [
+				{
+					id: "team",
+					name: "Initiative team",
+					lead: "architecture",
+					status: "active",
+					items: 2,
+					met: 0,
+					doneWhen: initiativeMarks,
+				},
+			],
 			projects: [
 				{
 					id: "roles-page",
@@ -109,8 +135,18 @@ describe("workRecordsFrom", () => {
 					initiative: "team",
 					items: 1,
 					met: 0,
+					doneWhen: projectMarks,
 				},
-				{ id: "solo", name: "Project solo", lead: "ops", status: "active", initiative: null, items: 1, met: 0 },
+				{
+					id: "solo",
+					name: "Project solo",
+					lead: "ops",
+					status: "active",
+					initiative: null,
+					items: 1,
+					met: 0,
+					doneWhen: projectMarks,
+				},
 			],
 		});
 	});
@@ -150,6 +186,10 @@ describe("workRecordsFrom", () => {
 			status: "active",
 			items: 2,
 			met: 1,
+			doneWhen: [
+				{ item: "first thing works", met: true },
+				{ item: "A third thing", met: false },
+			],
 		});
 		expect(r.projects[0]).toMatchObject({ initiative: null, status: "dropped" });
 	});
@@ -197,7 +237,17 @@ describe("workRecordsFrom", () => {
 		});
 		const r = workRecordsFrom(log(initiative("team")) + '{"v":1,"op":"project.cre');
 		expect(r).toEqual({
-			initiatives: [{ id: "team", name: "Initiative team", lead: "architecture", status: "active", items: 2, met: 0 }],
+			initiatives: [
+				{
+					id: "team",
+					name: "Initiative team",
+					lead: "architecture",
+					status: "active",
+					items: 2,
+					met: 0,
+					doneWhen: initiativeMarks,
+				},
+			],
 			projects: [],
 		});
 	});
