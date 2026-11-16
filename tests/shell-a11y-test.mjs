@@ -7,6 +7,11 @@
  *   S3 axe color-contrast: top bar and status bar text reads at WCAG AA in both themes;
  *   S4 every visible control in the top bar and status bar (the folder chip included) is at least 24x24 px,
  *      read in one page.evaluate (a redraw between reads can't detach the node).
+ *   S5 the status bar fits (frontend #296; ui-check UI-CLIPPED-SCROLLBARS on div.statusbar-left at 320 px,
+ *      live 869a08dc): at 320/390/1440 px, with the left group holding the live values seen then (context
+ *      149.2K / 1000K, cost $683.0322, cache hit 89.7%, plus a streaming rate), nothing in the bar is cut by
+ *      an overflow:hidden box unless that box ends in an ellipsis; Connected and Context stay fully shown and
+ *      the folder chip stays at least 24 px. Values are put in and read back in one page.evaluate.
  * Any other serious or critical axe finding on the shell fails too. Scoped to .topbar and .statusbar: the
  * pages' own bodies have their own tests (e.g. roles-by-project-test.mjs).
  * Run after build: scripts/sealed.sh node tests/shell-a11y-test.mjs
@@ -40,7 +45,7 @@ const hardStop = setTimeout(() => {
 hardStop.unref();
 
 /** One page at `view`, with the server's roles count replaced by ASKS. */
-async function openPage(browser, { view, width, theme }) {
+async function openPage(browser, { view, width, theme, badge = true }) {
 	const context = await browser.newContext({ viewport: { width, height: 900 }, locale: "en-US", timezoneId: "UTC" });
 	await context.addInitScript((t) => {
 		if (t === "light") localStorage.setItem("pi-web-ui:theme", "flow-light");
@@ -58,7 +63,8 @@ async function openPage(browser, { view, width, theme }) {
 	});
 	const page = await context.newPage();
 	await page.goto(`${srv.http}/?view=${view}`);
-	await page.locator(".topbar .roles-badge").first().waitFor({ timeout: 20000 });
+	// Below the top bar's fit width the Roles tab moves into "⋯": S5 waits for the status bar only.
+	if (badge) await page.locator(".topbar .roles-badge").first().waitFor({ timeout: 20000 });
 	await page.locator(".statusbar .status-cwd").first().waitFor({ timeout: 10000 });
 	await page.addScriptTag({ path: AXE });
 	return { context, page };
@@ -128,11 +134,86 @@ async function shellCase(browser, view, width, theme) {
 	}
 }
 
+/** In the page: fill the left group with the live values of the finding, measure, then put it back. */
+function footerFit() {
+	const bar = document.querySelector(".statusbar");
+	const left = bar?.querySelector(".statusbar-left");
+	if (!bar || !left) return { missing: true };
+	const undo = [];
+	const setText = (el, text) => {
+		const node = el && [...el.childNodes].reverse().find((n) => n.nodeType === 3 && n.textContent.trim());
+		if (!node) return;
+		const was = node.textContent;
+		node.textContent = text;
+		undo.push(() => (node.textContent = was));
+	};
+	setText(left.querySelector(".status-ctx"), "149.2K / 1000K");
+	setText(left.querySelector(".status-cost"), "683.0322"); // the "$" is its own text node
+	setText(left.querySelector(".status-cache .cache-pct"), "89.7%");
+	const rate = document.createElement("span");
+	rate.className = "status-item status-rate";
+	rate.innerHTML = '<span class="working-spin rate-spin"></span>123t/s';
+	left.append(rate);
+	undo.push(() => rate.remove());
+	try {
+		const cut = [];
+		for (const el of [bar, ...bar.querySelectorAll("*")]) {
+			if (!el.getClientRects().length) continue;
+			const s = getComputedStyle(el);
+			const clipsX = ["hidden", "clip"].includes(s.overflowX);
+			if (clipsX && el.scrollWidth > el.clientWidth + 2 && s.textOverflow !== "ellipsis")
+				cut.push(`${el.className} ${el.scrollWidth}>${el.clientWidth}`);
+		}
+		if (cut.length) {
+			const shown = [...left.children].filter((c) => c.getClientRects().length);
+			cut.push(
+				`shown: ${shown.map((c) => `${c.className}=${Math.round(c.getBoundingClientRect().width)}`).join(", ")}`,
+			);
+		}
+		const box = left.getBoundingClientRect();
+		const whole = (sel) => {
+			const r = left.querySelector(sel)?.getBoundingClientRect();
+			return !!r && r.width > 0 && r.left >= box.left - 0.5 && r.right <= box.right + 0.5;
+		};
+		const cwd = bar.querySelector(".status-cwd")?.getBoundingClientRect();
+		return {
+			cut,
+			conn: whole(".status-conn"),
+			ctx: whole(".status-ctx"),
+			cwd: cwd ? [cwd.width, cwd.height] : null,
+		};
+	} finally {
+		for (const f of undo.reverse()) f();
+	}
+}
+
+async function fitCase(browser, view, width, theme) {
+	const tag = `${view} ${width}px ${theme}`;
+	const { context, page } = await openPage(browser, { view, width, theme, badge: false });
+	try {
+		const r = await page.evaluate(footerFit);
+		check(`S5 ${tag}: the status bar is there`, !r.missing);
+		if (r.missing) return;
+		check(`S5 ${tag}: nothing in the status bar is cut without an ellipsis`, r.cut.length === 0, r.cut.join(" | "));
+		check(`S5 ${tag}: Connected and Context are shown whole`, r.conn && r.ctx, `conn=${r.conn} ctx=${r.ctx}`);
+		check(
+			`S5 ${tag}: the folder chip is at least 24x24 px`,
+			r.cwd !== null && r.cwd[0] >= 24 && r.cwd[1] >= 24,
+			r.cwd ? `${r.cwd[0].toFixed(1)}x${r.cwd[1].toFixed(1)}` : "no folder chip",
+		);
+	} finally {
+		await context.close();
+	}
+}
+
 let chrome;
 try {
 	chrome = await chromium.launch({ executablePath: CHROME_PATH, headless: true });
 	for (const view of ["roles", "chat"])
 		for (const width of [1440, 390]) for (const theme of ["light", "dark"]) await shellCase(chrome, view, width, theme);
+	for (const view of ["roles", "chat"])
+		for (const width of [320, 390, 1440])
+			for (const theme of ["light", "dark"]) await fitCase(chrome, view, width, theme);
 } catch (error) {
 	console.error(`FAIL ${error instanceof Error ? error.message : "fixture error"}`);
 	failures++;

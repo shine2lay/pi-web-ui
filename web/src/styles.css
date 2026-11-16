@@ -16202,6 +16202,12 @@ button.source-default-toggle {
 	.status-rate {
 		flex-shrink: 0;
 	}
+	/* 一行放不下（320px，或 390px 生成中多了速率）时左组折成第二行，而不是把末尾的项裁掉一半
+	   （frontend #296）。两行 10.5px 的字在手机底栏的 44px 高度里放得下，底栏不变高。 */
+	.statusbar-left {
+		flex-wrap: wrap;
+		row-gap: 2px;
+	}
 	/* 上下文：手机上只留「已用 / 窗口」数字（标签与进度条占地且信息冗余）。 */
 	.status-ctx .ctx-label,
 	.status-ctx .ctx-bar {
