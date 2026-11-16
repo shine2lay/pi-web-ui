@@ -6,7 +6,13 @@
 import { describe, expect } from "vitest";
 import type { UiRoleTask } from "../../server/protocol.js";
 import type { UiBoardState, UiBoardTask } from "../../server/roles-board-protocol.js";
-import { heldOnOf, layerWindow, miniMapOf, type TaskMap, taskMapOf } from "../../server/shared/roles-by-project/graph.js";
+import {
+	heldOnOf,
+	layerWindow,
+	miniMapOf,
+	type TaskMap,
+	taskMapOf,
+} from "../../server/shared/roles-by-project/graph.js";
 import { notBuilt } from "./roles-by-project-not-built.js";
 
 const STATUS: Record<UiBoardState, UiRoleTask["status"]> = {
@@ -39,19 +45,22 @@ const layerOf = (map: TaskMap, ref: string) => map.layers.findIndex((l) => l.inc
 const edgeSet = (map: TaskMap) => map.edges.map((e) => `${e.from} -> ${e.to}`).sort();
 
 describe("roles-by-project G1-G2: links and cycles", () => {
-	notBuilt("G1 links only from dependsOnRefs inside the group; same-group cross-queue ref drawn; no guessed nodes", () => {
-		const rows = [
-			row("backend #1", "queued"),
-			row("backend #2", "queued", ["backend #1", "backend #1", "backend #2", "qa #99", "frontend #5"]),
-			row("temper #38", "working"),
-			row("backend #3", "blocked", ["temper #38"]),
-		];
-		const map = taskMapOf(rows);
-		expect(edgeSet(map)).toEqual(["backend #1 -> backend #2", "temper #38 -> backend #3"]);
-		expect([...nodesOf(map)].sort()).toEqual(["backend #1", "backend #2", "backend #3", "temper #38"]);
-		expect(map.layers.flat().includes("qa #99") || map.layers.flat().includes("frontend #5")).toBe(false);
-		expect(layerOf(map, "temper #38")).toBeLessThan(layerOf(map, "backend #3"));
-	});
+	notBuilt(
+		"G1 links only from dependsOnRefs inside the group; same-group cross-queue ref drawn; no guessed nodes",
+		() => {
+			const rows = [
+				row("backend #1", "queued"),
+				row("backend #2", "queued", ["backend #1", "backend #1", "backend #2", "qa #99", "frontend #5"]),
+				row("temper #38", "working"),
+				row("backend #3", "blocked", ["temper #38"]),
+			];
+			const map = taskMapOf(rows);
+			expect(edgeSet(map)).toEqual(["backend #1 -> backend #2", "temper #38 -> backend #3"]);
+			expect([...nodesOf(map)].sort()).toEqual(["backend #1", "backend #2", "backend #3", "temper #38"]);
+			expect(map.layers.flat().includes("qa #99") || map.layers.flat().includes("frontend #5")).toBe(false);
+			expect(layerOf(map, "temper #38")).toBeLessThan(layerOf(map, "backend #3"));
+		},
+	);
 
 	notBuilt("G1 a self-reference alone makes no link: the task is loose", () => {
 		const map = taskMapOf([row("backend #1", "queued", ["backend #1"]), row("backend #2", "queued")]);
@@ -90,7 +99,10 @@ describe("roles-by-project G3-G4: window and caps", () => {
 		const map = taskMapOf(rows);
 		const mini = miniMapOf(map, rows);
 		expect(mini.columns.map((c) => c.refs.length)).toEqual([1, 5]);
-		expect(mini.columns[1]).toEqual({ refs: ["backend #2", "backend #3", "backend #4", "backend #5", "backend #6"], more: 2 });
+		expect(mini.columns[1]).toEqual({
+			refs: ["backend #2", "backend #3", "backend #4", "backend #5", "backend #6"],
+			more: 2,
+		});
 		expect([mini.earlier, mini.later]).toEqual([0, 0]);
 	});
 
@@ -159,34 +171,49 @@ describe("roles-by-project G5-G6: root blockers and held on", () => {
 });
 
 describe("roles-by-project G7: opened map, scale, empty", () => {
-	notBuilt("G7 opened map holds every row, none windowed; done links are done; the mini map windows the same chain", () => {
-		const rows = [row("backend #1", "done")];
-		for (let i = 2; i <= 9; i++) rows.push(row(`backend #${i}`, i <= 4 ? "done" : "queued", [`backend #${i - 1}`]));
-		for (let i = 20; i < 30; i++) rows.push(row(`qa #${i}`, "queued"));
-		const map = taskMapOf(rows);
-		expect(nodesOf(map)).toEqual(new Set(rows.map((r) => r.ref)));
-		expect(map.layers.filter((l) => l.some((r) => r.startsWith("backend"))).length).toBe(9);
-		for (let i = 1; i <= 9; i++) expect(layerOf(map, `backend #${i}`)).toBe(i - 1);
-		for (const e of map.edges) if (["backend #1", "backend #2", "backend #3", "backend #4"].includes(e.from)) expect(e.kind).toBe("done");
-		expect(map.loose.length).toBe(10);
-		const mini = miniMapOf(map, rows);
-		expect(mini.columns.length).toBe(5);
-		expect([mini.earlier, mini.later]).toEqual([4, 0]);
-		expect(mini.columns[0].refs).toEqual(["backend #5"]);
-	});
+	notBuilt(
+		"G7 opened map holds every row, none windowed; done links are done; the mini map windows the same chain",
+		() => {
+			const rows = [row("backend #1", "done")];
+			for (let i = 2; i <= 9; i++) rows.push(row(`backend #${i}`, i <= 4 ? "done" : "queued", [`backend #${i - 1}`]));
+			for (let i = 20; i < 30; i++) rows.push(row(`qa #${i}`, "queued"));
+			const map = taskMapOf(rows);
+			expect(nodesOf(map)).toEqual(new Set(rows.map((r) => r.ref)));
+			expect(map.layers.filter((l) => l.some((r) => r.startsWith("backend"))).length).toBe(9);
+			for (let i = 1; i <= 9; i++) expect(layerOf(map, `backend #${i}`)).toBe(i - 1);
+			for (const e of map.edges)
+				if (["backend #1", "backend #2", "backend #3", "backend #4"].includes(e.from)) expect(e.kind).toBe("done");
+			expect(map.loose.length).toBe(10);
+			const mini = miniMapOf(map, rows);
+			expect(mini.columns.length).toBe(5);
+			expect([mini.earlier, mini.later]).toEqual([4, 0]);
+			expect(mini.columns[0].refs).toEqual(["backend #5"]);
+		},
+	);
 
 	notBuilt("G7 260 tasks: every node and edge is in the data; a layer is 1 + its highest linked predecessor", () => {
 		const rows: UiBoardTask[] = [];
 		const states: UiBoardState[] = ["done", "queued", "working", "blocked", "waiting", "needs-you"];
 		for (let i = 1; i <= 260; i++) {
-			const deps = [i % 7 === 0 ? `ops #${i - 3}` : "", i % 5 === 0 ? `ops #${i - 1}` : "", i % 13 === 0 ? "temper #9999" : ""];
-			rows.push(row(`ops #${i}`, states[i % states.length], deps.filter((d) => d && !d.endsWith("#0") && !d.includes("#-"))));
+			const deps = [
+				i % 7 === 0 ? `ops #${i - 3}` : "",
+				i % 5 === 0 ? `ops #${i - 1}` : "",
+				i % 13 === 0 ? "temper #9999" : "",
+			];
+			rows.push(
+				row(
+					`ops #${i}`,
+					states[i % states.length],
+					deps.filter((d) => d && !d.endsWith("#0") && !d.includes("#-")),
+				),
+			);
 		}
 		const map = taskMapOf(rows);
 		const refs = new Set(rows.map((r) => r.ref));
 		expect(nodesOf(map)).toEqual(refs);
 		const linked = new Set<string>();
-		for (const r of rows) for (const d of new Set(r.dependsOnRefs)) if (refs.has(d) && d !== r.ref) linked.add(`${d} -> ${r.ref}`);
+		for (const r of rows)
+			for (const d of new Set(r.dependsOnRefs)) if (refs.has(d) && d !== r.ref) linked.add(`${d} -> ${r.ref}`);
 		expect(edgeSet(map)).toEqual([...linked].sort());
 		for (const r of rows) {
 			const preds = [...new Set(r.dependsOnRefs)].filter((d) => refs.has(d) && d !== r.ref);

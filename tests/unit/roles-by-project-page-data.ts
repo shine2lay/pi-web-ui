@@ -47,19 +47,32 @@ export function boardTask(
 		state,
 		queueIndex: state === "done" ? null : Number(id) % 100,
 		...(state === "done" ? { finishedAt: AT - 3_600_000 } : {}),
-		...(state === "needs-you" ? { stuck: { question: `${title}?`, choices: ["Yes", "No"], sinceAt: AT - 60_000, tier: "owner" as const } } : {}),
+		...(state === "needs-you"
+			? { stuck: { question: `${title}?`, choices: ["Yes", "No"], sinceAt: AT - 60_000, tier: "owner" as const } }
+			: {}),
 		...over,
 	};
 }
 
-function groupOf(key: string, label: string, rows: readonly UiBoardTask[], extra: Partial<UiBoardGroup> = {}): UiBoardGroup {
+function groupOf(
+	key: string,
+	label: string,
+	rows: readonly UiBoardTask[],
+	extra: Partial<UiBoardGroup> = {},
+): UiBoardGroup {
 	const mine = rows.filter((t) => t.groupKey === key);
 	const counts = { "needs-you": 0, blocked: 0, waiting: 0, working: 0, queued: 0 };
 	for (const t of mine) if (t.state !== "done") counts[t.state] += 1;
 	const open = mine.filter((t) => t.state !== "done").length;
 	const roleOpen = new Map<string, number>();
 	for (const t of mine) roleOpen.set(t.role ?? "", (roleOpen.get(t.role ?? "") ?? 0) + (t.state === "done" ? 0 : 1));
-	const kind = key.startsWith("project:") ? "project" : key.startsWith("tag:") ? "tag" : key.startsWith("role:") ? "role" : "none";
+	const kind = key.startsWith("project:")
+		? "project"
+		: key.startsWith("tag:")
+			? "tag"
+			: key.startsWith("role:")
+				? "role"
+				: "none";
 	return {
 		key,
 		kind,
@@ -69,7 +82,10 @@ function groupOf(key: string, label: string, rows: readonly UiBoardTask[], extra
 		done14d: mine.length - open,
 		doneShown: mine.length - open,
 		roles: [...roleOpen].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([r]) => r),
-		lastFinishedAt: mine.reduce<number | null>((m, t) => (t.finishedAt && (m === null || t.finishedAt > m) ? t.finishedAt : m), null),
+		lastFinishedAt: mine.reduce<number | null>(
+			(m, t) => (t.finishedAt && (m === null || t.finishedAt > m) ? t.finishedAt : m),
+			null,
+		),
 		...(kind === "project" ? { projectId: key.slice(8), projectStatus: "active" as const } : {}),
 		...extra,
 	};
@@ -78,9 +94,39 @@ function groupOf(key: string, label: string, rows: readonly UiBoardTask[], extra
 export const WORK: UiWorkRecords = {
 	initiatives: [{ id: "team-in-temper", name: "Team in Temper", lead: "ops", status: "active", items: 1, met: 0 }],
 	projects: [
-		{ id: "roles-by-project", name: "Roles by project", lead: "frontend", status: "active", initiative: "team-in-temper", items: 2, met: 1, doneWhen: [{ item: "Spec landed", met: true }, { item: "Page live", met: false }] },
-		{ id: "inkflow-onboarding", name: "Inkflow onboarding", lead: "design", status: "active", initiative: null, items: 0, met: 0, doneWhen: [] },
-		{ id: "quiet-project", name: "Quiet project", lead: "ops", status: "active", initiative: null, items: 0, met: 0, doneWhen: [] },
+		{
+			id: "roles-by-project",
+			name: "Roles by project",
+			lead: "frontend",
+			status: "active",
+			initiative: "team-in-temper",
+			items: 2,
+			met: 1,
+			doneWhen: [
+				{ item: "Spec landed", met: true },
+				{ item: "Page live", met: false },
+			],
+		},
+		{
+			id: "inkflow-onboarding",
+			name: "Inkflow onboarding",
+			lead: "design",
+			status: "active",
+			initiative: null,
+			items: 0,
+			met: 0,
+			doneWhen: [],
+		},
+		{
+			id: "quiet-project",
+			name: "Quiet project",
+			lead: "ops",
+			status: "active",
+			initiative: null,
+			items: 0,
+			met: 0,
+			doneWhen: [],
+		},
 	],
 };
 
@@ -88,19 +134,44 @@ const ROLES_P = "project:roles-by-project";
 const INK = "project:inkflow-onboarding";
 const SMOKE = "tag:release-smoke";
 /** Group label -> the refs searching for it must show (spec-page.md §Controls). */
-export const LABELS = { roles: "Roles by project", ink: "Inkflow onboarding", smoke: "release-smoke", none: "No project or tag" };
+export const LABELS = {
+	roles: "Roles by project",
+	ink: "Inkflow onboarding",
+	smoke: "release-smoke",
+	none: "No project or tag",
+};
 
 /** The live board: 4 groups with open work (5 asks among them), one quiet project. */
 export function liveTasks(): UiBoardTask[] {
 	return [
-		boardTask("frontend #294", ROLES_P, "needs-you", "Pick the tile density", { initiative: "team-in-temper", project: "roles-by-project" }),
-		boardTask("architecture #546", ROLES_P, "working", "Roles by project spec", { initiative: "team-in-temper", project: "roles-by-project" }),
-		boardTask("frontend #293", ROLES_P, "queued", "Seam and failing acceptance", { initiative: "team-in-temper", project: "roles-by-project", dependsOnRefs: ["architecture #546"] }),
-		boardTask("backend #174", ROLES_P, "blocked", "Board producer", { project: "roles-by-project", dependsOnRefs: ["frontend #293"], howToUnblock: "Unblocks when Frontend #293 finishes" }),
+		boardTask("frontend #294", ROLES_P, "needs-you", "Pick the tile density", {
+			initiative: "team-in-temper",
+			project: "roles-by-project",
+		}),
+		boardTask("architecture #546", ROLES_P, "working", "Roles by project spec", {
+			initiative: "team-in-temper",
+			project: "roles-by-project",
+		}),
+		boardTask("frontend #293", ROLES_P, "queued", "Seam and failing acceptance", {
+			initiative: "team-in-temper",
+			project: "roles-by-project",
+			dependsOnRefs: ["architecture #546"],
+		}),
+		boardTask("backend #174", ROLES_P, "blocked", "Board producer", {
+			project: "roles-by-project",
+			dependsOnRefs: ["frontend #293"],
+			howToUnblock: "Unblocks when Frontend #293 finishes",
+		}),
 		boardTask("design #62", INK, "needs-you", "Approve onboarding copy", { project: "inkflow-onboarding" }),
 		boardTask("backend #81", INK, "needs-you", "Choose invite expiry", { project: "inkflow-onboarding" }),
-		boardTask("backend #80", INK, "working", "Invite API", { project: "inkflow-onboarding", tags: ["inkflow", "invites"] }),
-		boardTask("design #61", INK, "blocked", "Onboarding screens", { project: "inkflow-onboarding", dependsOnRefs: ["backend #80"] }),
+		boardTask("backend #80", INK, "working", "Invite API", {
+			project: "inkflow-onboarding",
+			tags: ["inkflow", "invites"],
+		}),
+		boardTask("design #61", INK, "blocked", "Onboarding screens", {
+			project: "inkflow-onboarding",
+			dependsOnRefs: ["backend #80"],
+		}),
 		boardTask("qa #13", SMOKE, "needs-you", "Accept the flaky smoke", { tags: ["release-smoke"] }),
 		boardTask("qa #12", SMOKE, "queued", "Smoke tests", { tags: ["release-smoke"] }),
 		boardTask("ops #901", "none", "needs-you", "Free the disk", {}),
@@ -119,7 +190,13 @@ export function scaleTasks(extra = 220, areas = 20): UiBoardTask[] {
 		const area = `area-${String((i % areas) + 1).padStart(2, "0")}`;
 		const ref = `${roles[i % roles.length]} #${1000 + i}`;
 		const before = i >= areas ? [`${roles[(i - areas) % roles.length]} #${1000 + i - areas}`] : [];
-		out.push(boardTask(ref, `tag:${area}`, states[i % states.length], `Area task ${1000 + i}`, { tags: [area], dependsOnRefs: before, queueIndex: i }));
+		out.push(
+			boardTask(ref, `tag:${area}`, states[i % states.length], `Area task ${1000 + i}`, {
+				tags: [area],
+				dependsOnRefs: before,
+				queueIndex: i,
+			}),
+		);
 	}
 	return out;
 }
@@ -139,7 +216,13 @@ export function boardOf(tasks: readonly UiBoardTask[], problem?: string): UiTask
 	return {
 		asOf: AT,
 		groups,
-		roleGroups: roles.map((r) => groupOf(`role:${r}`, ROLE_TITLES[r] ?? r, tasks.map((t) => ({ ...t, groupKey: `role:${t.role}` })))),
+		roleGroups: roles.map((r) =>
+			groupOf(
+				`role:${r}`,
+				ROLE_TITLES[r] ?? r,
+				tasks.map((t) => ({ ...t, groupKey: `role:${t.role}` })),
+			),
+		),
 		tasks: [...tasks],
 		...(problem ? { problem } : {}),
 	};
@@ -159,7 +242,13 @@ function roleOf(id: string): UiRoleOverview {
 		asks: [],
 		tldr: [],
 		spend: { state: "none", line: "No budget" },
-		queue: { running: true, counts: { active: 0, queued: 0, done: 0 }, lanes: { inUse: 0, atOnce: 2 }, active: [], queued: [] },
+		queue: {
+			running: true,
+			counts: { active: 0, queued: 0, done: 0 },
+			lanes: { inUse: 0, atOnce: 2 },
+			active: [],
+			queued: [],
+		},
 		requests: { open: 0 },
 		report: { state: "not-in-job" },
 		problems: [],

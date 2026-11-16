@@ -27,7 +27,9 @@ const AXE = process.env.PI_AXE_JS ?? join(home, "temper-ai/configs/design/bin/ve
 const WEBKIT = (() => {
 	const root = process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(home, ".cache", "ms-playwright");
 	if (!existsSync(root)) return null;
-	const dir = readdirSync(root).filter((d) => /^webkit-\d+$/.test(d)).sort((a, b) => Number(b.slice(7)) - Number(a.slice(7)))[0];
+	const dir = readdirSync(root)
+		.filter((d) => /^webkit-\d+$/.test(d))
+		.sort((a, b) => Number(b.slice(7)) - Number(a.slice(7)))[0];
 	return dir && existsSync(join(root, dir, "pw_run.sh")) ? join(root, dir, "pw_run.sh") : null;
 })();
 const VIEW = { roles: data.LABELS.roles, ink: data.LABELS.ink };
@@ -37,7 +39,18 @@ const ASK_VIEW = {
 	revision: "c".repeat(64),
 	kind: "stuck",
 	title: "Pick the tile density?",
-	fields: [{ id: "q1", text: "Pick the tile density?", options: [{ value: "Yes", label: "Yes" }, { value: "No", label: "No" }], multi: false, allowText: false }],
+	fields: [
+		{
+			id: "q1",
+			text: "Pick the tile density?",
+			options: [
+				{ value: "Yes", label: "Yes" },
+				{ value: "No", label: "No" },
+			],
+			multi: false,
+			allowText: false,
+		},
+	],
 };
 
 let failures = 0;
@@ -54,7 +67,10 @@ const rolesMessage = (tasks) => {
 	return JSON.stringify({ type: "roles", asks: overview.asks.length, checkedAt, overview });
 };
 /** The update every L case sends: the same board plus one queued backend task in a new last group. */
-const freshTasks = (tasks) => [...tasks, data.boardTask("backend #4242", `tag:${FRESH.label}`, "queued", FRESH.title, { tags: [FRESH.label], queueIndex: 99 })];
+const freshTasks = (tasks) => [
+	...tasks,
+	data.boardTask("backend #4242", `tag:${FRESH.label}`, "queued", FRESH.title, { tags: [FRESH.label], queueIndex: 99 }),
+];
 
 const srv = await ownServer({ name: "roles-by-project", env: { PI_WEB_TOKEN: "", PI_IDENTITY_REINDEX: "0" } });
 const hardStop = setTimeout(() => {
@@ -99,12 +115,21 @@ async function openPage(browser, { width, height = 900, theme = "dark", tasks = 
 	page.on("console", (m) => m.type() === "error" && errors.push(`console ${m.text()}`));
 	await page.goto(`${srv.http}/?view=roles`);
 	const group = page.locator('[role="radiogroup"]').filter({ has: page.getByRole("radio", { name: "Project" }) });
-	const built = await group.first().waitFor({ timeout: 20000 }).then(() => true, () => false);
+	const built = await group
+		.first()
+		.waitFor({ timeout: 20000 })
+		.then(
+			() => true,
+			() => false,
+		);
 	if (!built) {
 		const shell = await page.evaluate(() => document.body.children.length > 0).catch(() => false);
 		throw new Error(shell ? NOT_BUILT : "harness: the app shell did not load");
 	}
-	await page.getByRole("button", { name: new RegExp(VIEW.roles) }).first().waitFor({ timeout: 10000 });
+	await page
+		.getByRole("button", { name: new RegExp(VIEW.roles) })
+		.first()
+		.waitFor({ timeout: 10000 });
 	const send = async (next) => {
 		if (!socket) throw new Error("harness: no socket");
 		socket.send(rolesMessage(next));
@@ -118,7 +143,8 @@ const scrollState = (page) =>
 	page.evaluate(() => {
 		const path = (el) => {
 			const parts = [];
-			for (let e = el; e && e !== document.documentElement; e = e.parentElement) parts.unshift(`${e.tagName}:${[...(e.parentElement?.children ?? [])].indexOf(e)}`);
+			for (let e = el; e && e !== document.documentElement; e = e.parentElement)
+				parts.unshift(`${e.tagName}:${[...(e.parentElement?.children ?? [])].indexOf(e)}`);
 			return parts.join("/");
 		};
 		const out = { window: window.scrollY };
@@ -130,10 +156,21 @@ async function journey(browser, theme) {
 	const { context, page, errors } = await openPage(browser, { width: 1440, theme, tasks: data.liveTasks() });
 	try {
 		const body = await page.locator("body").innerText();
-		check(`journey ${theme}: title, lede and As of`, /Roles/.test(body) && /5 things need you/.test(body) && /As of/.test(body));
-		check(`journey ${theme}: Needs you · 5 and a tile per open group`, /Needs you · 5/.test(body) && [VIEW.roles, VIEW.ink, data.LABELS.smoke, data.LABELS.none].every((l) => body.includes(l)));
+		check(
+			`journey ${theme}: title, lede and As of`,
+			/Roles/.test(body) && /5 things need you/.test(body) && /As of/.test(body),
+		);
+		check(
+			`journey ${theme}: Needs you · 5 and a tile per open group`,
+			/Needs you · 5/.test(body) &&
+				[VIEW.roles, VIEW.ink, data.LABELS.smoke, data.LABELS.none].every((l) => body.includes(l)),
+		);
 		await tile(page, VIEW.roles).click();
-		check(`journey ${theme}: a tile opens (aria-expanded) and shows its map and Done when`, (await tile(page, VIEW.roles).getAttribute("aria-expanded")) === "true" && /Done when/.test(await page.locator("body").innerText()));
+		check(
+			`journey ${theme}: a tile opens (aria-expanded) and shows its map and Done when`,
+			(await tile(page, VIEW.roles).getAttribute("aria-expanded")) === "true" &&
+				/Done when/.test(await page.locator("body").innerText()),
+		);
 		const small = await page.evaluate(() =>
 			[...document.querySelectorAll("button, [role=radio], input, a[href], summary")]
 				.filter((e) => e.getClientRects().length && !e.closest("[hidden]"))
@@ -146,10 +183,23 @@ async function journey(browser, theme) {
 		else {
 			await page.addScriptTag({ path: AXE });
 			const bad = await page.evaluate(async () => {
-				const tags = { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"] }, resultTypes: ["violations"] };
+				const tags = {
+					runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"] },
+					resultTypes: ["violations"],
+				};
 				const a = await window.axe.run(document, tags);
-				const b = await window.axe.run(document, { runOnly: { type: "rule", values: ["label-content-name-mismatch"] } });
-				return [...a.violations, ...b.violations].filter((v) => v.impact === "serious" || v.impact === "critical").map((v) => `${v.id}: ${v.nodes.slice(0, 2).map((n) => n.target.join(" ")).join(", ")}`);
+				const b = await window.axe.run(document, {
+					runOnly: { type: "rule", values: ["label-content-name-mismatch"] },
+				});
+				return [...a.violations, ...b.violations]
+					.filter((v) => v.impact === "serious" || v.impact === "critical")
+					.map(
+						(v) =>
+							`${v.id}: ${v.nodes
+								.slice(0, 2)
+								.map((n) => n.target.join(" "))
+								.join(", ")}`,
+					);
 			});
 			check(`journey ${theme}: axe-core, no serious or critical finding`, bad.length === 0, bad.join(" | "));
 		}
@@ -173,14 +223,40 @@ async function l1(browser) {
 		await page.mouse.wheel(0, 600);
 		await sleep(300);
 		const before = await scrollState(page);
-		check("L1 harness: the page scrolled before the update", Object.values(before).some((v) => v > 0), JSON.stringify(before));
+		check(
+			"L1 harness: the page scrolled before the update",
+			Object.values(before).some((v) => v > 0),
+			JSON.stringify(before),
+		);
 		await a.send(freshTasks(tasks));
 		const after = await scrollState(page);
-		check("L1 scroll offset kept", JSON.stringify(after) === JSON.stringify(before), `${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
-		const focus = await page.evaluate(() => ({ search: document.activeElement?.getAttribute("type") === "search" || document.activeElement?.getAttribute("role") === "searchbox", value: document.activeElement?.value, start: document.activeElement?.selectionStart, end: document.activeElement?.selectionEnd }));
-		check("L1 search keeps focus, text and caret mid-word", focus.search && focus.value === "backend" && focus.start === 3 && focus.end === 3, JSON.stringify(focus));
-		const open = [await tile(page, VIEW.roles).getAttribute("aria-expanded"), await tile(page, VIEW.ink).getAttribute("aria-expanded")];
-		check("L1 both opened tiles stay aria-expanded=true", open.every((v) => v === "true"), open.join(","));
+		check(
+			"L1 scroll offset kept",
+			JSON.stringify(after) === JSON.stringify(before),
+			`${JSON.stringify(before)} -> ${JSON.stringify(after)}`,
+		);
+		const focus = await page.evaluate(() => ({
+			search:
+				document.activeElement?.getAttribute("type") === "search" ||
+				document.activeElement?.getAttribute("role") === "searchbox",
+			value: document.activeElement?.value,
+			start: document.activeElement?.selectionStart,
+			end: document.activeElement?.selectionEnd,
+		}));
+		check(
+			"L1 search keeps focus, text and caret mid-word",
+			focus.search && focus.value === "backend" && focus.start === 3 && focus.end === 3,
+			JSON.stringify(focus),
+		);
+		const open = [
+			await tile(page, VIEW.roles).getAttribute("aria-expanded"),
+			await tile(page, VIEW.ink).getAttribute("aria-expanded"),
+		];
+		check(
+			"L1 both opened tiles stay aria-expanded=true",
+			open.every((v) => v === "true"),
+			open.join(","),
+		);
 	} finally {
 		await a.context.close();
 	}
@@ -188,8 +264,15 @@ async function l1(browser) {
 	try {
 		await tile(b.page, VIEW.ink).focus();
 		await b.send(freshTasks(data.liveTasks()));
-		const focused = await b.page.evaluate(() => [document.activeElement?.getAttribute("aria-expanded"), document.activeElement?.textContent ?? ""]);
-		check("L1 a focused tile keeps keyboard focus", focused[0] !== null && focused[1].includes("Inkflow onboarding"), JSON.stringify(focused));
+		const focused = await b.page.evaluate(() => [
+			document.activeElement?.getAttribute("aria-expanded"),
+			document.activeElement?.textContent ?? "",
+		]);
+		check(
+			"L1 a focused tile keeps keyboard focus",
+			focused[0] !== null && focused[1].includes("Inkflow onboarding"),
+			JSON.stringify(focused),
+		);
 	} finally {
 		await b.context.close();
 	}
@@ -199,8 +282,15 @@ async function l1(browser) {
 		const dialog = c.page.locator("dialog[open]");
 		await dialog.getByRole("radio", { name: "No" }).check();
 		await c.send(freshTasks(data.liveTasks()));
-		const state = await c.page.evaluate(() => ({ open: !!document.querySelector("dialog[open]"), picked: document.querySelector("dialog[open] input:checked")?.value ?? null }));
-		check("L1 the answer dialog stays open with the picked choice", state.open && state.picked === "No", JSON.stringify(state));
+		const state = await c.page.evaluate(() => ({
+			open: !!document.querySelector("dialog[open]"),
+			picked: document.querySelector("dialog[open] input:checked")?.value ?? null,
+		}));
+		check(
+			"L1 the answer dialog stays open with the picked choice",
+			state.open && state.picked === "No",
+			JSON.stringify(state),
+		);
 	} finally {
 		await c.context.close();
 	}
@@ -217,8 +307,15 @@ async function l2(browser, name) {
 		await send(freshTasks(data.liveTasks()));
 		await page.mouse.up();
 		await sleep(200);
-		check(`L2 ${name}: a payload between mousedown and mouseup still opens the tile`, (await target.getAttribute("aria-expanded")) === "true");
-		check(`L2 ${name}: no page errors`, errors.filter((e) => e.startsWith("pageerror")).length === 0, errors.join(" | "));
+		check(
+			`L2 ${name}: a payload between mousedown and mouseup still opens the tile`,
+			(await target.getAttribute("aria-expanded")) === "true",
+		);
+		check(
+			`L2 ${name}: no page errors`,
+			errors.filter((e) => e.startsWith("pageerror")).length === 0,
+			errors.join(" | "),
+		);
 	} finally {
 		await context.close();
 	}
@@ -236,7 +333,8 @@ async function l3(browser) {
 					for (const el of document.querySelectorAll("body *")) {
 						if (![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) continue;
 						const s = getComputedStyle(el);
-						if (s.visibility === "hidden" || s.display === "none" || el.closest("[hidden], [aria-hidden=true]")) continue;
+						if (s.visibility === "hidden" || s.display === "none" || el.closest("[hidden], [aria-hidden=true]"))
+							continue;
 						const b = el.getBoundingClientRect();
 						if (b.width && b.height) boxes.push([el, b]);
 					}
@@ -248,7 +346,8 @@ async function l3(browser) {
 							if (ea.contains(eb) || eb.contains(ea)) continue;
 							const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
 							const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-							if (w > 1 && h > 1) hits.push(`${ea.textContent.trim().slice(0, 20)} / ${eb.textContent.trim().slice(0, 20)}`);
+							if (w > 1 && h > 1)
+								hits.push(`${ea.textContent.trim().slice(0, 20)} / ${eb.textContent.trim().slice(0, 20)}`);
 						}
 					return { overflow, hits };
 				});
@@ -257,10 +356,17 @@ async function l3(browser) {
 				check(`${tag}: 0 overlapping text`, r.hits.length === 0, r.hits.slice(0, 3).join(" | "));
 				check(`${tag}: 0 console errors`, errors.length === 0, errors.slice(0, 3).join(" | "));
 				if (width === 390 || width === 1440) {
-					const shown = await page.getByRole("button", { name: "Answer", exact: true }).filter({ visible: true }).count();
+					const shown = await page
+						.getByRole("button", { name: "Answer", exact: true })
+						.filter({ visible: true })
+						.count();
 					const want = width === 1440 ? [3, "Show 2 more"] : [1, "Show 4 more"];
 					const more = await page.getByRole("button", { name: want[1] }).count();
-					check(`P3-layout ${tag}: Needs you shows ${want[0]} cards and "${want[1]}"`, shown === want[0] && more === 1, `${shown} shown`);
+					check(
+						`P3-layout ${tag}: Needs you shows ${want[0]} cards and "${want[1]}"`,
+						shown === want[0] && more === 1,
+						`${shown} shown`,
+					);
 				}
 			} finally {
 				await context.close();

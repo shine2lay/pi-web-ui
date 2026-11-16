@@ -53,23 +53,22 @@ export interface UiBoardGroup {
 }
 
 /** G2: one task row of the board. */
-export interface UiBoardTask
-	extends Pick<
-		UiRoleTask,
-		| "id"
-		| "role"
-		| "title"
-		| "status"
-		| "lifecycleStatus"
-		| "project"
-		| "initiative"
-		| "tags"
-		| "dependsOnRefs"
-		| "howToUnblock"
-		| "finishedAt"
-		| "doneSummary"
-		| "stuck"
-	> {
+export interface UiBoardTask extends Pick<
+	UiRoleTask,
+	| "id"
+	| "role"
+	| "title"
+	| "status"
+	| "lifecycleStatus"
+	| "project"
+	| "initiative"
+	| "tags"
+	| "dependsOnRefs"
+	| "howToUnblock"
+	| "finishedAt"
+	| "doneSummary"
+	| "stuck"
+> {
 	/** "<role> #<id>", the same canonical form as dependsOnRefs. */
 	ref: string;
 	/** UiBoardGroup.key. */

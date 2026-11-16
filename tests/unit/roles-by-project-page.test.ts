@@ -71,7 +71,14 @@ async function mount() {
 }
 async function push(board: UiTaskBoard | undefined) {
 	checked += 1000;
-	await act(async () => receiveRoles({ type: "roles", asks: board ? overviewOf(board).asks.length : 0, checkedAt: checked, overview: overviewOf(board, checked) }));
+	await act(async () =>
+		receiveRoles({
+			type: "roles",
+			asks: board ? overviewOf(board).asks.length : 0,
+			checkedAt: checked,
+			overview: overviewOf(board, checked),
+		}),
+	);
 	if (renderError) throw renderError;
 }
 async function fail() {
@@ -81,16 +88,28 @@ async function fail() {
 const text = () => host.textContent ?? "";
 const buttons = () => [...host.querySelectorAll("button")];
 const buttonNamed = (name: string | RegExp) =>
-	buttons().find((b) => (typeof name === "string" ? b.textContent?.trim() === name || b.getAttribute("aria-label") === name : name.test(b.textContent ?? "")));
-const radios = () => [...host.querySelectorAll<HTMLElement>('[role="radiogroup"] [role="radio"], [role="radiogroup"] input[type="radio"]')];
-const checkedRadio = () => radios().find((r) => r.getAttribute("aria-checked") === "true" || (r as HTMLInputElement).checked);
-const nameOf = (el: Element) => (el.getAttribute("aria-label") ?? el.closest("label")?.textContent ?? el.textContent ?? "").trim();
+	buttons().find((b) =>
+		typeof name === "string"
+			? b.textContent?.trim() === name || b.getAttribute("aria-label") === name
+			: name.test(b.textContent ?? ""),
+	);
+const radios = () => [
+	...host.querySelectorAll<HTMLElement>('[role="radiogroup"] [role="radio"], [role="radiogroup"] input[type="radio"]'),
+];
+const checkedRadio = () =>
+	radios().find((r) => r.getAttribute("aria-checked") === "true" || (r as HTMLInputElement).checked);
+const nameOf = (el: Element) =>
+	(el.getAttribute("aria-label") ?? el.closest("label")?.textContent ?? el.textContent ?? "").trim();
 const searchBox = () => host.querySelector<HTMLInputElement>('input[type="search"], [role="searchbox"]');
 /** Tiles are buttons with aria-expanded (spec-page.md §Accessibility); a tile's text names its group. */
-const tiles = () => [...host.querySelectorAll<HTMLElement>("button[aria-expanded]")].filter((b) => !b.closest("dialog"));
+const tiles = () =>
+	[...host.querySelectorAll<HTMLElement>("button[aria-expanded]")].filter((b) => !b.closest("dialog"));
 const tileLabels = () => Object.values(LABELS).filter((l) => tiles().some((t) => t.textContent?.includes(l)));
 const hiddenIn = (el: Element | null): boolean =>
-	!!el && (el.hasAttribute("hidden") || (el instanceof HTMLElement && el.style.display === "none") || hiddenIn(el.parentElement));
+	!!el &&
+	(el.hasAttribute("hidden") ||
+		(el instanceof HTMLElement && el.style.display === "none") ||
+		hiddenIn(el.parentElement));
 const answers = () => buttons().filter((b) => b.textContent?.trim() === "Answer" && !hiddenIn(b));
 
 async function type(value: string) {
@@ -116,8 +135,12 @@ describe("roles-by-project P1: exactly two controls", () => {
 		await live();
 		expect(host.querySelectorAll('[role="radiogroup"]').length).toBe(1);
 		expect(radios().map(nameOf)).toEqual(["Project", "Now", "Department", "Status"]);
-		expect(searchBox()?.getAttribute("aria-label") ?? searchBox()?.labels?.[0]?.textContent).toBe("Find a task, project or role");
-		const fields = [...host.querySelectorAll("input, select, textarea")].filter((f) => !f.closest("dialog") && !f.closest('[role="radiogroup"]'));
+		expect(searchBox()?.getAttribute("aria-label") ?? searchBox()?.labels?.[0]?.textContent).toBe(
+			"Find a task, project or role",
+		);
+		const fields = [...host.querySelectorAll("input, select, textarea")].filter(
+			(f) => !f.closest("dialog") && !f.closest('[role="radiogroup"]'),
+		);
 		expect(fields).toEqual([searchBox()]);
 		expect(host.querySelectorAll('[role="radiogroup"], [role="tablist"], select').length).toBe(1);
 	});
@@ -125,7 +148,9 @@ describe("roles-by-project P1: exactly two controls", () => {
 	notBuilt("P1 default Project; Now is remembered across reload; arrow keys move and select", async () => {
 		await live();
 		expect(nameOf(checkedRadio()!)).toBe("Project");
-		await act(async () => checkedRadio()?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+		await act(async () =>
+			checkedRadio()?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+		);
 		expect(nameOf(checkedRadio()!)).toBe("Now");
 		expect(document.activeElement).toBe(checkedRadio());
 		expect(localStorage.getItem("roles.groupBy")).toBe("now");
@@ -181,7 +206,9 @@ describe("roles-by-project P2: search", () => {
 describe("roles-by-project P3: Needs you", () => {
 	notBuilt("P3 Needs you · 5: shown cards + Show N more = 5; closing it survives reload", async () => {
 		await live();
-		const needs = [...host.querySelectorAll("details")].find((d) => d.querySelector("summary")?.textContent?.includes("Needs you · 5"));
+		const needs = [...host.querySelectorAll("details")].find((d) =>
+			d.querySelector("summary")?.textContent?.includes("Needs you · 5"),
+		);
 		expect(needs?.open).toBe(true);
 		const shown = answers().length;
 		expect(shown).toBeGreaterThan(0);
@@ -193,7 +220,9 @@ describe("roles-by-project P3: Needs you", () => {
 		});
 		expect(localStorage.getItem("roles.needsOpen")).toBe("0");
 		await live();
-		const again = [...host.querySelectorAll("details")].find((d) => d.querySelector("summary")?.textContent?.includes("Needs you · 5"));
+		const again = [...host.querySelectorAll("details")].find((d) =>
+			d.querySelector("summary")?.textContent?.includes("Needs you · 5"),
+		);
 		expect(again?.open).toBe(false);
 	});
 });
@@ -204,7 +233,18 @@ describe("roles-by-project P4: answering through the existing flow", () => {
 		revision: "b".repeat(64),
 		kind: "stuck",
 		title: "Pick the tile density?",
-		fields: [{ id: "q1", text: "Pick the tile density?", options: [{ value: "Yes", label: "Yes" }, { value: "No", label: "No" }], multi: false, allowText: false }],
+		fields: [
+			{
+				id: "q1",
+				text: "Pick the tile density?",
+				options: [
+					{ value: "Yes", label: "Yes" },
+					{ value: "No", label: "No" },
+				],
+				multi: false,
+				allowText: false,
+			},
+		],
 	};
 	async function openFirst() {
 		await live();
@@ -223,20 +263,28 @@ describe("roles-by-project P4: answering through the existing flow", () => {
 	}
 	const answerSent = () => sent.filter((m) => m.type === "roles_ask_answer");
 
-	notBuilt("P4 Send disabled before a choice; Send emits roles_ask_answer with key, id, revision; no local flip", async () => {
-		const { dialog, send } = await openFirst();
-		expect(send.disabled).toBe(true);
-		expect(answerSent()).toEqual([]);
-		await click(dialog.querySelector('input[type="radio"]'));
-		expect(send.disabled).toBe(false);
-		await click(send);
-		const a = answerSent();
-		expect(a.length).toBe(1);
-		if (a[0].type !== "roles_ask_answer") throw new Error("no answer");
-		expect([a[0].key, a[0].askId, a[0].revision, a[0].answers]).toEqual(["frontend:task:294", view.id, view.revision, [{ id: "q1", selected: ["Yes"] }]]);
-		await act(async () => receiveRoleAnswer({ type: "roles_ask_result", reqId: a[0].reqId, ok: true }));
-		expect(text()).toContain("Needs you · 5");
-	});
+	notBuilt(
+		"P4 Send disabled before a choice; Send emits roles_ask_answer with key, id, revision; no local flip",
+		async () => {
+			const { dialog, send } = await openFirst();
+			expect(send.disabled).toBe(true);
+			expect(answerSent()).toEqual([]);
+			await click(dialog.querySelector('input[type="radio"]'));
+			expect(send.disabled).toBe(false);
+			await click(send);
+			const a = answerSent();
+			expect(a.length).toBe(1);
+			if (a[0].type !== "roles_ask_answer") throw new Error("no answer");
+			expect([a[0].key, a[0].askId, a[0].revision, a[0].answers]).toEqual([
+				"frontend:task:294",
+				view.id,
+				view.revision,
+				[{ id: "q1", selected: ["Yes"] }],
+			]);
+			await act(async () => receiveRoleAnswer({ type: "roles_ask_result", reqId: a[0].reqId, ok: true }));
+			expect(text()).toContain("Needs you · 5");
+		},
+	);
 
 	notBuilt("P4 a refused answer shows the dialog's error and sends nothing more", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -254,19 +302,22 @@ describe("roles-by-project P4: answering through the existing flow", () => {
 });
 
 describe("roles-by-project P5-P6: error, loading, empty", () => {
-	notBuilt("P5 a failed look after a good one: banner + Try again above the unchanged last view; one reload per press", async () => {
-		await live();
-		const before = tileLabels();
-		await fail();
-		expect(text()).toContain("Couldn't read the queues just now");
-		expect(tileLabels()).toEqual(before);
-		const watches = () => sent.filter((m) => m.type === "roles_watch" && m.full).length;
-		const n = watches();
-		await click(buttonNamed("Try again"));
-		expect(watches()).toBe(n + 1);
-		await push(boardOf(liveTasks()));
-		expect(text()).not.toContain("Couldn't read the queues just now");
-	});
+	notBuilt(
+		"P5 a failed look after a good one: banner + Try again above the unchanged last view; one reload per press",
+		async () => {
+			await live();
+			const before = tileLabels();
+			await fail();
+			expect(text()).toContain("Couldn't read the queues just now");
+			expect(tileLabels()).toEqual(before);
+			const watches = () => sent.filter((m) => m.type === "roles_watch" && m.full).length;
+			const n = watches();
+			await click(buttonNamed("Try again"));
+			expect(watches()).toBe(n + 1);
+			await push(boardOf(liveTasks()));
+			expect(text()).not.toContain("Couldn't read the queues just now");
+		},
+	);
 
 	notBuilt("P5 a payload without taskBoard after a good one shows the banner over the last good view", async () => {
 		await live();
@@ -312,7 +363,9 @@ describe("roles-by-project P7-P8: Now view, no prototype chrome", () => {
 	notBuilt("P7 Now: Up next numbered in queue order, 20 then +N more", async () => {
 		localStorage.setItem("roles.groupBy", "now");
 		const steps = Array.from({ length: 25 }, (_, i) =>
-			boardTask(`ops #${700 - i}`, "none", "queued", `Queued step ${String(i + 1).padStart(2, "0")}`, { queueIndex: i }),
+			boardTask(`ops #${700 - i}`, "none", "queued", `Queued step ${String(i + 1).padStart(2, "0")}`, {
+				queueIndex: i,
+			}),
 		);
 		await mount();
 		await push(boardOf([boardTask("ops #800", "none", "working", "Running now"), ...steps]));
