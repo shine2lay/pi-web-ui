@@ -75,8 +75,6 @@ let asked: "off" | "count" | "full" = "off";
  *  full watch; null until it comes. On a watch the server first replays what it had, with that old
  *  look's checkedAt, and looks again only later, so that first update says nothing about now. */
 let firstCheckedAt: number | null = null;
-const usageAcknowledged = new Set<string>();
-let usageConnected = false;
 
 const listeners = new Set<() => void>();
 
@@ -100,7 +98,6 @@ function sync(force = false): void {
 	const want = wanted();
 	if (!force && want === asked) return;
 	asked = want;
-	usageAcknowledged.clear();
 	if (state.usageRender) set({ ...state, usageRender: undefined, usageRenderTimings: undefined });
 	if (want !== "full" && state.waitingSince !== undefined) set({ ...state, waitingSince: undefined });
 	if (want === "off") {
@@ -157,8 +154,6 @@ export function reloadRoles(): void {
  *  longer known to be current: the wait for the server to look again starts now (unless it already
  *  had), and `ready` on the next socket asks again. */
 export function rolesConnectionLost(): void {
-	usageConnected = false;
-	usageAcknowledged.clear();
 	if (state.usageRender) set({ ...state, usageRender: undefined, usageRenderTimings: undefined });
 	if (wanted() !== "full") return;
 	if (state.appliedAt === undefined && state.waitingSince !== undefined) return;
@@ -187,59 +182,11 @@ const usageGeneration = (v: unknown): v is UiRoleUsageGeneration => {
 	);
 };
 
-/** Called ONLY by a successful active-visible DOM update/refit, never by receipt or projection. */
-export function acknowledgeRenderedRolesUsage(
-	overview: UiRolesOverview,
-	roles: { role: string; generation: UiRoleUsageGeneration }[],
-): number {
-	const binding = state.usageRender;
-	if (
-		!usageConnected ||
-		state.status !== "ready" ||
-		state.error !== undefined ||
-		fullWatchers === 0 ||
-		wanted() !== "full" ||
-		asked !== "full" ||
-		!binding ||
-		state.overview !== overview ||
-		typeof document === "undefined" ||
-		document.visibilityState !== "visible"
-	)
-		return 0;
-	let sent = 0;
-	for (const item of roles.slice(0, 64)) {
-		if (!usageGeneration(item.generation)) continue;
-		const cost = overview.roles.find((r) => r.id === item.role)?.usageCost;
-		if (
-			cost?.role !== item.role ||
-			cost.state !== "ready" ||
-			cost.generation?.epoch !== item.generation.epoch ||
-			cost.generation.sequence !== item.generation.sequence
-		)
-			continue;
-		const key = `${item.role}:${item.generation.epoch}:${item.generation.sequence}`;
-		if (usageAcknowledged.has(key)) continue;
-		if (
-			!appSend({
-				type: "roles_watch",
-				full: true,
-				renderedUsage: { watch: binding.watch, role: item.role, generation: { ...item.generation } },
-			})
-		)
-			continue;
-		usageAcknowledged.add(key);
-		sent++;
-	}
-	return sent;
-}
-
 /** `roles` from the server. */
 export function receiveRoles(payload: RolesPayload): void {
 	const now = Date.now();
-	usageConnected = true;
 	const asks = typeof payload.asks === "number" && payload.asks >= 0 ? payload.asks : state.asks;
 	if (payload.overview) {
-		usageAcknowledged.clear();
 		const render = payload.usageRender;
 		const usageRender =
 			render &&
@@ -663,8 +610,6 @@ export function resetRolesState(): void {
 	countWatchers = 0;
 	asked = "off";
 	firstCheckedAt = null;
-	usageConnected = false;
-	usageAcknowledged.clear();
 	setViewFresh("roles", null);
 	notify();
 }

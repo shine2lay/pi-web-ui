@@ -17912,9 +17912,9 @@ button.source-default-toggle {
 }
 .roles-answer-option input {
 	flex: none;
-	width: 18px;
-	height: 18px;
-	margin: 3px 0;
+	width: 24px;
+	height: 24px;
+	margin: 0;
 	accent-color: var(--accent-fill);
 }
 .roles-answer-option > span {

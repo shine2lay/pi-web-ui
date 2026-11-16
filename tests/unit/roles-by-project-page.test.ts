@@ -15,7 +15,6 @@ import { TASKS_ROLES_V8_TOKENS_CSS } from "../../web/src/tasks-roles-v8/styles-t
 import { disconnectRoleAnswers, receiveRoleAnswer } from "../../web/src/roles-answer-state.js";
 import { receiveRoles, resetRolesState } from "../../web/src/roles-state.js";
 import type { ClientMessage, UiRoleAskView } from "../../web/src/types.js";
-import { notBuilt } from "./roles-by-project-not-built.js";
 import { AT, boardOf, boardTask, LABELS, liveTasks, overviewOf } from "./roles-by-project-page-data.js";
 import type { UiTaskBoard } from "../../server/roles-board-protocol.js";
 
@@ -131,7 +130,7 @@ async function live() {
 }
 
 describe("roles-by-project P1: exactly two controls", () => {
-	notBuilt("P1 a Group by radiogroup (Project, Now, Department, Status) and a search box, nothing else", async () => {
+	it("P1 a Group by radiogroup (Project, Now, Department, Status) and a search box, nothing else", async () => {
 		await live();
 		expect(host.querySelectorAll('[role="radiogroup"]').length).toBe(1);
 		expect(radios().map(nameOf)).toEqual(["Project", "Now", "Department", "Status"]);
@@ -145,7 +144,7 @@ describe("roles-by-project P1: exactly two controls", () => {
 		expect(host.querySelectorAll('[role="radiogroup"], [role="tablist"], select').length).toBe(1);
 	});
 
-	notBuilt("P1 default Project; Now is remembered across reload; arrow keys move and select", async () => {
+	it("P1 default Project; Now is remembered across reload; arrow keys move and select", async () => {
 		await live();
 		expect(nameOf(checkedRadio()!)).toBe("Project");
 		await act(async () =>
@@ -158,7 +157,7 @@ describe("roles-by-project P1: exactly two controls", () => {
 		expect(nameOf(checkedRadio()!)).toBe("Now");
 	});
 
-	notBuilt("P1 a stored bogus value or a storage error -> Project", async () => {
+	it("P1 a stored bogus value or a storage error -> Project", async () => {
 		localStorage.setItem("roles.groupBy", "bogus");
 		await live();
 		expect(nameOf(checkedRadio()!)).toBe("Project");
@@ -181,7 +180,7 @@ describe("roles-by-project P2: search", () => {
 		["Ops #900", [LABELS.none]],
 	];
 	for (const [query, groups] of cases) {
-		notBuilt(`P2 search ${JSON.stringify(query)} -> ${groups.join(", ")}`, async () => {
+		it(`P2 search ${JSON.stringify(query)} -> ${groups.join(", ")}`, async () => {
 			await live();
 			expect(tileLabels()).toEqual([LABELS.roles, LABELS.ink, LABELS.smoke, LABELS.none]);
 			await type(query);
@@ -189,7 +188,7 @@ describe("roles-by-project P2: search", () => {
 		});
 	}
 
-	notBuilt("P2 no match -> Clear search, which brings every group back; search is not stored", async () => {
+	it("P2 no match -> Clear search, which brings every group back; search is not stored", async () => {
 		await live();
 		await type("zzz-nothing");
 		expect(tileLabels()).toEqual([]);
@@ -204,7 +203,7 @@ describe("roles-by-project P2: search", () => {
 });
 
 describe("roles-by-project P3: Needs you", () => {
-	notBuilt("P3 Needs you · 5: shown cards + Show N more = 5; closing it survives reload", async () => {
+	it("P3 Needs you · 5: shown cards + Show N more = 5; closing it survives reload", async () => {
 		await live();
 		const needs = [...host.querySelectorAll("details")].find((d) =>
 			d.querySelector("summary")?.textContent?.includes("Needs you · 5"),
@@ -263,30 +262,27 @@ describe("roles-by-project P4: answering through the existing flow", () => {
 	}
 	const answerSent = () => sent.filter((m) => m.type === "roles_ask_answer");
 
-	notBuilt(
-		"P4 Send disabled before a choice; Send emits roles_ask_answer with key, id, revision; no local flip",
-		async () => {
-			const { dialog, send } = await openFirst();
-			expect(send.disabled).toBe(true);
-			expect(answerSent()).toEqual([]);
-			await click(dialog.querySelector('input[type="radio"]'));
-			expect(send.disabled).toBe(false);
-			await click(send);
-			const a = answerSent();
-			expect(a.length).toBe(1);
-			if (a[0].type !== "roles_ask_answer") throw new Error("no answer");
-			expect([a[0].key, a[0].askId, a[0].revision, a[0].answers]).toEqual([
-				"frontend:task:294",
-				view.id,
-				view.revision,
-				[{ id: "q1", selected: ["Yes"] }],
-			]);
-			await act(async () => receiveRoleAnswer({ type: "roles_ask_result", reqId: a[0].reqId, ok: true }));
-			expect(text()).toContain("Needs you · 5");
-		},
-	);
+	it("P4 Send disabled before a choice; Send emits roles_ask_answer with key, id, revision; no local flip", async () => {
+		const { dialog, send } = await openFirst();
+		expect(send.disabled).toBe(true);
+		expect(answerSent()).toEqual([]);
+		await click(dialog.querySelector('input[type="radio"]'));
+		expect(send.disabled).toBe(false);
+		await click(send);
+		const a = answerSent();
+		expect(a.length).toBe(1);
+		if (a[0].type !== "roles_ask_answer") throw new Error("no answer");
+		expect([a[0].key, a[0].askId, a[0].revision, a[0].answers]).toEqual([
+			"frontend:task:294",
+			view.id,
+			view.revision,
+			[{ id: "q1", selected: ["Yes"] }],
+		]);
+		await act(async () => receiveRoleAnswer({ type: "roles_ask_result", reqId: a[0].reqId, ok: true }));
+		expect(text()).toContain("Needs you · 5");
+	});
 
-	notBuilt("P4 a refused answer shows the dialog's error and sends nothing more", async () => {
+	it("P4 a refused answer shows the dialog's error and sends nothing more", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		const { dialog, send } = await openFirst();
 		await click(dialog.querySelector('input[type="radio"]'));
@@ -302,24 +298,21 @@ describe("roles-by-project P4: answering through the existing flow", () => {
 });
 
 describe("roles-by-project P5-P6: error, loading, empty", () => {
-	notBuilt(
-		"P5 a failed look after a good one: banner + Try again above the unchanged last view; one reload per press",
-		async () => {
-			await live();
-			const before = tileLabels();
-			await fail();
-			expect(text()).toContain("Couldn't read the queues just now");
-			expect(tileLabels()).toEqual(before);
-			const watches = () => sent.filter((m) => m.type === "roles_watch" && m.full).length;
-			const n = watches();
-			await click(buttonNamed("Try again"));
-			expect(watches()).toBe(n + 1);
-			await push(boardOf(liveTasks()));
-			expect(text()).not.toContain("Couldn't read the queues just now");
-		},
-	);
+	it("P5 a failed look after a good one: banner + Try again above the unchanged last view; one reload per press", async () => {
+		await live();
+		const before = tileLabels();
+		await fail();
+		expect(text()).toContain("Couldn't read the queues just now");
+		expect(tileLabels()).toEqual(before);
+		const watches = () => sent.filter((m) => m.type === "roles_watch" && m.full).length;
+		const n = watches();
+		await click(buttonNamed("Try again"));
+		expect(watches()).toBe(n + 1);
+		await push(boardOf(liveTasks()));
+		expect(text()).not.toContain("Couldn't read the queues just now");
+	});
 
-	notBuilt("P5 a payload without taskBoard after a good one shows the banner over the last good view", async () => {
+	it("P5 a payload without taskBoard after a good one shows the banner over the last good view", async () => {
 		await live();
 		const before = tileLabels();
 		await push(undefined);
@@ -328,14 +321,14 @@ describe("roles-by-project P5-P6: error, loading, empty", () => {
 		expect(tileLabels()).toEqual(before);
 	});
 
-	notBuilt("P5 a failed first look: banner alone", async () => {
+	it("P5 a failed first look: banner alone", async () => {
 		await mount();
 		await fail();
 		expect(text()).toContain("Couldn't read the queues just now");
 		expect(tiles()).toEqual([]);
 	});
 
-	notBuilt("P6 loading before the first board (a payload without taskBoard keeps loading)", async () => {
+	it("P6 loading before the first board (a payload without taskBoard keeps loading)", async () => {
 		await mount();
 		expect(host.querySelector('[role="status"]')?.textContent).toContain("Loading projects and queues");
 		await push(undefined);
@@ -343,7 +336,7 @@ describe("roles-by-project P5-P6: error, loading, empty", () => {
 		expect(text()).not.toContain("Couldn't read the queues just now");
 	});
 
-	notBuilt("P6 empty board -> All clear, no fleet bar; quiet projects still listed", async () => {
+	it("P6 empty board -> All clear, no fleet bar; quiet projects still listed", async () => {
 		await mount();
 		await push(boardOf([boardTask("ops #899", "none", "done", "Rotate the logs")]));
 		expect(text()).toContain("All clear");
@@ -360,7 +353,7 @@ describe("roles-by-project page tokens (spec-build.md §Modules)", () => {
 });
 
 describe("roles-by-project P7-P8: Now view, no prototype chrome", () => {
-	notBuilt("P7 Now: Up next numbered in queue order, 20 then +N more", async () => {
+	it("P7 Now: Up next numbered in queue order, 20 then +N more", async () => {
 		localStorage.setItem("roles.groupBy", "now");
 		const steps = Array.from({ length: 25 }, (_, i) =>
 			boardTask(`ops #${700 - i}`, "none", "queued", `Queued step ${String(i + 1).padStart(2, "0")}`, {
@@ -377,7 +370,7 @@ describe("roles-by-project P7-P8: Now view, no prototype chrome", () => {
 		expect(text()).toContain("+5 more");
 	});
 
-	notBuilt("P8 no .proto, [data-proto-chrome] or prototype label in any state", async () => {
+	it("P8 no .proto, [data-proto-chrome] or prototype label in any state", async () => {
 		const chrome = () =>
 			host.querySelectorAll('.proto, [data-proto-chrome], [aria-label="Prototype controls"]').length +
 			(/Theme: system|Busy afternoon, before tags/.test(text()) ? 1 : 0);

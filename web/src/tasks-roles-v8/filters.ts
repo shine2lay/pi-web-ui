@@ -26,7 +26,7 @@ export type V8StatusFilterId =
 export type V8DropdownKind = "dept" | "app" | "state" | "tag";
 
 export interface TasksRolesV8FilterState {
-	page: "initiatives" | "roles";
+	page: "initiatives";
 	theme: "dark" | "light";
 	scheme?: "stone" | "slate" | "graphite";
 	mode: "normal" | "loading" | "empty" | "error";
@@ -54,7 +54,7 @@ export interface TasksRolesV8FilterState {
 }
 
 export type V8FilterState = Omit<Partial<TasksRolesV8FilterState>, "page"> & {
-	page?: "initiatives" | "roles" | number;
+	page?: "initiatives" | number;
 	currentPage?: number;
 	pageSize?: number;
 	dept?: string;
@@ -90,7 +90,7 @@ export const TASK_URGENCY_RANK: Readonly<Record<UiTaskLifecycleStatus, number>> 
 
 export function createInitialFilterState(overrides: V8FilterState = {}): TasksRolesV8FilterState {
 	const rawPage = overrides.page;
-	const viewPage: "initiatives" | "roles" = rawPage === "roles" ? "roles" : "initiatives";
+	const viewPage = "initiatives" as const;
 	const currentPage =
 		typeof overrides.currentPage === "number" && overrides.currentPage >= 1
 			? Math.floor(overrides.currentPage)

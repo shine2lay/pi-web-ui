@@ -855,11 +855,11 @@ describe("closed boundary and the actual store", () => {
 		expect(app).toMatch(
 			/<PagePanes\s+view=\{view\}\s+dialogs=\{chat\.ready \? nativeDialogs : \[\]\}\s+onOpen=\{openFromRolesPage\}\s+onAbout=\{aboutFromRoles\}\s*\/>/,
 		);
-		// roles-exact: the supplied design uses this same closed model.
-		expect(panes).toContain('import("./RolesExactView")');
+		// roles-by-project: the Roles page uses this same closed model.
+		expect(panes).toContain('import("../roles-by-project/RolesByProjectView")');
 		// roles-panel: About & rules opens Settings at the role, the way the old panel did.
 		expect(panes).toMatch(
-			/<RolesExactView\s+active=\{view === "roles"\}\s+dialogs=\{dialogs\}\s+onOpen=\{onOpen\}\s+onAbout=\{onAbout\}\s*\/>/,
+			/<RolesByProjectView\s+active=\{view === "roles"\}\s+dialogs=\{dialogs\}\s+onOpen=\{onOpen\}\s+onAbout=\{onAbout\}\s*\/>/,
 		);
 		// The page's opens are remembered first (fixed words on failure), then go the existing way.
 		expect(app).toMatch(/markRolesOpen\(target\.file\);\s*openFromRoles\(target\);/);

@@ -65,3 +65,13 @@ made them), and small hand-made cases. Each count is checked against a plain rec
   search text and caret, both tiles `aria-expanded="true"`, the dialog open with the same choice.
 - L2 A payload arriving between mousedown and mouseup on a tile still opens it (Chromium and WebKit).
 - L3 320, 390, 1440 px, light and dark: 0 horizontal overflow, 0 overlapping text, 0 console errors.
+
+Measurement note (Architecture rm-b04e515c, ruling A; no assertion removed, no threshold relaxed). Hypothesis:
+document-scoped feature a11y/target queries pick up older shell defects, and un-clipped boxes count text scrolled
+out of view; scoping to the feature and clipping to visible geometry keeps every real defect failing. Wrong if a
+visible overlap or a feature-owned defect disappears under the amended measure.
+- Journey axe and 24 px targets cover the page root `.rbp` (a missing root fails) plus any dialog the page opens
+  outside it; both run on the page and again with the answer dialog open and a choice picked.
+- L3 overlap stays document-wide; each text box is clipped per axis by its overflow ancestors (ui-check's
+  browser-collect.py rule). A parity case on fixed geometry proves a scrolled-out pair passes and a visible
+  overlap fails.

@@ -34,7 +34,7 @@ import {
 	type V8StatusFilterId,
 } from "./filters";
 import { createReferenceDataset, escapeHtml, ROLLUP_META, STATUS_META, V8_REFERENCE_DATASET } from "./reference-data";
-import { renderRolesBentoView, renderSvgDonut, renderWhyModal } from "./role-bento-surface";
+import { renderWhyModal } from "./role-bento-surface";
 import { injectTasksRolesV8Styles, TASKS_ROLES_V8_CSS } from "./styles";
 import type { TasksRolesV8Dataset } from "./types";
 
@@ -51,9 +51,7 @@ export {
 	renderDagDetailPanel,
 	renderDeliveryPipelineMeter,
 	renderDepartmentStrip,
-	renderRolesBentoView,
 	renderStatusBadge,
-	renderSvgDonut,
 	renderTagDagRegion,
 	renderTaskCallouts,
 	renderTaskNode,
@@ -102,10 +100,7 @@ export function renderViewRegion(params: {
     `;
 	}
 
-	if (state.page === "initiatives") {
-		return renderUnifiedTasksPanel({ dataset, state, activeDagBoards });
-	}
-	return renderRolesBentoView({ dataset, state, activeDagBoards });
+	return renderUnifiedTasksPanel({ dataset, state, activeDagBoards });
 }
 
 export function renderTasksRolesV8Shell(params: {
@@ -129,9 +124,6 @@ export function renderTasksRolesV8Shell(params: {
 		? `<nav class="seg-group" aria-label="Primary views">
             <button type="button" class="seg-btn" id="tab-initiatives" aria-pressed="${state.page === "initiatives" ? "true" : "false"}">
               All Department Tasks
-            </button>
-            <button type="button" class="seg-btn" id="tab-roles" aria-pressed="${state.page === "roles" ? "true" : "false"}">
-              Roles &amp; Queues
             </button>
           </nav>`
 		: "";
@@ -234,7 +226,7 @@ export function mountTasksRolesV8Surface(
 	if (typeof window !== "undefined" && typeof window.location?.search === "string" && window.location.search) {
 		const params = new URLSearchParams(window.location.search);
 		const pageParam = params.get("page");
-		if (pageParam === "roles" || pageParam === "initiatives") {
+		if (pageParam === "initiatives") {
 			urlInitPatch.page = pageParam;
 		}
 		const themeParam = params.get("theme");
@@ -303,11 +295,6 @@ export function mountTasksRolesV8Surface(
 
 		container.querySelector<HTMLButtonElement>("#tab-initiatives")?.addEventListener("click", () => {
 			state = { ...state, page: "initiatives" };
-			refresh();
-		});
-
-		container.querySelector<HTMLButtonElement>("#tab-roles")?.addEventListener("click", () => {
-			state = { ...state, page: "roles" };
 			refresh();
 		});
 
@@ -861,10 +848,7 @@ export function mountTasksRolesV8Surface(
 				patch.searchQuery !== undefined ||
 				patch.search !== undefined;
 			const nextSearchQuery = patch.searchQuery ?? patch.search ?? state.searchQuery;
-			const nextPageTab =
-				typeof rawPatchPage === "string" && (rawPatchPage === "roles" || rawPatchPage === "initiatives")
-					? rawPatchPage
-					: state.page;
+			const nextPageTab = rawPatchPage === "initiatives" ? rawPatchPage : state.page;
 			const nextCurrentPage =
 				patch.currentPage !== undefined
 					? patch.currentPage

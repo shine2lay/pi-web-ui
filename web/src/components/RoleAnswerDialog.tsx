@@ -190,6 +190,7 @@ export function RoleAnswerDialog({
 										<input
 											type={field.multi ? "checkbox" : "radio"}
 											name={`roles-answer-option-${index}`}
+											value={option.value}
 											checked={answer.selected.includes(option.value)}
 											onChange={(e) =>
 												change(

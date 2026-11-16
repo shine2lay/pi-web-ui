@@ -5,12 +5,9 @@ import { act, createElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LanguageProvider } from "../../web/src/i18n.js";
-import { projectExactRoles, type ExactRoles } from "../../web/src/roles-exact-model.js";
-import { createExactRolesView } from "../../web/src/roles-exact-view.js";
 import { nativeDialogFocusMatches, questionAction, resolveQuestionAction } from "../../web/src/roles-answer-actions.js";
 import { Dialog } from "../../web/src/components/Dialog.js";
 import { projectUsefulRoles } from "../../web/src/roles-useful-model.js";
-import type { SurfaceValue, SurfaceValues } from "../../web/src/roles-u0/types.js";
 
 const send = vi.hoisted(() => vi.fn());
 vi.mock("../../web/src/app-globals", () => ({ appSend: send }));
@@ -54,18 +51,6 @@ const state = (asks: unknown[] = [ask()], roles: unknown[] = [role()], extra: Ro
 const dialogs = [{ sessionFile: HOME, dialogId: 51 }];
 const useful = (asks: unknown[] = [ask()], roles: unknown[] = [role()]) =>
 	projectUsefulRoles(state(asks, roles), "open", NOW);
-function object(value: SurfaceValue): SurfaceValues {
-	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("expected object");
-	return value;
-}
-function list(value: SurfaceValue): SurfaceValue[] {
-	if (!Array.isArray(value)) throw new Error("expected list");
-	return value;
-}
-function invoke(value: SurfaceValue) {
-	if (typeof value !== "function") throw new Error("expected callback");
-	value(document.body);
-}
 const language = (child: ReactNode) => createElement(LanguageProvider, null, child);
 const cleanups: (() => void)[] = [];
 beforeEach(() => vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true));
@@ -199,41 +184,7 @@ describe("Roles answer actions: capability is separate from native navigation", 
 	});
 });
 
-describe("the Roles surface and the native dialog use the current-action policy", () => {
-	it("exact inbox and department detail expose the chat action; retained callbacks re-resolve before navigation", () => {
-		let model: ExactRoles = projectExactRoles(state([ask(51), ask(52)]), "open", NOW);
-		let summaries = dialogs;
-		const open = vi.fn();
-		vi.useFakeTimers();
-		const view = createExactRolesView(
-			() => model,
-			{ open, about: vi.fn(), answer: vi.fn(), dialogs: () => summaries, reload: vi.fn() },
-			{
-				raf: (fn) => setTimeout(fn, 0),
-				cancelRaf: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-				setTimeout: (fn, ms) => setTimeout(fn, ms),
-				clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-			},
-			vi.fn(),
-		);
-		cleanups.push(() => view.dispose());
-		const inbox = list(view.values(1400, 780).inbox);
-		const buttons = list(object(inbox[0]).choices).map(object);
-		expect(buttons.map((button) => button.label)).toEqual(["Answer in chat", "Open chat"]);
-		expect(list(object(inbox[1]).choices).map((button) => object(button).label)).toEqual(["Open chat"]);
-		view.openRole("ops");
-		const detail = list(object(view.values(1400, 780).ex).decisions).map(object);
-		expect(list(detail[0].choices).map((button) => object(button).label)).toContain("Answer in chat");
-		model = projectExactRoles(state([ask(52), ask(51)]), "open", NOW);
-		invoke(buttons[0].pick);
-		expect(open).toHaveBeenCalledExactlyOnceWith({ file: HOME, focus: { kind: "question", id: "dlg-51" } });
-		summaries = [{ sessionFile: HOME, dialogId: 52 }];
-		invoke(buttons[0].pick);
-		expect(open).toHaveBeenCalledTimes(1);
-		model = projectExactRoles(state([]), "open", NOW);
-		invoke(buttons[0].pick);
-		expect(open).toHaveBeenCalledTimes(1);
-	});
+describe("the native dialog", () => {
 	it("native arrival focuses a non-submitting container, preserves full context, and leaves keyboard/escape native", async () => {
 		const host = document.createElement("div");
 		document.body.append(host);

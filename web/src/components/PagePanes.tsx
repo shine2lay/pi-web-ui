@@ -10,7 +10,9 @@ import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import type { UsefulOpenTarget } from "../roles-useful-model";
 
 // roles-overview: the Roles page loads with its first opening and stays mounted after it.
-const RolesExactView = lazy(() => import("./RolesExactView").then((m) => ({ default: m.RolesExactView })));
+const RolesByProjectView = lazy(() =>
+	import("../roles-by-project/RolesByProjectView").then((m) => ({ default: m.RolesByProjectView })),
+);
 // initiatives-page-exact (#225): the supplied design; the old InitiativesView stays in source, unmounted.
 const InitiativesPage = lazy(() => import("./InitiativesPage").then((m) => ({ default: m.InitiativesPage })));
 // openviking-dashboard: the Memory tab, a memory explorer (design #316).
@@ -25,7 +27,7 @@ export interface PagePanesProps {
 	readonly onAbout: (role: string) => void;
 }
 
-type RolesProps = Parameters<typeof RolesExactView>[0];
+type RolesProps = Parameters<typeof RolesByProjectView>[0];
 type RolesDialogs = RolesProps["dialogs"];
 
 /** True once `view` has been this page at least once (the page then stays mounted). */
@@ -47,7 +49,7 @@ export function PagePanes({ view, dialogs, onOpen, onAbout }: PagePanesProps): R
 			<div className={`view-pane roles-pane ${view === "roles" ? "" : "hidden"}`}>
 				{rolesSeen && (
 					<Suspense fallback={null}>
-						<RolesExactView active={view === "roles"} dialogs={dialogs} onOpen={onOpen} onAbout={onAbout} />
+						<RolesByProjectView active={view === "roles"} dialogs={dialogs} onOpen={onOpen} onAbout={onAbout} />
 					</Suspense>
 				)}
 			</div>

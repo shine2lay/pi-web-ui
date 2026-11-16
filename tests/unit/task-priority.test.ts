@@ -1,13 +1,10 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { act, createElement } from "react";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 import type { UiRolesOverview, UiTaskQueue, UiTaskQueueTask } from "../../server/protocol.js";
-import { resetAppGlobals, setAppGlobals } from "../../web/src/app-globals.js";
-import { RolesExactView } from "../../web/src/components/RolesExactView.js";
 import {
 	DEFAULT_PRIORITY,
 	PRIORITIES,
@@ -22,7 +19,6 @@ import {
 } from "../../web/src/components/TaskPriorityBadge.js";
 import { TaskQueuePanel } from "../../web/src/components/TaskQueuePanel.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
-import { receiveRoles, resetRolesState } from "../../web/src/roles-state.js";
 import { renderUnifiedTaskCard } from "../../web/src/tasks-roles-v8/card-surface.js";
 import { createInitialFilterState } from "../../web/src/tasks-roles-v8/filters.js";
 import { buildLiveTasksRolesV8Dataset } from "../../web/src/tasks-roles-v8/live-adapter.js";
@@ -175,7 +171,7 @@ describe("Task priority P0–P3 in pi-web-ui (Task #805)", () => {
 		]);
 	});
 
-	it("renders P0 / P1 / P2 / P3 priority badges in TaskQueuePanel and RolesExactView", () => {
+	it("renders P0 / P1 / P2 / P3 priority badges in TaskQueuePanel", () => {
 		const queue: UiTaskQueue = {
 			available: true,
 			running: true,
@@ -216,104 +212,6 @@ describe("Task priority P0–P3 in pi-web-ui (Task #805)", () => {
 		});
 		expect(cardHtml).toContain('data-priority="P0"');
 		expect(cardHtml).toContain("task-priority-p0");
-
-		// Mount RolesExactView with live overview containing P0, P1, P2, P3 tasks
-		resetRolesState();
-		resetAppGlobals();
-		setAppGlobals({ status: "open" });
-		const nowMs = Date.now();
-
-		const host = document.createElement("div");
-		document.body.appendChild(host);
-		const root = createRoot(host);
-		try {
-			act(() => {
-				root.render(
-					createElement(RolesExactView, {
-						active: true,
-						onOpen: () => {},
-						onAbout: () => {},
-					}),
-				);
-			});
-			act(() => {
-				receiveRoles({
-					type: "roles",
-					asks: 0,
-					overview: {
-						at: nowMs,
-						asks: [],
-						paused: false,
-						reportTz: "America/Los_Angeles",
-						roles: [
-							{
-								id: "ops",
-								title: "Ops",
-								focus: "Tooling",
-								workMode: "request-only",
-								workModeFrom: "owner",
-								goals: [],
-								goalsFrom: "owner",
-								status: "busy",
-								homeChat: { file: "/tmp/ops.jsonl" },
-								asks: [],
-								tldr: [],
-								spend: { state: "ok", line: "$0", spent: "$0", budget: "$0" },
-								queue: {
-									running: true,
-									counts: { active: 1, queued: 3, done: 0 },
-									lanes: { inUse: 1, atOnce: 2 },
-									active: [
-										{
-											id: 101,
-											title: "P0 active",
-											status: "working",
-											priority: "P0",
-											createdAt: nowMs - 4000,
-											updatedAt: nowMs - 4000,
-										},
-									],
-									queued: [
-										{
-											id: 102,
-											title: "P1 queued",
-											status: "ready",
-											priority: "P1",
-											createdAt: nowMs - 3000,
-											updatedAt: nowMs - 3000,
-										},
-										{
-											id: 103,
-											title: "P2 default",
-											status: "ready",
-											createdAt: nowMs - 2000,
-											updatedAt: nowMs - 2000,
-										},
-										{
-											id: 104,
-											title: "P3 backlog",
-											status: "ready",
-											priority: "P3",
-											createdAt: nowMs - 1000,
-											updatedAt: nowMs - 1000,
-										},
-									],
-								},
-								requests: { open: 0 },
-								report: { state: "not-in-job" },
-							},
-						],
-					},
-				});
-			});
-			const badges = [...host.querySelectorAll(".task-priority-badge")].map((el) => el.getAttribute("data-priority"));
-			expect(badges).toEqual(["P0", "P1", "P2", "P3"]);
-		} finally {
-			act(() => root.unmount());
-			host.remove();
-			resetRolesState();
-			resetAppGlobals();
-		}
 
 		// Direct unit check on insertByPriority & repositionReadyTaskByPriority
 		const list: Array<{ id: number; status: string; priority?: TaskPriority }> = [

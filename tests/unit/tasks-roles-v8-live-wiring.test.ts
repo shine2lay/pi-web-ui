@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientMessage, UiRolesOverview, UiWorkPage } from "../../server/protocol.js";
 import { resetAppGlobals, setAppGlobals, setAppSend } from "../../web/src/app-globals.js";
 import { InitiativesExactView } from "../../web/src/components/InitiativesExactView.js";
-import { RolesExactView } from "../../web/src/components/RolesExactView.js";
 import { disconnectRoleAnswers, receiveRoleAnswer } from "../../web/src/roles-answer-state.js";
 import { receiveRoles, resetRolesState } from "../../web/src/roles-state.js";
 import {
@@ -318,60 +317,6 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 		const v8Group = res.dataset.askGroups.find((g) => g.key === "tag:roles-initiatives-v8");
 		expect(v8Group).toBeDefined();
 		expect(v8Group?.title).toBe("Tasks & Roles v8 Rework");
-	});
-
-	it("mounts RolesExactView in live v8 mode (without fonts), strips prototype demo chrome, and wires Escape + Open chat", async () => {
-		const container = document.createElement("div");
-		document.body.appendChild(container);
-		const root = createRoot(container);
-		const opened: unknown[] = [];
-
-		await act(async () => {
-			root.render(
-				createElement(RolesExactView, {
-					active: true,
-					onOpen: (t) => opened.push(t),
-					onAbout: vi.fn(),
-				}),
-			);
-		});
-
-		const shell = container.querySelector(".app-shell");
-		expect(shell).not.toBeNull();
-		// Prototype demo chrome must be completely absent in live mode
-		expect(container.querySelector("#tab-roles")).toBeNull();
-		expect(container.querySelector("#tab-initiatives")).toBeNull();
-		expect(container.querySelector("[data-ui-mode]")).toBeNull();
-		expect(container.querySelector("#why-modal-btn")).toBeNull();
-		expect(container.querySelector("#why-modal")).toBeNull();
-		expect(container.querySelector("#theme-toggle")).toBeNull();
-		expect(container.querySelector("#restore-normal-btn")).toBeNull();
-
-		expect(container.querySelectorAll("details.filter-dd[data-filter-dropdown]").length).toBe(4);
-		expect(container.querySelector("#task-search-input")).not.toBeNull();
-
-		// Open a filter dropdown and verify Escape closes it via shortcut-stack
-		const deptDetails = container.querySelector<HTMLDetailsElement>('details.filter-dd[data-filter-dropdown="dept"]');
-		expect(deptDetails).not.toBeNull();
-		await act(async () => {
-			if (deptDetails) {
-				deptDetails.open = true;
-				deptDetails.dispatchEvent(new Event("toggle"));
-			}
-		});
-		expect(deptDetails?.open).toBe(true);
-
-		await act(async () => {
-			const evt = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-			window.dispatchEvent(evt);
-		});
-		expect(container.querySelector<HTMLDetailsElement>('details.filter-dd[data-filter-dropdown="dept"]')?.open).toBe(
-			false,
-		);
-
-		await act(async () => {
-			root.unmount();
-		});
 	});
 
 	it("mounts InitiativesExactView in live v8 mode (without fonts) and renders DAG + Tier 3 drawers", async () => {
@@ -936,122 +881,5 @@ describe("tasks-roles-v8 live adapter and component wiring (#241)", () => {
 		expect(host.querySelectorAll(".unified-task-card").length).toBe(3);
 
 		ctrl.destroy();
-	});
-
-	it("wires live inline .answer-choice-btn in RolesExactView through roles_ask_open + roles_ask_answer and only marks answeredTasks after server ok: true (#245)", async () => {
-		const sent: ClientMessage[] = [];
-		setAppSend((msg) => {
-			sent.push(msg);
-			return true;
-		});
-		setAppGlobals({ status: "open", ready: true });
-
-		const overview = sampleLiveOverview();
-		receiveRoles({
-			type: "roles",
-			asks: 1,
-			checkedAt: 1_762_560_000_000,
-			overview,
-		});
-
-		const container = document.createElement("div");
-		document.body.appendChild(container);
-		const root = createRoot(container);
-
-		await act(async () => {
-			root.render(
-				createElement(RolesExactView, {
-					active: true,
-					onOpen: vi.fn(),
-					onAbout: vi.fn(),
-				}),
-			);
-		});
-
-		// Expand Design #221 details drawer
-		const detailBtn = container.querySelector<HTMLButtonElement>('.task-detail-toggle-btn[data-task-id="221"]');
-		expect(detailBtn).not.toBeNull();
-		await act(async () => {
-			detailBtn?.click();
-		});
-
-		const choiceBtn = container.querySelector<HTMLButtonElement>(
-			'[data-task-detail="221"] .answer-choice-btn[data-choice="Approve v8 (Recommended)"]',
-		);
-		expect(choiceBtn).not.toBeNull();
-
-		// Click the inline choice button in live mode
-		await act(async () => {
-			choiceBtn?.click();
-		});
-
-		// Must send roles_ask_open and NOT mark the task answered before server confirmation
-		const openMsg = sent.find(
-			(m): m is Extract<ClientMessage, { type: "roles_ask_open" }> => m.type === "roles_ask_open",
-		);
-		expect(openMsg).toBeDefined();
-		expect(openMsg?.key).toBe("design:task:221");
-		expect(container.querySelector('[data-task-detail="221"]')?.textContent).not.toContain("Answered by you");
-		expect(container.querySelector(".attention-note-bar")?.textContent).toContain("1 Needs you");
-
-		// Server responds to roles_ask_open with the single-question ask form
-		await act(async () => {
-			receiveRoleAnswer({
-				type: "roles_ask",
-				reqId: openMsg!.reqId,
-				ok: true,
-				ask: {
-					id: "ask-221",
-					revision: "a".repeat(64),
-					kind: "stuck",
-					title: "Tasks & Roles v8 prototype signoff",
-					fields: [
-						{
-							id: "q1",
-							text: "Approve v8 carbon + warm-gold palette for live build?",
-							options: [
-								{ value: "Approve v8 (Recommended)", label: "Approve v8 (Recommended)" },
-								{ value: "Keep v7", label: "Keep v7" },
-							],
-							multi: false,
-							allowText: false,
-						},
-					],
-				},
-			});
-		});
-
-		// Must now send roles_ask_answer with the selected option; still not marked answered until roles_ask_result ok: true
-		const answerMsg = sent.find(
-			(m): m is Extract<ClientMessage, { type: "roles_ask_answer" }> => m.type === "roles_ask_answer",
-		);
-		expect(answerMsg).toBeDefined();
-		expect(answerMsg).toMatchObject({
-			type: "roles_ask_answer",
-			key: "design:task:221",
-			askId: "ask-221",
-			revision: "a".repeat(64),
-			answers: [{ id: "q1", selected: ["Approve v8 (Recommended)"] }],
-		});
-		expect(container.querySelector('[data-task-detail="221"]')?.textContent).not.toContain("Answered by you");
-
-		// Server confirms roles_ask_result ok: true
-		await act(async () => {
-			receiveRoleAnswer({
-				type: "roles_ask_result",
-				reqId: answerMsg!.reqId,
-				ok: true,
-			});
-		});
-
-		// Now the task is marked answered locally and Roles reload is triggered
-		expect(container.querySelector('[data-task-detail="221"]')?.textContent).toContain(
-			'✓ Answered by you: "Approve v8 (Recommended)"',
-		);
-		expect(container.querySelector(".attention-note-bar")?.textContent).toContain("0 Needs you");
-
-		await act(async () => {
-			root.unmount();
-		});
 	});
 });

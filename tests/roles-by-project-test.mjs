@@ -171,39 +171,137 @@ async function journey(browser, theme) {
 			(await tile(page, VIEW.roles).getAttribute("aria-expanded")) === "true" &&
 				/Done when/.test(await page.locator("body").innerText()),
 		);
-		const small = await page.evaluate(() =>
-			[...document.querySelectorAll("button, [role=radio], input, a[href], summary")]
-				.filter((e) => e.getClientRects().length && !e.closest("[hidden]"))
-				.map((e) => [e.textContent?.trim().slice(0, 30) || e.getAttribute("aria-label"), e.getBoundingClientRect()])
-				.filter(([, r]) => r.width < 24 || r.height < 24)
-				.map(([n, r]) => `${n} ${Math.round(r.width)}x${Math.round(r.height)}`),
-		);
-		check(`journey ${theme}: every target at least 24 px`, small.length === 0, small.slice(0, 5).join(" | "));
-		if (!existsSync(AXE)) check(`journey ${theme}: axe-core`, false, `axe-core not found at ${AXE}`);
-		else {
-			await page.addScriptTag({ path: AXE });
-			const bad = await page.evaluate(async () => {
-				const tags = {
-					runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"] },
-					resultTypes: ["violations"],
-				};
-				const a = await window.axe.run(document, tags);
-				const b = await window.axe.run(document, {
-					runOnly: { type: "rule", values: ["label-content-name-mismatch"] },
-				});
-				return [...a.violations, ...b.violations]
-					.filter((v) => v.impact === "serious" || v.impact === "critical")
-					.map(
-						(v) =>
-							`${v.id}: ${v.nodes
-								.slice(0, 2)
-								.map((n) => n.target.join(" "))
-								.join(", ")}`,
-					);
-			});
-			check(`journey ${theme}: axe-core, no serious or critical finding`, bad.length === 0, bad.join(" | "));
-		}
+		// Architecture rm-b04e515c (ruling A): targets and axe cover the page root .rbp and any dialog it opens
+		// outside it, never the app's shell; a missing root fails. Checked twice: the page, then the answer dialog
+		// open with a choice picked.
+		if (existsSync(AXE)) await page.addScriptTag({ path: AXE });
+		await featureChecks(page, `journey ${theme}`);
+		await page.getByRole("button", { name: "Answer", exact: true }).first().click();
+		const dialog = page.locator("dialog[open]");
+		await dialog.getByRole("radio").first().check();
+		check(`journey ${theme}: the answer dialog opens with a choice picked`, (await dialog.count()) === 1);
+		await featureChecks(page, `journey ${theme} answer dialog`);
 		check(`journey ${theme}: no console or page errors`, errors.length === 0, errors.slice(0, 3).join(" | "));
+	} finally {
+		await context.close();
+	}
+}
+
+/** The feature's own boxes: .rbp plus an open dialog outside it (Architecture rm-b04e515c, ruling A). */
+async function featureChecks(page, tag) {
+	const small = await page.evaluate(() => {
+		const root = document.querySelector(".rbp");
+		if (!root) return null;
+		const roots = [root, ...[...document.querySelectorAll("dialog[open]")].filter((d) => !root.contains(d))];
+		return roots
+			.flatMap((r) => [...r.querySelectorAll("button, [role=radio], input, a[href], summary")])
+			.filter((e) => e.getClientRects().length && !e.closest("[hidden]"))
+			.map((e) => [e.textContent?.trim().slice(0, 30) || e.getAttribute("aria-label"), e.getBoundingClientRect()])
+			.filter(([, r]) => r.width < 24 || r.height < 24)
+			.map(([n, r]) => `${n} ${Math.round(r.width)}x${Math.round(r.height)}`);
+	});
+	check(`${tag}: the page root .rbp exists`, small !== null);
+	check(`${tag}: every target at least 24 px`, small?.length === 0, (small ?? []).slice(0, 5).join(" | "));
+	if (!existsSync(AXE)) return check(`${tag}: axe-core`, false, `axe-core not found at ${AXE}`);
+	const bad = await page.evaluate(async () => {
+		const root = document.querySelector(".rbp");
+		if (!root) return ["no .rbp root"];
+		const include = [[".rbp"]];
+		document.querySelectorAll("dialog[open]").forEach((d, i) => {
+			if (root.contains(d)) return;
+			d.setAttribute("data-rbp-axe", String(i));
+			include.push([`dialog[data-rbp-axe="${i}"]`]);
+		});
+		const tags = {
+			runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"] },
+			resultTypes: ["violations"],
+		};
+		const a = await window.axe.run({ include }, tags);
+		const b = await window.axe.run(
+			{ include },
+			{
+				runOnly: { type: "rule", values: ["label-content-name-mismatch"] },
+			},
+		);
+		return [...a.violations, ...b.violations]
+			.filter((v) => v.impact === "serious" || v.impact === "critical")
+			.map(
+				(v) =>
+					`${v.id}: ${v.nodes
+						.slice(0, 2)
+						.map((n) => n.target.join(" "))
+						.join(", ")}`,
+			);
+	});
+	check(`${tag}: axe-core, no serious or critical finding`, bad.length === 0, bad.join(" | "));
+}
+
+/**
+ * Overlapping visible text, document-wide. Each text box is clipped on each axis by its overflow ancestors, the
+ * rule ui-check's browser-collect.py uses (Architecture rm-b04e515c), so text scrolled out of a pane is not
+ * counted but a visible collision with the shell still is.
+ */
+function overlapScan() {
+	const overflow = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+	const scrolls = (v) => v === "hidden" || v === "clip" || v === "auto" || v === "scroll";
+	const boxes = [];
+	for (const el of document.querySelectorAll("body *")) {
+		if (![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) continue;
+		const s = getComputedStyle(el);
+		if (s.visibility === "hidden" || s.display === "none" || el.closest("[hidden], [aria-hidden=true]")) continue;
+		const r = el.getBoundingClientRect();
+		let { left, top, right, bottom } = r;
+		for (
+			let anc = el.parentElement;
+			anc && anc !== document.body && anc !== document.documentElement;
+			anc = anc.parentElement
+		) {
+			const st = getComputedStyle(anc);
+			const ar = anc.getBoundingClientRect();
+			if (scrolls(st.overflowX)) {
+				left = Math.max(left, ar.left);
+				right = Math.min(right, ar.right);
+			}
+			if (scrolls(st.overflowY)) {
+				top = Math.max(top, ar.top);
+				bottom = Math.min(bottom, ar.bottom);
+			}
+		}
+		if (right - left > 0.5 && bottom - top > 0.5) boxes.push([el, { left, top, right, bottom }]);
+	}
+	const hits = [];
+	for (let i = 0; i < boxes.length; i++)
+		for (let j = i + 1; j < boxes.length; j++) {
+			const [ea, a] = boxes[i];
+			const [eb, b] = boxes[j];
+			if (ea.contains(eb) || eb.contains(ea)) continue;
+			const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+			const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+			if (w > 1 && h > 1) hits.push(`${ea.textContent.trim().slice(0, 20)} / ${eb.textContent.trim().slice(0, 20)}`);
+		}
+	return { overflow, hits };
+}
+
+/** The clipped measure on fixed geometry: text scrolled out of a pane passes, a visible overlap fails. */
+async function overlapParity(browser) {
+	const context = await browser.newContext({ viewport: { width: 400, height: 300 } });
+	try {
+		const page = await context.newPage();
+		const pane = (extra) =>
+			`<body style="margin:0;font:14px sans-serif"><header style="position:fixed;top:0;left:0;right:0;height:40px"><span>Top bar</span></header>` +
+			`<main style="position:absolute;top:40px;left:0;right:0;height:200px;overflow-y:auto"><div style="height:600px;padding-top:${extra}"><span>Page text</span></div></main></body>`;
+		await page.setContent(pane("0"));
+		await page.evaluate(() => document.querySelector("main").scrollTo(0, 30));
+		const clipped = await page.evaluate(overlapScan);
+		await page.setContent(
+			`<body style="margin:0;font:14px sans-serif"><span style="position:absolute;top:10px;left:10px">Top bar</span><span style="position:absolute;top:14px;left:20px">Page text</span></body>`,
+		);
+		const visible = await page.evaluate(overlapScan);
+		check(
+			"L3 harness: clipped measure parity (scrolled-out pair passes, visible overlap fails)",
+			clipped.hits.length === 0 && visible.hits.length === 1,
+			JSON.stringify({ clipped: clipped.hits, visible: visible.hits }),
+		);
 	} finally {
 		await context.close();
 	}
@@ -327,30 +425,7 @@ async function l3(browser) {
 			const { context, page, errors } = await openPage(browser, { width, theme });
 			try {
 				await tile(page, VIEW.roles).click();
-				const r = await page.evaluate(() => {
-					const overflow = document.documentElement.scrollWidth - document.documentElement.clientWidth;
-					const boxes = [];
-					for (const el of document.querySelectorAll("body *")) {
-						if (![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) continue;
-						const s = getComputedStyle(el);
-						if (s.visibility === "hidden" || s.display === "none" || el.closest("[hidden], [aria-hidden=true]"))
-							continue;
-						const b = el.getBoundingClientRect();
-						if (b.width && b.height) boxes.push([el, b]);
-					}
-					const hits = [];
-					for (let i = 0; i < boxes.length; i++)
-						for (let j = i + 1; j < boxes.length; j++) {
-							const [ea, a] = boxes[i];
-							const [eb, b] = boxes[j];
-							if (ea.contains(eb) || eb.contains(ea)) continue;
-							const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
-							const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-							if (w > 1 && h > 1)
-								hits.push(`${ea.textContent.trim().slice(0, 20)} / ${eb.textContent.trim().slice(0, 20)}`);
-						}
-					return { overflow, hits };
-				});
+				const r = await page.evaluate(overlapScan);
 				const tag = `L3 ${width}px ${theme}`;
 				check(`${tag}: 0 horizontal overflow`, r.overflow <= 0, `${r.overflow}px`);
 				check(`${tag}: 0 overlapping text`, r.hits.length === 0, r.hits.slice(0, 3).join(" | "));
@@ -386,6 +461,7 @@ try {
 		safari = await webkit.launch({ executablePath: WEBKIT, headless: true });
 		await l2(safari, "WebKit");
 	}
+	await overlapParity(chrome);
 	await l3(chrome);
 } catch (error) {
 	console.error(`FAIL ${error instanceof Error ? error.message : "fixture error"}`);

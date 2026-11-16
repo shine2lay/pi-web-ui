@@ -438,7 +438,7 @@ afterEach(() => {
 });
 
 describe("Tasks & Roles v8 client module (Task #240)", () => {
-	it("completes the full happy-path journey across All Department Tasks, 4 filterable dropdowns, Tag DAG, Roles Bento view, Why modal, and Dark/Light themes", () => {
+	it("completes the full happy-path journey across All Department Tasks, 4 filterable dropdowns, Tag DAG, Why modal, and Dark/Light themes", () => {
 		const container = document.createElement("div");
 		document.body.appendChild(container);
 
@@ -621,23 +621,6 @@ describe("Tasks & Roles v8 client module (Task #240)", () => {
 		expect(container.querySelectorAll("#tag-dag-region [data-dag-node]").length).toBe(2);
 		container.querySelector<HTMLButtonElement>("#tag-dag-region .clear-handoff-btn")?.click();
 		expect(container.querySelectorAll("#tag-dag-region [data-dag-node]").length).toBe(7);
-
-		// 10. Switch to Roles & Queues Bento view
-		container.querySelector<HTMLButtonElement>("#tab-roles")?.click();
-		const roleCards = container.querySelectorAll("[data-role-card]");
-		expect(roleCards.length).toBe(6);
-		expect(container.querySelectorAll("[data-role-card] .dept-monogram").length).toBe(6);
-		expect(container.querySelectorAll(".roles-lane-pills").length).toBe(6);
-
-		// Expand a department queue in Roles view
-		container.querySelector<HTMLButtonElement>('.role-toggle-btn[data-role-id="frontend"]')?.click();
-		expect(container.querySelector('[data-role-card="frontend"]')?.getAttribute("data-role-expanded")).toBe("true");
-
-		// Expand idle departments footer bar
-		const idleBtn = container.querySelector<HTMLButtonElement>("#toggle-idle-btn");
-		expect(idleBtn?.getAttribute("aria-expanded")).toBe("false");
-		idleBtn?.click();
-		expect(container.querySelector(".idle-list")?.textContent).toContain("Product:");
 
 		// 11. Why modal hidden by default, opens and closes cleanly
 		const whyModal = container.querySelector("#why-modal");

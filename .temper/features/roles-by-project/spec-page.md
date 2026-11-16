@@ -18,7 +18,7 @@ what it must keep across a live update.
 | loading | no `taskBoard` received yet and the watch has not failed | skeleton tiles, "Loading projects and queues" |
 | live | last payload had `taskBoard` | the view; "As of" = `taskBoard.asOf` formatted |
 | empty | live and no open task (`groups` all `open: 0`) | "All clear" panel, then minis; fleet bar hidden |
-| error | `status === "error"`, or a payload without `taskBoard` after a good one | coral banner "Couldn't read the queues just now" + "Try again" above the last good view, kept as it was; no last good view -> banner alone |
+| error | `status === "error"` or `error` set (also with `status` ready and the last good overview kept), or a payload without `taskBoard` after a good one (Architecture rm-b04e515c, accepting rm-5e5f4305) | coral banner "Couldn't read the queues just now" + "Try again" above the last good view, kept as it was; no last good view -> banner alone |
 | no results | search on and nothing matches | "Clear search" + suggestion buttons |
 
 - "Try again" calls `reloadRoles()` once per press; no timer, no fake delay. The banner leaves when a payload

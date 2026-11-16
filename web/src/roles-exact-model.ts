@@ -338,7 +338,7 @@ export const EXACT_SOURCE: Record<SourceState, { title: string; body: string; la
 	},
 };
 
-/** The page's words for a value nobody recorded, in every part of the Roles view (roles-exact/). */
+/** The words for a value nobody recorded. */
 export const NR = "Not recorded";
 
 export function exactAge(since: number | null, now: number): string {

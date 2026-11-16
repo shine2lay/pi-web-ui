@@ -1,5 +1,4 @@
 /// <reference types="vite/client" />
-/// <reference path="../../web/src/roles-design-fonts.d.ts" />
 // @vitest-environment jsdom
 // W7: synthetic admitted scalars + the actual projection, transport and DOM-completion seams.
 // No native sources, live chats, worker starts, model requests or production browser interaction.
@@ -7,8 +6,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { IdentityDef } from "../../server/identities.js";
 import type {
@@ -21,31 +18,14 @@ import type {
 import { RolesOverviewReader, RolesWatch, roleUsageCost, type RolesOverviewHost } from "../../server/roles-overview.js";
 import { createUsageMeterCache } from "../../server/usage-accounting-meter-cache.js";
 import { validateMeterSnapshot, type UsageMeterSnapshot } from "../../server/usage-accounting-meter-contract.js";
-import { RolesExactView, updateRolesUsageDOM } from "../../web/src/components/RolesExactView.js";
 import { projectExactRoles } from "../../web/src/roles-exact-model.js";
-import { createExactRolesView } from "../../web/src/roles-exact-view.js";
 import { projectRolePanel } from "../../web/src/roles-panel-model.js";
-import {
-	acknowledgeRenderedRolesUsage,
-	receiveRoles,
-	resetRolesState,
-	rolesConnectionLost,
-	watchRoles,
-} from "../../web/src/roles-state.js";
-import { bindRolesSurface } from "../../web/src/roles-u0/surface.js";
+import { receiveRoles, resetRolesState, watchRoles } from "../../web/src/roles-state.js";
 import { projectRoleUsageCost, projectSpend, projectUsefulRoles } from "../../web/src/roles-useful-model.js";
 import type { UiRoleUsageCost as WebCost, UiRolesUsageRenderTiming as WebTiming } from "../../web/src/types.js";
 
 const send = vi.hoisted(() => vi.fn<(msg: ClientMessage) => boolean>(() => true));
-const prepare = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => undefined));
 vi.mock("../../web/src/app-globals", () => ({ appSend: send, useAppField: () => "open" }));
-vi.mock("../../web/src/roles-exact-fonts", () => ({
-	exactRolesFonts: { geist: new Uint8Array(), mono: new Uint8Array() },
-}));
-vi.mock("../../web/src/roles-u0/surface", async (original) => ({
-	...(await original<typeof import("../../web/src/roles-u0/surface.js")>()),
-	prepareRolesDocument: prepare,
-}));
 const NOW = Date.parse("2026-10-20T19:00:00.000Z");
 const ISO = new Date(NOW).toISOString();
 const WEEK = "2026-10-19";
@@ -183,27 +163,6 @@ function projected(cost = dto(), now = NOW) {
 	expect(value).not.toBeNull();
 	return value!;
 }
-function mounted(cost = dto()) {
-	const model = projectExactRoles(state(overview(cost)), "open", NOW);
-	let binding: ReturnType<typeof bindRolesSurface> | null = null;
-	const view = createExactRolesView(
-		() => model,
-		{ open: vi.fn(), about: vi.fn(), answer: vi.fn(), reload: vi.fn() },
-		{
-			raf: (f) => setTimeout(f, 0),
-			cancelRaf: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-			setTimeout: (f, ms) => setTimeout(f, ms),
-			clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-		},
-		() => binding?.update(),
-	);
-	binding = bindRolesSurface(document, () => view.values(1400, 780));
-	cleanups.push(() => {
-		binding?.dispose();
-		view.dispose();
-	});
-	return { view, binding };
-}
 
 beforeEach(() => {
 	vi.useFakeTimers();
@@ -211,7 +170,6 @@ beforeEach(() => {
 	vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 	resetRolesState();
 	send.mockReset().mockReturnValue(true);
-	prepare.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => {
 	for (const clean of cleanups.splice(0)) clean();
@@ -413,15 +371,6 @@ describe("W7 useful, panel and exact consumers", () => {
 		const model = projectExactRoles(state(old), "open", NOW);
 		expect(model.roles[0].usageCost).toBeNull();
 		expect(projectRolePanel(state(old), "ops", NOW)?.spend).toEqual(projectSpend(manual));
-		const { view } = mounted(roleUsageCost({}, "ops", NOW));
-		const before = view.values(1400, 780);
-		expect(before.spendAmountText).toContain("12.50");
-		view.openRole("ops", document.body);
-		vi.runAllTimers();
-		const region = document.querySelector('[role="region"]')!;
-		expect(region.textContent).toContain("known list subtotal: UNKNOWN");
-		expect(region.textContent).toContain("Manual tally — stale/unverified reference only");
-		expect(region.textContent).not.toContain(`$${EXACT}`);
 	});
 	it("only admits synthetic policy-wide clean funding, and never draws an automatic safety bar", () => {
 		const v = snapshot();
@@ -440,13 +389,6 @@ describe("W7 useful, panel and exact consumers", () => {
 			"reporting remainder $1998.876543210988 USD — not spending permission",
 		);
 		expect(projected(cost).lines.join(" ")).toContain("already included, not additional");
-		const { view } = mounted(cost);
-		const values = view.values(1400, 780);
-		// The geometry and amount remain the manual $12.50 reference, not the automatic decimal/remainder.
-		expect(values.spendAmountText).toContain("12.50");
-		expect(values.spendBarWidth).toBe("0.625%");
-		expect(values.spendBarColor).toBe("#7DB8FF");
-		expect(values.spendAria).not.toContain("1998.876543210988");
 		expect(projected(cost, NOW + 60_001).lines.join(" ")).toContain("UNKNOWN — no certified budget remainder");
 	});
 	it("independently downgrades stale native age and Pacific-week mismatch; polls do not renew it", () => {
@@ -568,7 +510,7 @@ describe("S0 Temper frontier is diagnostic, always UNKNOWN", () => {
 	});
 });
 
-describe("existing watch transport: optional post-DOM generation acknowledgement", () => {
+describe("existing watch transport: server-side generation acknowledgement", () => {
 	// Execute just the real existing handler's bounded case, never import/start server/index.ts.
 	function route(watch: RolesWatch<object>, ws: object, msg: ClientMessage, receive: (m: ServerMessage) => void) {
 		const code = readFileSync(join(project, "server/index.ts"), "utf8");
@@ -615,195 +557,6 @@ describe("existing watch transport: optional post-DOM generation acknowledgement
 			receive,
 		};
 	}
-	const acks = () =>
-		send.mock.calls.map((call) => call[0]).filter((m) => m.type === "roles_watch" && m.renderedUsage !== undefined);
-	it("the real mounted component acknowledges only after the active-visible iframe DOM update", async () => {
-		const f = transport();
-		await f.watch.look();
-		vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-		vi.spyOn(window, "requestAnimationFrame").mockImplementation((fn) => window.setTimeout(() => fn(NOW), 16));
-		vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => window.clearTimeout(id));
-		const host = document.createElement("div");
-		document.body.appendChild(host);
-		const root = createRoot(host);
-		cleanups.push(() => {
-			act(() => root.unmount());
-			host.remove();
-		});
-		const fonts = { geist: new Uint8Array(), mono: new Uint8Array() };
-		const render = async (active: boolean) => {
-			await act(async () =>
-				root.render(createElement(RolesExactView, { active, fonts, onOpen: vi.fn(), onAbout: vi.fn() })),
-			);
-		};
-		await render(false);
-		await act(async () => {
-			await vi.advanceTimersByTimeAsync(20);
-		});
-		expect(host.querySelector("iframe")?.contentDocument?.querySelector("[data-boxgrid]")).not.toBeNull();
-		expect(acks()).toHaveLength(0);
-		vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-		await render(true);
-		await act(async () => {
-			await vi.advanceTimersByTimeAsync(20);
-		});
-		expect(acks()).toHaveLength(0);
-		vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-		await render(false);
-		await render(true);
-		await act(async () => {
-			await vi.advanceTimersByTimeAsync(20);
-		});
-		expect(acks()).toHaveLength(0); // a visible unopened panel is not rendered cost evidence
-		const doc = host.querySelector("iframe")!.contentDocument!;
-		const open = doc.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]');
-		expect(open).not.toBeNull();
-		await act(async () => open!.click());
-		await act(async () => {
-			await vi.advanceTimersByTimeAsync(20);
-		});
-		expect(doc.querySelector('[role="region"]')?.textContent).toContain(`$${EXACT}`);
-		expect(acks()).toHaveLength(1);
-		expect(f.watch.usageRenderTimings(f.ws)[0]).toMatchObject({
-			role: "ops",
-			generation,
-			firstObservationToAckMs: null,
-		});
-	});
-	it("failed component mounting and unmount-before-preparation never acknowledge a generation", async () => {
-		const f = transport();
-		await f.watch.look();
-		vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-		const host = document.createElement("div");
-		document.body.appendChild(host);
-		let root = createRoot(host);
-		const fonts = { geist: new Uint8Array(), mono: new Uint8Array() };
-		prepare.mockRejectedValueOnce(new Error("synthetic font preparation failed"));
-		await act(async () =>
-			root.render(createElement(RolesExactView, { active: true, fonts, onOpen: vi.fn(), onAbout: vi.fn() })),
-		);
-		expect(host.querySelector('[role="alert"]')?.textContent).toContain("could not be loaded");
-		expect(acks()).toHaveLength(0);
-		await act(async () => root.unmount());
-		let ready: () => void = () => undefined;
-		prepare.mockImplementationOnce(
-			() =>
-				new Promise<void>((resolve) => {
-					ready = resolve;
-				}),
-		);
-		root = createRoot(host);
-		await act(async () =>
-			root.render(createElement(RolesExactView, { active: true, fonts, onOpen: vi.fn(), onAbout: vi.fn() })),
-		);
-		await act(async () => root.unmount());
-		await act(async () => ready());
-		expect(host.querySelector("iframe")).toBeNull();
-		expect(acks()).toHaveLength(0);
-		host.remove();
-	});
-	it("push and values() alone never acknowledge rendering; actual DOM update/refit then carries the same generation", async () => {
-		const f = transport(NOW - 250);
-		await f.watch.look();
-		const { view, binding } = mounted(f.current.roles[0].usageCost);
-		view.values(1400, 780);
-		expect(view.usageRenderCandidates()).toEqual([]);
-		expect(acks()).toHaveLength(0);
-		view.openRole("ops", document.body);
-		expect(view.usageRenderCandidates()).toEqual([{ role: "ops", generation }]);
-		binding.update();
-		expect(document.querySelector('[role="region"]')?.textContent).toContain(`$${EXACT}`);
-		f.now(NOW + 12);
-		vi.setSystemTime(NOW + 900_000); // client clock never becomes native first-observation evidence
-		const count = vi.fn();
-		updateRolesUsageDOM(
-			binding,
-			() => false,
-			() => count(acknowledgeRenderedRolesUsage(f.current, view.usageRenderCandidates())),
-		);
-		expect(count).toHaveBeenCalledExactlyOnceWith(1);
-		expect(acks()).toHaveLength(1);
-		expect(f.watch.usageRenderTimings(f.ws)).toEqual([
-			{
-				watch: 1,
-				role: "ops",
-				generation,
-				pushedAt: NOW,
-				acknowledgedAt: NOW + 12,
-				firstNativeObservedAt: NOW - 250,
-				pushToAckMs: 12,
-				firstObservationToAckMs: 262,
-			},
-		]);
-		expect(acknowledgeRenderedRolesUsage(f.current, [{ role: "ops", generation }])).toBe(0);
-	});
-	it("missing native receipt stays null; fresh Temper UNKNOWN can be rendered without certifying coverage", async () => {
-		const f = transport(null, true);
-		await f.watch.look();
-		const { view, binding } = mounted(f.current.roles[0].usageCost);
-		view.openRole("ops", document.body);
-		f.now(NOW + 5);
-		updateRolesUsageDOM(
-			binding,
-			() => false,
-			() => acknowledgeRenderedRolesUsage(f.current, view.usageRenderCandidates()),
-		);
-		expect(f.watch.usageRenderTimings(f.ws)[0]).toMatchObject({
-			firstNativeObservedAt: null,
-			firstObservationToAckMs: null,
-			pushToAckMs: 5,
-		});
-		expect(f.current.roles[0].usageCost?.usage?.usageCoverage).toBe("partial");
-		expect(projected(f.current.roles[0].usageCost).lines.join(" ")).toContain("coverage UNKNOWN");
-	});
-	it("does not acknowledge failed/unmounted bindings or send failures", async () => {
-		const f = transport();
-		await f.watch.look();
-		const done = vi.fn();
-		updateRolesUsageDOM(null, () => false, done);
-		expect(() =>
-			updateRolesUsageDOM(
-				{
-					update: () => {
-						throw new Error("failed DOM");
-					},
-				},
-				() => false,
-				done,
-			),
-		).toThrow("failed DOM");
-		expect(() =>
-			updateRolesUsageDOM(
-				{ update: () => undefined },
-				() => {
-					throw new Error("failed refit");
-				},
-				done,
-			),
-		).toThrow("failed refit");
-		expect(done).not.toHaveBeenCalled();
-		send.mockReturnValue(false);
-		expect(acknowledgeRenderedRolesUsage(f.current, [{ role: "ops", generation }])).toBe(0);
-		send.mockReturnValue(true);
-		expect(acknowledgeRenderedRolesUsage(f.current, [{ role: "ops", generation }])).toBe(1);
-	});
-	it("rejects hidden, disconnected, old snapshot, count-only and unwatched client renders", async () => {
-		const f = transport();
-		await f.watch.look();
-		const ack = () => acknowledgeRenderedRolesUsage(f.current, [{ role: "ops", generation }]);
-		vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-		expect(ack()).toBe(0);
-		vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-		expect(acknowledgeRenderedRolesUsage(structuredClone(f.current), [{ role: "ops", generation }])).toBe(0);
-		rolesConnectionLost();
-		expect(ack()).toBe(0);
-		resetRolesState();
-		watchRoles(false);
-		receiveRoles({ type: "roles", overview: f.current, asks: 0, usageRender: { watch: 1, pushedAt: NOW } });
-		expect(ack()).toBe(0);
-		resetRolesState();
-		expect(ack()).toBe(0);
-	});
 	it("server binds connection, watch, role and generation; closes clocks/extra fields and rejects replay", async () => {
 		const f = transport(NOW - 100);
 		await f.watch.look();
@@ -844,11 +597,5 @@ describe("existing watch transport: optional post-DOM generation acknowledgement
 		expect(f.watch.acknowledgeUsage(f.ws, good)).toBe(false);
 		f.now(Date.parse("2026-10-26T07:00:00.000Z"));
 		expect(f.watch.acknowledgeUsage(f.ws, { ...good, generation: next.generation })).toBe(false);
-	});
-	it("old-server pushes without optional watch metadata do not fabricate acknowledgement", () => {
-		watchRoles(true);
-		const o = overview();
-		receiveRoles({ type: "roles", overview: o, asks: 0 });
-		expect(acknowledgeRenderedRolesUsage(o, [{ role: "ops", generation }])).toBe(0);
 	});
 });

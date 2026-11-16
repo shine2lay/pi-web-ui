@@ -7,11 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readRoleInstructions } from "../../server/roles-instructions.js";
-import { projectInstructions } from "../../web/src/roles-exact-model.js";
-import { instructionsOf } from "../../web/src/roles-exact/instructions.js";
 
 const AT = "2026-10-18T16:00:00.000Z";
-const NOW = Date.parse("2026-10-18T17:00:00Z");
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 const dirs: string[] = [];
 afterEach(() => {
@@ -92,41 +89,5 @@ describe("roles-instructions reader", () => {
 		e.files.push({ name: "passwd", path: "/etc/passwd", sha256: sha("x"), at: AT });
 		f.write({ [f.home]: e });
 		expect(await f.read()).toEqual({ state: "none" });
-	});
-});
-
-describe("roles-instructions display", () => {
-	const view = (raw: unknown) => instructionsOf(projectInstructions(raw, NOW), NOW);
-	const loaded = Date.parse(AT);
-	const clock = `${String(new Date(loaded).getHours()).padStart(2, "0")}:${String(new Date(loaded).getMinutes()).padStart(2, "0")}`;
-
-	it("Current with its load time", () => {
-		const v = view({ state: "current", loadedAt: loaded });
-		expect(v.instrLabel).toBe("Current");
-		expect(v.instrFg).toBe("#9FD8B8");
-		expect(v.instr.text).toContain(`Loaded `);
-		expect(v.instr.text).toContain(`${clock} · up to date`);
-	});
-
-	it("Outdated naming the changed files", () => {
-		const v = view({ state: "outdated", loadedAt: loaded, changed: ["notebook.md", "AGENTS.md"] });
-		expect(v.instrLabel).toBe("Outdated");
-		expect(v.instrFg).toBe("#F0B95A");
-		expect(v.instr.text).toContain(`${clock} · notebook.md, AGENTS.md changed since`);
-	});
-
-	it("Not recorded for none, an older server, or anything malformed", () => {
-		for (const raw of [
-			{ state: "none" },
-			undefined,
-			{ state: "current" },
-			{ state: "outdated", loadedAt: loaded, changed: [] },
-			{ state: "outdated", loadedAt: loaded, changed: ["<b>x</b>"] },
-			{ state: "current", loadedAt: NOW + 3_600_000 },
-		]) {
-			const v = view(raw);
-			expect(v.instrLabel).toBe("Not recorded");
-			expect(v.instrFg).toBe("#C7B8FF");
-		}
 	});
 });

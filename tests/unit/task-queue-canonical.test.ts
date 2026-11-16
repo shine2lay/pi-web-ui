@@ -29,4 +29,3 @@ await import("./queue-blocks.test.js");
 await import("./queue-lead-reminders.test.js");
 await import("./queue-profiles.test.js");
 await import("./queue-requester.test.js");
-await import("./roles-lanes.test.js");
