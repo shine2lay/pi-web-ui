@@ -1,5 +1,6 @@
 import { mergeOwnerLastWrote } from "./owner-input-time.js";
 import type { UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
+import { canonicalizeTagList } from "./shared/task-tag-governance.js";
 import { checkTags } from "./shared/task-tags.js";
 
 export const REQUESTER_INPUTS_MAX = 32;
@@ -47,7 +48,7 @@ export function requesterInputOf(raw: unknown): UiTaskRequesterInput | undefined
 		message: o.message,
 		...(o.forOwner === true ? { forOwner: true as const } : {}),
 		...(Array.isArray(o.ownerIds) ? { ownerIds: [...o.ownerIds] as string[] } : {}),
-		...(checkedTags.value?.length ? { tags: checkedTags.value } : {}),
+		...(checkedTags.value?.length ? { tags: canonicalizeTagList(checkedTags.value) } : {}),
 	};
 }
 

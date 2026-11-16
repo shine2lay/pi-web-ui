@@ -2,6 +2,8 @@
 // server/shared/task-tags.ts — Canonical tag slug validation & inheritance
 // ---------------------------------------------------------------------------
 
+import { canonicalizeTagList } from "./task-tag-governance.js";
+
 export const TAG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
 export const MAX_TAGS_PER_ITEM = 16;
 
@@ -65,42 +67,25 @@ export function resolveInheritedTags(
 		return explicitTags.length > 0 ? explicitTags : undefined;
 	}
 	if (!originInputs || originInputs.length === 0) return undefined;
-	const seen = new Set<string>();
-	const inherited: string[] = [];
-	for (const input of originInputs) {
-		const rawTags = "tags" in input ? input.tags : undefined;
-		if (!Array.isArray(rawTags)) continue;
-		for (const tag of rawTags) {
-			if (typeof tag === "string") {
-				const trimmed = tag.trim();
-				if (TAG_SLUG_RE.test(trimmed) && !seen.has(trimmed)) {
-					seen.add(trimmed);
-					inherited.push(trimmed);
-					if (inherited.length >= maxTags) break;
-				}
-			}
-		}
-		if (inherited.length >= maxTags) break;
-	}
-	return inherited.length > 0 ? inherited : undefined;
+	return normTags(
+		originInputs.flatMap((input) => ("tags" in input && Array.isArray(input.tags) ? input.tags : [])),
+		maxTags,
+	);
 }
 
 /**
- * Replay helper that filters, trims, and deduplicates valid tag slugs without throwing.
+ * Replay helper that filters, trims, folds historical aliases onto their canonical tag (CANONICAL_TAG_ALIASES,
+ * ops #964) and deduplicates valid tag slugs without throwing.
  * Returns undefined when raw is not an array or contains no valid tag slugs.
  */
 export function normTags(raw: unknown, maxTags: number = MAX_TAGS_PER_ITEM): string[] | undefined {
 	if (!Array.isArray(raw)) return undefined;
-	const seen = new Set<string>();
-	const out: string[] = [];
+	const valid: string[] = [];
 	for (const item of raw) {
 		if (typeof item !== "string") continue;
 		const trimmed = item.trim();
-		if (trimmed.length > 0 && trimmed.length <= 60 && TAG_SLUG_RE.test(trimmed) && !seen.has(trimmed)) {
-			seen.add(trimmed);
-			out.push(trimmed);
-			if (out.length >= maxTags) break;
-		}
+		if (trimmed.length > 0 && trimmed.length <= 60 && TAG_SLUG_RE.test(trimmed)) valid.push(trimmed);
 	}
+	const out = canonicalizeTagList(valid).slice(0, maxTags);
 	return out.length > 0 ? out : undefined;
 }

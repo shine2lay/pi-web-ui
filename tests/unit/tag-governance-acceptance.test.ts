@@ -1,9 +1,10 @@
 // Tag governance acceptance (ops #963, Rule 18 Task 1; ops #964 builds it and may not weaken or delete these).
 // Owner 2026-11-15, Design home chat (via rm-ae23a75e): "also i see the tags being used freely, like i saw 2 for open
-// viking work". Run: npm run test:tag-governance-acceptance (outside the land gate's tests/unit until ops #964 makes
-// it pass). The cross-repo parity check reads pi-queue's copy from TAG_GOVERNANCE_PEER (default ~/projects/pi-queue).
+// viking work". Part of tests/unit (the land gate) since ops #964 made it pass; alone: npm run
+// test:tag-governance-acceptance. The cross-repo parity check reads pi-queue's copy from TAG_GOVERNANCE_PEER (default
+// ~/projects/pi-queue of the real user: the sealed gate's HOME is a temp folder).
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -236,7 +237,7 @@ describe("cross-repo parity", () => {
 			fileURLToPath(new URL("../../server/shared/task-tag-governance.ts", import.meta.url)),
 			"utf8",
 		);
-		const peerRoot = process.env.TAG_GOVERNANCE_PEER || join(homedir(), "projects", "pi-queue");
+		const peerRoot = process.env.TAG_GOVERNANCE_PEER || join(userInfo().homedir, "projects", "pi-queue");
 		const peer = readFileSync(join(peerRoot, "tag-governance.ts"), "utf8");
 		expect(own).toMatch(imports);
 		expect(peer).toMatch(imports);

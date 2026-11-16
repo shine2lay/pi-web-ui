@@ -66,7 +66,7 @@
 		"typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit && tsc -p desktop/tsconfig.json --noEmit && tsc -p plugins/page-picker/extension/tsconfig.json --noEmit",
 		"test": "vitest run",
 		"test:unit": "vitest run",
-		"test:tag-governance-acceptance": "vitest run --config tests/acceptance/vitest.config.ts",
+		"test:tag-governance-acceptance": "vitest run tests/unit/tag-governance-acceptance.test.ts",
 		"test:smoke": "node tests/run-smoke.mjs",
 		"test:smoke:core": "node tests/run-smoke.mjs --core",
 		"check:protocol": "node scripts/check-protocol-sync.mjs",

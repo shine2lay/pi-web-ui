@@ -48,7 +48,7 @@ import { StringDecoder } from "node:string_decoder";
 import { deadEndWaysOut } from "./dead-end.js";
 import { checkInitiative } from "./decision-records.js";
 import { samePath, type IdentityDef } from "./identities.js";
-import { checkTags } from "./shared/task-tags.js";
+import * as tagRules from "./role-message-tags.js";
 import type {
 	UiRoleMessage,
 	UiRoleMessageKind,
@@ -363,7 +363,7 @@ type RoleMessageSchedule = (schedule: () => void) => void;
 const inSchedulingContext: RoleMessageSchedule = (schedule) => schedule();
 
 /** What the server does for the delivery (AgentService). */
-export interface RoleMessageHost {
+export interface RoleMessageHost extends tagRules.TagGovernanceHost {
 	/** The roles now (pi-identity's identity list). */
 	roles(): IdentityDef[];
 	/** Whether the chat with this transcript is working (a turn runs, a message is on its way). */
@@ -428,15 +428,13 @@ export interface RoleMessageDraft {
 	tags?: string[];
 }
 
-export interface RoleMessageSendInput {
+export interface RoleMessageSendInput extends tagRules.RoleMessageTagInput {
 	to?: unknown;
 	kind?: unknown;
 	text?: unknown;
 	replyTo?: unknown;
 	/** decision-records: optional initiative id (lowercase letters, digits, dashes; at most 60). */
 	initiative?: unknown;
-	/** Optional tag slugs (1-16 items, lowercase letters, digits, dashes; at most 60 chars each). */
-	tags?: unknown;
 }
 
 export type RoleMessageSendResult =
@@ -887,12 +885,13 @@ export function queueEntriesOf(file: string, withHeader = false): Promise<TaskQu
  *  queue-paused: `held`: its own chat recorded the owner's pause (the queue's chat tells it). */
 export function ownTaskOf(
 	entries: Iterable<TaskQueueEntryLike>,
-): { id?: number; done: boolean; queueChat?: string; held: boolean } | undefined {
+): ({ id?: number; done: boolean; queueChat?: string; held: boolean } & tagRules.WorkerTaskTags) | undefined {
 	const q = taskQueueFromEntries(entries, true, Number.POSITIVE_INFINITY);
 	if (!q.from) return undefined;
 	const own = q.tasks[0];
 	return {
 		id: own?.id,
+		...tagRules.taskTagFacts(own),
 		// queue-drop: a task its lead dropped is over too.
 		done: !own || own.status === "done" || own.status === "dropped",
 		queueChat: q.from.file,
@@ -1941,7 +1940,7 @@ export class RoleMessages {
 		}
 		const initiativeCheck = checkInitiative(input.initiative);
 		if (!initiativeCheck.ok) return { ok: false, error: initiativeCheck.error };
-		const tagsCheck = checkTags(input.tags);
+		const tagsCheck = tagRules.governMessageTags(this.host, input);
 		if (!tagsCheck.ok) return { ok: false, error: tagsCheck.error };
 		const replyTo = typeof input.replyTo === "string" ? input.replyTo.trim() : "";
 		let original: RoleMessageRecord | undefined;
@@ -2035,8 +2034,7 @@ export class RoleMessages {
 				: original
 					? (original.initiative ?? this.host.initiativeOf?.(original.id) ?? "")
 					: "";
-		const rawTags = tagsCheck.value !== undefined ? tagsCheck.value : original?.tags;
-		const tags = rawTags?.length ? [...rawTags] : undefined;
+		const tags = tagRules.messageDraftTags(this.host, sender, tagsCheck.value, original, kind === "reply");
 		return {
 			ok: true,
 			draft: {

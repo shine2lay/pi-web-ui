@@ -19,6 +19,7 @@ import {
 import { AI_READER_POINTER, BOARD_ROUTING_RULE } from "./board-tool.js";
 import type { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { ROLE_MESSAGE_POLICY } from "./role-message-limits.js";
+import { CONFIRM_NEW_TAG_DESCRIPTION } from "./shared/task-tag-governance.js";
 
 /** board (task #76): what message_role's result adds when the same text went to several roles. */
 export function sameTextHint(roles: readonly string[]): string {
@@ -77,9 +78,10 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 			tags: Type.Optional(
 				Type.Array(Type.String(), {
 					description:
-						'Optional: tag slugs for grouping related work across roles (1-16 items, lowercase letters, digits, dashes; at most 60 chars each, e.g. ["roles-rework", "glanceability"]). A reply without tags inherits the original message\'s tags; pass [] to clear.',
+						'Optional: tag slugs for grouping related work across roles (1-16 items, lowercase letters, digits, dashes; at most 60 chars each, e.g. ["roles-rework", "glanceability"]). A reply without tags inherits the original message\'s tags; a new message from a queued task without tags gets its task\'s project and tags; pass [] to clear. Old duplicate tags are rewritten to their canonical tag; a new tag that looks like an existing one is refused (see confirmNewTag).',
 				}),
 			),
+			confirmNewTag: Type.Optional(Type.Boolean({ description: CONFIRM_NEW_TAG_DESCRIPTION })),
 			grant: Type.Optional(
 				Type.String({
 					description:
@@ -162,6 +164,7 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 				replyTo: p.replyTo,
 				initiative: p.initiative,
 				...(p.tags !== undefined ? { tags: p.tags } : {}),
+				...(p.confirmNewTag !== undefined ? { confirmNewTag: p.confirmNewTag } : {}),
 			};
 			const res = guard ? await guard.send(sender, { ...input, grant: p.grant }, _id) : service.send(sender, input);
 			if (!res.ok) {

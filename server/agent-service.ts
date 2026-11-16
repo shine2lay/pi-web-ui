@@ -434,6 +434,7 @@ import {
 	needsOwnTurn,
 } from "./role-messages.js";
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
+import { rememberWorkerTask, roleMessageTagFacts } from "./role-message-tag-facts.js";
 import { admitRoleMailAtResume, installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
 import {
 	installPromptStartGuard,
@@ -5513,13 +5514,10 @@ export class ClientSession {
 				const identity = this.identityOf(conv);
 				if (!identity) return "Only a chat with a role can message other roles, and this chat has none.";
 				let file: string | undefined;
-				let taskId: number | undefined;
-				let queueChat: string | undefined;
+				let own: ReturnType<typeof ownTaskOf>;
 				try {
 					file = conv.session.sessionFile ?? undefined;
-					const own = ownTaskOf(conv.session.sessionManager.getBranch());
-					taskId = own?.id;
-					queueChat = own?.queueChat;
+					own = rememberWorkerTask(ownTaskOf(conv.session.sessionManager.getBranch()));
 				} catch {
 					// the session is being replaced
 				}
@@ -5533,14 +5531,14 @@ export class ClientSession {
 					role: identity.id,
 					title: identity.title,
 					file,
-					chat: chatLabel({ taskId, isHome, title: conv.title }),
+					chat: chatLabel({ taskId: own?.id, isHome, title: conv.title }),
 					handling: roleMessageService?.handlingDepth(file, lastUserText) ?? 0,
 					...(owner ? { forOwner: owner } : {}),
 					// role-message-ladder: the server's own binding of this chat (never the model's words).
 					guard: {
 						bindingId: file,
 						isHome,
-						...(taskId !== undefined && !isHome ? { task: { queueId: queueChat ?? "", taskId } } : {}),
+						...(own?.id !== undefined && !isHome ? { task: { queueId: own.queueChat ?? "", taskId: own.id } } : {}),
 						lastUserText,
 					},
 				};
@@ -18648,6 +18646,7 @@ export class AgentService {
 			// Ops #711 (audit R6a): when it arrived (or failed for good), kept past the live store's 1,000 messages.
 			deliverySettled: (record, at) => this.keepDecision(deliveryRecord(record, at)),
 			initiativeOf: (id) => this.decisions.messageInitiativeOf(id),
+			...roleMessageTagFacts(() => ({ messages: this.roleMessages?.recent(0), overview: this.newestOverview?.value })),
 			log: (line) => console.log(line),
 		});
 		this.roleMessages.deferUntilStart();
