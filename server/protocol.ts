@@ -2705,6 +2705,8 @@ export interface UiWorkRecord {
 	/** Its done-when items, and how many are marked met. */
 	items: number;
 	met: number;
+	/** roles-by-project G1: each item with its mark, registry order ([] = none; absent = older server). */
+	doneWhen?: import("./roles-board-protocol.js").UiWorkDoneWhenMark[];
 }
 
 /** roles-panel: the work registry's records (read only). */
@@ -3563,34 +3565,8 @@ export interface UiDecisionRecordView {
 	chatTitle?: string;
 }
 
-/** roles-overview: the Roles page's snapshot. */
-export interface UiRolesOverview {
-	/** When it was made (ms). */
-	at: number;
-	roles: UiRoleOverview[];
-	/** Every open ask, oldest first (an ask whose time isn't known goes last). */
-	asks: UiRoleAsk[];
-	/** Role messages are paused (the owner's switch in Settings). */
-	paused: boolean;
-	/** The 6 am report job's time zone (its days and "6 am" are in it). */
-	reportTz: string;
-	/** board: the roles' shared board (absent: this server has none). */
-	board?: UiBoard;
-	/** roles-panel: the work registry's initiatives and projects (absent: this server reads none). */
-	work?: UiWorkRecords;
-	/** owner-contacts (Roles D3): the owner's own messages to role home chats, newest first (absent: none read). */
-	contacts?: UiOwnerContact[];
-	/** roles-sent: sender → receiver pairs with open requests or questions (absent: this server reads none). */
-	openPairs?: UiRoleOpenPair[];
-	/** ladder-alarm: the approval step beyond the active free-chain boundary. on false = it's off this run
-	 *  (chains stop at that boundary; nobody can approve more), with the reason its start logged and since = when this
-	 *  server started. Absent: not known yet (still starting) or this server has no such step. */
-	approvals?: UiMessageApprovals;
-	/** Multi-tag group roll-ups across all roles, sorted by priority. */
-	tagGroups?: UiTaskGroupRollup[];
-	/** Pre-aggregated index of appOrSystem -> tags for App/System filtering. */
-	touchSystems?: UiTouchSystemSummary[];
-}
+/** roles-overview (UiRolesOverview) and the roles-by-project board types live in roles-board-protocol.ts. */
+export type * from "./roles-board-protocol.js";
 
 /** ladder-alarm: the approval step's state as the Roles page shows it. */
 export interface UiMessageApprovals {
@@ -5885,7 +5861,7 @@ export type ServerMessage =
 	 *  error: it couldn't be made (the page keeps what it had). */
 	| {
 			type: "roles";
-			overview?: UiRolesOverview;
+			overview?: import("./roles-board-protocol.js").UiRolesOverview;
 			asks: number;
 			error?: string;
 			checkedAt?: number;

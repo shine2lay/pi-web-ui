@@ -97,4 +97,6 @@
 //     DSH keeps its read-only Elsewhere rows; old pages must refresh before sending removed actions.
 // 53: effort-level-button - get_effort_levels / set_effort_level and the effort_levels answer and push: the
 //     composer's "Department effort level" button. An old page shows no button; an old server never answers.
-export const PROTOCOL_VERSION = 53;
+// 54: roles-by-project - UiRolesOverview.taskBoard (groups, board rows) and UiWorkRecord.doneWhen on the roles
+//     payload. A new page on an old server would wait for taskBoard forever; the mismatch flag tells it to refresh.
+export const PROTOCOL_VERSION = 54;
