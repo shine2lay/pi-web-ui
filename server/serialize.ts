@@ -7,6 +7,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { imageMetaOf } from "./image-meta.js";
 import type { UiContentBlock, UiImageBlock, UiMessage } from "./protocol.js";
 import { tooBigKind } from "./rewind.js";
+import { sentByOf } from "./sent-by-message.js";
 
 /** AgentMessage is not re-exported from the package root; derive it from AgentSession. */
 export type AgentMessage = AgentSession["messages"][number];
@@ -277,13 +278,19 @@ export function serializeMessage(m: AgentMessage, seq: number, imageUrl?: ImageU
 	const lazy = imageUrl ? (n: number, v: string) => imageUrl(id, n, v) : undefined;
 
 	switch (m.role) {
-		case "user":
+		case "user": {
+			// sent-by (Ops #972): who typed it, as a label (server/sent-by-message.ts).
+			const who = sentByOf(m);
 			return {
 				id,
 				role: "user",
 				content: serializeUserContent(m.content, lazy),
 				timestamp: m.timestamp,
+				...(who
+					? { sentBy: { name: who.name, login: who.login, ...(who.owner ? { owner: true as const } : {}) } }
+					: {}),
 			};
+		}
 
 		case "assistant":
 			return {

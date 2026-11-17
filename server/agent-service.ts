@@ -121,6 +121,7 @@ import {
 import { briefOfAsk, stuckAskBriefs } from "./owner-card-brief.js";
 import { noteOwnerInput, ownerLastWroteOf } from "./owner-input-time.js";
 import { noteOwnerText, ownerInputMarkOnEvent } from "./owner-input-mark.js";
+import { noteSentByText, type SentBy, sentByExtension, sentByOnEvent } from "./sent-by-message.js";
 import { CooOwnerQuestionDesk, type CardDelivery } from "./owner-question-coo.js";
 import type { OwnerQuestionAsker } from "./owner-question-card.js";
 import { isCooHomeChat, makeOwnerQuestionTool } from "./owner-question-tool.js";
@@ -2595,20 +2596,16 @@ interface RoleDeliveryHow {
 /** optimistic-send: how far one prompt() got, for its final answer (see ClientSession.prompt). */
 interface PromptFlow {
 	requester?: UiTaskRequesterInput;
-	/** role-messages: "extension" = the server sends it for someone else (a role message), not the
-	 *  owner typing: pi's input hooks see that source (pi-queue doesn't take it for the owner's answer),
-	 *  and the owner's draft, last prompt and seen marks stay as they are. */
+	/** role-messages: "extension" = the server sends it for someone else (a role message), not the owner typing:
+	 *  pi's input hooks see that source (pi-queue: not his answer); his draft, last prompt, seen marks stay. */
 	source?: "extension";
-	/** telegram-coo: who sent it (a role's reply goes to Telegram when the run's cause is telegram, plugin
-	 *  or role) and the host.roles.send id it answers (see role-replies.ts). */
+	/** telegram-coo: who sent it (role-replies.ts: telegram/plugin/role -> reply to Telegram) and its send id. */
 	cause?: RoleTurnCause;
 	sendId?: string;
-	/** telegram-coo: a role's reply to a question asked for the owner (role-replies.ts forOwner): who
-	 *  answered and the owner's send ids; the run it starts or joins is the owner's. */
+	/** telegram-coo: a role's answer to a question asked for the owner (role-replies.ts); the run is his. */
 	forOwner?: RoleOwnerAnswer;
 	ownerChannel?: OwnerChannel;
-	/** carry-on: the note carries on a turn a restart cut off: that turn's saved requester inputs
-	 *  (see AgentService.carryOn and RoleTurnInput.carried). */
+	/** carry-on: a turn a restart cut off: its saved requester inputs (AgentService.carryOn, RoleTurnInput). */
 	carried?: CarriedRoleTurn;
 	/** pi put the text off until the previous run has settled: its preflight callback answers later. */
 	deferred: boolean;
@@ -2622,16 +2619,17 @@ interface PromptFlow {
 	lateText?: () => string | undefined;
 	/** Recheck at SDK preflight too, after input hooks/auth/compaction have awaited. */
 	textCurrent?: () => boolean;
+	sentBy?: SentBy; // sent-by (Ops #972): who typed it, from the web request's Tailscale login (server/sent-by.ts)
 }
 
-/** telegram-coo: pi took a text: the run it starts (pending until agent_start) or the running run it
- *  joined (queued) remembers who sent it and the host.roles.send id. */
+/** telegram-coo: pi took a text: the run it starts or joins remembers who sent it and the send id. */
 function noteTurnCause(conv: Conversation, flow: PromptFlow, joined: boolean, text: string): void {
 	const rec = joined && conv.turnRecord ? conv.turnRecord : (conv.turnPending ??= newTurnRecord());
 	collectRoleInput(rec, flow);
 	// owner-input-time + owner-input-mark: his accepted input's time (30-minute window) and its lasting mark.
 	noteOwnerInput(conv, rec, flow.requester?.kind === "owner", Date.now());
 	if (flow.requester?.kind === "owner") noteOwnerText(conv, text, flow.requester.channel);
+	noteSentByText(conv, text, flow.sentBy); // sent-by (Ops #972): the message pi makes of it gets its sender
 	// carry-on: a text joined the running turn: the live list keeps its requester inputs.
 	if (rec === conv.turnRecord) saveRunningRequester(conv);
 	// owner-contacts: pi took the owner's message into this chat's turn.
@@ -6393,6 +6391,7 @@ export class ClientSession {
 						// board (task #76): a role chat's new posts on the roles' board, as one "[Board]" note at the
 						// start of a turn: a shown custom message saved in its transcript (its details are the chat's
 						// "seen up to" mark). It returns no system prompt, so the prompt and its cache stay as they are.
+						{ name: "pi-webui-sent-by", hidden: true, factory: sentByExtension }, // sent-by (Ops #972): [From: <name>] lines
 						{
 							name: "pi-webui-board",
 							hidden: true,
@@ -8709,13 +8708,12 @@ export class ClientSession {
 	 *  streaming delta logs once a minute, not hundreds of times a second. */
 	private eventErrorLoggedAt = new Map<string, number>();
 
-	/**
-	 * crash-guard: pi calls this listener inside its run loop and doesn't catch listener errors, so a
-	 * throw here broke the run of a chat or escaped as an unhandled error. Log it with its stack (the
-	 * same error at most once a minute) and go on; the next snapshot brings the windows up to date.
-	 */
+	/** crash-guard: pi calls this listener inside its run loop and doesn't catch listener errors, so a throw
+	 *  here broke the run of a chat or escaped as an unhandled error. Log it with its stack (the same error
+	 *  at most once a minute) and go on; the next snapshot brings the windows up to date. */
 	private onEvent(conv: Conversation, event: AgentSessionEvent): void {
 		ownerInputMarkOnEvent(conv, event); // owner-input-mark: never throws
+		sentByOnEvent(conv, event, (m) => conv.uiMessageCache.delete(uiMessageKeyOf(conv, m as AgentMessage).cacheKey)); // sent-by
 		try {
 			this.onEventNow(conv, event);
 		} catch (err) {
@@ -12504,9 +12502,8 @@ export class ClientSession {
 		queue = false,
 		/** optimistic-send: the window's id for this send, answered with one prompt_ack (prompt-ack.ts). */
 		id?: string,
-		/** role-messages: source "extension" = sent by the server for someone else (see PromptFlow.source).
-		 *  telegram-coo: cause = who sent it, sendId = the host.roles.send it is (see PromptFlow.cause),
-		 *  forOwner = a reply to a question asked for the owner (see PromptFlow.forOwner). */
+		/** role-messages: source "extension" = sent by the server for someone else; telegram-coo: cause = who
+		 *  sent it, sendId = its host.roles.send, forOwner = a reply to a question asked for him (see PromptFlow). */
 		opts?: {
 			requester?: UiTaskRequesterInput;
 			source?: "extension";
@@ -12521,6 +12518,7 @@ export class ClientSession {
 			/** Server-only late card composition; never set from a browser or plugin request. */
 			lateText?: () => string | undefined;
 			textCurrent?: () => boolean;
+			sentBy?: SentBy; // sent-by (Ops #972): who typed it (index.ts, a browser's prompt only)
 		},
 	): Promise<void> {
 		let conv: Conversation;
@@ -12546,6 +12544,7 @@ export class ClientSession {
 			...(ownerChannelOf(opts?.ownerChannel) ? { ownerChannel: opts!.ownerChannel } : {}),
 			...(opts?.carried ? { carried: opts.carried } : {}),
 			...(opts?.taskStart ? { taskStart: opts.taskStart } : {}),
+			...(opts?.sentBy ? { sentBy: opts.sentBy } : {}),
 			...(opts?.lateText && opts.source === "extension"
 				? { lateText: opts.lateText, textCurrent: opts.textCurrent }
 				: {}),

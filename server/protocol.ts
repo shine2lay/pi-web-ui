@@ -81,13 +81,13 @@ export interface UiMessage {
 	/** rewind-to-here：这条助手报错是「对话太大发不出去」（413 request_too_large / 超过上下文）。
 	 *  前端把原始报错收进「详情」，面上只给一句大白话。 */
 	tooBig?: "bytes" | "tokens";
-	/** Present on compactionSummary messages: context size (tokens) before
-	 *  compaction — the card header renders "compacted from N tokens" like
-	 *  the pi CLI. Absent on older snapshots. */
+	/** Present on compactionSummary messages: context size (tokens) before compaction — the card header
+	 *  renders "compacted from N tokens" like the pi CLI. Absent on older snapshots. */
 	tokensBefore?: number;
 	/** role-messages: this user message is a message from another role (message_role) that the server
 	 *  confirmed (its store has this id, for this chat, with exactly this text): shown as a labelled card. */
 	roleMessage?: UiRoleMessage;
+	sentBy?: { name: string; login: string; owner?: true }; // sent-by (Ops #972): who typed it (Tailscale login)
 }
 
 /** role-messages: what a message between roles is. role-reports: "report" = the app's 6 am report

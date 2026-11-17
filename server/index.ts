@@ -145,6 +145,7 @@ import { ConnEvents, MAX_RECORDS_PER_SOCKET } from "./conn-events.js";
 import { ChatOpenTracker, preciseNow } from "./chat-open-timing.js";
 import { globalLspPool } from "./lsp-tool.js";
 import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
+import { PeopleBook, type SentBy } from "./sent-by.js";
 import type {
 	BgServer,
 	CachedWindow,
@@ -329,10 +330,11 @@ if (process.platform === "win32") {
 }
 
 const app = express();
-// Host 白名单（防 DNS rebinding，审查 #352）：无 token 部署下 HTTP 路由此前
-// 不校验 Host，恶意网页让自己的域名解析到 127.0.0.1 即可打满全部 API。
-// 显式白名单走 PI_WEB_ALLOW_HOSTS（与 WS 侧同 env）；设置了 PI_WEB_TOKEN 则
-// 由 token 鉴权兜底，不再限制 Host。WS 升级侧同规则见 originAllowed()。
+const peopleBook = new PeopleBook(join(DATA_DIR, "people.json")); // sent-by (Ops #972): Tailscale logins
+app.use(peopleBook.noteRequest);
+// Host 白名单（防 DNS rebinding，审查 #352）：无 token 部署下 HTTP 路由此前不校验 Host，恶意网页让自己的域名解析到 127.0.0.1
+// 即可打满全部 API。显式白名单走 PI_WEB_ALLOW_HOSTS（与 WS 侧同 env）；设置了 PI_WEB_TOKEN 则由 token 鉴权兜底，不再限制 Host。
+// WS 升级侧同规则见 originAllowed()。
 app.use((req, res, next) => {
 	const hostHeader = req.headers.host;
 	if (
@@ -1148,17 +1150,17 @@ export interface DispatchSession {
 	cwd: string;
 	/** id: optimistic-send - the window's id for this send, answered with one prompt_ack. */
 	/** opts.cause (telegram-coo): who started the turn; the browser's messages say "browser" so a role's
-	 *  home chat keeps their answers off Telegram. Engines without roles (DSH) ignore it. */
+	 *  home chat keeps their answers off Telegram. Engines without roles (DSH) ignore it.
+	 *  opts.sentBy (sent-by, Ops #972): who typed it, from the socket's Tailscale login. */
 	prompt(
 		text: string,
 		attachments?: PromptAttachment[],
 		queue?: boolean,
 		id?: string,
-		opts?: { cause?: "browser"; ownerChannel?: "browser" },
+		opts?: { cause?: "browser"; ownerChannel?: "browser"; sentBy?: SentBy },
 	): Promise<void>;
-	/** chat-open-speed: the pi session of the chat this window is on ("" when none). Used to refuse
-	 *  a message written into a chat that was still opening if the window ended up elsewhere.
-	 *  Optional: engines without sessions (DSH) don't implement it and the check is skipped. */
+	/** chat-open-speed: the pi session of the chat this window is on ("" when none), to refuse a message written
+	 *  into a chat that was still opening if the window ended up elsewhere. Optional: DSH skips the check. */
 	activeSessionId?(): string;
 	activeConversationId?(): string;
 	sessionIdForConversation?(conversationId: string): string;
@@ -2330,8 +2332,8 @@ function serializeShared(msg: ServerMessage): string {
 wss.on("connection", (ws, req) => {
 	// Origin/auth admission already passed. Non-browser sockets and internal clients stay unowned.
 	const acceptedBrowser = typeof req.headers.origin === "string" && originAllowed(req);
-	// Count attached sockets (the control socket reports REAL sockets, not
-	// cached client-session objects).
+	const tailscaleSender = acceptedBrowser ? peopleBook.noteSocket(req.headers) : undefined; // sent-by (Ops #972)
+	// Count attached sockets (the control socket reports REAL sockets, not cached client-session objects).
 	service.noteSocketOpen();
 	let clientId: string | null = null;
 	let closed = false;
@@ -2650,15 +2652,13 @@ wss.on("connection", (ws, req) => {
 			}
 			ownedCommand = claim;
 		}
-		// Host-owned dispatch entry, never an execution/persistence receipt. Old clients have no
-		// recovery identity and receive no extra frame. Domain authorization/results still apply.
+		// Host-owned dispatch entry, not an execution/persistence receipt; old clients: no recovery frame; auth applies.
 		reportRecovery("uncertain", "dispatch-started");
 		const sendIdentity = (reply: ServerMessage) => send(correlateIdentityReply(msg, reply));
 		switch (msg.type) {
 			case "prompt": {
-				// chat-open-speed: a message written while a chat was still opening carries the chat
-				// it was meant for. If the window is on a different one by now (another chat opened
-				// in between, the open failed), refuse it instead of sending it to the wrong chat.
+				// chat-open-speed: a message written while a chat was still opening carries the chat it was meant
+				// for. If the window is on another one by now (another chat opened, the open failed), refuse it.
 				const want = typeof msg.forSession === "string" ? msg.forSession : "";
 				const on = want ? (cs.activeSessionId?.() ?? want) : want;
 				if (want && on !== want) {
@@ -2669,12 +2669,12 @@ wss.on("connection", (ws, req) => {
 				}
 				void cs.prompt(msg.text, msg.attachments, msg.queue, typeof msg.id === "string" ? msg.id : undefined, {
 					...browserRoleInput(acceptedBrowser, AgentService.isPseudoClientId(clientId ?? "")),
+					sentBy: peopleBook.resolve(tailscaleSender),
 				});
 				break;
 			}
 			case "prompt_status":
-				// optimistic-send: a window that reconnected or reloaded asks about sends it still shows as
-				// "Sending". Answered on this socket; if it drops too, the next reconnect asks again.
+				// optimistic-send: a reconnected/reloaded window asks about sends it still shows as "Sending" (this socket).
 				if (Array.isArray(msg.ids)) {
 					const statusReqId = typeof msg.reqId === "string" && msg.reqId ? msg.reqId : undefined;
 					const statusClientId = clientId;

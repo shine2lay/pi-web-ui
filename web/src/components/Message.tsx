@@ -62,14 +62,14 @@ import { openRollbackDialog } from "../rollback-state";
 import { BUILTIN_UI_ITEMS, type UiSlotEntry } from "../ui-slots";
 import { appSend } from "../app-globals";
 import { parseActionSuggestions } from "../action-suggestions";
+import { SentByLabel } from "./SentByLabel";
 
 /** 编辑重问编辑器里直接拖入/粘贴文件的上限（与服务端 MAX_UPLOAD_BYTES 一致）。 */
 const MAX_EDIT_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
-// Narrowing guards. UiContentBlock is an open union (its last member is
-// `{ type: string; [k: string]: unknown }`), so plain `switch` narrowing does
-// not work — same pattern pi-vsc uses in shared/blocks.ts.
+// Narrowing guards. UiContentBlock is an open union (last member `{ type: string; [k: string]: unknown }`),
+// so plain `switch` narrowing does not work — same pattern pi-vsc uses in shared/blocks.ts.
 // ---------------------------------------------------------------------------
 
 export function asText(block: UiContentBlock): UiTextBlock | null {
@@ -1108,6 +1108,7 @@ export const Message = memo(function Message({
 											: `${t("plugin")} · ${message.customType ?? t("unknown")}`
 							: roleLabel(message.role, t)}
 				</span>
+				{!roleMsg && <SentByLabel sentBy={message.sentBy} />}
 				{message.model && <span className="msg-model">{message.model}</span>}
 				{message.timestamp && <span className="msg-time">{formatTime(message.timestamp)}</span>}
 				{qnIndex !== undefined && onJump && (
@@ -1570,10 +1571,9 @@ function stripFileWrapper(text: string): string {
 }
 
 /**
- * Collapsible card for a compaction summary — the web counterpart of the
- * CLI's CompactionSummaryMessageComponent. Collapsed shows "compacted from
- * N tokens" + expand affordance; expanded shows the full summary markdown
- * plus a hint that only recent messages stay in context.
+ * Collapsible card for a compaction summary — the web counterpart of the CLI's CompactionSummaryMessageComponent.
+ * Collapsed shows "compacted from N tokens" + expand affordance; expanded shows the full summary markdown plus a
+ * hint that only recent messages stay in context.
  */
 function CompactionCard({
 	message,

@@ -16,8 +16,8 @@ import {
 	ownerInputMarksIn,
 	ownerTextSha256,
 	OwnerInputsWaiting,
-	userMessageText,
 } from "../../server/owner-input-mark.js";
+import { userMessageText } from "../../server/admitted-texts.js";
 import { requesterForAdmission } from "../../server/queue-requester.js";
 
 vi.mock("../../server/workspace-snapshot.js", () => ({
@@ -306,7 +306,7 @@ describe("owner-input mark: shape", () => {
 
 	it("waiting texts are capped and a run's end keeps only what is still queued (each once)", () => {
 		const w = new OwnerInputsWaiting();
-		for (let i = 0; i < 40; i++) w.admitted(`t${i}`, "browser", 1);
+		for (let i = 0; i < 40; i++) w.admitted({ text: `t${i}`, channel: "browser", at: 1 });
 		expect(w.size).toBe(32);
 		w.keepOnly(["t39", "t38", "t38"]);
 		expect(w.size).toBe(2);
