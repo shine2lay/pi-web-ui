@@ -17,11 +17,13 @@ import { chromium, webkit } from "playwright-core";
 import { tsImport } from "tsx/esm/api";
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { ownServer } from "./lib/own-server.mjs";
+import { miniMaps } from "./lib/roles-mini-map.mjs";
 if (!process.env.PI_SEALED) throw new Error("Run with scripts/sealed.sh");
 if (!CHROME_PATH) throw new Error("Chrome is required");
 
 const NOT_BUILT = "roles-by-project: not built (Frontend #294 task)";
 const data = await tsImport("./unit/roles-by-project-page-data.ts", import.meta.url);
+const graph = await tsImport("../server/shared/roles-by-project/graph.ts", import.meta.url);
 const home = userInfo().homedir;
 const AXE = process.env.PI_AXE_JS ?? join(home, "temper-ai/configs/design/bin/vendor/axe-4.13.0.min.js");
 const WEBKIT = (() => {
@@ -82,7 +84,12 @@ hardStop.unref();
 
 /** A page whose roles feed is this test's: `send(tasks)` delivers one payload; the server's are dropped. */
 async function openPage(browser, { width, height = 900, theme = "dark", tasks = data.scaleTasks() }) {
-	const context = await browser.newContext({ viewport: { width, height }, locale: "en-US", timezoneId: "UTC" });
+	const context = await browser.newContext({
+		viewport: { width, height },
+		deviceScaleFactor: 2,
+		locale: "en-US",
+		timezoneId: "UTC",
+	});
 	await context.addInitScript((t) => {
 		if (t === "light") localStorage.setItem("pi-web-ui:theme", "flow-light");
 	}, theme);
@@ -521,6 +528,9 @@ try {
 	await overlapParity(chrome);
 	await l3(chrome);
 	await nowWidth(chrome);
+	const miniHarness = { data, graph, openPage, tile, check, overlapScan };
+	await miniMaps(chrome, "Chromium", miniHarness);
+	if (safari) await miniMaps(safari, "WebKit", miniHarness);
 } catch (error) {
 	console.error(`FAIL ${error instanceof Error ? error.message : "fixture error"}`);
 	failures++;

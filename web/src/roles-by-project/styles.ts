@@ -88,8 +88,12 @@ export const ROLES_BY_PROJECT_CSS = `
 .rbp-draw{display:flex !important;align-items:center;gap:8px;flex-wrap:wrap}
 .rbp-draw .rbp-cut{font-size:12px;color:var(--text-muted);white-space:nowrap}
 .rbp-tile.is-open .rbp-th>.rbp-draw{display:none !important}
-.rbp-thumb{position:relative;max-width:100%;overflow:hidden;display:block}
+.rbp-thumb{position:relative;width:100%;max-width:100%;overflow:hidden;display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px 24px}
+.rbp-mini-chain{position:relative;display:block;max-width:100%;flex:none}
 .rbp-thumb .sq{position:absolute;display:block;border-radius:2px}
+.rbp-thumb .rbp-layer-more{position:absolute;text-align:center;line-height:18px}
+.rbp-mini-loose{display:flex;flex-wrap:wrap;max-width:100%;flex:0 1 auto}
+.rbp-mini-loose .sq{position:static;flex:none}
 .rbp-thumb .f-ok{opacity:.55}
 .rbp-counts{font-size:12px;color:var(--text-secondary);display:flex !important;flex-wrap:wrap;gap:2px 10px}
 .rbp-counts .c-you{color:var(--you-fg);font-weight:600}

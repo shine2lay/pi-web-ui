@@ -201,6 +201,38 @@ export function scaleTasks(extra = 220, areas = 20): UiBoardTask[] {
 	return out;
 }
 
+/** M2: a windowed 13-layer chain, eight nodes in its first open layer, and seven loose tasks. */
+export function denseMiniTasks(): UiBoardTask[] {
+	const tag = "dense-mini";
+	const row = (id: number, state: UiBoardState, deps: string[] = []) =>
+		boardTask(`frontend #${id}`, `tag:${tag}`, state, `Mini task ${id}`, {
+			tags: [tag],
+			dependsOnRefs: deps,
+			queueIndex: id,
+		});
+	const chain = Array.from({ length: 13 }, (_, i) =>
+		row(6000 + i, i < 4 ? "done" : "queued", i ? [`frontend #${5999 + i}`] : []),
+	);
+	const siblings = Array.from({ length: 7 }, (_, i) => row(6100 + i, "queued", ["frontend #6003"]));
+	chain[5].dependsOnRefs = ["frontend #6004", ...siblings.map((t) => t.ref)];
+	const loose = Array.from({ length: 7 }, (_, i) => row(6200 + i, "working"));
+	const cap = Array.from({ length: 43 }, (_, i) =>
+		boardTask(`qa #${6300 + i}`, "tag:capped-mini", "queued", `Capped task ${i}`, { tags: ["capped-mini"] }),
+	);
+	const done = loose.map((t) => ({
+		...t,
+		ref: `frontend #${t.id + 1000}`,
+		id: t.id + 1000,
+		groupKey: "tag:done-mini",
+		tags: ["done-mini"],
+		state: "done" as const,
+		status: "done" as const,
+		queueIndex: null,
+		finishedAt: AT - 1000,
+	}));
+	return [...liveTasks(), ...chain, ...siblings, ...loose, ...cap, ...done];
+}
+
 export function boardOf(tasks: readonly UiBoardTask[], problem?: string): UiTaskBoard {
 	const known = new Set([ROLES_P, INK, SMOKE, "none", "project:quiet-project"]);
 	const extra = [...new Set(tasks.map((t) => t.groupKey).filter((k) => !known.has(k)))].sort();

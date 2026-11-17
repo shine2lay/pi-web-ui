@@ -3,12 +3,12 @@
  * `block.on`, loose tasks "On their own", done tasks folded) and the closed tile's mini map. Layout comes from
  * graph.ts (taskMapOf / miniMapOf); this file only draws it.
  */
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { miniMapOf, taskMapOf, type TaskMap } from "../../../server/shared/roles-by-project/graph";
 import type { UiBoardTask } from "../types";
 import { Icon, StatePill } from "./icons";
 import { deptOf, isOpen, plural, prettyRefs, refLabel, roleName, STATE_KEY } from "./model";
-import { elbow, Segs, useEdges, type Seg } from "./edges";
+import { elbow, useEdges, type Seg } from "./edges";
 
 const LOOSE_FIRST = 6;
 const SUMMARY_MAX = 120;
@@ -255,12 +255,9 @@ export function Thumb({ rows, scale }: { rows: readonly UiBoardTask[]; scale: nu
 		}),
 	);
 	const chainW = mini.columns.length ? (mini.columns.length - 1) * PITCH_X + BOX_W : 0;
-	const chainH = Math.max(0, ...mini.columns.map((c) => c.refs.length)) * PITCH_Y;
+	// Only the chain's horizontal geometry fits to width; counts stay at the page's readable text size.
+	const chainH = Math.max(0, ...mini.columns.map((c) => c.refs.length * PITCH_Y * scale + (c.more ? 18 : 0)));
 	const perRow = chainW ? 6 : 14;
-	const x0 = chainW ? chainW + 24 : 0;
-	mini.squares.refs.forEach((ref, i) =>
-		boxes.push({ ref, x: x0 + (i % perRow) * SQ_PITCH, y: Math.floor(i / perRow) * SQ_PITCH, w: SQ, h: SQ }),
-	);
 	const segs: Seg[] = [];
 	for (const e of map.edges) {
 		const a = at.get(e.from);
@@ -268,11 +265,20 @@ export function Thumb({ rows, scale }: { rows: readonly UiBoardTask[]; scale: nu
 		// Mini map links stay plain (prototype thumbHtml); edge kinds are drawn on the opened map only.
 		if (a && b && b.x > a.x) segs.push(...elbow(a.x + BOX_W, a.y + BOX_H / 2, b.x, b.y + BOX_H / 2, "plain", false));
 	}
-	if (!boxes.length) return null;
-	const sqRows = Math.ceil(mini.squares.refs.length / perRow);
-	const width = Math.max(chainW, x0 + Math.min(perRow, mini.squares.refs.length) * SQ_PITCH);
-	const height = Math.max(chainH, sqRows * SQ_PITCH);
+	if (!boxes.length && !mini.squares.refs.length) return null;
 	const s = (n: number) => Math.round(n * scale * 10) / 10;
+	const x = (n: number) => `${(n / chainW) * 100}%`;
+	const square = (ref: string, style: CSSProperties) => {
+		const st = byRef.get(ref)?.state ?? "queued";
+		return (
+			<i
+				key={ref}
+				data-mini-ref={ref}
+				className={`sq k-${STATE_KEY[st]}${st === "done" ? " f-ok" : ""}`}
+				style={style}
+			/>
+		);
+	};
 	const open = rows.filter(isOpen).length;
 	return (
 		<>
@@ -280,22 +286,41 @@ export function Thumb({ rows, scale }: { rows: readonly UiBoardTask[]; scale: nu
 			<span
 				className="rbp-thumb"
 				role="img"
-				aria-label={`Task map: ${plural(boxes.length, "task")} shown, ${open} open`}
-				style={{ width: s(width), height: s(height) }}
+				aria-label={`Task map: ${plural(boxes.length + mini.squares.refs.length, "task")} shown, ${open} open${mini.columns.map((col, i) => (col.more ? `; ${col.more} more in layer ${i + 1}` : "")).join("")}`}
 			>
-				<Segs
-					segs={segs.map((g) => ({ ...g, left: s(g.left), top: s(g.top), width: s(g.width), height: s(g.height) }))}
-				/>
-				{boxes.map((b) => {
-					const st = byRef.get(b.ref)?.state ?? "queued";
-					return (
-						<i
-							key={b.ref}
-							className={`sq k-${STATE_KEY[st]}${st === "done" ? " f-ok" : ""}`}
-							style={{ left: s(b.x), top: s(b.y), width: s(b.w), height: s(b.h) }}
-						/>
-					);
-				})}
+				{chainW > 0 && (
+					<span className="rbp-mini-chain" style={{ width: s(chainW), height: chainH }}>
+						{segs.map((g, i) => (
+							<i
+								key={i}
+								className={g.cls}
+								style={{ left: x(g.left), top: s(g.top), width: x(g.width), height: s(g.height) }}
+							/>
+						))}
+						{boxes.map((b) => square(b.ref, { left: x(b.x), top: s(b.y), width: x(b.w), height: s(b.h) }))}
+						{mini.columns.map(
+							(col, i) =>
+								col.more > 0 && (
+									<span
+										key={i}
+										className="rbp-cut rbp-layer-more"
+										title={`${col.more} more tasks in this layer`}
+										style={{ left: x(i * PITCH_X), top: s(col.refs.length * PITCH_Y), width: x(BOX_W) }}
+									>
+										+{col.more}
+									</span>
+								),
+						)}
+					</span>
+				)}
+				{mini.squares.refs.length > 0 && (
+					<span
+						className="rbp-mini-loose"
+						style={{ width: s(perRow * SQ_PITCH - (SQ_PITCH - SQ)), gap: s(SQ_PITCH - SQ) }}
+					>
+						{mini.squares.refs.map((ref) => square(ref, { width: s(SQ), height: s(SQ) }))}
+					</span>
+				)}
 			</span>
 			{mini.later > 0 && <span className="rbp-cut">+{mini.later} later</span>}
 			{mini.squares.more > 0 && <span className="rbp-cut">+{mini.squares.more}</span>}
