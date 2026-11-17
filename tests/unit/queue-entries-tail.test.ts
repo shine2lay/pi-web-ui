@@ -33,7 +33,8 @@ import {
 	readQueueEntries,
 	setQueueEntriesChunkBytes,
 } from "../../server/queue-entries-tail.js";
-import { ownTaskOf, queueEntriesOf } from "../../server/role-messages.js";
+import { ownTaskOf } from "../../server/own-task.js";
+import { queueEntriesOf } from "../../server/role-messages.js";
 import { type TaskQueueEntryLike, taskQueueAll, taskQueueFromEntries } from "../../server/task-queue.js";
 
 /** queueEntriesOf before #635, over the whole file: the oracle. */

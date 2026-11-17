@@ -29,6 +29,8 @@ import { requesterForAdmission } from "../../server/queue-requester.js";
 import { collectRoleInput, newTurnRecord, type RoleTurnRecord } from "../../server/role-replies.js";
 
 const MIN = 60_000;
+/** owner-requester (Ops #973): every owner card says whose it is; Shine when no one else asked. */
+const FOR_SHINE = { requester: "Shine" };
 const T0 = Date.parse("2026-10-31T16:00:00Z");
 // The process-wide list of asks keeps the real clock (it took Date.now before the test faked it), so the minutes in
 // its line are the real ones; the minutes themselves are checked on a fake clock in owner-question-wiring.test.ts.
@@ -293,7 +295,8 @@ describe("ClientSession with the switch on", () => {
 		const again = mine.client.askUser(QUESTIONS, {}, asking.id);
 		const [pending] = ofType(other, "question_pending");
 		expect(pending).toBeDefined();
-		expect(pending).not.toHaveProperty("route"); // asked again: shown as before, no line (Ops #684's table)
+		// asked again: shown as before, no line (Ops #684's table); only whose it is (owner-requester, Ops #973)
+		expect(pending!.route).toEqual(FOR_SHINE);
 		expect(heldIds()).toEqual([]);
 		expect(listedIds()).toContain(pending!.id);
 		other.client.resolveQuestion(pending!.id, [{ id: "port", selected: ["8080"] }]);
@@ -459,6 +462,7 @@ describe("ClientSession with the switch off", () => {
 			questions: QUESTIONS,
 			conversationId: asking.id,
 			conversationTitle: "asking",
+			route: FOR_SHINE,
 		});
 		expect(approval).toEqual({
 			type: "tool_approval_pending",
@@ -470,11 +474,13 @@ describe("ClientSession with the switch off", () => {
 			reasonEn: "lists",
 			conversationId: asking.id,
 			conversationTitle: "asking",
+			route: FOR_SHINE,
 		});
 		expect(heldIds()).toEqual([]);
 		expect(askHub.list().every((a) => a.route === undefined)).toBe(true);
-		expect(snapshotQuestion(other)).not.toHaveProperty("route");
-		expect(snapshotApproval(other)).not.toHaveProperty("route");
+		// No route line; only whose it is (owner-requester, Ops #973).
+		expect(snapshotQuestion(other)?.route).toEqual(FOR_SHINE);
+		expect(snapshotApproval(other)?.route).toEqual(FOR_SHINE);
 		expect(chatListQuestion(other, asking.id)).toBeDefined();
 		expect(router.sweep()).toEqual([]);
 		expect(existsSync(join(dir, OWNER_QUESTION_HOLDS_FILE))).toBe(false);

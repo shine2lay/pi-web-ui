@@ -55,8 +55,8 @@ import { normalizeIconSvg } from "./icon-svg.js";
 import { PluginDomConsent, declarationWantsDom } from "./plugin-dom.js";
 import { validatePluginManifest, formatManifestIssue, isKnownPermission } from "./plugin-manifest-validate.js";
 import { buildPluginApiCatalog } from "./plugin-api-catalog.js";
-import { askHub, type Ask, type AskEvent, type AskFieldAnswer, type AskResult } from "./asks.js";
-import { ownerSeesAskEvent } from "./owner-question-surfaces.js";
+import { askHub, type Ask, type AskEvent, type AskFieldAnswer, type AskMeta, type AskResult } from "./asks.js";
+import { pluginAnswer, pluginAsks, pluginSeesAskEvent } from "./owner-question-surfaces.js";
 import { connNoticeHub, type ConnNotice } from "./conn-events.js";
 import type { RoleReply, RoleSendOptions, RoleSendResult, RoleSendVia } from "./role-replies.js";
 import { AGENT_TOOL_CATALOG } from "./tool-manager.js";
@@ -213,7 +213,7 @@ export interface PluginConversationListItem {
 }
 
 /** 插件 AI 工具执行时由宿主传入的调用方对话上下文。 */
-export interface PluginToolCallerContext {
+export interface PluginToolCallerContext extends Pick<AskMeta, "requester"> {
 	conversationId?: string;
 	sessionFile?: string;
 	cwd?: string;
@@ -4433,12 +4433,12 @@ export class PluginManager {
 				},
 			},
 			asks: {
-				list: () => (can("asks") ? askHub.list().map(copyAsk) : []),
+				list: () => (can("asks") ? pluginAsks().map(copyAsk) : []), // owner-requester (Ops #973): Shine's alone
 				on: (handler) => {
 					if (!can("asks") || typeof handler !== "function") return () => {};
 					const off = askHub.on((ev) => {
 						// owner-question routing (Ops #685): nothing about an ask held for COO goes out to a plugin.
-						if (!ownerSeesAskEvent(ev)) return;
+						if (!pluginSeesAskEvent(ev)) return;
 						try {
 							handler({ ...ev, ask: copyAsk(ev.ask) });
 						} catch (err) {
@@ -4449,7 +4449,7 @@ export class PluginManager {
 				},
 				answer: async (id, answers) => {
 					if (!can("asks")) return { ok: false, error: 'the plugin did not declare permission "asks"' };
-					return askHub.answer(String(id ?? ""), Array.isArray(answers) ? answers : [], info.id);
+					return pluginAnswer(String(id ?? ""), Array.isArray(answers) ? answers : [], info.id); // as Shine (Ops #973)
 				},
 			},
 			roles: {

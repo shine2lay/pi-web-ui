@@ -16,7 +16,9 @@ import "./patch-lazy-boundary-context.js";
 import "./patch-jiti-resolve-cache.js";
 // Logs whatever holds pi's sign-in lock (auth.json) for 60 s or more; logging only (#134).
 import "./auth-lock-trace.js";
-import { mergeRequesterTurn, requesterForAdmission, requesterInputOf, requesterOfTurn } from "./queue-requester.js";
+import { mergeRequesterTurn, requesterForAdmission, requesterOfTurn, roleRequesterInputOf } from "./queue-requester.js";
+import { answeredBy } from "./sent-by.js";
+import { chatRequester, ownTaskOf } from "./own-task.js";
 import { OwnerContacts, ownerInputIds, type OwnerContactOutcome } from "./owner-contacts.js";
 import type { UiOwnerContact, UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
 import { spawn } from "node:child_process";
@@ -418,7 +420,6 @@ import {
 import { LEAD_REMINDERS_FILE, leadReminderOf, type LeadReminderRecord, QueueBlocks } from "./queue-blocks.js";
 import {
 	chatLabel,
-	ownTaskOf,
 	pausedNoteText,
 	QUEUE_PAUSED_CUSTOM_TYPE,
 	queueEntriesOf,
@@ -5349,6 +5350,7 @@ export class ClientSession {
 				...(sessionFile ? { sessionFile } : {}),
 				...(cwd ? { cwd } : {}),
 				...(role ? { role } : {}),
+				...chatRequester(conv), // owner-requester (Ops #973)
 			};
 		} catch {
 			return {};
@@ -5526,6 +5528,7 @@ export class ClientSession {
 				const owner = isHome ? ownerTurnOf(conv.turnRecord) : null;
 				const lastUserText = lastUserTextOf(conv) ?? "";
 				return {
+					...chatRequester(conv), // owner-requester (Ops #973): the owner this turn or task is for
 					role: identity.id,
 					title: identity.title,
 					file,
@@ -7705,6 +7708,11 @@ export class ClientSession {
 		};
 	}
 
+	/** owner-requester (Ops #973): a new ask's meta, with the owner its chat's turn or task is for. */
+	private static askMetaFor(conv: Conversation | undefined): AskMeta {
+		return { ...ClientSession.askMetaOf(conv), ...chatRequester(conv) };
+	}
+
 	/** owner-question routing (Ops #685): the identity whose home chat this is (COO's own asks go straight). */
 	private static homeRoleOf(sessionFile: string | undefined): string | undefined {
 		return homeChatOf(sessionFile, identityRegistry().identities)?.id;
@@ -7797,7 +7805,7 @@ export class ClientSession {
 	private static stuckSeq = 0;
 	/** telegram-answers: answers given from elsewhere (Telegram, the Queue tab) on their way into the
 	 *  chat, by ask id: what was answered and who answered, for when the task moves on. */
-	private static readonly stuckAnswers = new Map<string, { summary: string; from: string }>();
+	private static readonly stuckAnswers = new Map<string, { summary: string; from: string; by?: string }>();
 	private static stuckReconcileTimer: ReturnType<typeof setTimeout> | null = null;
 	/** queue-main-chat: the transcripts of task chats whose task asks its main chat now (as the open chats'
 	 *  queues say): nothing says the user is needed there (no green light, no "done" cue). */
@@ -7961,7 +7969,7 @@ export class ClientSession {
 			const given = ClientSession.stuckAnswers.get(have.askId);
 			ClientSession.stuckAnswers.delete(have.askId);
 			if (given) {
-				askHub.settle(have.askId, { how: "answered", summary: given.summary, from: given.from });
+				askHub.settle(have.askId, { how: "answered", ...given });
 				continue;
 			}
 			const why = stuckGoneReason(w ? "stuck" : seen.get(key), !w && mainAnswered.has(key));
@@ -8030,7 +8038,7 @@ export class ClientSession {
 		if (ClientSession.stuckAnswers.has(askId)) return { ok: false, error: "an answer is already on its way" };
 		const send = ClientSession.stuckAnswerSender;
 		if (!send) return { ok: false, error: "answers can't be sent into chats here" };
-		ClientSession.stuckAnswers.set(askId, { summary: text, from });
+		ClientSession.stuckAnswers.set(askId, { summary: text, from, ...answeredBy() }); // by: kept for the later settle
 		let r: AskResult;
 		try {
 			if (wanted.binding) {
@@ -8168,7 +8176,7 @@ export class ClientSession {
 		return {
 			opened: (ui) => {
 				const conv = chat();
-				const ask = dialogAsk(askId(ui), ui, ClientSession.askMetaOf(conv));
+				const ask = dialogAsk(askId(ui), ui, ClientSession.askMetaFor(conv));
 				askHub.add(
 					ask,
 					(answers, from) => {
@@ -10309,7 +10317,7 @@ export class ClientSession {
 			this.pendingQuestions.set(id, entry);
 			const askingConv = conversationId ? this.convs.get(conversationId) : undefined;
 			const ask: Ask = {
-				...questionAsk(id, questions, ClientSession.askMetaOf(askingConv)),
+				...questionAsk(id, questions, ClientSession.askMetaFor(askingConv)),
 				...(sig.toolCallId ? { toolCallId: sig.toolCallId } : {}),
 			};
 			// owner-question routing (Ops #685): where it goes (none while the switch is off: as before). Only a
@@ -10517,7 +10525,7 @@ export class ClientSession {
 				createdAt: Date.now(),
 			};
 			this.pendingApprovals.set(id, entry);
-			const ask = approvalAsk(id, { toolName, params, reason, reasonEn, category }, ClientSession.askMetaOf(conv));
+			const ask = approvalAsk(id, { toolName, params, reason, reasonEn, category }, ClientSession.askMetaFor(conv));
 			askHub.add(
 				ask,
 				(answers, from) => {
@@ -18905,7 +18913,7 @@ export class AgentService {
 					this.keepDecision(
 						answerRecord(
 							ev.ask,
-							{ summary: ev.summary, from: ev.from, ...(ev.answers ? { answers: ev.answers } : {}) },
+							ev, // summary, from, answers, by (who answered: owner-requester, Ops #973)
 							at,
 							file ? roles.get(file) : undefined,
 						),
@@ -19573,18 +19581,7 @@ export class AgentService {
 		const owner = this.roleMessages.ownerContextFor(file, text);
 		const cause = this.roleMessages.causalityOf(file, text);
 		const record = cause.kind === "record" && cause.exactTarget ? this.roleMessages.byId(cause.record.id) : undefined;
-		const requester = record
-			? requesterInputOf({
-					kind: "role",
-					role: record.from.role,
-					id: record.id,
-					message: record.kind,
-					...(record.forOwner === true
-						? { forOwner: true, ...(record.ownerIds ? { ownerIds: record.ownerIds } : {}) }
-						: {}),
-					...(record.tags?.length ? { tags: record.tags } : {}),
-				})
-			: undefined;
+		const requester = record ? roleRequesterInputOf(record) : undefined;
 		return {
 			cause: this.roleMessageCause(text),
 			// A CI alert or a script's request (Ops #782) starts its own turn, never joins a running one.

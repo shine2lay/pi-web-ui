@@ -57,6 +57,7 @@ import type {
 	UiStallRule,
 	UiWorkHandoff,
 } from "./protocol.js";
+import { ownTaskOf } from "./own-task.js";
 import { ownerChannelOf, type OwnerChannel, type RoleOwnerAnswer, OWNER_IDS_MAX } from "./role-replies.js";
 import { CARRY_ON_PREFIX } from "./running-chats.js";
 import { guardPolicyIsValid, ROLE_MESSAGE_POLICY, roleMessagesHourlyExempt } from "./role-message-limits.js";
@@ -233,6 +234,7 @@ export interface RoleMessageRecord {
 	/** role-message-ladder: a typed approval control (not business words): the request it belongs to. Handling it
 	 *  keeps the business chain's hop (no +1). */
 	guard?: RoleMessageGuardTag;
+	requester?: string; // owner-requester (Ops #973): the owner the sending turn or task was for; absent = Shine
 }
 
 /** role-message-ladder: what a control record is for. */
@@ -403,6 +405,7 @@ export interface RoleMessageSender {
 	forOwner?: { ownerIds: string[]; ownerChannel?: OwnerChannel };
 	/** role-message-ladder: the server's own binding of the sending chat (never the model's). */
 	guard?: RoleMessageSenderBinding;
+	requester?: string; // owner-requester (Ops #973): the sending chat's owner (owner-requester.ts chatPersonOf)
 }
 
 /** role-message-ladder: the sending chat as the server binds it. */
@@ -879,24 +882,6 @@ export async function reportReplyText(
  */
 export function queueEntriesOf(file: string, withHeader = false): Promise<TaskQueueEntryLike[]> {
 	return readQueueEntries(file, withHeader);
-}
-
-/** The task a queued task's chat works on (from its own entries); undefined = not a task's chat.
- *  queue-paused: `held`: its own chat recorded the owner's pause (the queue's chat tells it). */
-export function ownTaskOf(
-	entries: Iterable<TaskQueueEntryLike>,
-): ({ id?: number; done: boolean; queueChat?: string; held: boolean } & tagRules.WorkerTaskTags) | undefined {
-	const q = taskQueueFromEntries(entries, true, Number.POSITIVE_INFINITY);
-	if (!q.from) return undefined;
-	const own = q.tasks[0];
-	return {
-		id: own?.id,
-		...tagRules.taskTagFacts(own),
-		// queue-drop: a task its lead dropped is over too.
-		done: !own || own.status === "done" || own.status === "dropped",
-		queueChat: q.from.file,
-		held: !!own && !!taskQueueHeld(own, q),
-	};
 }
 
 /**
@@ -1850,6 +1835,7 @@ export class RoleMessages {
 			...(extra.root ? { root: extra.root } : {}),
 			...(extra.parent ? { parent: extra.parent } : {}),
 			...(extra.guard ? { guard: { ...extra.guard } } : {}),
+			...(sender.requester ? { requester: sender.requester } : {}),
 		};
 	}
 

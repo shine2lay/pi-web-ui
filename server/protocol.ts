@@ -378,7 +378,7 @@ export interface UiTaskLaunch extends UiTaskProfile {
 
 /** Accepted inputs of the proposal's turn, not proof of plan consent or work authority. */
 export type UiTaskRequesterInput =
-	| { kind: "owner"; channel: "browser" | "telegram"; id: string }
+	| { kind: "owner"; channel: "browser" | "telegram"; id: string; person?: string } // person: which owner (Ops #973)
 	| {
 			kind: "role";
 			role: string;
@@ -387,6 +387,7 @@ export type UiTaskRequesterInput =
 			forOwner?: true;
 			ownerIds?: string[];
 			tags?: string[];
+			person?: string; // which owner the sender's turn or task is for; absent = the default owner (Shine)
 	  }
 	| { kind: "unknown" };
 export interface UiTaskRequester {
@@ -603,15 +604,14 @@ export interface UiTaskQueueAnswerBinding {
 	route?: UiOwnerQuestionRoute;
 }
 
-/** owner-question routing (Ops #685): which way an owner ask came, as every card shows it first:
- *  its line ("You were chatting here …", "Came through COO", or HELD_FOR_COO_LINE while held),
- *  then COO's note and recommendation when it let the ask through. Absent = no line (switch off). */
+/** Whose an owner ask is and which way it came, as every card shows it first: "For <name>" (Ops #973), its line
+ *  ("You were chatting here …", "Came through COO", HELD_FOR_COO_LINE while held; Ops #685), then COO's note. */
 export interface UiOwnerQuestionRoute {
-	line: string;
+	requester?: string; // whose question it is, shown "For <name>" ("Shine" when no one else asked)
+	line?: string; // which way it came; absent while owner-question routing gave it no line
 	note?: string;
 	recommendation?: string;
-	/** Still with COO: shown only on the asking chat's page and the Queue tab, answerable there. */
-	held?: true;
+	held?: true; // still with COO: shown only on the asking chat's page and the Queue tab, answerable there
 }
 
 /** owner-card-brief (Ops #682): one line of the plain brief every queue card to the owner opens with,

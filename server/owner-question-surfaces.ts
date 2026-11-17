@@ -10,20 +10,30 @@
 // ---------------------------------------------------------------------------
 
 import { resolve } from "node:path";
-import { type Ask, type AskEvent, isAskHeld } from "./asks.js";
+import { type Ask, type AskEvent, type AskFieldAnswer, type AskResult, askHub, isAskHeld } from "./asks.js";
 import type { UiDialog, UiOwnerQuestionRoute, UiTaskQueueTask, UiTldrLine } from "./protocol.js";
 import { CAME_THROUGH_COO_LABEL } from "./owner-question-route.js";
+import { DEFAULT_REQUESTER, reachesOwnerChannels, requesterName } from "./owner-requester.js";
+import { asAnswerer } from "./sent-by.js";
 import { newestWaiting, writtenForAsk } from "./roles-row.js";
 import { stuckTarget } from "./stuck-asks.js";
 
 /** The line a held ask shows where it is still shown (the asking chat's page, the Queue tab). */
 export const HELD_FOR_COO_LINE = "With COO first. You can answer here.";
 
-/** The route lines the owner sees on an ask; undefined = no line (no route, or a direct one without a label). */
-export function ownerQuestionRouteView(ask: Pick<Ask, "route"> | undefined): UiOwnerQuestionRoute | undefined {
-	const route = ask?.route;
-	if (!route) return undefined;
-	if (route.to === "direct") return route.label ? { line: route.label } : undefined;
+/** The route lines the owner sees on an ask: always whose it is (owner-requester, Ops #973, "Shine" by default),
+ *  then which way it came when routing gave it a line. */
+export function ownerQuestionRouteView(
+	ask: Pick<Ask, "route" | "requester"> | undefined,
+): UiOwnerQuestionRoute | undefined {
+	if (!ask) return undefined;
+	return { requester: requesterName(ask.requester), ...routeLinesOf(ask) };
+}
+
+function routeLinesOf(ask: Pick<Ask, "route" | "requester">): Omit<UiOwnerQuestionRoute, "requester"> {
+	const route = ask.route;
+	if (!route) return {};
+	if (route.to === "direct") return route.label ? { line: route.label } : {};
 	if (isAskHeld(ask as Ask)) return { line: HELD_FOR_COO_LINE, held: true };
 	return {
 		line: route.label ?? CAME_THROUGH_COO_LABEL,
@@ -32,8 +42,8 @@ export function ownerQuestionRouteView(ask: Pick<Ask, "route"> | undefined): UiO
 	};
 }
 
-/** Spread into a card's wire shape: `{ route }` when it has a line, nothing otherwise (off = as before). */
-export function routeOfAsk(ask: Pick<Ask, "route"> | undefined): { route?: UiOwnerQuestionRoute } {
+/** Spread into a card's wire shape: `{ route }` for an ask, nothing without one. */
+export function routeOfAsk(ask: Pick<Ask, "route" | "requester"> | undefined): { route?: UiOwnerQuestionRoute } {
 	const route = ownerQuestionRouteView(ask);
 	return route ? { route } : {};
 }
@@ -48,6 +58,22 @@ export function ownerSeesAskEvent(ev: AskEvent): boolean {
 	return !isAskHeld(ev.ask);
 }
 
+/** owner-requester (Ops #973): the asks a plugin (Telegram) lists: plugin channels are Shine's alone, so another
+ *  owner's ask stays in the web app. */
+export function pluginAsks(): Ask[] {
+	return askHub.list().filter((ask) => reachesOwnerChannels(ask.requester));
+}
+
+/** An AskHub event a plugin gets: the owner sees it and it isn't another owner's. */
+export function pluginSeesAskEvent(ev: AskEvent): boolean {
+	return ownerSeesAskEvent(ev) && reachesOwnerChannels(ev.ask.requester);
+}
+
+/** An answer through a plugin channel: the default owner's own, so its record says he answered. */
+export function pluginAnswer(id: string, answers: AskFieldAnswer[], from: string): Promise<AskResult> {
+	return asAnswerer(DEFAULT_REQUESTER, () => askHub.answer(id, answers, from));
+}
+
 const dialogViews = new WeakMap<UiDialog, { sig: string; view: UiDialog }>();
 
 /**
@@ -55,7 +81,10 @@ const dialogViews = new WeakMap<UiDialog, { sig: string; view: UiDialog }>();
  * (the switch off) it is the dialog itself, as before; otherwise the same view object while its lines
  * stay the same, so the snapshot sends it again only when they change.
  */
-export function dialogView(dialog: UiDialog | null, ask: Pick<Ask, "route"> | undefined): UiDialog | null {
+export function dialogView(
+	dialog: UiDialog | null,
+	ask: Pick<Ask, "route" | "requester"> | undefined,
+): UiDialog | null {
 	if (!dialog) return dialog;
 	const route = ownerQuestionRouteView(ask);
 	if (!route) return dialog;

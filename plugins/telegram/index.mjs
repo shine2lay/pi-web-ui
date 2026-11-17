@@ -23,6 +23,7 @@ import {
 	renderSignature,
 	stuckTask,
 } from "./question-identity.mjs";
+import { webOnlyNotice } from "./web-only.mjs";
 
 export {
 	GONE_IDENTITY_TTL_MS,
@@ -3027,13 +3028,12 @@ export default {
 					"Send the owner a message on Telegram (only to him, through the pi bot), with an optional link and sender name.",
 				promptSnippet: "telegram_send: send the owner a Telegram message (text, optional url/linkLabel/from)",
 				parameters: SEND_TOOL_PARAMETERS,
-				async execute(_id, params) {
-					const p = params ?? {};
-					const r = await notify({ text: p.text, url: p.url, linkLabel: p.linkLabel, from: p.from });
+				async execute(_id, params, _signal, _onUpdate, context) {
+					const r = webOnlyNotice(context) ?? (await notify(params ?? {})); // another owner's chat: not sent (Ops #973)
 					const text = r.ok
 						? `Sent to the owner on Telegram (message ${r.messageIds.join(", ")}).`
 						: `Not sent: ${r.error}`;
-					return { content: [{ type: "text", text }], details: r, ...(r.ok ? {} : { isError: true }) };
+					return { content: [{ type: "text", text }], details: r, ...(r.ok || r.routed_to ? {} : { isError: true }) };
 				},
 			}) ?? null;
 		// Other plugins: host.events.emit("telegram:send", { text, url?, linkLabel?, from? }).

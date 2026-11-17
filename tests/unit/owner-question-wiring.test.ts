@@ -301,6 +301,7 @@ describe("owner asks with the switch on", () => {
 		expect(w.events.map((e) => e.type)).toEqual(["appeared"]);
 		expect(w.hub.list().map((a) => a.id)).toEqual(["q-1"]);
 		expect(ownerQuestionRouteView(w.hub.get("q-1"))).toEqual({
+			requester: "Shine", // owner-requester (Ops #973): whose it is, on every card
 			line: "You were chatting here (you wrote 1 minute ago)",
 		});
 		// Every window shows it; Telegram gets it with the label before the question.
@@ -399,9 +400,15 @@ describe("owner asks with the switch on", () => {
 		// The asking chat's own page still shows it, marked, and an answer there settles it.
 		expect(shownToWindow(true, design.id, design.id)).toBe(true);
 		expect(shownToWindow(true, design.id, "conv-another-window")).toBe(false);
-		expect(ownerQuestionRouteView(w.hub.get("q-5"))).toEqual({ line: HELD_FOR_COO_LINE, held: true });
+		expect(ownerQuestionRouteView(w.hub.get("q-5"))).toEqual({
+			requester: "Shine",
+			line: HELD_FOR_COO_LINE,
+			held: true,
+		});
 		expect(HELD_FOR_COO_LINE).toBe("With COO first. You can answer here.");
-		expect(routeOfAsk(w.hub.get("q-5"))).toEqual({ route: { line: HELD_FOR_COO_LINE, held: true } });
+		expect(routeOfAsk(w.hub.get("q-5"))).toEqual({
+			route: { requester: "Shine", line: HELD_FOR_COO_LINE, held: true },
+		});
 		expect(await w.hub.answer("q-5", [{ id: "port", selected: ["8080"] }], "browser")).toEqual({ ok: true });
 		await w.settle();
 		expect(w.feed).toEqual([]);
@@ -443,6 +450,7 @@ describe("owner asks with the switch on", () => {
 		expect(w.router.release("q-6", "coo", "He set the port rule on Tuesday.", "Pick 8080")).toEqual({ ok: true });
 		expect(w.events.map((e) => e.type)).toEqual(["held", "released", "appeared"]);
 		expect(ownerQuestionRouteView(w.hub.get("q-6"))).toEqual({
+			requester: "Shine",
 			line: "Came through COO",
 			note: "He set the port rule on Tuesday.",
 			recommendation: "Pick 8080",
@@ -475,6 +483,7 @@ describe("owner asks with the switch on", () => {
 		now = T0 + 30 * MIN;
 		expect(w.router.sweep()).toEqual(["q-7"]);
 		expect(ownerQuestionRouteView(w.hub.get("q-7"))).toEqual({
+			requester: "Shine",
 			line: "Came through COO; COO added nothing (it reached you after 30 minutes)",
 		});
 		await w.settle();
@@ -535,6 +544,7 @@ describe("owner asks with the switch on", () => {
 		});
 		expect(after.hub.list().map((a) => a.id)).toEqual(["stuck-2b"]);
 		expect(ownerQuestionRouteView(after.hub.get("stuck-2b"))).toEqual({
+			requester: "Shine",
 			line: "Came through COO",
 			note: "Already agreed with Design.",
 		});

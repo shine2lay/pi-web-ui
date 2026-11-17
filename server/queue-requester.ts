@@ -1,30 +1,36 @@
 import { mergeOwnerLastWrote } from "./owner-input-time.js";
+import { isPersonName, personOfSentBy } from "./owner-requester.js";
 import type { UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
+import type { RoleMessageRecord } from "./role-messages.js";
 import { canonicalizeTagList } from "./shared/task-tag-governance.js";
 import { checkTags } from "./shared/task-tags.js";
+import type { SentBy } from "./sent-by.js";
 
 export const REQUESTER_INPUTS_MAX = 32;
 const exact = (re: RegExp, value: unknown): value is string =>
 	typeof value === "string" && re.exec(value)?.[0] === value;
 const inputId = (value: unknown): value is string => exact(/^(?:ri|rs)-[a-f0-9-]{8,64}$/u, value);
 const keys = (o: Record<string, unknown>, allowed: string[]) => Object.keys(o).every((k) => allowed.includes(k));
+const personField = (value: unknown) => (typeof value === "string" ? { person: value } : {});
 
 /** Same optional display-only wire record as pi-queue/queue-requester.ts. Never authority. */
 export function requesterInputOf(raw: unknown): UiTaskRequesterInput | undefined {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
 	const o = raw as Record<string, unknown>;
 	if (o.kind === "unknown" && keys(o, ["kind"])) return { kind: "unknown" };
+	// owner-requester (Ops #973): which owner asked; absent = the default owner.
+	if (o.person !== undefined && !isPersonName(o.person)) return;
 	if (
 		o.kind === "owner" &&
-		keys(o, ["kind", "channel", "id"]) &&
+		keys(o, ["kind", "channel", "id", "person"]) &&
 		(o.channel === "browser" || o.channel === "telegram") &&
 		inputId(o.id)
 	) {
-		return { kind: "owner", channel: o.channel, id: o.id };
+		return { kind: "owner", channel: o.channel, id: o.id, ...personField(o.person) };
 	}
 	if (
 		o.kind !== "role" ||
-		!keys(o, ["kind", "role", "id", "message", "forOwner", "ownerIds", "tags"]) ||
+		!keys(o, ["kind", "role", "id", "message", "forOwner", "ownerIds", "tags", "person"]) ||
 		!exact(/^[a-z0-9][a-z0-9-]{0,39}$/u, o.role) ||
 		!exact(/^rm-[a-f0-9-]{8,64}$/u, o.id) ||
 		(o.message !== "question" && o.message !== "request" && o.message !== "reply") ||
@@ -49,7 +55,21 @@ export function requesterInputOf(raw: unknown): UiTaskRequesterInput | undefined
 		...(o.forOwner === true ? { forOwner: true as const } : {}),
 		...(Array.isArray(o.ownerIds) ? { ownerIds: [...o.ownerIds] as string[] } : {}),
 		...(checkedTags.value?.length ? { tags: canonicalizeTagList(checkedTags.value) } : {}),
+		...personField(o.person),
 	};
+}
+
+/** The receiving turn's requester input for a delivered role message (agent-service roleMessageHow). */
+export function roleRequesterInputOf(record: RoleMessageRecord): UiTaskRequesterInput | undefined {
+	return requesterInputOf({
+		kind: "role",
+		role: record.from.role,
+		id: record.id,
+		message: record.kind,
+		...(record.forOwner === true ? { forOwner: true, ...(record.ownerIds ? { ownerIds: record.ownerIds } : {}) } : {}),
+		...(record.tags?.length ? { tags: record.tags } : {}),
+		...(record.requester ? { person: record.requester } : {}),
+	});
 }
 
 export function requesterOf(raw: unknown): UiTaskRequester | undefined {
@@ -85,6 +105,8 @@ export function requesterForAdmission(input: {
 	sendId?: string;
 	requester?: UiTaskRequesterInput;
 	inputId: string;
+	/** sent-by (Ops #972): who typed it; owner-requester (Ops #973) keeps a non-default owner as `person`. */
+	sentBy?: SentBy;
 }): UiTaskRequesterInput {
 	if (input.requester !== undefined) {
 		return input.source === "extension" && input.cause === "role"
@@ -93,7 +115,12 @@ export function requesterForAdmission(input: {
 	}
 	if ((input.ownerChannel === "browser" || input.ownerChannel === "telegram") && input.cause === input.ownerChannel) {
 		return (
-			requesterInputOf({ kind: "owner", channel: input.ownerChannel, id: input.sendId ?? input.inputId }) ?? {
+			requesterInputOf({
+				kind: "owner",
+				channel: input.ownerChannel,
+				id: input.sendId ?? input.inputId,
+				...personField(personOfSentBy(input.sentBy)),
+			}) ?? {
 				kind: "unknown",
 			}
 		);

@@ -47,7 +47,12 @@ describe("Ops108 baseline", () => {
 		// Re-pinned by showtell-owner-answer (Ops #883, COO rm-f03ad615): it only adds the optional host.ownerActions
 		// (the owner front door, server/owner-front-door.ts) and PluginManager.ownerFrontDoor, and moves the proxy prefix
 		// helpers unchanged to server/plugin-proxy.ts (imported back); no Ops108 routing line changed. Was f30f2f46….
-		expect(sha("server/plugins.ts")).toBe("aec29bdbdf7f53a6180c4932cf64ce74ef20ca122cc718dd2705a9b676f1e50e");
+		// Re-pinned by owner-requester (Ops #973, Shine 2026-11-16 m97662 "Web only for now"): host.asks.list/on also leave
+		// out an ask for another owner (owner-question-surfaces pluginAsks/pluginSeesAskEvent; Shine's and unowned asks go out
+		// as before), a plugin's answer runs as Shine (pluginAnswer), and PluginToolCallerContext extends Pick<AskMeta,
+		// "requester">; its diff changes only the asks.js and owner-question-surfaces imports, the context's opening line,
+		// the ownerSeesAskEvent line, host.asks.list's line and the answer's return line; no Ops108 routing line changed. Was aec29bdb….
+		expect(sha("server/plugins.ts")).toBe("fad666705c2cdd6c5af2871d6883a6839c3499d6669cae89b7f52b6e1852f417");
 		// Re-pinned by owner-card-brief (Ops #682, owner via COO rm-d2c1f9b2): it only adds the display-only
 		// renderBrief and puts its lines first in renderAsk's message and short form; its diff removes only renderAsk's
 		// doc comment and the two joined part lists (now with the brief); no Ops108 routing line changed. Was 91637612….
@@ -62,6 +67,11 @@ describe("Ops108 baseline", () => {
 		// to plugins/telegram/question-identity.mjs, matches ask entries in createBridge by stable question identity across
 		// restarts/chat reopens and silent unanswered repeats, and logs question identity hashes and notice sender/length;
 		// no Ops108 routing line (replyMayGoToTelegram, createChat, onRoleTurnEnd) changed. Was 5a065c5c….
-		expect(sha("plugins/telegram/index.mjs")).toBe("fc40ca098faeb854129dc948f70f123eae810487a83917363c92fad282ee9239");
+		// Re-pinned by owner-requester (Ops #973, Shine 2026-11-16 m97662 "Web only for now"): telegram_send from a chat
+		// whose work is another owner's (caller context `requester`) sends nothing and says routed_to "<name> (web only)"
+		// (plugins/telegram/web-only.mjs, imported); its diff changes only telegram_send's execute signature, its notify
+		// call and its isError line; no Ops108 routing line (replyMayGoToTelegram, createChat, onRoleTurnEnd) changed.
+		// Was fc40ca09….
+		expect(sha("plugins/telegram/index.mjs")).toBe("3a69cbf707d4784b079b5c2601f9f8b14db92635360f33f79ac77f6719bb9024");
 	});
 });

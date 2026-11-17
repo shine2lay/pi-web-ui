@@ -23,7 +23,8 @@ import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import type { Ask, AskFieldAnswer } from "./asks.js";
+import type { Ask, AskAnswered } from "./asks.js";
+import { answerOwnerFields, type AnswerOwnerFields } from "./owner-requester.js";
 import type { UiBoardPost } from "./protocol.js";
 import type { RoleMessageRecord } from "./role-messages.js";
 
@@ -99,7 +100,7 @@ export interface PlanFields {
 	mustNot?: string;
 }
 
-export interface DecisionRecord {
+export interface DecisionRecord extends AnswerOwnerFields {
 	v: 1;
 	/** "dr-" + a hash of source and ref: the same thing gets the same id, live or backfilled. */
 	id: string;
@@ -136,10 +137,8 @@ export interface DecisionRecord {
 	ask?: string;
 	body?: string;
 	questions?: AnswerQuestion[];
-	/** Where the owner answered: browser, telegram, … */
-	answeredIn?: string;
-	/** Chat transcript (basename) the record came from. */
-	file?: string;
+	answeredIn?: string; // where the owner answered: browser, telegram, … (who: answeredBy, AnswerOwnerFields)
+	file?: string; // the chat transcript (basename) the record came from
 	/** answer, backfilled: "<ask line>-><answer line>" in `file`. */
 	lines?: string;
 	doc?: import("./owner-front-door.js").FrontDoorDoc; // answer via a plugin's front door: the doc and his words
@@ -440,7 +439,7 @@ export function answerRef(ask: Ask): string {
  *  a one-field ask's summary is matched against its choices: a choice = picked, else typed. */
 export function answerRecord(
 	ask: Ask,
-	outcome: { summary: string; from: string; answers?: AskFieldAnswer[] },
+	outcome: AskAnswered,
 	at: number,
 	role?: string | null,
 ): NewDecisionRecord | undefined {
@@ -485,6 +484,7 @@ export function answerRecord(
 		questions,
 		summary: outcome.summary,
 		answeredIn: outcome.from,
+		...answerOwnerFields(ask.requester, outcome.by),
 		...(ask.conversationTitle ? { chat: ask.conversationTitle } : {}),
 		...(ask.sessionFile ? { file: basename(ask.sessionFile) } : {}),
 		...(ask.task ? { task: ask.task.id } : {}),

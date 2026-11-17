@@ -3486,6 +3486,12 @@ button.rolemsg-fold:focus-visible {
 	margin: 0 0 2px;
 	font-weight: 600;
 }
+/* owner-requester (Ops #973): "For Wai" / "For Shine", a small label above the route line. */
+.owner-question-route-for {
+	margin: 0 0 2px;
+	font-size: 0.85em;
+	color: var(--muted);
+}
 .owner-question-route .owner-card-brief {
 	margin: 0;
 }

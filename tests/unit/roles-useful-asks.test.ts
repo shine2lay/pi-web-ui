@@ -170,6 +170,7 @@ describe("Needs you follows the real reader", () => {
 				answer: { key: "design:question:q1", id: "q1" },
 				since: T0 + 1000,
 				link: { file: home, focus: { kind: "question", id: "q1" } },
+				route: { requester: "Shine" }, // owner-requester (Ops #973): whose it is
 			},
 		]);
 		liveAsks = [];
@@ -302,6 +303,7 @@ describe("Needs you reads every started task chat", () => {
 					answer: { key: "design:question:q11", id: "q11" },
 					since: T0 + 2000,
 					link: { file: chats[10], focus: { kind: "question", id: "q11" } },
+					route: { requester: "Shine" },
 				},
 			],
 		});

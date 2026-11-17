@@ -13,7 +13,9 @@ export function OwnerQuestionRoute({ route }: { route: unknown }) {
 	if (!view) return null;
 	return (
 		<div className={view.held ? "owner-question-route held" : "owner-question-route"}>
-			<p className="owner-question-route-line">{view.line}</p>
+			{/* owner-requester (Ops #973): whose question it is; anyone can still answer it. */}
+			{view.requester && <p className="owner-question-route-for">For {view.requester}</p>}
+			{view.line && <p className="owner-question-route-line">{view.line}</p>}
 			<OwnerCardBrief lines={routeNoteLines(view)} />
 		</div>
 	);

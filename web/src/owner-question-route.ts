@@ -35,14 +35,20 @@ export function routeNoteLines(view: UiOwnerQuestionRoute): UiOwnerCardBriefLine
 	];
 }
 
-/** A card's route lines, plain, or none at all when its line isn't. */
+/** owner-requester (Ops #973): the name a card is for, shown "For <name>" (a short plain name). */
+const REQUESTER_MAX = 80;
+
+/** A card's route lines, plain: whose it is and which way it came; none at all when neither is plain. */
 export function ownerQuestionRouteOf(value: unknown): UiOwnerQuestionRoute | undefined {
 	const fields = object(value);
-	const line = plainText(fields?.line, ROUTE_LINE_MAX);
-	if (!fields || !line) return undefined;
+	if (!fields) return undefined;
+	const requester = plainText(fields.requester, REQUESTER_MAX);
+	const line = plainText(fields.line, ROUTE_LINE_MAX);
+	if (!line) return requester ? { requester } : undefined;
 	const note = plainText(fields.note, ROUTE_TEXT_MAX);
 	const recommendation = plainText(fields.recommendation, ROUTE_TEXT_MAX);
 	return {
+		...(requester ? { requester } : {}),
 		line,
 		...(note ? { note } : {}),
 		...(recommendation ? { recommendation } : {}),

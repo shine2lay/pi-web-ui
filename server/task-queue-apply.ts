@@ -114,10 +114,9 @@ export function apply(s: State, raw: unknown): void {
 		const task: Task = { id: op.id, plan: planOf(op.plan), status: "ready", addedAt: num(op.ts) };
 		const priority = normPriority(op.priority);
 		if (priority) task.priority = priority;
-		if (op.op === "add") {
-			const origin = requesterOf(op.origin);
-			if (origin) task.origin = origin;
-		}
+		// owner-requester (Ops #973): a task's own chat gets its origin with the assignment (pi-queue 3f16075).
+		const origin = requesterOf(op.origin);
+		if (origin) task.origin = origin;
 		const tags =
 			op.tags !== undefined
 				? normTags(op.tags)

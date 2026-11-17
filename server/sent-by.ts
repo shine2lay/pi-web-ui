@@ -14,6 +14,7 @@
  * Each distinct login is logged once per server run, so a new person's exact login shows up on
  * their first visit.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, statSync } from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
 
@@ -175,4 +176,18 @@ export class PeopleBook {
 			}`,
 		);
 	}
+}
+
+const answerer = new AsyncLocalStorage<string | undefined>();
+
+/** owner-requester (Ops #973): run a page socket's message (or a plugin's answer) as this person, so an owner
+ *  answer it gives records who gave it (asks.ts settle -> decision-records answeredBy). */
+export function asAnswerer<T>(name: string | undefined, fn: () => T): T {
+	return answerer.run(name, fn);
+}
+
+/** `{ by }` with who is answering now (a sent-by name, the default owner for his own channels), else `{}`. */
+export function answeredBy(): { by?: string } {
+	const by = answerer.getStore();
+	return by ? { by } : {};
 }

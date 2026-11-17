@@ -205,12 +205,16 @@ export function askViewOf(ask: Ask): UiRoleAskView | null {
  *  line plain or none, COO's words plain or left out (never refuses the form). Nothing while the switch is off. */
 function routeOf(ask: Ask): { route?: UiOwnerQuestionRoute } {
 	const route = ownerQuestionRouteView(ask);
-	if (!route || !route.line || !text(route.line, BRIEF_TEXT_MAX)) return {};
+	if (!route) return {};
+	// owner-requester (Ops #973): whose question it is, always (a name: plain by isPersonName).
+	const requester = route.requester ? { requester: route.requester } : {};
+	if (!route.line || !text(route.line, BRIEF_TEXT_MAX)) return { route: requester };
 	const words = (part: string | undefined) => (part && text(part, BRIEF_TEXT_MAX) ? part : undefined);
 	const note = words(route.note);
 	const recommendation = words(route.recommendation);
 	return {
 		route: {
+			...requester,
 			line: route.line,
 			...(note ? { note } : {}),
 			...(recommendation ? { recommendation } : {}),

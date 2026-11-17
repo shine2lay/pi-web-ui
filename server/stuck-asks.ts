@@ -17,6 +17,7 @@
  */
 import { createHash } from "node:crypto";
 import type { AskMeta } from "./asks.js";
+import { requesterPersonOf } from "./owner-requester.js";
 import type { UiTaskQueue, UiTaskQueueTask } from "./protocol.js";
 import { questionBindingKey, type QuestionBinding, type OwnerQuestionOccurrence } from "./queue-question-port.js";
 
@@ -124,14 +125,19 @@ export function wantedStuckAsks(sources: StuckSource[]): {
 					? occurrence.binding
 					: undefined
 				: s.questionBinding?.(t.id);
-			const meta: AskMeta =
-				target === s.file
-					? s.meta
+			// owner-requester (Ops #973): a task's card is for the owner the task is for, never the chat's turn.
+			const { requester: _chatTurn, ...chatMeta } = s.meta;
+			const requester = requesterPersonOf(t.origin);
+			const meta: AskMeta = {
+				...(target === s.file
+					? chatMeta
 					: {
 							conversationTitle: t.chat?.title || `Queue #${t.id}: ${t.plan.title}`,
 							...(s.meta.cwd ? { cwd: s.meta.cwd } : {}),
 							sessionFile: target,
-						};
+						}),
+				...(requester ? { requester } : {}),
+			};
 			wanted.set(key, {
 				key,
 				target,

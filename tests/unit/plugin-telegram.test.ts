@@ -3094,6 +3094,24 @@ describe("telegram plugin: notices to the owner (telegram_send, telegram:send; O
 		off?.();
 	});
 
+	it("owner-requester (Ops #973): from Wai's chat telegram_send sends nothing and says it stays in the web app", async () => {
+		const { host, sent } = liveHost({ botToken: TOKEN, ownerId: OWNER });
+		const off = telegramPlugin.activate(host);
+		const r = await toolOf(host).execute("c", { text: "Ready" }, undefined, undefined, {
+			role: "ops",
+			requester: "Wai",
+		});
+		expect(r.details).toMatchObject({ ok: false, routed_to: "Wai (web only)" });
+		expect(r.isError).toBeUndefined();
+		expect(r.content[0].text).toMatch(/^Not sent: this work is Wai's/);
+		expect(sent).toHaveLength(0);
+		// Shine's chat (no requester) sends as before.
+		const shine = await toolOf(host).execute("c", { text: "Ready" }, undefined, undefined, { role: "ops" });
+		expect(shine.details.ok).toBe(true);
+		expect(sent).toHaveLength(1);
+		off?.();
+	});
+
 	it("off or not set up: the tool says so and a bus message is only logged; nothing goes out", async () => {
 		const cases: [Record<string, unknown>, RegExp][] = [
 			[{ enabled: false, botToken: TOKEN, ownerId: OWNER }, /Telegram is off/],

@@ -145,7 +145,7 @@ import { ConnEvents, MAX_RECORDS_PER_SOCKET } from "./conn-events.js";
 import { ChatOpenTracker, preciseNow } from "./chat-open-timing.js";
 import { globalLspPool } from "./lsp-tool.js";
 import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
-import { PeopleBook, type SentBy } from "./sent-by.js";
+import { asAnswerer, PeopleBook, type SentBy } from "./sent-by.js";
 import type {
 	BgServer,
 	CachedWindow,
@@ -2538,7 +2538,7 @@ wss.on("connection", (ws, req) => {
 	};
 	const dispatch = (msg: ClientMessage, fromPending = false): boolean => {
 		try {
-			dispatchNow(msg, fromPending);
+			asAnswerer(peopleBook.resolve(tailscaleSender)?.name, () => dispatchNow(msg, fromPending)); // who answers (Ops #973)
 			return true;
 		} catch (err) {
 			// These are ownership refusals, not generic dispatch crashes; never ignore their payload.

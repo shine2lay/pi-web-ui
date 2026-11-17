@@ -31,6 +31,7 @@ import {
 	type OwnerQuestionCooReason,
 	type OwnerQuestionDirectReason,
 } from "./owner-question-route.js";
+import { answeredBy } from "./sent-by.js";
 import type {
 	QuestionAnswer,
 	UiApprovalCategory,
@@ -91,6 +92,7 @@ export interface Ask {
 	toolCallId?: string;
 	/** owner-question routing: where it went and the line it is shown with (absent = no route, as before). */
 	route?: AskRoute;
+	requester?: string; // owner-requester (Ops #973): the owner it is for if not the default ("Wai"); never Telegram
 }
 
 /** owner-question routing: who let a held ask through. */
@@ -136,7 +138,7 @@ export interface AskFieldAnswer {
 
 export type AskEvent =
 	| { type: "appeared"; ask: Ask }
-	| { type: "answered"; ask: Ask; summary: string; from: string; answers?: AskFieldAnswer[] }
+	| ({ type: "answered"; ask: Ask } & AskAnswered)
 	| { type: "gone"; ask: Ask; reason: string }
 	/** owner-question routing: kept for COO, not shown to the owner (no "appeared"). */
 	| { type: "held"; ask: Ask }
@@ -152,9 +154,10 @@ export interface AskResult {
 
 export type AskAnswerFn = (answers: AskFieldAnswer[], from: string) => AskResult | Promise<AskResult>;
 
-/** decision-records: `answers` = what was picked and typed, per field (when the settler knows it). */
-export type AskOutcome =
-	{ how: "answered"; summary: string; from: string; answers?: AskFieldAnswer[] } | { how: "gone"; reason: string };
+/** decision-records: `answers` = what was picked and typed, per field (when the settler knows it); `by` = who
+ *  answered, when known (owner-requester, Ops #973: the page socket's sent-by name, Shine for plugin channels). */
+export type AskAnswered = { summary: string; from: string; answers?: AskFieldAnswer[]; by?: string };
+export type AskOutcome = ({ how: "answered" } & AskAnswered) | { how: "gone"; reason: string };
 
 /** Who answered in the browser (the default for every answer that comes over the page socket). */
 export const FROM_BROWSER = "browser";
@@ -264,6 +267,7 @@ export class AskHub {
 				summary: outcome.summary,
 				from: outcome.from,
 				...(outcome.answers ? { answers: outcome.answers } : {}),
+				...(outcome.by ? { by: outcome.by } : answeredBy()),
 			});
 		} else {
 			this.emit({ type: "gone", ask: e.ask, reason: outcome.reason });
@@ -364,12 +368,7 @@ export function checkAnswers(ask: Ask, answers: AskFieldAnswer[]): string | null
 // Describing each kind
 // ---------------------------------------------------------------------------
 
-export interface AskMeta {
-	conversationId?: string;
-	conversationTitle?: string;
-	cwd?: string;
-	sessionFile?: string;
-}
+export type AskMeta = Pick<Ask, "conversationId" | "conversationTitle" | "cwd" | "sessionFile" | "requester">;
 
 const optionOf = (o: UiQuestionOption): AskOption => ({
 	value: o.label,
