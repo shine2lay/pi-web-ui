@@ -61,6 +61,8 @@ Server: everything; the overview gains fields, nothing is removed.
 
 Not in this build, told to Backend: the server's `roles_watch.renderedUsage` acknowledgement
 (`server/index.ts`, `rolesWatch.acknowledgeUsage`) loses its last web caller; its owner decides its removal.
+Status 2026-11-16: removed by backend #175 with the server state only it read; the page-side `usageRender` /
+`usageRenderTimings` reader in `web/src/roles-state.ts` is now never fed and is Frontend's to delete.
 
 ## Prototype-Only Chrome
 

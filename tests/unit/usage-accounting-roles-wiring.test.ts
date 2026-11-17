@@ -4,23 +4,16 @@
 // No native sources, live chats, worker starts, model requests or production browser interaction.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { IdentityDef } from "../../server/identities.js";
-import type {
-	ClientMessage,
-	ServerMessage,
-	UiRoleUsageCost,
-	UiRolesOverview,
-	UiRolesUsageRenderAck,
-} from "../../server/protocol.js";
-import { RolesOverviewReader, RolesWatch, roleUsageCost, type RolesOverviewHost } from "../../server/roles-overview.js";
+import type { ClientMessage, UiRoleUsageCost, UiRolesOverview } from "../../server/protocol.js";
+import { RolesOverviewReader, roleUsageCost, type RolesOverviewHost } from "../../server/roles-overview.js";
 import { createUsageMeterCache } from "../../server/usage-accounting-meter-cache.js";
 import { validateMeterSnapshot, type UsageMeterSnapshot } from "../../server/usage-accounting-meter-contract.js";
 import { projectExactRoles } from "../../web/src/roles-exact-model.js";
 import { projectRolePanel } from "../../web/src/roles-panel-model.js";
-import { receiveRoles, resetRolesState, watchRoles } from "../../web/src/roles-state.js";
+import { resetRolesState } from "../../web/src/roles-state.js";
 import { projectRoleUsageCost, projectSpend, projectUsefulRoles } from "../../web/src/roles-useful-model.js";
 import type { UiRoleUsageCost as WebCost, UiRolesUsageRenderTiming as WebTiming } from "../../web/src/types.js";
 
@@ -31,7 +24,6 @@ const ISO = new Date(NOW).toISOString();
 const WEEK = "2026-10-19";
 const EPOCH = "a".repeat(64);
 const EXACT = "9007199254740993.123456789012";
-const project = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cleanups: (() => void)[] = [];
 const generation = { epoch: EPOCH, sequence: 7 };
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -184,9 +176,6 @@ describe("W7 closed cache-to-protocol bridge", () => {
 	it("keeps protocol parity on the existing web export path", () => {
 		expectTypeOf<WebCost>().toEqualTypeOf<UiRoleUsageCost>();
 		expectTypeOf<WebTiming>().toEqualTypeOf<import("../../server/protocol.js").UiRolesUsageRenderTiming>();
-		expectTypeOf<Extract<ClientMessage, { type: "roles_watch" }>["renderedUsage"]>().toEqualTypeOf<
-			UiRolesUsageRenderAck | undefined
-		>();
 	});
 	it("pins only this role, not task/initiative amounts; preserves exact money and leaves the cache untouched", () => {
 		const v = snapshot();
@@ -507,95 +496,5 @@ describe("S0 Temper frontier is diagnostic, always UNKNOWN", () => {
 		if (c.sources[0].kind !== "temper") throw new Error("fixture");
 		c.sources[0].frontier.stallCodes = ["run-again" as "pending"];
 		expect(projectRoleUsageCost(c, "ops", NOW)).toBeNull();
-	});
-});
-
-describe("existing watch transport: server-side generation acknowledgement", () => {
-	// Execute just the real existing handler's bounded case, never import/start server/index.ts.
-	function route(watch: RolesWatch<object>, ws: object, msg: ClientMessage, receive: (m: ServerMessage) => void) {
-		const code = readFileSync(join(project, "server/index.ts"), "utf8");
-		const start = code.indexOf('case "roles_watch":');
-		const end = code.indexOf('case "roles_unwatch":', start);
-		expect(start >= 0 && end > start).toBe(true);
-		const handler = new Function("rolesWatch", "ws", "msg", "send", `switch(msg.type) { ${code.slice(start, end)} }`);
-		handler(watch, ws, msg, receive);
-	}
-	function transport(first: number | null = null, temper = false) {
-		let now = NOW;
-		let current = overview(dto(snapshot(temper), NOW, first));
-		let displayed = current;
-		const messages: ServerMessage[] = [];
-		const ws = {};
-		const watch = new RolesWatch<object>(async () => ({ ...current, at: now }), { now: () => now });
-		cleanups.push(() => watch.stop());
-		const receive = (m: ServerMessage) => {
-			messages.push(m);
-			if (m.type === "roles") {
-				if (m.overview) displayed = m.overview;
-				receiveRoles(m);
-			}
-		};
-		send.mockImplementation((msg?: ClientMessage) => {
-			if (msg) route(watch, ws, msg, receive);
-			return true;
-		});
-		const stop = watchRoles(true);
-		cleanups.push(stop);
-		return {
-			watch,
-			ws,
-			messages,
-			get current() {
-				return displayed;
-			},
-			now: (v: number) => {
-				now = v;
-			},
-			next: (c: UiRoleUsageCost) => {
-				current = overview(c);
-			},
-			receive,
-		};
-	}
-	it("server binds connection, watch, role and generation; closes clocks/extra fields and rejects replay", async () => {
-		const f = transport(NOW - 100);
-		await f.watch.look();
-		const good = { watch: 1, role: "ops", generation };
-		for (const raw of [
-			null,
-			{ ...good, watch: 99 },
-			{ ...good, role: "design" },
-			{ ...good, clientAt: NOW },
-			{ ...good, generation: { ...generation, sequence: 6 } },
-			{ ...good, generation: { ...generation, extra: true } },
-		])
-			expect(f.watch.acknowledgeUsage(f.ws, raw)).toBe(false);
-		expect(f.watch.acknowledgeUsage({}, good)).toBe(false);
-		f.watch.watch({}, false, vi.fn());
-		f.now(NOW + 1);
-		expect(f.watch.acknowledgeUsage(f.ws, good)).toBe(true);
-		expect(f.watch.acknowledgeUsage(f.ws, good)).toBe(false);
-		const timing = f.watch.usageRenderTimings(f.ws);
-		timing[0].acknowledgedAt = 0;
-		expect(f.watch.usageRenderTimings(f.ws)[0].acknowledgedAt).toBe(NOW + 1);
-		f.watch.watch(f.ws, true, f.receive);
-		expect(f.watch.acknowledgeUsage(f.ws, good)).toBe(false);
-		f.watch.drop(f.ws);
-		expect(f.watch.usageRenderTimings(f.ws)).toEqual([]);
-	});
-	it("old or superseded generations, failed source reads and Pacific-week rollover cannot get accepted", async () => {
-		const f = transport();
-		await f.watch.look();
-		const good = { watch: 1, role: "ops", generation };
-		f.now(NOW + 60_001);
-		expect(f.watch.acknowledgeUsage(f.ws, good)).toBe(false);
-		f.now(NOW);
-		const next = dto();
-		next.generation!.sequence++;
-		f.next(next);
-		await f.watch.look();
-		expect(f.watch.acknowledgeUsage(f.ws, good)).toBe(false);
-		f.now(Date.parse("2026-10-26T07:00:00.000Z"));
-		expect(f.watch.acknowledgeUsage(f.ws, { ...good, generation: next.generation })).toBe(false);
 	});
 });

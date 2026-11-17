@@ -2057,7 +2057,7 @@ export type ClientCommand =
 	  }
 	/** roles-overview: the Roles page wants the snapshot and its updates (full) or just the ask count for
 	 *  the top bar (count); roles_unwatch stops them. */
-	| { type: "roles_watch"; full: boolean; renderedUsage?: UiRolesUsageRenderAck }
+	| { type: "roles_watch"; full: boolean }
 	| { type: "roles_unwatch" }
 	/** initiatives-page: the Initiatives tab wants its page and its updates: the initiatives with their
 	 *  counts, the reader's state, and one initiative's decisions ("" = Unfiled; left out = the first
@@ -3092,13 +3092,10 @@ export interface UiRoleUsageCost {
 	sources: UiRoleUsageSource[];
 	faults: import("./usage-accounting-meter-contract.js").MeterFaultCount[];
 }
-/** Optional DOM-completion telemetry, not paint, human observation or accounting authority. */
-export interface UiRolesUsageRenderAck {
+export interface UiRolesUsageRenderTiming {
 	watch: number;
 	role: string;
 	generation: UiRoleUsageGeneration;
-}
-export interface UiRolesUsageRenderTiming extends UiRolesUsageRenderAck {
 	pushedAt: number;
 	acknowledgedAt: number;
 	firstNativeObservedAt: number | null;
