@@ -226,6 +226,70 @@ describe("roles-by-project P3: Needs you", () => {
 	});
 });
 
+describe("roles-by-project opened-card progressive disclosure", () => {
+	const card = (ref: string) => host.querySelector<HTMLElement>(`article[data-ref="${ref}"]`)!;
+	async function openRoles() {
+		await click(tiles().find((t) => t.textContent?.includes(LABELS.roles)));
+	}
+
+	it("keeps the actual question once at the top and only the pointer in the opened needs-you note", async () => {
+		await live();
+		await openRoles();
+		const question = "Pick the tile density?";
+		expect(host.querySelector(".rbp-needs")?.textContent).toContain(question);
+		expect(text().split(question).length - 1).toBe(1);
+		expect(card("frontend #294").querySelector("h4")?.textContent).toBe("Pick the tile density");
+		expect(card("frontend #294").querySelector(".rbp-unb")?.textContent).toBe("Needs your answer: it's at the top");
+	});
+
+	it.each([
+		["Unblocks when Frontend #293 finishes", null],
+		[" \n Unblocks  when frontend #293 finishes. \t", null],
+		[
+			"Unblocks when Frontend #293 finishes. Then retry the producer.",
+			"Unblocks when Frontend #293 finishes. Then retry the producer.",
+		],
+		["Retry the producer after frontend #293 finishes.", "Retry the producer after Frontend #293 finishes."],
+		["Unblocks when Frontend #293 finishes?", "Unblocks when Frontend #293 finishes?"],
+	])("suppresses only a whole-sentence duplicate blocker: %s", async (body, expected) => {
+		const rows = liveTasks();
+		rows.find((t) => t.ref === "backend #174")!.howToUnblock = body!;
+		await mount();
+		await push(boardOf(rows));
+		await openRoles();
+		const note = card("backend #174").querySelector(".rbp-unb")!;
+		expect(note.querySelector("b")?.textContent).toBe("Unblocks when Frontend #293 finishes");
+		expect(note.querySelector("span")?.textContent ?? null).toBe(expected);
+		if (expected === null) expect(note.textContent).toBe("Unblocks when Frontend #293 finishes");
+	});
+
+	it("keeps distinct waiting recovery and the lead's question unchanged", async () => {
+		const rows = [
+			boardTask("frontend #301", "project:roles-by-project", "waiting", "Wait for install", {
+				howToUnblock: "Install finishes. Then check frontend #293.",
+			}),
+			boardTask("frontend #302", "project:roles-by-project", "waiting", "Ask the lead", {
+				status: "asking",
+				stuck: {
+					question: "Should frontend #293 retry?",
+					choices: ["Yes", "No"],
+					sinceAt: AT,
+					tier: "lead",
+				},
+			}),
+		];
+		await mount();
+		await push(boardOf(rows));
+		await openRoles();
+		expect(card("frontend #301").querySelector(".rbp-unb")?.textContent).toBe(
+			"Carries on by itself when this is doneInstall finishes. Then check Frontend #293.",
+		);
+		expect(card("frontend #302").querySelector(".rbp-unb")?.textContent).toBe(
+			"Waits for its lead to answerShould Frontend #293 retry?",
+		);
+	});
+});
+
 describe("roles-by-project P4: answering through the existing flow", () => {
 	const view: UiRoleAskView = {
 		id: "ask-frontend-294",

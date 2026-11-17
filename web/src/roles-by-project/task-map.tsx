@@ -21,7 +21,6 @@ function UnblockNote({ task, byRef }: { task: UiBoardTask; byRef: Map<string, Ui
 		return (
 			<p className="rbp-unb u-you">
 				<b>Needs your answer: it's at the top</b>
-				{task.stuck?.question && <span>{task.stuck.question}</span>}
 			</p>
 		);
 	if (task.state === "blocked") {
@@ -33,10 +32,12 @@ function UnblockNote({ task, byRef }: { task: UiBoardTask; byRef: Map<string, Ui
 		const title = names.length
 			? `Unblocks when ${names.join(" and ")} ${names.length === 1 ? "finishes" : "finish"}`
 			: "Blocked";
+		const body = prettyRefs(task.howToUnblock ?? "");
+		const sentence = (text: string) => text.replace(/\s+/g, " ").trim().replace(/\.$/, "");
 		return (
 			<p className="rbp-unb u-blk">
 				<b>{title}</b>
-				{task.howToUnblock && <span>{prettyRefs(task.howToUnblock)}</span>}
+				{body && sentence(body) !== sentence(title) && <span>{body}</span>}
 			</p>
 		);
 	}
