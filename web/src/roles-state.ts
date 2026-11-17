@@ -14,14 +14,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { appAdmit } from "./app-admit";
 import { appSend } from "./app-globals";
 import { setViewFresh } from "./page-live";
-import type {
-	ClientMessage,
-	ServerMessage,
-	UiBoardPostKind,
-	UiRolesOverview,
-	UiRoleUsageGeneration,
-	UiRolesUsageRenderTiming,
-} from "./types";
+import type { ClientMessage, ServerMessage, UiBoardPostKind, UiRolesOverview } from "./types";
 
 export type RolesPayload = Extract<ServerMessage, { type: "roles" }>;
 
@@ -60,9 +53,6 @@ export interface RolesState {
 	 *  earliest counts), cleared with appliedAt set and when the page stops watching. The page's alarms
 	 *  wait LIVE_GRACE_MS of visible time from it (page-live.ts). */
 	waitingSince?: number;
-	/** Optional watch binding and server-clock telemetry; never source freshness. */
-	usageRender?: { watch: number; pushedAt: number };
-	usageRenderTimings?: UiRolesUsageRenderTiming[];
 }
 
 let state: RolesState = { overview: null, asks: 0, status: "idle" };
@@ -98,7 +88,6 @@ function sync(force = false): void {
 	const want = wanted();
 	if (!force && want === asked) return;
 	asked = want;
-	if (state.usageRender) set({ ...state, usageRender: undefined, usageRenderTimings: undefined });
 	if (want !== "full" && state.waitingSince !== undefined) set({ ...state, waitingSince: undefined });
 	if (want === "off") {
 		appSend({ type: "roles_unwatch" });
@@ -154,7 +143,6 @@ export function reloadRoles(): void {
  *  longer known to be current: the wait for the server to look again starts now (unless it already
  *  had), and `ready` on the next socket asks again. */
 export function rolesConnectionLost(): void {
-	if (state.usageRender) set({ ...state, usageRender: undefined, usageRenderTimings: undefined });
 	if (wanted() !== "full") return;
 	if (state.appliedAt === undefined && state.waitingSince !== undefined) return;
 	set({ ...state, appliedAt: undefined, waitingSince: state.waitingSince ?? Date.now() });
@@ -169,38 +157,15 @@ export function resendRolesWatch(): void {
 	sync(true);
 }
 
-const usageUint = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
-const usageGeneration = (v: unknown): v is UiRoleUsageGeneration => {
-	if (!v || typeof v !== "object" || Array.isArray(v)) return false;
-	const g = v as UiRoleUsageGeneration;
-	return (
-		Object.keys(v).sort().join(",") === "epoch,sequence" &&
-		typeof g.epoch === "string" &&
-		g.epoch.length === 64 &&
-		/^[a-f0-9]{64}$/.test(g.epoch) &&
-		usageUint(g.sequence)
-	);
-};
-
 /** `roles` from the server. */
 export function receiveRoles(payload: RolesPayload): void {
 	const now = Date.now();
 	const asks = typeof payload.asks === "number" && payload.asks >= 0 ? payload.asks : state.asks;
 	if (payload.overview) {
-		const render = payload.usageRender;
-		const usageRender =
-			render &&
-			Object.keys(render).sort().join(",") === "pushedAt,watch" &&
-			usageUint(render.watch) &&
-			render.watch > 0 &&
-			usageUint(render.pushedAt)
-				? { ...render }
-				: undefined;
 		const checkedAt = payload.checkedAt ?? payload.overview.at;
 		const applied = lookedAgain(checkedAt, true);
 		set({
 			overview: payload.overview,
-			...(usageRender ? { usageRender } : {}),
 			asks: payload.overview.asks.length,
 			status: "ready",
 			checkedAt,
@@ -218,41 +183,9 @@ export function receiveRoles(payload: RolesPayload): void {
 			status: state.overview ? "ready" : "error",
 			error: payload.error,
 			failedAt: now,
-			usageRender: undefined,
-			usageRenderTimings: undefined,
 			heardAt: now,
 			appliedAt: undefined,
 			...(wanted() === "full" ? { waitingSince: state.waitingSince ?? now } : {}),
-		});
-		return;
-	}
-	// A closed accepted receipt is optional diagnostics, never a freshness confirmation.
-	const timing = payload.usageRenderTiming;
-	if (
-		timing &&
-		Object.keys(timing).sort().join(",") ===
-			"acknowledgedAt,firstNativeObservedAt,firstObservationToAckMs,generation,pushToAckMs,pushedAt,role,watch" &&
-		timing.watch === state.usageRender?.watch &&
-		usageGeneration(timing.generation) &&
-		typeof timing.role === "string" &&
-		overviewHasGeneration(state.overview, timing.role, timing.generation) &&
-		usageUint(timing.pushedAt) &&
-		usageUint(timing.acknowledgedAt) &&
-		timing.acknowledgedAt >= timing.pushedAt &&
-		timing.pushToAckMs === timing.acknowledgedAt - timing.pushedAt &&
-		(timing.firstNativeObservedAt === null
-			? timing.firstObservationToAckMs === null
-			: usageUint(timing.firstNativeObservedAt) &&
-				timing.firstNativeObservedAt > 0 &&
-				timing.firstNativeObservedAt <= timing.pushedAt &&
-				timing.firstObservationToAckMs === timing.acknowledgedAt - timing.firstNativeObservedAt)
-	) {
-		set({
-			...state,
-			usageRenderTimings: [
-				...(state.usageRenderTimings ?? []).filter((t) => t.role !== timing.role),
-				structuredClone(timing),
-			].slice(-64),
 		});
 		return;
 	}
@@ -265,19 +198,6 @@ export function receiveRoles(payload: RolesPayload): void {
 		...(applied ? { appliedAt: now, waitingSince: undefined } : {}),
 		heardAt: now,
 	});
-}
-
-function overviewHasGeneration(
-	overview: UiRolesOverview | null,
-	role: string,
-	generation: UiRoleUsageGeneration,
-): boolean {
-	const cost = overview?.roles.find((r) => r.id === role)?.usageCost;
-	return (
-		cost?.role === role &&
-		cost.generation?.epoch === generation.epoch &&
-		cost.generation.sequence === generation.sequence
-	);
 }
 
 function subscribe(fn: () => void): () => void {

@@ -3092,16 +3092,6 @@ export interface UiRoleUsageCost {
 	sources: UiRoleUsageSource[];
 	faults: import("./usage-accounting-meter-contract.js").MeterFaultCount[];
 }
-export interface UiRolesUsageRenderTiming {
-	watch: number;
-	role: string;
-	generation: UiRoleUsageGeneration;
-	pushedAt: number;
-	acknowledgedAt: number;
-	firstNativeObservedAt: number | null;
-	pushToAckMs: number;
-	firstObservationToAckMs: number | null;
-}
 
 /** roles-overview: one role on the Roles page. */
 export interface UiRoleOverview {
@@ -5862,10 +5852,6 @@ export type ServerMessage =
 			asks: number;
 			error?: string;
 			checkedAt?: number;
-			/** Per-connection full-watch binding; only sent with a full overview. */
-			usageRender?: { watch: number; pushedAt: number };
-			/** Server-clock timing of an accepted optional rendered-generation ack. */
-			usageRenderTiming?: UiRolesUsageRenderTiming;
 	  }
 	/** initiatives-page: the Initiatives tab's page (watchers get it again when it changes); error: it
 	 *  couldn't be made (the page keeps what it had). */

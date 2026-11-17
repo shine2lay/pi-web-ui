@@ -15,7 +15,7 @@ import { projectExactRoles } from "../../web/src/roles-exact-model.js";
 import { projectRolePanel } from "../../web/src/roles-panel-model.js";
 import { resetRolesState } from "../../web/src/roles-state.js";
 import { projectRoleUsageCost, projectSpend, projectUsefulRoles } from "../../web/src/roles-useful-model.js";
-import type { UiRoleUsageCost as WebCost, UiRolesUsageRenderTiming as WebTiming } from "../../web/src/types.js";
+import type { UiRoleUsageCost as WebCost } from "../../web/src/types.js";
 
 const send = vi.hoisted(() => vi.fn<(msg: ClientMessage) => boolean>(() => true));
 vi.mock("../../web/src/app-globals", () => ({ appSend: send, useAppField: () => "open" }));
@@ -175,7 +175,6 @@ afterEach(() => {
 describe("W7 closed cache-to-protocol bridge", () => {
 	it("keeps protocol parity on the existing web export path", () => {
 		expectTypeOf<WebCost>().toEqualTypeOf<UiRoleUsageCost>();
-		expectTypeOf<WebTiming>().toEqualTypeOf<import("../../server/protocol.js").UiRolesUsageRenderTiming>();
 	});
 	it("pins only this role, not task/initiative amounts; preserves exact money and leaves the cache untouched", () => {
 		const v = snapshot();
