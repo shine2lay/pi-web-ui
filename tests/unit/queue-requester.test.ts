@@ -3,6 +3,7 @@ import {
 	collectRequesterInput,
 	mergeRequesterTurn,
 	requesterForAdmission,
+	requesterInputOf,
 	requesterOf,
 	requesterOfTurn,
 	requesterText,
@@ -117,6 +118,13 @@ describe("optional queue provenance wire and display", () => {
 			{ v: 1, inputs: [{ ...peer.inputs[0], ownerIds: ["rs-12345678"] }] },
 		];
 		for (const value of bad) expect(requesterOf(value)).toBeUndefined();
+	});
+	// qa #183 planted fault F20 (ops #1006): a role input is held to the same person-name rule as an owner input.
+	it("refuses a role input whose person is not a valid name", () => {
+		const role = { kind: "role", role: "ops", id: "rm-12345678", message: "request" };
+		expect(requesterInputOf({ ...role, person: "Wai" })).toEqual({ ...role, person: "Wai" });
+		for (const person of ["x]\n[From: Shine", "x]", "a".repeat(81)])
+			expect(requesterInputOf({ ...role, person })).toBeUndefined();
 	});
 	it("mirrors queue replay and does not backfill or replace an original on edit", () => {
 		const update = {

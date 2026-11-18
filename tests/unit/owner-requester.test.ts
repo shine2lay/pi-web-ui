@@ -6,13 +6,18 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { type AskEvent, AskHub, dialogAsk, stuckAsk } from "../../server/asks.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { type AskEvent, AskHub, askHub, dialogAsk, stuckAsk } from "../../server/asks.js";
 import { answerRecord } from "../../server/decision-records.js";
 import type { IdentityDef } from "../../server/identities.js";
-import { pluginSeesAskEvent, dialogView, ownerQuestionRouteView } from "../../server/owner-question-surfaces.js";
+import {
+	pluginAnswer,
+	pluginSeesAskEvent,
+	dialogView,
+	ownerQuestionRouteView,
+} from "../../server/owner-question-surfaces.js";
 import { ownTaskOf } from "../../server/own-task.js";
-import { chatPersonOf, requesterPersonOf } from "../../server/owner-requester.js";
+import { answerOwnerFields, chatPersonOf, isPersonName, requesterPersonOf } from "../../server/owner-requester.js";
 import type { UiTaskQueue, UiTaskQueueTask, UiTaskRequester } from "../../server/protocol.js";
 import {
 	collectRequesterInput,
@@ -24,7 +29,7 @@ import {
 } from "../../server/queue-requester.js";
 import { GUARD_POLICY_V1 } from "../../server/role-message-limits.js";
 import { RoleMessages, type RoleMessageHost } from "../../server/role-messages.js";
-import { asAnswerer } from "../../server/sent-by.js";
+import { answeredBy, asAnswerer } from "../../server/sent-by.js";
 import { wantedStuckAsks } from "../../server/stuck-asks.js";
 import { TASK_QUEUE_ENTRY_TYPE, type TaskQueueEntryLike } from "../../server/task-queue.js";
 import { ownerQuestionRouteOf } from "../../web/src/owner-question-route.js";
@@ -188,6 +193,57 @@ describe("answers record who actually answered", () => {
 		expect(record).not.toHaveProperty("answeredBy");
 		expect(record).not.toHaveProperty("requester");
 		expect(record).not.toHaveProperty("routedTo");
+	});
+});
+
+// qa #183 planted faults F16-F19, F23 (ops #1006): each assertion fails with its fault planted.
+describe("person names, the turn's person and the answerer, at their edges", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("an 80-character name is a person; 81 is not (sent-by's maximum)", () => {
+		expect(isPersonName("a".repeat(80))).toBe(true);
+		expect(isPersonName("a".repeat(81))).toBe(false);
+	});
+
+	it("the latest input of a turn decides its person, not the first", () => {
+		expect(
+			requesterPersonOf({
+				v: 1,
+				inputs: [
+					{ kind: "owner", channel: "browser", id: "ri-11111111" },
+					{ kind: "owner", channel: "browser", id: "ri-22222222", person: "Wai" },
+				],
+			}),
+		).toBe("Wai");
+	});
+
+	it("a running turn with only a role input takes that input's person over the task's", () => {
+		const turn: UiTaskRequester = {
+			v: 1,
+			inputs: [{ kind: "role", role: "ops", id: "rm-12345678", message: "request", person: "Wai" }],
+		};
+		expect(chatPersonOf(turn, undefined)).toBe("Wai");
+		expect(chatPersonOf(turn, shineOrigin)).toBe("Wai");
+	});
+
+	it("answeredBy is who answered, not whose ask it was", () => {
+		expect(answerOwnerFields("Wai", "Shine")).toEqual({
+			answeredBy: "Shine",
+			requester: "Wai",
+			routedTo: "Wai (web only)",
+		});
+	});
+
+	it("a plugin (Telegram) answer runs as Shine", async () => {
+		let seen: { by?: string } | undefined;
+		vi.spyOn(askHub, "answer").mockImplementation((() => {
+			seen = answeredBy();
+			return Promise.resolve({ ok: true });
+		}) as unknown as typeof askHub.answer);
+		await pluginAnswer("ask-1", [], "telegram");
+		expect(seen).toEqual({ by: "Shine" });
 	});
 });
 

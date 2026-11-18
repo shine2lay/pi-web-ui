@@ -51,6 +51,15 @@ describe("the displayed Roles overview's receipt", () => {
 		expect(snapshot().appliedAt).toBe(NOW + 3000);
 	});
 
+	// qa #183 planted fault F31 (ops #1006): one failed refresh never blanks a shown overview into the error screen.
+	it("keeps a shown overview ready when a server error arrives, and reports the error beside it", () => {
+		receiveRoles({ type: "roles", asks: 0, overview });
+		receiveRoles({ type: "roles", asks: 0, error: "boom" });
+		expect(snapshot().status).toBe("ready");
+		expect(snapshot().error).toBe("boom");
+		expect(snapshot().overview).toBe(overview);
+	});
+
 	it("replaces the receipt only with another full overview and clears it on reset", () => {
 		receiveRoles({ type: "roles", asks: 0, overview });
 		vi.setSystemTime(NOW + 5000);

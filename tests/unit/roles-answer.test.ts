@@ -163,6 +163,10 @@ describe("a complete bounded ask", () => {
 			expect(askViewOf(fixture(over))!.revision).not.toBe(revision);
 		}
 	});
+	// qa #183 planted fault F26 (ops #1006): an unrouted question still says whose it is.
+	it("says whose a direct question is when it has no route line", () => {
+		expect(askViewOf(fixture({ requester: "Wai" }))?.route).toEqual({ requester: "Wai" });
+	});
 });
 
 // pi-queue's plan pop-up: ctx.ui.confirm(title, "### Task #...") as dialogAsk builds it.
