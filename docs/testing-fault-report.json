@@ -1,0 +1,370 @@
+{
+ "date": "2026-11-17",
+ "repo": "pi-web-ui",
+ "head": "17fedbd835ff417506a4db4baba6716fc29dcdc0",
+ "commits": [
+  "dfe17d5e",
+  "7be5e346",
+  "17fedbd8",
+  "13bfcf5f"
+ ],
+ "landing_check": "scripts/check.sh --fast = npm run typecheck + unit tests from scripts/select-tests.mjs",
+ "faults": [
+  {
+   "id": "F01",
+   "commit": "dfe17d5e",
+   "file": "server/sent-by.ts",
+   "line": 27,
+   "fault": "sentByName stops stripping [ and ] from a sender name",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/sent-by.test.ts > sent-by: the Tailscale headers > keeps a name safe for the line: no brackets or line breaks"
+  },
+  {
+   "id": "F02",
+   "commit": "dfe17d5e",
+   "file": "server/sent-by.ts",
+   "line": 30,
+   "fault": "sentByName keeps 81 characters instead of the 80 maximum",
+   "task": "ops #1005",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F03",
+   "commit": "dfe17d5e",
+   "file": "server/sent-by.ts",
+   "line": 75,
+   "fault": "Tailscale login header is no longer lower-cased",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/sent-by.test.ts > sent-by: the Tailscale headers > reads the login (lower case) and the display name, falling back to the login"
+  },
+  {
+   "id": "F04",
+   "commit": "dfe17d5e",
+   "file": "server/sent-by.ts",
+   "line": 61,
+   "fault": "RFC 2047 base64 word with upper-case 'B' is decoded as quoted-printable",
+   "task": "ops #1005",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F05",
+   "commit": "dfe17d5e",
+   "file": "server/sent-by.ts",
+   "line": 92,
+   "fault": "people.json logins are no longer lower-cased",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/sent-by.test.ts > sent-by: people.json > refuses a login twice, saying why"
+  },
+  {
+   "id": "F06",
+   "commit": "dfe17d5e",
+   "file": "server/sent-by.ts",
+   "line": 151,
+   "fault": "a login missing from people.json is treated as the owner",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/sent-by.test.ts > sent-by: people.json > a mapped login gets its name; the owner's gets owner; another keeps its display name"
+  },
+  {
+   "id": "F07",
+   "commit": "dfe17d5e",
+   "file": "server/sent-by.ts",
+   "line": 128,
+   "fault": "people.json is read once and never again after it changes",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/sent-by.test.ts > sent-by: people.json > a broken file is said loudly and every login keeps its display name; fixing it needs no restart"
+  },
+  {
+   "id": "F08",
+   "commit": "dfe17d5e",
+   "file": "server/sent-by-message.ts",
+   "line": 40,
+   "fault": "slash commands are noted for sender tagging",
+   "task": "ops #1005",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F10",
+   "commit": "dfe17d5e",
+   "file": "server/serialize.ts",
+   "line": 290,
+   "fault": "every tagged message is serialized with owner:true",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/sent-by.test.ts > sent-by: a typed web message keeps who sent it (through the prompt path) > Wai's message: sentBy=Wai stored, the words unchanged, [From: Wai] for the model, a Wai label"
+  },
+  {
+   "id": "F11",
+   "commit": "dfe17d5e",
+   "file": "server/admitted-texts.ts",
+   "line": 37,
+   "fault": "waiting-text cap boundary off by one (keeps 31, not 32)",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/owner-input-mark.test.ts > owner-input mark: shape > waiting texts are capped and a run's end keeps only what is still queued (each once)"
+  },
+  {
+   "id": "F12",
+   "commit": "dfe17d5e",
+   "file": "server/admitted-texts.ts",
+   "line": 54,
+   "fault": "keepOnly lets one queued copy keep several waiting duplicates",
+   "task": "ops #1005",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F13",
+   "commit": "dfe17d5e",
+   "file": "server/admitted-texts.ts",
+   "line": 22,
+   "fault": "multi-part user text joined without newline",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/owner-input-mark.test.ts > owner-input mark: shape > text of a user message: string content or text parts joined by a newline; other roles have none"
+  },
+  {
+   "id": "F14",
+   "commit": "7be5e346",
+   "file": "plugins/telegram/web-only.mjs",
+   "line": 10,
+   "fault": "telegram_send no longer refuses another owner's chat",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/plugin-telegram.test.ts > telegram plugin: notices to the owner (telegram_send, telegram:send; Ops #627) > owner-requester (Ops #973): from Wai's chat telegram_send sends nothing and says it stays in the web app"
+  },
+  {
+   "id": "F15",
+   "commit": "7be5e346",
+   "file": "server/owner-requester.ts",
+   "line": 29,
+   "fault": "the owner's own typed message records a named person",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/owner-requester.test.ts > a Wai message, then queue_add: Wai's task and a plan dialog for Wai > the typed message's sender sets the turn's person; Shine's (the owner) sets none"
+  },
+  {
+   "id": "F16",
+   "commit": "7be5e346",
+   "file": "server/owner-requester.ts",
+   "line": 24,
+   "fault": "isPersonName rejects an 80-character name",
+   "task": "ops #1006",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F17",
+   "commit": "7be5e346",
+   "file": "server/owner-requester.ts",
+   "line": 35,
+   "fault": "the first input of a turn decides its owner instead of the latest",
+   "task": "ops #1006",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F18",
+   "commit": "7be5e346",
+   "file": "server/owner-requester.ts",
+   "line": 43,
+   "fault": "a running turn with only role inputs ignores their person",
+   "task": "ops #1006",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F19",
+   "commit": "7be5e346",
+   "file": "server/owner-requester.ts",
+   "line": 75,
+   "fault": "answeredBy is overwritten with the ask's requester",
+   "task": "ops #1006",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F20",
+   "commit": "7be5e346",
+   "file": "server/queue-requester.ts",
+   "line": 22,
+   "fault": "role requester inputs accept an invalid person",
+   "task": "ops #1006",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F21",
+   "commit": "7be5e346",
+   "file": "server/queue-requester.ts",
+   "line": 122,
+   "fault": "admission records the default owner's own name as a person",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/owner-requester.test.ts > a Wai message, then queue_add: Wai's task and a plan dialog for Wai > the typed message's sender sets the turn's person; Shine's (the owner) sets none"
+  },
+  {
+   "id": "F22",
+   "commit": "7be5e346",
+   "file": "server/owner-question-surfaces.ts",
+   "line": 69,
+   "fault": "plugin ask events no longer filter out another owner's asks",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/owner-requester.test.ts > owner escalations follow the task's requester > a Wai task's card is for Wai and nothing goes to plugins (Telegram)"
+  },
+  {
+   "id": "F23",
+   "commit": "7be5e346",
+   "file": "server/owner-question-surfaces.ts",
+   "line": 74,
+   "fault": "plugin (Telegram) answers are no longer attributed to Shine",
+   "task": "ops #1006",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F24",
+   "commit": "7be5e346",
+   "file": "server/asks.ts",
+   "line": 270,
+   "fault": "web answers record who answered only when it is Shine",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/owner-requester.test.ts > answers record who actually answered > a page answer under Wai's socket records answeredBy Wai; for Wai's ask, routed web only"
+  },
+  {
+   "id": "F25",
+   "commit": "7be5e346",
+   "file": "server/stuck-asks.ts",
+   "line": 129,
+   "fault": "a stuck task's card inherits the queue chat's running-turn owner",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/owner-requester.test.ts > owner escalations follow the task's requester > a Shine task, or one with no requester, is Shine's: it reaches Telegram as today"
+  },
+  {
+   "id": "F26",
+   "commit": "7be5e346",
+   "file": "server/roles-asks.ts",
+   "line": 211,
+   "fault": "Roles page ask view drops 'For <name>' when the ask has no route line",
+   "task": "ops #1006",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F27",
+   "commit": "7be5e346",
+   "file": "web/src/owner-question-route.ts",
+   "line": 47,
+   "fault": "web card route reader drops a requester-only route",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/owner-requester.test.ts > a Wai message, then queue_add: Wai's task and a plan dialog for Wai > the plan-approval dialog is labelled for Wai on every web card"
+  },
+  {
+   "id": "F28",
+   "commit": "7be5e346",
+   "file": "server/decision-records.ts",
+   "line": 487,
+   "fault": "decision records drop requester/routedTo",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/owner-requester.test.ts > answers record who actually answered > a page answer under Wai's socket records answeredBy Wai; for Wai's ask, routed web only"
+  },
+  {
+   "id": "F29",
+   "commit": "7be5e346",
+   "file": "server/task-queue-apply.ts",
+   "line": 119,
+   "fault": "a task's single-input origin is dropped on assignment",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/owner-requester.test.ts > old records with no person are Shine's and parse unchanged > requester records and a task chat's own entries"
+  },
+  {
+   "id": "F30",
+   "commit": "17fedbd8",
+   "file": "web/src/roles-state.ts",
+   "line": 91,
+   "fault": "leaving the Roles page for count-only watch keeps the freshness wait running",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/page-live.test.ts > roles-state: the page's wait for the server to look again > a failed look waits too; the top bar's count-only watch never starts a wait"
+  },
+  {
+   "id": "F31",
+   "commit": "17fedbd8",
+   "file": "web/src/roles-state.ts",
+   "line": 183,
+   "fault": "a server error replaces a shown overview with the error state",
+   "task": "ops #1006",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F32",
+   "commit": "17fedbd8",
+   "file": "web/src/roles-state.ts",
+   "line": 166,
+   "fault": "the first full overview no longer marks the freshness baseline",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/page-live.test.ts > roles-state: the page's wait for the server to look again > starts with a full watch, ends with a newer look, and Roles' freshness follows"
+  },
+  {
+   "id": "F34",
+   "commit": "13bfcf5f",
+   "file": "server/shared/roles-by-project/groups.ts",
+   "line": 26,
+   "fault": "a paused task is shown as blocked instead of waiting",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/roles-by-project-board.test.ts > roles-by-project B3: board state and counts > B3 boardStateOf: every status, paused open task -> waiting, dropped -> null"
+  },
+  {
+   "id": "F35",
+   "commit": "13bfcf5f",
+   "file": "server/shared/roles-by-project/groups.ts",
+   "line": 53,
+   "fault": "done-predecessor walk stops at 3 steps instead of 4",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/roles-by-project-board.test.ts > roles-by-project B6-B7: done predecessors > B6 donePredecessors: 4 steps back from an open task, step 5 never"
+  },
+  {
+   "id": "F36",
+   "commit": "13bfcf5f",
+   "file": "server/shared/roles-by-project/groups.ts",
+   "line": 15,
+   "fault": "a task naming an unknown project gets its own project group",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/roles-by-project-board.test.ts > roles-by-project B1: group key > B1 groupKeyOf: registry project, project-id tag, first tag, nothing"
+  },
+  {
+   "id": "F37",
+   "commit": "13bfcf5f",
+   "file": "server/roles-by-project.ts",
+   "line": 84,
+   "fault": "14-day done count excludes a task finished exactly at the window start",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/roles-by-project-board.test.ts > roles-by-project B4-B5: done rows in the 14-day window > B5 window [asOf - 14 d, asOf]: 15 d out, exactly 14 d in, no finishedAt out, future out"
+  },
+  {
+   "id": "F38",
+   "commit": "13bfcf5f",
+   "file": "server/roles-by-project.ts",
+   "line": 100,
+   "fault": "groups with only waiting tasks lose the 'held' sort tier",
+   "caught": true,
+   "caught_by": "vitest (selected): tests/unit/roles-by-project-board.test.ts > roles-by-project B8: order and determinism > B8 groups: needs-you > held > active > done-only, then open desc, then label; none last in its tier"
+  },
+  {
+   "id": "F39",
+   "commit": "dfe17d5e",
+   "file": "server/sent-by-message.ts",
+   "line": 81,
+   "fault": "a run's end forgets the senders of texts still waiting as follow-ups",
+   "task": "ops #1005",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  },
+  {
+   "id": "F40",
+   "commit": "dfe17d5e",
+   "file": "server/sent-by-message.ts",
+   "line": 55,
+   "fault": "a stored sender without an owner flag reads as the owner",
+   "task": "ops #1005",
+   "caught": false,
+   "caught_by": "none (selected tests and the full unit suite pass)"
+  }
+ ]
+}

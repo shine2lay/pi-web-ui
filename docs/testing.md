@@ -22,6 +22,7 @@ test_check:
   below_par: found-below-par.md
   miss_log: docs/testing-misses.jsonl
   done_lists: .temper/features/*/done.md
+  fault_report: docs/testing-fault-report.json
 ---
 
 # Testing pi-web-ui
