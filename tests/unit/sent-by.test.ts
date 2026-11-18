@@ -10,8 +10,14 @@ import { type ExtensionAPI, SessionManager } from "@earendil-works/pi-coding-age
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClientSession } from "../../server/agent-service.js";
 import { requesterForAdmission } from "../../server/queue-requester.js";
-import { PeopleBook, parsePeople, type SentBy, tailscaleSenderOf } from "../../server/sent-by.js";
-import { sentByExtension, sentByOf, withSenderLines } from "../../server/sent-by-message.js";
+import { PeopleBook, parsePeople, type SentBy, sentByName, tailscaleSenderOf } from "../../server/sent-by.js";
+import {
+	noteSentByText,
+	sentByExtension,
+	sentByOf,
+	sentByOnEvent,
+	withSenderLines,
+} from "../../server/sent-by-message.js";
 import { serializeMessage } from "../../server/serialize.js";
 
 vi.mock("../../server/workspace-snapshot.js", () => ({
@@ -74,6 +80,15 @@ describe("sent-by: the Tailscale headers", () => {
 		expect(tailscaleSenderOf({ "tailscale-user-login": WAI, "tailscale-user-name": `=?utf-8?b?${b64}?=` })!.name).toBe(
 			"ဝေ",
 		);
+		// QA #183 F04: the encoding letter is case-insensitive (RFC 2047), so upper-case B is base64 too.
+		expect(tailscaleSenderOf({ "tailscale-user-login": WAI, "tailscale-user-name": "=?UTF-8?B?V2Fp?=" })!.name).toBe(
+			"Wai",
+		);
+	});
+
+	it("keeps at most 80 characters of a name (owner-requester's person names are 1-80)", () => {
+		// QA #183 F02
+		expect(sentByName("a".repeat(100))).toHaveLength(80);
 	});
 
 	it("keeps a name safe for the line: no brackets or line breaks", () => {
@@ -185,10 +200,43 @@ describe("sent-by: the line the model sees", () => {
 		expect(handler!({ messages: [{ role: "user", content: "hi" }] })).toBeUndefined();
 	});
 
+	it("a stored sender without a boolean owner flag is not the owner", () => {
+		// QA #183 F40: an older, hand-edited or forked session file
+		expect(sentByOf({ role: "user", content: "hi", sentBy: { login: WAI, name: "Wai" } })?.owner).toBe(false);
+		expect(sentByOf({ role: "user", content: "hi", sentBy: { login: WAI, name: "Wai", owner: "yes" } })?.owner).toBe(
+			false,
+		);
+	});
+
 	it("never tags a message that isn't the user's", () => {
 		const a = { role: "assistant", content: [{ type: "text", text: "x" }], sentBy: { login: WAI, name: "Wai" } };
 		expect(sentByOf(a)).toBeUndefined();
 		expect(withSenderLines([a])).toBeUndefined();
+	});
+});
+
+describe("sent-by: waiting texts get their sender when pi starts them", () => {
+	const wai: SentBy = { login: WAI, name: "Wai", owner: false };
+	const userMessage = (content: string) =>
+		({ role: "user", content }) as { role: string; content: string; sentBy?: SentBy };
+
+	it("a slash command is never noted, so it gets no sender", () => {
+		// QA #183 F08
+		const chat = { session: {} };
+		noteSentByText(chat, "/foo bar", wai);
+		const message = userMessage("/foo bar");
+		sentByOnEvent(chat, { type: "message_start", message }, () => {});
+		expect(message.sentBy).toBeUndefined();
+	});
+
+	it("a run's end keeps the senders of texts still waiting as follow-ups", () => {
+		// QA #183 F39
+		const chat = { session: { getSteeringMessages: () => [], getFollowUpMessages: () => ["later"] } };
+		noteSentByText(chat, "later", wai);
+		sentByOnEvent(chat, { type: "agent_end" }, () => {});
+		const message = userMessage("later");
+		sentByOnEvent(chat, { type: "message_start", message }, () => {});
+		expect(message.sentBy).toEqual(wai);
 	});
 });
 

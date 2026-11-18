@@ -17,7 +17,7 @@ import {
 	ownerTextSha256,
 	OwnerInputsWaiting,
 } from "../../server/owner-input-mark.js";
-import { userMessageText } from "../../server/admitted-texts.js";
+import { AdmittedTexts, userMessageText } from "../../server/admitted-texts.js";
 import { requesterForAdmission } from "../../server/queue-requester.js";
 
 vi.mock("../../server/workspace-snapshot.js", () => ({
@@ -312,5 +312,14 @@ describe("owner-input mark: shape", () => {
 		expect(w.size).toBe(2);
 		expect(w.take(userMessage("t0"))).toBeUndefined();
 		expect(w.take(userMessage("t39"))).toMatchObject({ text: "t39" });
+	});
+
+	it("one queued copy keeps only one of several identical waiting texts", () => {
+		// QA #183 F12: AdmittedTexts is shared by owner-input-mark and sent-by
+		const w = new AdmittedTexts<{ text: string }>();
+		w.admitted({ text: "ok" });
+		w.admitted({ text: "ok" });
+		w.keepOnly(["ok"]);
+		expect(w.size).toBe(1);
 	});
 });
