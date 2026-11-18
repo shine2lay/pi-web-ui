@@ -21,6 +21,7 @@ test_check:
   quarantine: docs/testing-quarantine.md
   below_par: found-below-par.md
   miss_log: docs/testing-misses.jsonl
+  done_lists: .temper/features/*/done.md
 ---
 
 # Testing pi-web-ui
@@ -123,6 +124,7 @@ Rules every test here keeps:
 - A skipped test says why and names the task that brings it back.
 - Past failures and complaints are checks in [found-below-par.md](../found-below-par.md); bugs that
   got past the tests are in [the miss log](testing-misses.jsonl), each with the test that catches it now.
+- Each feature's `done.md` is QA's done list (2026-11-17); ticked only with proof.
 
 ## Owner
 
