@@ -15,6 +15,7 @@ import {
 } from "./markers/index.js";
 import { appendSnapshot, STORE_CUSTOM_TYPE, type StoreSnapshot } from "./markers/store.js";
 import { TODO_NAMESPACE, type TodoState, initTodoState } from "./markers/builtins/todo.js";
+import { dropRenameInHomeChat } from "./home-chat-rename.js";
 import type { MarkerContext } from "./markers/marker.js";
 
 ensureMarkersRegistered();
@@ -253,10 +254,12 @@ export class MarkerService {
 		return this.host.lang?.() ?? "en";
 	}
 
-	buildGuidance(): string {
+	/** The marker lines of a chat's prompt; a role's home chat (by its transcript) gets no conv (home-chat-rename.ts). */
+	buildGuidance(sessionFile?: string): string {
 		if (!this.settings.markersEnabled) return "";
 		const disabled = new Set(this.settings.disabledMarkers);
 		disabled.add("todo");
+		dropRenameInHomeChat(disabled, sessionFile);
 		const lines = collectGuidance(disabled, this.lang());
 		if (lines.length === 0) return "";
 		// The dynamic lines ride the `{lines}` slot so translator packs can
@@ -364,6 +367,7 @@ export class MarkerService {
 		if (tokens.length === 0) return;
 
 		const disabled = new Set(this.settings.disabledMarkers);
+		dropRenameInHomeChat(disabled, this.host.getSessionManager(conversationId)?.getSessionFile?.());
 		const states = new Map<string, unknown>();
 		const getOrInit = (ns: string): unknown => {
 			let st = states.get(ns);

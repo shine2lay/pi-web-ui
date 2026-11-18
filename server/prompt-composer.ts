@@ -89,6 +89,20 @@ export function overrideOf(overrides: Record<string, string> | undefined, token:
 	return v && v.trim() ? v : "";
 }
 
+/** A chat's tool/resource snapshot that agent-service composes its prompt from (composeInputs, renderMainCompose). */
+export interface ComposeSource {
+	cwd: string;
+	selectedTools: string[];
+	toolSnippets: Record<string, string>;
+	toolGuidelines: string[];
+	contextFiles: { path: string; content: string }[];
+	skills: { name: string; description: string; filePath: string }[];
+	preset?: string;
+	role?: string | null;
+	/** The chat's transcript; a role's home chat gets no conv rename guidance (home-chat-no-rename, Ops #1007). */
+	sessionFile?: string;
+}
+
 /** 组装每个来源的自动内容所需的全部输入（由 agent-service 在 run 时收集）。 */
 export interface PromptComposerInputs {
 	/** 当前工作目录（反斜杠会转正斜杠）。 */

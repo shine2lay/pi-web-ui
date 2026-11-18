@@ -484,7 +484,9 @@ import {
 	renderPromptTemplate,
 	resolveSectionTexts,
 	type PromptComposerInputs,
+	type ComposeSource,
 } from "./prompt-composer.js";
+import { isHomeChatFile } from "./home-chat-rename.js";
 import type {
 	BgServer,
 	CachedWindow,
@@ -4979,16 +4981,7 @@ export class ClientSession {
 	private lastSdkAppendFiles: string[] = [];
 
 	/** 当前活动会话的工具/资源快照 → composer 输入。cwd 取活动对话的。 */
-	private composeInputs(src: {
-		cwd: string;
-		selectedTools: string[];
-		toolSnippets: Record<string, string>;
-		toolGuidelines: string[];
-		contextFiles: { path: string; content: string }[];
-		skills: { name: string; description: string; filePath: string }[];
-		preset?: string;
-		role?: string | null;
-	}): PromptComposerInputs {
+	private composeInputs(src: ComposeSource): PromptComposerInputs {
 		const preset = src.preset ?? this.conv?.agentPreset ?? this.settingsSvc.current.defaultAgentPreset ?? "standard";
 		const role =
 			src.role !== undefined
@@ -5020,7 +5013,9 @@ export class ClientSession {
 				src.selectedTools.some((n) => n.startsWith("terminal_"))
 					? TERMINAL_TOOLS_GUIDANCE
 					: "",
-			markersGuidance: this.markerSvc.buildGuidance(),
+			markersGuidance: this.markerSvc.buildGuidance(
+				src.sessionFile ?? this.convs.get(this.activeId)?.session.sessionFile,
+			),
 			// issue #91：组合模板各来源段按客户端 UI 语言渲染（英文默认）。
 			lang: this.getLang(),
 			contextFiles: src.contextFiles,
@@ -5055,16 +5050,7 @@ export class ClientSession {
 	}
 
 	/** 渲染当前组合模板。始终通过 prompt-composer 渲染完整系统提示词（即使在无自定义模板/覆盖的默认 standard 状态下也不返回 undefined，避免回退到 SDK buildSystemPrompt 重新注入默认 soul / Available tools / Pi documentation）。 */
-	private renderMainCompose(src: {
-		cwd: string;
-		selectedTools: string[];
-		toolSnippets: Record<string, string>;
-		toolGuidelines: string[];
-		contextFiles: { path: string; content: string }[];
-		skills: { name: string; description: string; filePath: string }[];
-		preset?: string;
-		role?: string | null;
-	}): string {
+	private renderMainCompose(src: ComposeSource): string {
 		const tpl = (this.settingsSvc.current.promptTemplate ?? "").trim();
 		const ovs = this.settingsSvc.current.promptOverrides ?? {};
 		const hasOverride = Object.values(ovs).some((v) => typeof v === "string" && v.trim());
@@ -5120,6 +5106,7 @@ export class ClientSession {
 					})),
 					preset,
 					role,
+					sessionFile: sess.sessionFile,
 				}),
 			);
 			// 模板/覆盖渲染（无自定义模板时用默认模板渲染完整提示词，确保与真实 run 规则一致且包含预设过滤）。
@@ -6268,7 +6255,7 @@ export class ClientSession {
 						}
 						// bash 管道限制已并入 bash 工具自身的 description，不再作为独立提示段注入。
 						// 内置标记工具引导（按总开关/分组开关过滤）
-						const markerGuidance = this.markerSvc.buildGuidance();
+						const markerGuidance = this.markerSvc.buildGuidance(this.convs.get(ownerId ?? "")?.session.sessionFile);
 						if (markerGuidance) out.push(markerGuidance);
 						return out;
 					},
@@ -6383,6 +6370,7 @@ export class ClientSession {
 										preset: currentPreset,
 										role:
 											(conv ? this.identityOf(conv)?.id : undefined) ?? (sess ? this.sessionRoleId(sess) : undefined),
+										sessionFile: sess?.sessionFile,
 									});
 									return rendered ? { systemPrompt: rendered } : undefined;
 								});
@@ -14314,7 +14302,7 @@ export class ClientSession {
 				return ClientSession.openInConnectedWindow(c.id);
 			},
 			get homeChat() {
-				return !!homeChatOf(c.session.sessionFile, identityRegistry().identities);
+				return isHomeChatFile(c.session.sessionFile);
 			},
 			taskChat: !!c.openedByQueue,
 			get draft() {
