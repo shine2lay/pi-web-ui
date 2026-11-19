@@ -52,9 +52,10 @@ export interface MiniMap {
 ## Mini map (closed tile)
 
 - Chain drawn = the chain with the most tasks (ties: §Order). Window over its layers with `layerWindow`:
-  `start` = first layer holding an open task, or `max(0, count - 3)` when none is open;
-  `end = min(count, start + 5)`; `start = max(0, min(start, end - 3))`; `earlier = start`, `later = count - end`.
-  So at most 5 layers, at least 3 when the chain has 3, and "+N earlier layers" / "+N later" from the numbers.
+  `start` = first layer holding an open task, or `max(0, count - 5)` when none is open;
+  `end = min(count, start + 5)`; `start = max(0, min(start, end - 5))`; `earlier = start`, `later = count - end`.
+  So at most 5 layers, backfilled with earlier layers up to 5 when the chain has them (Shine 2026-11-18: "can we
+  show up to 5"); the first open layer is always in the window; "+N earlier layers" / "+N later" from the numbers.
 - Each layer shows up to 5 tasks, then "+N".
 - Loose open tasks follow as squares, up to 40, then "+N". No chain and nothing open: the done tasks as green
   squares, same cap.

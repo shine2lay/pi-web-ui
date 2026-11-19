@@ -19,8 +19,9 @@ Architecture's spec.md is the contract and may change how a gap is closed.
 ## Mini task map rule
 
 - Layers come from `after` and `block.on` links (left to right; a phone keeps it compact).
-- Window: at most 5 layers, starting at the earliest layer that still has an unfinished task.
-- Nothing open: the last 3 layers. No links and nothing open: finished tasks as green squares.
+- Window: up to 5 layers, starting at the earliest layer that still has an unfinished task; when fewer than 5
+  come after it, earlier (finished) layers fill the window back to 5 (Shine 2026-11-18: "can we show up to 5").
+- Nothing open: the last 5 layers. No links and nothing open: finished tasks as green squares.
 - Cut layers show "+N earlier layers" / "+N later".
 - Colours: the state colours; done = green.
 

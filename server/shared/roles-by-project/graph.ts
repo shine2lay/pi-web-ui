@@ -38,7 +38,6 @@ export interface LayerWindow {
 }
 
 const LAYERS_MAX = 5;
-const LAYERS_MIN = 3;
 const PER_LAYER = 5;
 const SQUARES_MAX = 40;
 
@@ -273,11 +272,14 @@ export function taskMapOf(rows: readonly UiBoardTask[]): TaskMap {
 	return { layers: layers.filter(Boolean), edges, chains, loose, roots, cycles };
 }
 
-/** The 5-layer window from the first layer holding an open task (null: none open). Layers are 0-based. */
+/**
+ * Up to 5 layers that include the first layer holding an open task (null: none open, the last 5), backfilled
+ * with earlier (finished) layers when fewer than 5 follow it. Layers are 0-based.
+ */
 export function layerWindow(layerCount: number, firstOpenLayer: number | null): LayerWindow {
-	let start = firstOpenLayer ?? Math.max(0, layerCount - LAYERS_MIN);
+	let start = firstOpenLayer ?? Math.max(0, layerCount - LAYERS_MAX);
 	const end = Math.min(layerCount, start + LAYERS_MAX);
-	start = Math.max(0, Math.min(start, end - LAYERS_MIN));
+	start = Math.max(0, Math.min(start, end - LAYERS_MAX));
 	return { start, end, earlier: start, later: layerCount - end };
 }
 

@@ -82,10 +82,11 @@ describe("roles-by-project G1-G2: links and cycles", () => {
 });
 
 describe("roles-by-project G3-G4: window and caps", () => {
-	it("G3 layerWindow: from the first open layer, at most 5, at least 3", () => {
-		expect(layerWindow(8, 5)).toEqual({ start: 5, end: 8, earlier: 5, later: 0 });
+	// Shine 2026-11-18: "can we show up to 5" -> backfill with earlier (finished) layers up to 5.
+	it("G3 layerWindow: includes the first open layer, up to 5, backfilled with earlier layers", () => {
+		expect(layerWindow(8, 5)).toEqual({ start: 3, end: 8, earlier: 3, later: 0 });
 		expect(layerWindow(8, 0)).toEqual({ start: 0, end: 5, earlier: 0, later: 3 });
-		expect(layerWindow(8, null)).toEqual({ start: 5, end: 8, earlier: 5, later: 0 });
+		expect(layerWindow(8, null)).toEqual({ start: 3, end: 8, earlier: 3, later: 0 });
 		expect(layerWindow(2, 0)).toEqual({ start: 0, end: 2, earlier: 0, later: 0 });
 	});
 

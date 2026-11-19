@@ -28,7 +28,8 @@ without alot of knobs".
    Project, Now, Department, Status and is remembered; search is the only other control.
 2. Needs you is collapsible, shows its first row then "Show N more", and each ask can be answered
    with the existing answer flow.
-3. Every closed tile shows its mini task map (max 5 layers from the earliest unfinished layer);
+3. Every closed tile shows its mini task map (up to 5 layers including the earliest unfinished layer,
+   filled back with finished layers when fewer than 5 follow it; Shine 2026-11-18: "can we show up to 5");
    opening it shows the full map with done tasks green and the root blocker marked.
 4. Loading, empty, error (last view kept, Try again) and no-results states render at 320, 390 and
    1440 px in light and dark with 0 overflow and 0 overlap.
