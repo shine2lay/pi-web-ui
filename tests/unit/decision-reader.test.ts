@@ -26,7 +26,6 @@ import {
 	READER_SYSTEM,
 	readerStatus,
 	renderRecord,
-	unreadOf,
 } from "../../server/decision-reader.js";
 import { DecisionRecords, type DecisionRecord, type NewDecisionRecord } from "../../server/decision-records.js";
 import { RIDER_SYSTEM } from "../../server/decision-rider.js";
@@ -1104,7 +1103,6 @@ describe("the reader", () => {
 			expect(model.calls).toHaveLength(0);
 			expect(store.readerState().read).toEqual({});
 			expect(readerStatus(store, r, clock)).toMatchObject({ enabled: true, unread: 0, reads: [] });
-			expect(unreadOf(store, records.list())).toBe(0);
 		});
 
 		it("reads only records filed to a listed initiative (tag or markers); the rest wait unmarked until theirs is listed", async () => {
@@ -1120,7 +1118,6 @@ describe("the reader", () => {
 			const model = fakeModel([nothing(2), nothing(1)]);
 			const r = reader(model, { allRecords: false });
 			expect(r.unread().map((x) => x.ref)).toEqual(["rm-tag", "rm-mark"]);
-			expect(unreadOf(store, records.list())).toBe(2);
 			expect(await r.readAll()).toMatchObject({ read: 2, stopped: "done" });
 			expect(model.calls).toHaveLength(1);
 			expect(store.readerState().read).toEqual({ [id("rm-tag")]: "n", [id("rm-mark")]: "n" });
@@ -1132,7 +1129,6 @@ describe("the reader", () => {
 			expect(Object.keys(store.readerState().read).sort()).toEqual(
 				[id("rm-tag"), id("rm-mark"), id("rm-other")].sort(),
 			);
-			expect(unreadOf(store, records.list())).toBe(0);
 		});
 
 		it("reads a copy itself when the record it copies isn't read, and leaves that one unmarked", async () => {

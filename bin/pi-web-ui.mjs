@@ -3406,7 +3406,6 @@ async function decisionsCmd(argv) {
 	const action = argv[0];
 	let from;
 	let maxArg;
-	let initiativeArg;
 	const rest = [];
 	for (let i = 1; i < argv.length; i++) {
 		const a = argv[i];

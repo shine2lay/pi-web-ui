@@ -27,7 +27,6 @@ import { createRequire } from "node:module";
 import {
 	appendFileSync,
 	existsSync,
-	readdirSync,
 	readFileSync,
 	realpathSync,
 	renameSync,
@@ -400,8 +399,8 @@ import { DecisionBatchControl } from "./decision-batches.js";
 import { boundedDecisionModel } from "./decision-bounded-model.js";
 import { parseRecoveryCommand } from "./decision-recovery.js";
 import { AnswerPreviews } from "./decision-previews.js";
-import { DecisionReader, readerStatus, type ReadResult, unreadOf } from "./decision-reader.js";
-import { DecisionStore, fileRecord } from "./decision-store.js";
+import { DecisionReader, readerStatus, type ReadResult } from "./decision-reader.js";
+import { DecisionStore } from "./decision-store.js";
 import {
 	BOARD_CUSTOM_TYPE,
 	boardChatState,
@@ -624,14 +623,12 @@ import {
 	boardRecord,
 	dayStart,
 	DECISIONS_DIR,
-	type DecisionRecord,
 	DecisionRecords,
 	deliveryRecord,
 	messageRecord,
 	type NewDecisionRecord,
 	type NewDeliveryRecord,
 	QueueScanner,
-	recordId,
 	SCAN_STATE_FILE,
 } from "./decision-records.js";
 import {

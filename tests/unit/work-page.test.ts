@@ -7,7 +7,7 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { UiRolesOverview, UiWorkPage } from "../../server/protocol.js";
+import type { UiRolesOverview } from "../../server/protocol.js";
 import {
 	WORK_PAGE_ACTIVITY_MAX,
 	WORK_PAGE_RECORDS_MAX,

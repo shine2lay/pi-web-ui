@@ -1193,16 +1193,6 @@ function mergeResults(base: BatchResult, ...rest: BatchResult[]): BatchResult {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** How many records since readFrom it still has to read (filed to an initiative it reads, not read yet),
- *  from records already in memory: the page's count (the reader's own unread() reads the whole file). */
-export function unreadOf(store: DecisionStore, recs: Iterable<DecisionRecord>, settings = store.settings()): number {
-	const from = dayStart(settings.readFrom) ?? 0;
-	const read = store.readerState().read;
-	const waiting: DecisionRecord[] = [];
-	for (const r of recs) if (r.at >= from && !read[r.id] && !FEED_ONLY.has(r.source)) waiting.push(r);
-	return store.inInitiatives(waiting, settings.initiatives).length;
-}
-
 /** Status for the page: tokens per day, the cap, unread count, last error. */
 export function readerStatus(store: DecisionStore, reader: DecisionReader | undefined, now = Date.now()) {
 	const settings = store.settings();
