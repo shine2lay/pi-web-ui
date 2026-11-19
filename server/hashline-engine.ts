@@ -12,7 +12,8 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname } from "node:path";
+import { checkPatchPathBounds, resolvePatchPath } from "./patch-worktree-bounds.js";
 
 export const HL_HASH_LENGTH = 4;
 
@@ -485,6 +486,8 @@ export function applyHashlinePatch(
 	patchText: string,
 	options: {
 		cwd?: string;
+		allowLinkedWorktrees?: boolean;
+		homeDir?: string;
 		readFile?: (relPath: string) => string | null;
 		writeFile?: (relPath: string, content: string) => void;
 		deleteFile?: (relPath: string) => void;
@@ -492,16 +495,18 @@ export function applyHashlinePatch(
 	} = {},
 ): PatchApplyReport {
 	const cwd = options.cwd ?? process.cwd();
+	const allowLinkedWorktrees = Boolean(options.allowLinkedWorktrees);
+	const homeDir = options.homeDir;
 	const store = options.snapshotStore ?? globalSnapshotStore;
 
 	const defaultRead = (p: string) => {
-		const full = resolve(cwd, p);
+		const full = resolvePatchPath(cwd, p, homeDir);
 		if (!existsSync(full)) return null;
 		return readFileSync(full, "utf8");
 	};
 
 	const defaultWrite = (p: string, content: string) => {
-		const full = resolve(cwd, p);
+		const full = resolvePatchPath(cwd, p, homeDir);
 		const dir = dirname(full);
 		if (!existsSync(dir)) {
 			mkdirSync(dir, { recursive: true });
@@ -510,7 +515,7 @@ export function applyHashlinePatch(
 	};
 
 	const defaultDelete = (p: string) => {
-		const full = resolve(cwd, p);
+		const full = resolvePatchPath(cwd, p, homeDir);
 		if (existsSync(full)) {
 			unlinkSync(full);
 		}
@@ -533,14 +538,8 @@ export function applyHashlinePatch(
 	// ===== 阶段 1: 预检所有文件并计算目标内容 =====
 	for (const sec of sections) {
 		// 越界安全防护
-		const rel = relative(cwd, resolve(cwd, sec.filePath));
-		if (
-			rel === ".." ||
-			rel.startsWith(".." + sep) ||
-			rel.startsWith("../") ||
-			rel.startsWith("..\\") ||
-			isAbsolute(rel)
-		) {
+		const srcBounds = checkPatchPathBounds(sec.filePath, { cwd, allowLinkedWorktrees, homeDir });
+		if (!srcBounds.ok) {
 			return {
 				ok: false,
 				summary: `Path out of bounds: files outside the workspace cannot be changed: ${sec.filePath}`,
@@ -568,7 +567,7 @@ export function applyHashlinePatch(
 		let isRecovered = false;
 
 		// 哈希校验与三方冲突自愈（快照按绝对路径优先隔离，兼容相对路径回退）
-		const absFilePath = resolve(cwd, sec.filePath);
+		const absFilePath = srcBounds.resolvedPath;
 		if (sec.expectedHash && sec.expectedHash !== liveHash) {
 			const snapshot = store.get(absFilePath, sec.expectedHash) ?? store.get(sec.filePath, sec.expectedHash);
 			if (snapshot) {
@@ -611,14 +610,8 @@ export function applyHashlinePatch(
 			}
 			if (h.kind === "move_file") {
 				if (!h.targetPath) continue;
-				const destRel = relative(cwd, resolve(cwd, h.targetPath));
-				if (
-					destRel === ".." ||
-					destRel.startsWith(".." + sep) ||
-					destRel.startsWith("../") ||
-					destRel.startsWith("..\\") ||
-					isAbsolute(destRel)
-				) {
+				const destBounds = checkPatchPathBounds(h.targetPath, { cwd, allowLinkedWorktrees, homeDir });
+				if (!destBounds.ok || destBounds.rootDir !== srcBounds.rootDir) {
 					return {
 						ok: false,
 						summary: `Path out of bounds: files cannot be moved outside the workspace: ${h.targetPath}`,
@@ -802,7 +795,7 @@ export function applyHashlinePatch(
 	for (const [p, content] of plannedWrites.entries()) {
 		write(p, content);
 		// 记住新快照（统一采用绝对路径隔离多工作区）
-		store.record(resolve(cwd, p), content);
+		store.record(resolvePatchPath(cwd, p, homeDir), content);
 	}
 	for (const p of plannedDeletes) {
 		if (!plannedWrites.has(p)) {

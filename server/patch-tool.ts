@@ -9,7 +9,6 @@
  * - 当文件被外部改动导致哈希不一致时，自动尝试 3-Way Merge 冲突自愈。
  */
 
-import { resolve } from "node:path";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
@@ -21,16 +20,19 @@ import {
 	type PatchApplyReport,
 } from "./hashline-engine.js";
 import { getLiveLspDiagnostics } from "./lsp-tool.js";
+import { checkPatchPathBounds, resolvePatchPath } from "./patch-worktree-bounds.js";
 
 export const PATCH_TOOL_NAME = "patch";
 
 export interface PatchToolOptions {
 	cwd: string;
 	ownerId?: string;
+	homeDir?: string;
 }
 
 export function makePatchTool(options: PatchToolOptions) {
 	const cwd = options.cwd;
+	const homeDir = options.homeDir;
 
 	return defineTool({
 		name: PATCH_TOOL_NAME,
@@ -72,6 +74,8 @@ On divergence the engine attempts a 3-way merge. After success the tool returns 
 
 			const report = applyHashlinePatch(patchText, {
 				cwd,
+				allowLinkedWorktrees: true,
+				homeDir,
 				snapshotStore: globalSnapshotStore,
 			});
 
@@ -89,8 +93,12 @@ On divergence the engine attempts a 3-way merge. After success the tool returns 
 					const targetPath = r.newPath || r.filePath;
 					textOutput.push(`\nNext edit anchor for ${targetPath}: \`${formatHashlineHeader(targetPath, r.newHash)}\``);
 					try {
-						const fullPath = resolve(cwd, targetPath);
-						const diags = await getLiveLspDiagnostics(fullPath, cwd);
+						const bounds = checkPatchPathBounds(targetPath, { cwd, allowLinkedWorktrees: true, homeDir });
+						const fullPath = bounds.ok ? bounds.resolvedPath : resolvePatchPath(cwd, targetPath, homeDir);
+						const lspCwd = bounds.ok && bounds.kind === "worktree" ? bounds.rootDir : cwd;
+						const diags =
+							(await getLiveLspDiagnostics(fullPath, lspCwd)) ??
+							(lspCwd !== cwd ? await getLiveLspDiagnostics(fullPath, cwd) : null);
 						if (diags) {
 							textOutput.push(`\nLive LSP diagnostics for ${targetPath}:\n${diags}`);
 						}

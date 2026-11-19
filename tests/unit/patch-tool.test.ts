@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -329,5 +330,276 @@ PUT 4.=4:
 		const res = applyHashlinePatch(patch, { cwd: tempDir });
 		expect(res.ok).toBe(true);
 		expect(readFileSync(join(tempDir, filePath), "utf8")).toBe("step1\nline2\nline3\nstep2\n");
+	});
+});
+
+describe("Linked git worktrees outside cwd (#1033)", () => {
+	let sandboxRoot: string;
+	let testHome: string;
+	let mainRepoDir: string;
+	let wtDir: string;
+	let scratchCwd: string;
+	let plainSiblingDir: string;
+	let savedHome: string | undefined;
+
+	const runGit = (cwd: string, args: string[]) => {
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			HOME: testHome,
+			GIT_AUTHOR_NAME: "Patch Test",
+			GIT_AUTHOR_EMAIL: "patch-test@localhost",
+			GIT_COMMITTER_NAME: "Patch Test",
+			GIT_COMMITTER_EMAIL: "patch-test@localhost",
+		};
+		for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"]) {
+			delete env[k];
+		}
+		execFileSync("git", args, { cwd, env, stdio: "pipe" });
+	};
+
+	const execPatchTool = async (cwd: string, patch: string) => {
+		const tool = makePatchTool({ cwd, ownerId: "test-agent" });
+		const exec = tool.execute as unknown as (
+			_id: string,
+			p: { patch: string },
+		) => Promise<{
+			content: Array<{ type: "text"; text: string }>;
+			details: { ok: boolean; summary: string; error?: string };
+		}>;
+		return exec("call-wt", { patch });
+	};
+
+	beforeEach(() => {
+		savedHome = process.env.HOME;
+		sandboxRoot = mkdtempSync(join(tmpdir(), "patch-wt-sandbox-"));
+		testHome = join(sandboxRoot, "home");
+		mainRepoDir = join(testHome, "projects", "demo-repo");
+		wtDir = join(testHome, "projects", "demo-repo-wt");
+		plainSiblingDir = join(testHome, "projects", "plain-sibling");
+		scratchCwd = join(sandboxRoot, "scratch-cwd");
+
+		mkdirSync(join(mainRepoDir, "src"), { recursive: true });
+		mkdirSync(plainSiblingDir, { recursive: true });
+		mkdirSync(scratchCwd, { recursive: true });
+		mkdirSync(join(testHome, ".pi", "agent"), { recursive: true });
+		process.env.HOME = testHome;
+
+		writeFileSync(join(mainRepoDir, "src", "alpha.ts"), "export const alpha = 1;\n");
+		writeFileSync(join(mainRepoDir, "src", "source.ts"), "keepTop();\ncutLineOne();\ncutLineTwo();\nkeepBottom();\n");
+		writeFileSync(join(mainRepoDir, "src", "target.ts"), "header();\nfooter();\n");
+		writeFileSync(join(mainRepoDir, "src", "old-name.ts"), "export const moved = false;\n");
+		writeFileSync(join(plainSiblingDir, "note.txt"), "plain sibling\n");
+		writeFileSync(join(testHome, ".pi", "agent", "settings.json"), '{"safe":true}\n');
+
+		runGit(mainRepoDir, ["init", "-b", "main"]);
+		runGit(mainRepoDir, ["add", "."]);
+		runGit(mainRepoDir, ["commit", "-m", "initial"]);
+		runGit(mainRepoDir, ["worktree", "add", wtDir, "-b", "wt-feature"]);
+	});
+
+	afterEach(() => {
+		if (savedHome === undefined) delete process.env.HOME;
+		else process.env.HOME = savedHome;
+		try {
+			rmSync(sandboxRoot, { recursive: true, force: true });
+		} catch {}
+	});
+
+	it("applies PUT inside a linked git worktree (absolute and ~/ paths) when cwd is the main repo", async () => {
+		const alphaPath = join(wtDir, "src", "alpha.ts");
+		const targetPath = "~/projects/demo-repo-wt/src/target.ts";
+		const alphaHash = computeFileHash(readFileSync(alphaPath, "utf8"));
+		const targetHash = computeFileHash(readFileSync(join(wtDir, "src", "target.ts"), "utf8"));
+
+		const res = await execPatchTool(
+			mainRepoDir,
+			`
+[${alphaPath}#${alphaHash}]
+PUT 1.=1:
++export const alpha = 99;
+
+[${targetPath}#${targetHash}]
+PUT 2.=2:
++footerUpdated();
+`,
+		);
+
+		expect(res.details.ok).toBe(true);
+		expect(readFileSync(alphaPath, "utf8")).toBe("export const alpha = 99;\n");
+		expect(readFileSync(join(wtDir, "src", "target.ts"), "utf8")).toBe("header();\nfooterUpdated();\n");
+		// Main checkout stays untouched
+		expect(readFileSync(join(mainRepoDir, "src", "alpha.ts"), "utf8")).toBe("export const alpha = 1;\n");
+	});
+
+	it("applies cross-file CUT/PUT @reg and MV into a new subdirectory inside a linked worktree when cwd is /tmp scratch", async () => {
+		const srcFile = join(wtDir, "src", "source.ts");
+		const dstFile = join(wtDir, "src", "target.ts");
+		const oldFile = join(wtDir, "src", "old-name.ts");
+		const movedFile = join(wtDir, "src", "nested", "new-name.ts");
+
+		const hSrc = computeFileHash(readFileSync(srcFile, "utf8"));
+		const hDst = computeFileHash(readFileSync(dstFile, "utf8"));
+		const hOld = computeFileHash(readFileSync(oldFile, "utf8"));
+
+		const res = await execPatchTool(
+			scratchCwd,
+			`
+[${srcFile}#${hSrc}]
+CUT 2.=3 @movedBlock
+
+[${dstFile}#${hDst}]
+PUT >1 @movedBlock
+
+[${oldFile}#${hOld}]
+PUT 1.=1:
++export const moved = true;
+MV ${movedFile}
+`,
+		);
+
+		expect(res.details.ok).toBe(true);
+		expect(readFileSync(srcFile, "utf8")).toBe("keepTop();\nkeepBottom();\n");
+		expect(readFileSync(dstFile, "utf8")).toBe("header();\ncutLineOne();\ncutLineTwo();\nfooter();\n");
+		expect(existsSync(oldFile)).toBe(false);
+		expect(readFileSync(movedFile, "utf8")).toBe("export const moved = true;\n");
+	});
+
+	it("refuses main git checkouts outside cwd (.git directory is not a linked worktree)", async () => {
+		const mainAlpha = join(mainRepoDir, "src", "alpha.ts");
+		const hash = computeFileHash(readFileSync(mainAlpha, "utf8"));
+
+		const resAbs = await execPatchTool(scratchCwd, `[${mainAlpha}#${hash}]\nPUT 1.=1:\n+export const alpha = 2;\n`);
+		expect(resAbs.details.ok).toBe(false);
+		expect(resAbs.details.summary).toContain("Path out of bounds");
+
+		const resTilde = await execPatchTool(
+			wtDir,
+			`[~/projects/demo-repo/src/alpha.ts#${hash}]\nPUT 1.=1:\n+export const alpha = 2;\n`,
+		);
+		expect(resTilde.details.ok).toBe(false);
+		expect(resTilde.details.summary).toContain("Path out of bounds");
+		expect(readFileSync(mainAlpha, "utf8")).toBe("export const alpha = 1;\n");
+	});
+
+	it("refuses ~/.pi/... and plain sibling directories without a linked-worktree .git file", async () => {
+		const piSettings = join(testHome, ".pi", "agent", "settings.json");
+		const plainNote = join(plainSiblingDir, "note.txt");
+
+		const resPi = await execPatchTool(mainRepoDir, `[~/.pi/agent/settings.json]\nPUT 1.=1:\n+{"safe":false}\n`);
+		expect(resPi.details.ok).toBe(false);
+		expect(resPi.details.summary).toContain("Path out of bounds");
+		expect(readFileSync(piSettings, "utf8")).toBe('{"safe":true}\n');
+
+		const resSibling = await execPatchTool(mainRepoDir, `[${plainNote}]\nPUT 1.=1:\n+tampered\n`);
+		expect(resSibling.details.ok).toBe(false);
+		expect(resSibling.details.summary).toContain("Path out of bounds");
+		expect(readFileSync(plainNote, "utf8")).toBe("plain sibling\n");
+	});
+
+	it("refuses forged .git files missing commondir/gitdir or pointing to another worktree's gitdir", async () => {
+		// Case A: forged .git file pointing to a directory without commondir/gitdir
+		const forgedA = join(testHome, "projects", "forged-wt-a");
+		mkdirSync(join(forgedA, "fake-gitdir"), { recursive: true });
+		writeFileSync(join(forgedA, ".git"), "gitdir: ./fake-gitdir\n");
+		writeFileSync(join(forgedA, "app.ts"), "const ok = true;\n");
+
+		const resA = await execPatchTool(scratchCwd, `[${join(forgedA, "app.ts")}]\nPUT 1.=1:\n+const ok = false;\n`);
+		expect(resA.details.ok).toBe(false);
+		expect(resA.details.summary).toContain("Path out of bounds");
+		expect(readFileSync(join(forgedA, "app.ts"), "utf8")).toBe("const ok = true;\n");
+
+		// Case B: forged .git file pointing at demo-repo-wt's real gitdir (back-pointer mismatch)
+		const forgedB = join(testHome, "projects", "forged-wt-b");
+		mkdirSync(forgedB, { recursive: true });
+		const realWtDotGit = readFileSync(join(wtDir, ".git"), "utf8");
+		writeFileSync(join(forgedB, ".git"), realWtDotGit);
+		writeFileSync(join(forgedB, "app.ts"), "const safe = true;\n");
+
+		const resB = await execPatchTool(scratchCwd, `[${join(forgedB, "app.ts")}]\nPUT 1.=1:\n+const safe = false;\n`);
+		expect(resB.details.ok).toBe(false);
+		expect(resB.details.summary).toContain("Path out of bounds");
+		expect(readFileSync(join(forgedB, "app.ts"), "utf8")).toBe("const safe = true;\n");
+	});
+
+	it("refuses ../ traversal and MV dest escaping the linked worktree root", async () => {
+		const alphaPath = join(wtDir, "src", "alpha.ts");
+		const hash = computeFileHash(readFileSync(alphaPath, "utf8"));
+
+		// ../ traversal in section header
+		const resTraversal = await execPatchTool(scratchCwd, `[${wtDir}/../plain-sibling/note.txt]\nPUT 1.=1:\n+escaped\n`);
+		expect(resTraversal.details.ok).toBe(false);
+		expect(resTraversal.details.summary).toContain("Path out of bounds");
+
+		// MV ../escape out of worktree to sibling folder
+		const escapedSibling = join(wtDir, "..", "escaped.ts");
+		const resMvSibling = await execPatchTool(scratchCwd, `[${alphaPath}#${hash}]\nMV ${escapedSibling}\n`);
+		expect(resMvSibling.details.ok).toBe(false);
+		expect(resMvSibling.details.summary).toContain("Path out of bounds");
+		expect(existsSync(alphaPath)).toBe(true);
+		expect(existsSync(join(testHome, "projects", "escaped.ts"))).toBe(false);
+
+		// MV out of linked worktree into cwd (main repo)
+		const snuckIntoCwd = join(mainRepoDir, "src", "snuck.ts");
+		const resMvIntoCwd = await execPatchTool(mainRepoDir, `[${alphaPath}#${hash}]\nMV ${snuckIntoCwd}\n`);
+		expect(resMvIntoCwd.details.ok).toBe(false);
+		expect(resMvIntoCwd.details.summary).toContain("Path out of bounds");
+		expect(existsSync(alphaPath)).toBe(true);
+		expect(existsSync(snuckIntoCwd)).toBe(false);
+	});
+
+	it("refuses symlinks inside worktree or cwd pointing outside their root, and refuses .git itself", async () => {
+		// 1. Symlink inside worktree -> existing file outside worktree
+		const linkToOutside = join(wtDir, "src", "outside-link.txt");
+		symlinkSync(join(plainSiblingDir, "note.txt"), linkToOutside);
+		const resLink = await execPatchTool(mainRepoDir, `[${linkToOutside}]\nPUT 1.=1:\n+via symlink\n`);
+		expect(resLink.details.ok).toBe(false);
+		expect(resLink.details.summary).toContain("Path out of bounds");
+		expect(readFileSync(join(plainSiblingDir, "note.txt"), "utf8")).toBe("plain sibling\n");
+
+		// 2. Broken symlink inside worktree -> non-existent file outside worktree used as MV target
+		const brokenEscapeLink = join(wtDir, "src", "broken-escape.ts");
+		symlinkSync(join(plainSiblingDir, "created-outside.ts"), brokenEscapeLink);
+		const alphaPath = join(wtDir, "src", "alpha.ts");
+		const hash = computeFileHash(readFileSync(alphaPath, "utf8"));
+		const resBrokenMv = await execPatchTool(mainRepoDir, `[${alphaPath}#${hash}]\nMV ${brokenEscapeLink}\n`);
+		expect(resBrokenMv.details.ok).toBe(false);
+		expect(resBrokenMv.details.summary).toContain("Path out of bounds");
+		expect(existsSync(join(plainSiblingDir, "created-outside.ts"))).toBe(false);
+		expect(existsSync(alphaPath)).toBe(true);
+
+		// 3. Symlink inside cwd -> file outside cwd
+		const cwdLink = join(scratchCwd, "cwd-escape.txt");
+		symlinkSync(join(plainSiblingDir, "note.txt"), cwdLink);
+		const resCwdLink = await execPatchTool(scratchCwd, `[cwd-escape.txt]\nPUT 1.=1:\n+escaped cwd\n`);
+		expect(resCwdLink.details.ok).toBe(false);
+		expect(resCwdLink.details.summary).toContain("Path out of bounds");
+		expect(readFileSync(join(plainSiblingDir, "note.txt"), "utf8")).toBe("plain sibling\n");
+
+		// 4. Directory symlink inside worktree -> directory outside worktree
+		const outsideSubDir = join(plainSiblingDir, "sub");
+		mkdirSync(outsideSubDir, { recursive: true });
+		writeFileSync(join(outsideSubDir, "secret.txt"), "do not touch\n");
+		const dirLink = join(wtDir, "src", "dir-link");
+		symlinkSync(outsideSubDir, dirLink);
+		const resDirLink = await execPatchTool(mainRepoDir, `[${join(dirLink, "secret.txt")}]\nPUT 1.=1:\n+touched\n`);
+		expect(resDirLink.details.ok).toBe(false);
+		expect(resDirLink.details.summary).toContain("Path out of bounds");
+		expect(readFileSync(join(outsideSubDir, "secret.txt"), "utf8")).toBe("do not touch\n");
+
+		// 5. .git file inside linked worktree cannot be modified via patch
+		const resDotGit = await execPatchTool(scratchCwd, `[${join(wtDir, ".git")}]\nPUT 1.=1:\n+gitdir: /bad\n`);
+		expect(resDotGit.details.ok).toBe(false);
+		expect(resDotGit.details.summary).toContain("Path out of bounds");
+	});
+
+	it("keeps raw applyHashlinePatch default strict to cwd unless allowLinkedWorktrees is enabled", () => {
+		const alphaPath = join(wtDir, "src", "alpha.ts");
+		const hash = computeFileHash(readFileSync(alphaPath, "utf8"));
+		const res = applyHashlinePatch(`[${alphaPath}#${hash}]\nPUT 1.=1:\n+export const alpha = 7;\n`, {
+			cwd: mainRepoDir,
+		});
+		expect(res.ok).toBe(false);
+		expect(res.summary).toContain("Path out of bounds");
+		expect(readFileSync(alphaPath, "utf8")).toBe("export const alpha = 1;\n");
 	});
 });
