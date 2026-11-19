@@ -338,9 +338,8 @@ describe("live app wiring", () => {
 		);
 		expect(source.includes("model: boundedDecisionModel(")).toBe(true);
 		expect(source.includes("onBatch: (records) => control.prepare(records)")).toBe(true);
-		expect(/onChange:\s*\(\)\s*=>\s*\{\s*control\.progress\(\);\s*this\.onDecisionsChanged\?\.\(\);/.test(source)).toBe(
-			true,
-		);
+		// ops #1013: the Initiatives page's decisions watch is gone, so a change only moves the batch control on.
+		expect(/onChange:\s*\(\)\s*=>\s*control\.progress\(\)/.test(source)).toBe(true);
 	});
 });
 describe("native-session fences", () => {

@@ -120,7 +120,6 @@ describe("BUILTIN_UI_ITEMS（宿主默认）", () => {
 				"host:terminal",
 				"host:git",
 				"host:roles",
-				"host:initiatives",
 				"host:search",
 				"host:browser",
 				"host:tasks",
@@ -158,7 +157,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:terminal",
 			"host:git",
 			"host:roles",
-			"host:initiatives",
 			"host:openviking",
 			"host:plugins",
 			"host:search",
@@ -244,7 +242,6 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:terminal",
 			"host:git",
 			"host:roles",
-			"host:initiatives",
 			"host:openviking",
 			"host:plugins",
 			"host:search",
@@ -262,7 +259,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 	it("按角色分位置：视图三连 + 🧩 靠左，搜索与新建对话靠右", () => {
 		const top = build([])["topbar.primary"];
 		const alignOf = (id: string) => top.find((e) => e.id === id)?.align;
-		for (const id of ["host:chat", "host:terminal", "host:git", "host:roles", "host:initiatives", "host:plugins"])
+		for (const id of ["host:chat", "host:terminal", "host:git", "host:roles", "host:plugins"])
 			expect(alignOf(id)).toBe("start");
 		for (const id of ["host:search", "host:new-chat"]) expect(alignOf(id)).toBe("end");
 	});

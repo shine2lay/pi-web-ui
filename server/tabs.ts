@@ -20,16 +20,7 @@
  */
 
 /** Every tab that can be listed. `chat` is always on and is listed for symmetry. */
-export const ALL_TABS = [
-	"chat",
-	"terminal",
-	"git",
-	"search",
-	"tasks",
-	"settings",
-	"plugins",
-	"roles",
-] as const;
+export const ALL_TABS = ["chat", "terminal", "git", "search", "tasks", "settings", "plugins", "roles"] as const;
 
 export type Tab = (typeof ALL_TABS)[number];
 
