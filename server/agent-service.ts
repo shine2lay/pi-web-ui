@@ -178,7 +178,7 @@ import {
 import { moveThinkingInMemory, moveThinkingInSettingsFile } from "./thinking-level-settings.js";
 import { defaultThinking, prepareLaunch, profileChoices, QueueLaunchRefused } from "./queue-profile.js";
 import { effortLevelDeps, handleEffortLevelMessage } from "./effort-level.js";
-import type { ThinkingAllChatsResult, UiDecisionRecordView, UiDecisionsPage, UiTaskLaunch } from "./protocol.js";
+import type { ThinkingAllChatsResult, UiTaskLaunch } from "./protocol.js";
 import {
 	checkAll as checkAllUpdates,
 	collectTargets,
@@ -396,16 +396,12 @@ import { makeClaimFilesTool, type ClaimFilesHost } from "./claim-files-tool.js";
 import { makeMessageRoleTool, type MessageRoleHost } from "./role-message-tool.js";
 import { makeBoardTool } from "./board-tool.js";
 import { boardTurnHook } from "./board-turn-hook.js";
-import { type DecisionLogHost, makeDecisionLogTool } from "./decision-log-tool.js";
 import { DecisionBatchControl } from "./decision-batches.js";
 import { boundedDecisionModel } from "./decision-bounded-model.js";
 import { parseRecoveryCommand } from "./decision-recovery.js";
 import { AnswerPreviews } from "./decision-previews.js";
 import { DecisionReader, readerStatus, type ReadResult, unreadOf } from "./decision-reader.js";
 import { DecisionStore, fileRecord } from "./decision-store.js";
-import { buildDecisionsPage, recordView } from "./decision-view.js";
-import { WhoCache } from "./who-cache.js";
-import { WhoFiller } from "./who-fill.js";
 import {
 	BOARD_CUSTOM_TYPE,
 	boardChatState,
@@ -638,9 +634,6 @@ import {
 	recordId,
 	SCAN_STATE_FILE,
 } from "./decision-records.js";
-import { type DecisionModel, isolatedDecisionModel } from "./decision-model.js";
-import { makeInitiativeUpdateTool } from "./initiative-update-tool.js";
-import { ProgressFeed } from "./progress-feed.js";
 import {
 	LeadUpdatesFile,
 	StallDryLog,
@@ -2100,7 +2093,6 @@ function quietRunsOf(conv: Conversation, idx: ChatIndex): QuietRun[] {
 			? {
 					kind: s.kind,
 					...(s.forOwner ? { forOwner: true } : {}),
-					...(s.poke ? { poke: true } : {}),
 					...(s.stall ? { stall: true } : {}),
 				}
 			: null;
@@ -2182,10 +2174,6 @@ let ownerContacts: {
 } | null = null;
 /** telegram-coo: the Roles page's snapshot for the roles_overview tool (AgentService.readRolesOverview). */
 let rolesOverviewSource: (() => Promise<UiRolesOverview>) | null = null;
-/** initiatives-page: the decisions store and the kept records, for the decision_log tool (AgentService sets it). */
-let decisionsService: Omit<DecisionLogHost, "sender"> | null = null;
-/** progress-feed (task #85): the initiatives' progress feeds, for the initiative_update tool (AgentService sets it). */
-let progressFeedService: ProgressFeed | null = null;
 
 /** role-messages: the first text of a user message. */
 function firstUserText(m: AgentMessage): string | undefined {
@@ -5472,17 +5460,6 @@ export class ClientSession {
 
 	/** role-messages: message_role's host. The sender is this runtime's chat as the server knows it (its
 	 *  role, which chat, the depth of the role message it is handling), never what the model says. */
-	/** initiatives-page: decision_log's host: this chat's role (as message_role knows it), the store and records. */
-	private decisionLogHost(ownerId?: string): DecisionLogHost {
-		return {
-			sender: () => this.roleMessageHost(ownerId).sender(),
-			store: () => decisionsService?.store(),
-			record: (idOrRef) => decisionsService?.record(idOrRef),
-			records: (ids) => decisionsService?.records(ids) ?? new Map(),
-			changed: () => decisionsService?.changed(),
-		};
-	}
-
 	private roleMessageHost(ownerId?: string): MessageRoleHost {
 		const target = (): Conversation | undefined => {
 			try {
@@ -18619,14 +18596,11 @@ export class AgentService {
 		});
 		// initiatives-page (task #84): the decisions found in the records, the initiatives and the reader's state.
 		this.decisionStore = new DecisionStore(this.decisions.dir);
-		decisionsService = this.decisionLogService();
 		this.queueScanner = new QueueScanner(this.decisions, {
 			root: () => decisionsSessionsRoot(),
 			statePath: join(this.decisions.dir, SCAN_STATE_FILE),
 			roleOf: (files) => this.decisionChatRoles(files),
 			chatOf: (file) => this.decisionChatTitles.get(file),
-			// progress-feed (task #85): TL;DR lines, only those filed under an initiative with a Progress feed.
-			keepTldr: (rec) => this.keepTldr(rec),
 			log: (line) => console.log(line),
 		});
 		// role-messages: the store is read now (message_role works at once); delivery starts with
@@ -18671,35 +18645,6 @@ export class AgentService {
 			log: (line) => console.log(line),
 		});
 		roleBoardService = this.roleBoard;
-		// progress-feed (task #85): one running progress feed per initiative, written by its lead from the roles'
-		// records and linked to them (progress-feed.ts). Its asks go the way role requests do, as the Initiatives
-		// page's (outside the role message caps); its timer starts with startRoleMessages.
-		this.progressFeed = new ProgressFeed(
-			{
-				store: () => this.decisionStore,
-				records: () => this.keptRecords().list,
-				append: (rec) => this.decisions.append(rec),
-				roles: () => identityRegistry().identities.map((i) => ({ id: i.id, name: i.title || i.id })),
-				poke: (input) => {
-					const r = this.roleMessages.requestPoke(input);
-					return r.ok ? { ok: true, id: r.record.id } : r;
-				},
-				pokeState: (id) => this.roleMessages.byId(id)?.state,
-				leadBusy: (role) => {
-					const home = identityRegistry().identities.find((i) => i.id === role)?.homeChat;
-					return !!home && this.queueChatState(home).state === "working";
-				},
-				chatBusy: (file) => {
-					const path = this.decisionChatPath(file);
-					return !!path && this.queueChatState(path).state === "working";
-				},
-				model: () => this.feedModel(),
-				changed: () => this.onDecisionsChanged?.(),
-				log: (line) => console.log(line),
-			},
-			this.decisions.dir,
-		);
-		progressFeedService = this.progressFeed;
 		// telegram-coo: a role home chat's replies go to the plugins; roles_overview reads the Roles page.
 		roleTurnSettled = (file, rec) => this.roleTurnSettled(file, rec);
 		ownerContacts = {
@@ -18789,7 +18734,6 @@ export class AgentService {
 		this.roleMessages.start();
 		this.roleBoard.start();
 		this.startDecisionRecords();
-		this.progressFeed.start();
 		this.startStallWatch();
 		// owner-question routing (Ops #685): the safety net's sweep (lets nothing through while the switch is off).
 		this.ownerQuestions.start();
@@ -18921,24 +18865,6 @@ export class AgentService {
 	private decisionReader: DecisionReader | null = null;
 	private decisionBatchControl: DecisionBatchControl | null = null;
 	private decisionReadNow: Promise<ReadResult> | null = null;
-	private decisionRecordsIndex: {
-		key: string;
-		list: DecisionRecord[];
-		byId: Map<string, DecisionRecord>;
-		byRef: Map<string, DecisionRecord>;
-	} | null = null;
-	/** Architecture #99 (H-INIT-WHO-CACHE): who decided, kept between Initiatives page builds (who-cache.ts);
-	 *  keptRecords tells it about every new read of the records file. */
-	private readonly whoCache = new WhoCache();
-	/** Architecture #115 (H-INIT-WHO-FILL): fills whoCache in the background, in slices, through the page's own
-	 *  path (who-fill.ts), one fill at a time. */
-	private readonly whoFiller = new WhoFiller(
-		this.whoCache,
-		() => ({ decisions: this.decisionStore.decisions(), recs: this.keptRecords().byId }),
-		{ log: (line) => console.log(line) },
-	);
-	/** index.ts: the Initiatives page changed (decisions, the reader's state). */
-	onDecisionsChanged: (() => void) | null = null;
 
 	/** The reader reads on its own timer (settings.json in the decisions folder: model, interval, daily cap). */
 	private startDecisionReader(): void {
@@ -18963,98 +18889,20 @@ export class AgentService {
 			withPreviews: (rec) => previews.withPreviews(rec),
 			log: (line) => console.log(line),
 			onBatch: (records) => control.prepare(records),
-			onChange: () => {
-				control.progress();
-				this.onDecisionsChanged?.();
-			},
+			onChange: () => control.progress(),
 		});
 		this.decisionReader.start();
 	}
 
-	/** The kept records (oldest first), by id and by ref, read again only when the file changed. */
-	private keptRecords(): {
-		list: DecisionRecord[];
-		byId: Map<string, DecisionRecord>;
-		byRef: Map<string, DecisionRecord>;
-	} {
-		let key = "none";
-		let ino = -1;
-		let size = 0;
-		try {
-			const st = statSync(this.decisions.file);
-			ino = st.ino;
-			size = st.size;
-			key = `${st.ino}:${st.size}:${st.mtimeMs}`;
-		} catch {
-			/* nothing kept yet */
-		}
-		if (this.decisionRecordsIndex?.key === key) return this.decisionRecordsIndex;
-		// The kept who-decided answers stay right while the file only grows; a replaced or shrunk one drops them,
-		// and they are filled again in the background (#115).
-		if (this.whoCache.sawFile(ino, size)) this.startWhoFill();
-		const list = this.decisions.list();
-		const byId = new Map(list.map((r) => [r.id, r] as const));
-		const byRef = new Map<string, DecisionRecord>();
-		for (const r of list) if (!byRef.has(r.ref)) byRef.set(r.ref, r);
-		this.decisionRecordsIndex = { key, list, byId, byRef };
-		return this.decisionRecordsIndex;
-	}
-
-	/**
-	 * Architecture #115 (H-INIT-WHO-FILL): fill the who-cache in the background, in slices, through the page's
-	 * own path (who-fill.ts), so the first Initiatives page after a start isn't a cold build. index.ts starts
-	 * it when the server listens; keptRecords starts it again after the records file was replaced or shrank.
-	 * One at a time: asked while one runs, another follows it. A failure is logged, and pages build as before.
-	 */
-	startWhoFill(): void {
-		this.whoFiller.start();
-	}
-
-	/** #115: the background fill an Initiatives page should wait for, or nothing when none is running. */
-	whoFillPending(): Promise<void> | undefined {
-		return this.whoFiller.pending();
-	}
-
-	private keptRecord(idOrRef: string): DecisionRecord | undefined {
-		const { byId, byRef } = this.keptRecords();
-		return byId.get(idOrRef) ?? byRef.get(idOrRef);
-	}
-
-	/** The Initiatives tab: the initiatives with their counts, the reader's state, and one initiative's
-	 *  decisions ("" = Unfiled; left out = the first initiative), newest first, at most limit. */
-	initiativesPage(initiative?: string, limit = 200): UiDecisionsPage {
-		const store = this.decisionStore;
-		const sel = initiative ?? store.initiatives()[0]?.id ?? "";
-		const { list, byId } = this.keptRecords();
-		const reader = readerStatus(store, undefined);
-		// Unread from the cached records (the reader's own count reads the whole file): only those filed to an
-		// initiative it reads (task #98).
-		reader.unread = unreadOf(store, byId.values());
-		const page = buildDecisionsPage(store, byId, reader, {
-			initiative: sel,
-			limit: Math.max(1, Math.min(limit, 2000)),
-			whoCache: this.whoCache,
-		});
-		// progress-feed (task #85): each initiative's lead (who set it) and feed badges; the selected one's Progress.
-		const inis = new Map(store.initiatives().map((i) => [i.id, i] as const));
-		for (const row of page.initiatives) {
-			const ini = inis.get(row.id);
-			if (ini?.leadSet) row.leadSet = { ...ini.leadSet };
-			if (ini) row.feed = this.progressFeed.row(row.id, list);
-		}
-		if (sel && inis.has(sel)) page.progress = this.progressFeed.view(sel, list);
-		return page;
-	}
-
-	/** initiatives-plan-data (Ops #223): the work registry's reader for the Initiatives page (made on first use). */
+	/** The work registry's reader (made on first use). */
 	private workPageFile: WorkPageFile | null = null;
 	private workFactsError: string | null = null;
 
 	/**
-	 * initiatives-plan-data: the whole work registry for the Initiatives page (read only, see work-page.ts),
-	 * each task joined with what the Roles overview's projection of its queue says. Without that projection
-	 * the registry still shows, only the queues' details are missing. pages-fresh (Ops #245): the background
-	 * refresher passes the overview it has just made, so one round makes it once.
+	 * The whole work registry (read only, see work-page.ts), for dead-end and stall-watch: each task joined with
+	 * what the Roles overview's projection of its queue says. Without that projection the registry still reads,
+	 * only the queues' details are missing. stall-watch passes the overview it already has, so a round makes it
+	 * once.
 	 */
 	async readWorkPage(overview?: UiRolesOverview): Promise<UiWorkPage> {
 		let facts: WorkQueueFacts[] = [];
@@ -19082,120 +18930,7 @@ export class AgentService {
 		return withStall(page, findings, (stretch) => this.stallWake?.asked(stretch) ?? []);
 	}
 
-	// -----------------------------------------------------------------------
-	// progress-feed (task #85): one running progress feed per initiative (progress-feed.ts)
-	// -----------------------------------------------------------------------
-
-	private readonly progressFeed: ProgressFeed;
-	private feedModelFn: DecisionModel | undefined;
-
-	/** The second-hand check's reader: one isolated call per update (the cheapest Claude model, "auto"). */
-	private feedModel(): DecisionModel {
-		if (!this.feedModelFn)
-			this.feedModelFn = isolatedDecisionModel({
-				cwd: this.decisions.dir,
-				agentDir: process.env.PI_CODING_AGENT_DIR ?? getAgentDir(),
-				dataDir: this.stateStore.dataDir,
-			});
-		return this.feedModelFn;
-	}
-
-	/**
-	 * A TL;DR line is kept only when it is filed under an initiative with a Progress feed (the owner: only
-	 * Team in Temper). Its initiative: its own field, else its queued task's (the scanner set both on
-	 * rec.initiative, in that order), else the reader's filing by markers.
-	 */
-	private keepTldr(rec: NewDecisionRecord): NewDecisionRecord | undefined {
-		const on = this.decisionStore.feedSettings().initiatives;
-		if (!on.length) return undefined;
-		const probe: DecisionRecord = {
-			...rec,
-			v: 1,
-			id: recordId(rec.source, rec.ref),
-			seen: rec.at,
-			how: rec.how ?? "live",
-		};
-		const to = fileRecord(probe, this.decisionStore.initiatives())?.initiative;
-		if (!to || !on.includes(to)) return undefined;
-		return { ...rec, initiative: to };
-	}
-
-	/** The page: the owner sets or clears an initiative's lead (never a role). */
-	setInitiativeLead(initiative: unknown, lead: unknown): { ok: true } | { ok: false; error: string } {
-		if (typeof initiative !== "string" || !initiative.trim()) return { ok: false, error: "which initiative?" };
-		if (lead !== null && typeof lead !== "string") return { ok: false, error: "lead must be a role id or none" };
-		return this.progressFeed.setLead(initiative.trim().toLowerCase(), lead);
-	}
-
-	/** The page's "Ask for an update" button. */
-	askInitiativeUpdate(initiative: unknown): { ok: true; id: string; at: number } | { ok: false; error: string } {
-		if (typeof initiative !== "string" || !initiative.trim()) return { ok: false, error: "which initiative?" };
-		return this.progressFeed.ask(initiative.trim().toLowerCase());
-	}
-
-	/** The owner looked at an initiative's Progress (its "new since you looked" dot clears). */
-	initiativeSeen(initiative: unknown): void {
-		if (typeof initiative === "string" && initiative.trim()) this.progressFeed.seen(initiative.trim().toLowerCase());
-	}
-
-	/** Everything one update links (the page's "show all"). */
-	initiativeUpdateLinks(update: unknown): ReturnType<ProgressFeed["updateLinks"]> {
-		return typeof update === "string" ? this.progressFeed.updateLinks(update.trim().toLowerCase()) : undefined;
-	}
-
-	/** Control socket feed_catch_up: the one-time catch-up ask (live use of the feed, the owner's request). */
-	feedCatchUp(initiative: unknown, from: unknown): ReturnType<ProgressFeed["catchUp"]> {
-		if (typeof initiative !== "string" || typeof from !== "string")
-			return { ok: false, error: "give initiative and from (YYYY-MM-DD)" };
-		return this.progressFeed.catchUp(initiative.trim().toLowerCase(), from.trim());
-	}
-
-	/** Control socket feed_status: each feed initiative's lead, updates, unlinked count, open ask and flags. */
-	feedStatus(): Record<string, unknown> {
-		return this.progressFeed.status();
-	}
-
-	/** One kept record a card cites, with the chat to open when its file still exists. */
-	decisionRecordView(idOrRef: string): UiDecisionRecordView | undefined {
-		const rec = this.keptRecord(idOrRef);
-		if (!rec) return undefined;
-		const path = rec.file ? this.decisionChatPath(rec.file) : undefined;
-		return recordView(rec, { path, title: path ? this.decisionChatTitles.get(path) : undefined });
-	}
-
-	/** A chat file's full path by its name (records keep the name only). */
-	private decisionChatPath(file: string): string | undefined {
-		if (!/^[\w.-]+\.jsonl$/.test(file)) return undefined;
-		const root = decisionsSessionsRoot();
-		try {
-			for (const dir of readdirSync(root)) {
-				const p = join(root, dir, file);
-				if (existsSync(p)) return p;
-			}
-		} catch {
-			/* no chats folder */
-		}
-		return undefined;
-	}
-
 	/** decision_log's view of the store and the kept records (the tool lives in each chat's ClientSession). */
-	private decisionLogService(): Omit<DecisionLogHost, "sender"> {
-		return {
-			store: () => this.decisionStore,
-			record: (idOrRef) => this.keptRecord(idOrRef),
-			records: (ids) => {
-				const { byId } = this.keptRecords();
-				const out = new Map<string, DecisionRecord>();
-				for (const id of ids) {
-					const r = byId.get(id);
-					if (r) out.set(id, r);
-				}
-				return out;
-			},
-			changed: () => this.onDecisionsChanged?.(),
-		};
-	}
-
 	/** Control socket decisions_read: read now, in the background (at most maxBatches calls), within the
 	 *  settings (the daily cap holds); decisions_status shows how it goes. */
 	decisionsRead(maxBatches?: unknown): { ok: true; started: boolean } | { ok: false; error: string } {
@@ -19264,8 +18999,6 @@ export class AgentService {
 				roleBoardFile: join(dataDir, "role-board.json"),
 				roleOf: (files) => this.decisionChatRoles(files),
 				chatOf: (file) => this.decisionChatTitles.get(file),
-				// progress-feed (task #85): TL;DR lines filed under a feed initiative.
-				keepTldr: (rec) => this.keepTldr(rec),
 				onProgress: (p) => {
 					this.decisionBackfill = { ...p, added: { ...p.added } };
 				},
@@ -21267,10 +21000,7 @@ export class AgentService {
 		if (roleBoardService === this.roleBoard) roleBoardService = null;
 		this.queueScanner.stop();
 		this.decisionReader?.stop();
-		this.progressFeed.stop();
-		if (progressFeedService === this.progressFeed) progressFeedService = null;
 		this.stallWatch?.stop();
-		decisionsService = null;
 		this.stopDecisionAnswers?.();
 		this.stopDecisionAnswers = null;
 		this.stopOwnerAskRouted?.();

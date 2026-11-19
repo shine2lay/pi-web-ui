@@ -419,29 +419,15 @@ describe("RoleMessages.requestCiAlert", () => {
 		});
 	});
 
-	it("pokes and stalls still go out as before (shared app-report helper)", async () => {
+	it("stalls still go out as before (shared app-report helper)", async () => {
 		const { s, sent } = setup();
-		const poke = s.requestPoke({ role: "ops", initiative: "x-y", name: "X Y", text: "update please", why: ["button"] });
-		if (!poke.ok) throw new Error(poke.error);
-		expect(Object.keys(poke.record)).toEqual([
-			"id",
-			"at",
-			"from",
-			"to",
-			"kind",
-			"chain",
-			"text",
-			"state",
-			"sends",
-			"attempts",
-			"initiative",
-			"poke",
-		]);
-		expect(poke.record).toMatchObject({ kind: "report", from: { title: "the Initiatives page" }, initiative: "x-y" });
-		expect(s.requestPoke({ role: "docs", initiative: "x", name: "x", text: "x", why: [] })).toEqual({
-			ok: false,
-			error: "docs has no home chat",
+		const stall = s.requestStall({
+			role: "ops",
+			items: [{ kind: "project", id: "x-y", name: "X Y", rule: "empty", since: 0, step: 1 }],
+			text: "stalled",
 		});
+		if (!stall.ok) throw new Error(stall.error);
+		expect(stall.record).toMatchObject({ kind: "report", from: { title: "the work check" } });
 		expect(s.requestStall({ role: "ops", items: [], text: "x" })).toEqual({ ok: false, error: "no stalled items" });
 		expect(s.requestStall({ role: "nobody", items: [], text: "x" })).toEqual({
 			ok: false,

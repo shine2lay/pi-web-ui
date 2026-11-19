@@ -82,12 +82,11 @@ export const MESSAGE_ROLE_TOOL_NAME = "message_role";
  *  message_role it is always registered; pi-identity offers it only in chats that have a role, and the tool
  *  itself refuses a chat without one. */
 export const BOARD_TOOL_NAME = "board";
-/** decision-log (task #84): roles add and correct the Initiatives page's decisions (definition in
- *  decision-log-tool.ts). Not in the catalog: always registered; the tool refuses a chat without a role. */
+/** decision-log (task #84): retired with the Initiatives page (ops #1013); the name stays so
+ *  tool-registration.test.ts proves it is never registered again. */
 export const DECISION_LOG_TOOL_NAME = "decision_log";
-/** progress-feed (task #85): an initiative's lead reads what's new and posts progress updates (definition in
- *  initiative-update-tool.ts). Not in the catalog: always registered; the tool refuses a chat without a role,
- *  and only the initiative's lead may post. */
+/** progress-feed (task #85): retired; the name stays so tool-registration.test.ts proves it is never
+ *  registered again. */
 export const INITIATIVE_UPDATE_TOOL_NAME = "initiative_update";
 /** telegram-coo: every role's state in one call (definition in roles-overview-tool.ts). Not in the catalog:
  *  read-only and small, it is always registered (any chat may look at the Roles page's data; the owner

@@ -111,14 +111,6 @@ import {
 } from "./roles-state";
 import { graceLeft, graceView, liveVisibleAt, pageView, subscribePageLive, viewFresh } from "./page-live";
 import { disconnectRoleAnswers, receiveRoleAnswer } from "./roles-answer-state";
-import {
-	receiveDecisionRecord,
-	receiveInitiativeResult,
-	receiveInitiatives,
-	receiveUpdateLinks,
-	resendInitiativesWatch,
-} from "./initiatives-state";
-import { receiveWorkPage, resendWorkPageWatch, workPageConnectionLost } from "./work-page-state";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
@@ -2003,8 +1995,6 @@ export function useChat() {
 		effortLevelsSession(true);
 		resendNotebookWatch();
 		resendRolesWatch();
-		resendInitiativesWatch();
-		resendWorkPageWatch();
 		requestSubsLimits();
 		requestRoleGuard();
 		// first-send: a New chat still starting when the socket dropped asks for its answer again.
@@ -2550,26 +2540,6 @@ export function useChat() {
 						void boardSources.retire(msg.reqId);
 					}
 					break;
-				case "initiatives":
-					// initiatives-page: the Initiatives tab's page (initiatives-state.ts).
-					receiveInitiatives(msg);
-					break;
-				case "work_page":
-					// initiatives-page-exact: the Initiatives tab's work registry (work-page-state.ts).
-					receiveWorkPage(msg);
-					break;
-				case "decision_record":
-					// initiatives-page: a card's source record.
-					receiveDecisionRecord(msg);
-					break;
-				case "initiative_result":
-					// progress-feed (task #85): a lead change or an "Ask for an update" answered.
-					receiveInitiativeResult(msg);
-					break;
-				case "initiative_update_links":
-					// progress-feed: everything one update links.
-					receiveUpdateLinks(msg);
-					break;
 				case "identity_file":
 					receiveIdentityFile(msg);
 					break;
@@ -2946,8 +2916,6 @@ export function useChat() {
 			// episode it starts must already know why (pages-live).
 			traceRef.current?.noteCause({ reason: "close", closeCode: ev.code });
 			rolesConnectionLost();
-			// pages-fresh (Ops #245): so does the Initiatives page's.
-			workPageConnectionLost();
 			refreshNote();
 			// pages-live: a socket from before the tab last came back, closing now that it is visible: the
 			// owner is looking, so retry at once (the next socket is newer, so this can't loop).
@@ -3007,7 +2975,6 @@ export function useChat() {
 			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();
 			if (hadOpenRef.current && !lostSinceRef.current) lostSinceRef.current = Date.now();
 			rolesConnectionLost();
-			workPageConnectionLost();
 			doubtRef.current = false;
 			dispatch({ type: "status", status: "closed" });
 			if (timerRef.current) {

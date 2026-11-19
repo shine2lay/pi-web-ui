@@ -129,13 +129,6 @@ export const ROLE_REPORT_HEADINGS_BEFORE = [
 export const ROLE_REPORT_MAX_AGE_DAYS = 7;
 /** role-reports: who a report request is from (not a role: the app). */
 export const ROLE_REPORT_SENDER = { role: "app", title: "the app", chat: "6 am report job", file: "" } as const;
-/** progress-feed (task #85): who asks a lead for a progress update (not a role: the Initiatives page). */
-export const ROLE_POKE_SENDER = {
-	role: "app",
-	title: "the Initiatives page",
-	chat: "Initiatives page",
-	file: "",
-} as const;
 /** stall-wake (Ops #284): who wakes a lead about stalled work (not a role: the app's work check). */
 export const ROLE_STALL_SENDER = { role: "app", title: "the work check", chat: "Work check", file: "" } as const;
 /** ci-alert (Ops #720): who tells a role's home chat about a CI run (not a role: a script on this machine, through
@@ -201,14 +194,11 @@ export interface RoleMessageRecord {
 	error?: string;
 	/** role-reports: kind report: the day it is about, what the job found, and the answer's check. */
 	report?: RoleReportInfo;
-	/** progress-feed (task #85): kind report sent by the Initiatives page to an initiative's lead (no `report`):
-	 *  outside the role message caps and guards like the 6 am report, a chain of its own. */
-	poke?: RolePokeInfo;
 	/** stall-wake (Ops #284): kind report sent by the work check (stall-wake.ts) about stalled work: outside the role
-	 *  message caps and guards like a poke, a chain of its own, with the check's own caps. */
+	 *  message caps and guards like the 6 am report, a chain of its own, with the check's own caps. */
 	stall?: RoleStallInfo;
 	/** ci-alert (Ops #720): kind report sent by the CI watch about a CI run (ci-alert.ts): outside the role message
-	 *  caps and guards like a poke, a chain of its own; one record per key (the dedupe). */
+	 *  caps and guards like a stall message, a chain of its own; one record per key (the dedupe). */
 	ci?: RoleCiInfo;
 	/** script-notice (Ops #782): kind report sent by a script on this machine (control socket script_notice, app
 	 *  token), from { role "app", title: its name, chat: its id }: outside the role message caps and guards like a CI
@@ -306,16 +296,8 @@ export interface RoleReportReceipt {
 export type RoleReportResult =
 	{ ok: true; record: RoleMessageRecord; existing: boolean; paused: boolean } | { ok: false; error: string };
 
-/** progress-feed (task #85): an ask for a progress update: which initiative, and why it was sent. */
-export interface RolePokeInfo {
-	initiative: string;
-	/** The initiative's name, for the message header. */
-	name: string;
-	/** What set it off: task-done, decision, daily, button, flag, catch-up. */
-	why: string[];
-}
-
-export type RolePokeResult = { ok: true; record: RoleMessageRecord } | { ok: false; error: string };
+/** What sending one of the app's own messages (stall, CI alert, script notice) to a role gave. */
+export type RoleAppResult = { ok: true; record: RoleMessageRecord } | { ok: false; error: string };
 
 /** stall-wake (Ops #284): the stalled items a work-check message is about, each with its step in the chain. */
 export interface RoleStallInfo {
@@ -485,12 +467,8 @@ export function chatLabel(o: { taskId?: number; isHome: boolean; title?: string 
 
 type HeaderParts = Pick<
 	RoleMessageRecord,
-	"id" | "from" | "kind" | "replyTo" | "report" | "poke" | "stall" | "ci" | "script" | "tags"
+	"id" | "from" | "kind" | "replyTo" | "report" | "stall" | "ci" | "script" | "tags"
 >;
-
-/** progress-feed (task #85): what an ask for a progress update tells the lead to do with it. turn-status
- *  (Ops #688): the lead's turn ends with one status line. */
-export const POKE_HINT = `(The Initiatives page asks you, its lead, for a progress update, on the owner's request. Post it with initiative_update, not message_role. ${statusHint("poke")})`;
 
 /** stall-wake (Ops #284): what a work-check message tells the lead to do (its hint without the status). */
 const STALL_ACTION =
@@ -521,8 +499,6 @@ export function roleMessageHeader(r: HeaderParts): string {
 	if (r.kind === "report" && r.script) return `[Role message ${r.id} from ${scriptNoticeHeader(r.script)}]`;
 	if (r.kind === "report" && r.stall)
 		return `[Role message ${r.id} from the work check \u00b7 stalled work \u00b7 ${oneLine(stallNames(r.stall), 120).replace(/[\]\n]/g, " ")}]`;
-	if (r.kind === "report" && r.poke)
-		return `[Role message ${r.id} from the Initiatives page \u00b7 progress update \u00b7 ${oneLine(r.poke.name, 60).replace(/[\]\n]/g, " ")}]`;
 	if (r.kind === "report")
 		return `[Role message ${r.id} from the app \u00b7 6 am report \u00b7 ${r.report?.date ?? "?"}]`;
 	const what = r.kind === "reply" && r.replyTo ? `reply to ${r.replyTo}` : r.kind;
@@ -562,7 +538,6 @@ export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } 
 						? STALL_OWNER_HINT
 						: leadHint;
 			}
-			if (r.poke) return POKE_HINT;
 			if (r.ci) return ciAlertHint(r.ci);
 			if (r.script) return scriptNoticeHint(r.script.kind);
 			return "(The app's 6 am report request: your answer in this chat is the report the owner reads. No message_role, no new work, no tasks started.)";
@@ -1286,7 +1261,6 @@ export class RoleMessages {
 			kind: r.kind,
 			...(r.replyTo ? { replyTo: r.replyTo } : {}),
 			...(r.kind === "report" && r.report ? { reportDate: r.report.date } : {}),
-			...(r.poke ? { poke: { initiative: r.poke.initiative, name: r.poke.name } } : {}),
 			...(r.stall ? { stall: { names: stallNames(r.stall) } } : {}),
 			...(r.ci ? { ci: { title: ciAlertTitle(r.ci) } } : {}),
 			...(r.script ? { script: { sender: r.script.sender, title: r.script.title, kind: r.script.kind } } : {}),
@@ -1549,33 +1523,11 @@ export class RoleMessages {
 	}
 
 	/**
-	 * progress-feed (task #85): the Initiatives page asks an initiative's lead for a progress update. Sent like
-	 * a role request (after any running turn, starts a turn, retries), but as the page's, not a role's: outside
-	 * the role message caps and guards (kind report, like the 6 am report), a chain of its own.
-	 */
-	requestPoke(input: { role: string; initiative: string; name: string; text: string; why: string[] }): RolePokeResult {
-		const found = this.appReportRole(input.role);
-		if (!found.ok) return found;
-		const record = this.addAppReport(
-			found.role,
-			ROLE_POKE_SENDER,
-			input.text,
-			{
-				initiative: input.initiative,
-				poke: { initiative: input.initiative, name: input.name, why: [...input.why] },
-			},
-			(id, to) =>
-				`${id} Initiatives page -> ${to} \u00b7 progress update ${input.initiative} (${input.why.join(", ")})`,
-		);
-		return { ok: true, record };
-	}
-
-	/**
 	 * stall-wake (Ops #284): the work check wakes a role about stalled work it leads (or, the owner's step, COO).
-	 * Sent like requestPoke (after any running turn, starts a turn, retries), as the app's: outside the role
+	 * Sent like a role request (after any running turn, starts a turn, retries), as the app's: outside the role
 	 * message caps and guards (kind report), a chain of its own; stall-wake.ts keeps its own caps and ledger.
 	 */
-	requestStall(input: { role: string; items: RoleStallInfo["items"]; text: string }): RolePokeResult {
+	requestStall(input: { role: string; items: RoleStallInfo["items"]; text: string }): RoleAppResult {
 		const found = this.appReportRole(input.role);
 		if (!found.ok) return found;
 		if (!input.items.length) return { ok: false, error: "no stalled items" };
@@ -1592,7 +1544,7 @@ export class RoleMessages {
 
 	/**
 	 * ci-alert (Ops #720): the CI watch tells a role's home chat that a CI run failed (or was cut off) or that a
-	 * scheduled run never appeared (control socket ci_alert, after the app token was checked). Sent like requestPoke
+	 * scheduled run never appeared (control socket ci_alert, after the app token was checked). Sent like requestStall
 	 * (after any running turn, starts a turn, retries), as the app's: outside the role message caps and guards (kind
 	 * report), a chain of its own. The server writes the text from the checked fields only (ci-alert.ts). One record
 	 * per key: a key already in the store returns its first record (duplicate) and sends nothing.
@@ -1699,7 +1651,7 @@ export class RoleMessages {
 		role: { id: string; title: string },
 		sender: RoleMessageRecord["from"],
 		text: string,
-		extra: Pick<RoleMessageRecord, "initiative" | "poke" | "stall" | "ci" | "script">,
+		extra: Pick<RoleMessageRecord, "initiative" | "stall" | "ci" | "script">,
 		logLine: (id: string, to: string) => string,
 	): RoleMessageRecord {
 		const record: RoleMessageRecord = {
@@ -1955,12 +1907,6 @@ export class RoleMessages {
 				return {
 					ok: false,
 					error: `${replyTo} is the CI watch's alert: no reply is needed. Look into it with your tools (open the run, fix or queue the fix).`,
-				};
-			}
-			if (original.kind === "report" && original.poke) {
-				return {
-					ok: false,
-					error: `${replyTo} is the Initiatives page's ask for a progress update: post the update with initiative_update, not message_role.`,
 				};
 			}
 			if (original.kind === "report") {

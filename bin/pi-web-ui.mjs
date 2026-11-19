@@ -3414,8 +3414,6 @@ async function decisionsCmd(argv) {
 		else if (a.startsWith("--from=")) from = a.slice("--from=".length);
 		else if (a === "--max") maxArg = argv[++i];
 		else if (a.startsWith("--max=")) maxArg = a.slice("--max=".length);
-		else if (a === "--initiative") initiativeArg = argv[++i];
-		else if (a.startsWith("--initiative=")) initiativeArg = a.slice("--initiative=".length);
 		else rest.push(a);
 	}
 	const { opts } = parseFlags(rest);
@@ -3502,48 +3500,8 @@ async function decisionsCmd(argv) {
 			return;
 		}
 	}
-	// progress-feed (task #85): the feeds' state, and the one-time catch-up ask to an initiative's lead.
-	if (action === "feed") {
-		const st = await controlCommand(opts, "feed_status");
-		if (!st) unreachable();
-		if (!st.ok) fail(st.error);
-		const { settings, ...feeds } = st.feed;
-		console.log(
-			`Progress feed on for: ${settings.initiatives.length ? settings.initiatives.join(", ") : "none"}; ${settings.autoPoke ? `automatic asks at most every ${settings.pokeEveryHours} h, daily at ${settings.dailyAt}` : "automatic asks off (only Ask for an update and catch-ups)"}; reader check ${settings.readerCheck ? "on" : "off"}.`,
-		);
-		for (const [id, f] of Object.entries(feeds)) {
-			if (f.error) {
-				console.log(`${id}: ${f.error}`);
-				continue;
-			}
-			const when = (at) => (at ? new Date(at).toLocaleString() : "never");
-			console.log(
-				`${id}: lead ${f.lead ?? "none"}; ${f.updates} updates (last ${f.lastUpdate ? `${f.lastUpdate.id}, ${when(f.lastUpdate.at)}` : "none"}); not linked: ${f.unlinked.decisions} decisions, ${f.unlinked.changes} changes; open flags ${f.openFlags}; unchecked ${f.unchecked}.`,
-			);
-			if (f.open)
-				console.log(
-					`  asked ${f.open.to} at ${when(f.open.at)} (${f.open.by}: ${f.open.why.join(", ")}), ${f.open.id}`,
-				);
-			if (f.pending.length) console.log(`  waiting to ask: ${f.pending.join(", ")}`);
-			if (f.catchUp)
-				console.log(
-					`  catch-up from ${f.catchUp.from}: round ${f.catchUp.rounds}${f.catchUp.done ? ", done" : f.catchUp.stalled ? `, stalled (${f.catchUp.why ?? ""})` : ", going"}`,
-				);
-		}
-		return;
-	}
-	if (action === "catch-up") {
-		if (!initiativeArg || !from) fail("Usage: pi-web-ui decisions catch-up --initiative ID --from YYYY-MM-DD");
-		const st = await controlCommand(opts, "feed_catch_up", { initiative: initiativeArg, date: from });
-		if (!st) unreachable();
-		if (!st.ok) fail(st.error);
-		console.log(
-			`Asked the lead of ${initiativeArg} to catch up from ${from} (${st.feed.id}); ${st.feed.unlinked} decisions and changes not linked yet. Follow it with: pi-web-ui decisions feed`,
-		);
-		return;
-	}
 	fail(
-		"Usage: pi-web-ui decisions backfill [--from YYYY-MM-DD] [--data-dir DIR] | pi-web-ui decisions status | pi-web-ui decisions read [--max N] | pi-web-ui decisions feed | pi-web-ui decisions catch-up --initiative ID --from YYYY-MM-DD",
+		"Usage: pi-web-ui decisions backfill [--from YYYY-MM-DD] [--data-dir DIR] | pi-web-ui decisions status | pi-web-ui decisions read [--max N]",
 	);
 }
 

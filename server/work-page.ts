@@ -1,5 +1,6 @@
 /**
- * initiatives-plan-data (owner, 2026-10-18; Ops #223): the whole work registry, read for the Initiatives page.
+ * initiatives-plan-data (owner, 2026-10-18; Ops #223): the whole work registry, read for the stall check and
+ * dead-end answers (the Initiatives page that first read it was removed, ops #1013).
  *
  * pi-work-management (the pi-queue repo, work-store.ts) keeps initiatives, projects and its index of linked
  * tasks in an append-only log, `events.jsonl` in the work folder (PI_WORK_DIR, or "work" in pi's agent folder),
@@ -21,7 +22,6 @@
 import { open, stat, type FileHandle } from "node:fs/promises";
 import { samePath } from "./identities.js";
 import type {
-	ServerMessage,
 	UiNormalizedTouch,
 	UiRoleTaskBlocked,
 	UiRoleTaskNext,
@@ -60,13 +60,6 @@ export const WORK_PAGE_RECORDS_MAX = 500;
 export const WORK_PAGE_TASKS_MAX = 2000;
 /** The newest this many changes are sent (newest first). */
 export const WORK_PAGE_ACTIVITY_MAX = 1000;
-/** While a page watches, the log and the queues are looked at this often. */
-export const WORK_PAGE_POLL_MS = 5_000;
-/** Several pokes close together make one look. */
-export const WORK_PAGE_DEBOUNCE_MS = 500;
-/** pages-fresh (Ops #245): a kept page answers a new watch at once only while it is younger than this (three of
- *  the background refresher's rounds), so a refresher that stopped never passes an old page off as current. */
-export const WORK_PAGE_COPY_MAX_AGE_MS = 45_000;
 
 /** The store's own limits (pi-work-management work-store.ts). */
 const WORK_ID_MAX = 60;
@@ -859,176 +852,6 @@ export class WorkPageFile {
 			return replayOf("unreadable");
 		} finally {
 			await fh.close().catch(() => undefined);
-		}
-	}
-}
-
-export interface WorkPageWatchOptions {
-	/** How often to look again while a page watches (the queues have no change signal of their own). */
-	pollMs?: number;
-	debounceMs?: number;
-	log?: (line: string) => void;
-	/** pages-fresh: how young a kept page must be to answer a new watch at once (WORK_PAGE_COPY_MAX_AGE_MS). */
-	copyMaxAgeMs?: number;
-	/** This server's clock (tests). */
-	now?: () => number;
-}
-
-/**
- * The windows watching the work page, keyed by their socket. A window gets the page at once, then again only
- * when it changed (its snapshot time aside): looked at every pollMs while any window watches, and soon after
- * a poke. A failure is sent as an error the page can show (it keeps what it had), and said in the log once.
- *
- * pages-fresh (Ops #245): the last page made is kept, with when it was made, whether or not a window watches;
- * the background refresher (pages-fresh.ts) makes it again every round. A new watch is answered from it at
- * once while it is younger than copyMaxAgeMs and the latest look didn't fail; otherwise it waits for a look,
- * as before.
- */
-export class WorkPageWatch<K> {
-	private readonly watchers = new Map<K, { send: (msg: ServerMessage) => void; seen?: string }>();
-	private poll: ReturnType<typeof setInterval> | null = null;
-	private timer: ReturnType<typeof setTimeout> | null = null;
-	private running: Promise<void> | null = null;
-	private again = false;
-	private lastError: string | null = null;
-	/** pages-fresh: the last page made (never an error), its signature, and when it was made (this clock, ms). */
-	private copy: { msg: ServerMessage; sig: string; madeAt: number } | null = null;
-	private readonly pollMs: number;
-	private readonly debounceMs: number;
-	private readonly copyMaxAgeMs: number;
-	private readonly now: () => number;
-
-	constructor(
-		private readonly read: () => Promise<UiWorkPage>,
-		private readonly opts: WorkPageWatchOptions = {},
-	) {
-		this.pollMs = opts.pollMs ?? WORK_PAGE_POLL_MS;
-		this.debounceMs = opts.debounceMs ?? WORK_PAGE_DEBOUNCE_MS;
-		this.copyMaxAgeMs = opts.copyMaxAgeMs ?? WORK_PAGE_COPY_MAX_AGE_MS;
-		this.now = opts.now ?? Date.now;
-	}
-
-	/** This window wants the page (again, if it watched already): it gets it at once from the kept page when
-	 *  that is young enough (pages-fresh), else as soon as it is made. */
-	watch(key: K, send: (msg: ServerMessage) => void): Promise<void> {
-		const w: { send: (msg: ServerMessage) => void; seen?: string } = { send };
-		this.watchers.set(key, w);
-		if (!this.poll) {
-			this.poll = setInterval(() => void this.look(), this.pollMs);
-			this.poll.unref?.();
-		}
-		const copy = this.copy;
-		if (copy && this.lastError === null && this.now() - copy.madeAt <= this.copyMaxAgeMs) {
-			// The poll looks again within pollMs; this window then gets the page only if it changed.
-			w.seen = copy.sig;
-			try {
-				send(copy.msg);
-			} catch {
-				/* a closing socket */
-			}
-			return Promise.resolve();
-		}
-		return this.look();
-	}
-
-	drop(key: K): void {
-		this.watchers.delete(key);
-		if (this.watchers.size) return;
-		if (this.poll) clearInterval(this.poll);
-		this.poll = null;
-		if (this.timer) clearTimeout(this.timer);
-		this.timer = null;
-	}
-
-	/** Something changed: look again once things settle. */
-	poke(): void {
-		if (!this.watchers.size) return;
-		if (this.timer) clearTimeout(this.timer);
-		this.timer = setTimeout(() => {
-			this.timer = null;
-			void this.look();
-		}, this.debounceMs);
-		this.timer.unref?.();
-	}
-
-	get size(): number {
-		return this.watchers.size;
-	}
-
-	/** Whether it is looking on its timer (only while a window watches). */
-	get polling(): boolean {
-		return this.poll !== null;
-	}
-
-	/** pages-fresh: how old the kept page is (ms), or null when there is none. */
-	get copyAgeMs(): number | null {
-		return this.copy ? this.now() - this.copy.madeAt : null;
-	}
-
-	/** Looks once, and once more if asked meanwhile (tests call it directly). */
-	look(): Promise<void> {
-		return this.run(false);
-	}
-
-	/**
-	 * pages-fresh (Ops #245): the background refresher's round. Makes the page now, whether or not a window
-	 * watches (with `read` when given: the refresher's, from the Roles overview it has just made), keeps it, and
-	 * sends it only where it changed. Nothing more is made while a look is under way (its page is as fresh) or
-	 * when the kept page is younger than `skipYoungerMs` (a watching window's poll made it).
-	 */
-	refresh(skipYoungerMs = 0, read?: () => Promise<UiWorkPage>): Promise<void> {
-		if (this.running) return this.running;
-		const age = this.copyAgeMs;
-		if (age !== null && this.lastError === null && age < skipYoungerMs) return Promise.resolve();
-		return this.run(true, read);
-	}
-
-	private run(always: boolean, read?: () => Promise<UiWorkPage>): Promise<void> {
-		if (this.running) {
-			this.again = true;
-			return this.running;
-		}
-		this.running = (async () => {
-			try {
-				let first = true;
-				do {
-					this.again = false;
-					await this.lookOnce(first && always, first ? read : undefined);
-					first = false;
-				} while (this.again && this.watchers.size);
-			} finally {
-				this.running = null;
-			}
-		})();
-		return this.running;
-	}
-
-	private async lookOnce(always = false, read?: () => Promise<UiWorkPage>): Promise<void> {
-		if (!always && !this.watchers.size) return;
-		let msg: ServerMessage;
-		let sig: string;
-		try {
-			const page = await (read ?? this.read)();
-			const { at: _at, ...rest } = page;
-			sig = JSON.stringify(rest);
-			msg = { type: "work_page", page };
-			this.lastError = null;
-			this.copy = { msg, sig, madeAt: this.now() };
-		} catch (err) {
-			const error = (err as Error)?.message || String(err);
-			if (error !== this.lastError) this.opts.log?.(`[work-page] couldn't make the page: ${error}`);
-			this.lastError = error;
-			sig = `error\u0000${error}`;
-			msg = { type: "work_page", error };
-		}
-		for (const w of this.watchers.values()) {
-			if (w.seen === sig) continue;
-			w.seen = sig;
-			try {
-				w.send(msg);
-			} catch {
-				/* a closing socket */
-			}
 		}
 	}
 }

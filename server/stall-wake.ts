@@ -263,7 +263,7 @@ export function stallLeadItemText(d: StallDue, now: number, gapHours: number): s
 	const rest = f.chain.slice(d.step);
 	const next = rest.length
 		? `Next: if nothing changes, ${who(rest[0])} is woken at ${stallWhen(now + gapHours * HOUR, now)}${rest.length > 1 ? `, then ${rest.slice(1).map(who).join(", then ")}` : ""}.`
-		: "Next: nothing more is sent automatically; it stays on the Initiatives page.";
+		: "Next: nothing more is sent automatically.";
 	// Ops #483: a dead end clears only by one of its three ways out (or by closing the project).
 	const clear =
 		f.rule === "dead-end"
@@ -295,7 +295,7 @@ export function stallOwnerItemText(d: StallDue, ledger: readonly StallLedgerLine
 	return [
 		`${itemHead(f)}: ${stallRuleText(f, now)}. ${woken}`,
 		clip(contextLines(f).join(" "), 300),
-		"Put it to the owner as one dialog with the full package (rule 21): drop it, pause it, reassign it, or name the next work. Nothing more is sent automatically for it; it stays on the Initiatives page.",
+		"Put it to the owner as one dialog with the full package (rule 21): drop it, pause it, reassign it, or name the next work. Nothing more is sent automatically for it.",
 	].join("\n");
 }
 

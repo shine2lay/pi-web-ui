@@ -73,7 +73,6 @@ export function useFocusAfterToggle(msgId: string, ref: { current: HTMLElement |
 /** The row's "From ..." label. */
 export function roleMessageFrom(m: RoleMessageView, t: Translate): string {
 	if (m.kind === "report" && m.stall) return t("roleMessageFoldWorkCheck");
-	if (m.kind === "report" && m.poke) return t("roleMessageFoldPage");
 	if (m.kind === "report" && m.ci) return t("roleMessageFoldCiWatch");
 	// script-notice (Ops #782): the script's own name (checked by the server).
 	if (m.kind === "report" && m.script) return t("roleMessageFoldScript", { title: m.script.title });
@@ -88,7 +87,6 @@ export function roleMessageFrom(m: RoleMessageView, t: Translate): string {
 export function roleMessageKindWord(m: RoleMessageView, t: Translate): string {
 	if (m.kind === "owner-question") return OWNER_QUESTION_LABEL;
 	if (m.kind === "report" && m.stall) return t("roleMessageFoldStall", { names: m.stall.names });
-	if (m.kind === "report" && m.poke) return t("roleMessageFoldPoke", { name: m.poke.name });
 	if (m.kind === "report" && m.ci) return m.ci.title;
 	if (m.kind === "report" && m.script)
 		return m.script.kind === "request" ? t("roleScriptRequestWord") : t("roleScriptNoticeWord");

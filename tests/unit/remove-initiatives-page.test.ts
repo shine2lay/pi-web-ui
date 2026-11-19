@@ -121,7 +121,13 @@ describe("(b)/(c) plugin icons: names are never drawn as text, glyphs still are"
 					createElement(TopBar, {
 						chat: chatStub,
 						uiPrimary: [pluginTab(icon)],
-						terminal: { create: () => {}, close: () => {}, register: () => () => {}, restart: () => {}, select: () => {} },
+						terminal: {
+							create: () => {},
+							close: () => {},
+							register: () => () => {},
+							restart: () => {},
+							select: () => {},
+						},
 						view: "chat",
 						plugins: [{ id: "show-and-tell", name: "Show&Tell", icon, view: true }],
 						onViewChange: () => {},

@@ -33,9 +33,6 @@ export interface QuietSwitches {
 export interface QuietStamp {
 	kind: string;
 	forOwner?: boolean;
-	/** progress-feed (task #85): the Initiatives page's ask for a progress update (kind report): the owner
-	 *  reads the update on the page, so the lead's turn is folded like a role's. */
-	poke?: boolean | { initiative: string; name: string };
 	/** stall-wake (Ops #284): the work check's wake about stalled work (kind report): folded like a role's. */
 	stall?: boolean | { names: string };
 	/** CI alerts are app work notices, not owner-facing reports. */
@@ -108,10 +105,6 @@ const ROLE_HEAD = new RegExp(
 	`^\\[Role message ${RM} from [a-z0-9][a-z0-9._-]* \\(.*\\), sent from its .* \\u00b7 (?:question|request|fyi|reply to ${RM}|reply)\\](?: \\[tags: [a-z0-9-, ]+\\])?$`,
 );
 const REPORT_HEAD = new RegExp(`^\\[Role message ${RM} from the app \\u00b7 6 am report \\u00b7 [^\\]]+\\]$`);
-/** progress-feed (task #85): role-messages.ts roleMessageHeader for a poke. */
-const POKE_HEAD = new RegExp(
-	`^\\[Role message ${RM} from the Initiatives page \\u00b7 progress update \\u00b7 [^\\]]+\\]$`,
-);
 /** stall-wake (Ops #284): role-messages.ts roleMessageHeader for the work check's wake. */
 const STALL_HEAD = new RegExp(`^\\[Role message ${RM} from the work check \\u00b7 stalled work \\u00b7 [^\\]]+\\]$`);
 /** ci-alert: only the fixed header emitted by role-messages.ts, with checked repo/workflow fields. */
@@ -150,11 +143,10 @@ function roleStarter(text: string, stamp: QuietStamp | null | undefined): Starte
 	const body = nl === -1 ? "" : text.slice(nl + 1).replace(/^\n+/, "");
 	if (stamp) {
 		if (stamp.ci || stamp.script) return stamp.forOwner ? "visible" : { kind: "role" };
-		if (stamp.poke || stamp.stall) return { kind: "role" };
+		if (stamp.stall) return { kind: "role" };
 		if (stamp.kind === "report" || stamp.forOwner) return "visible";
 	} else {
-		if (POKE_HEAD.test(head) || STALL_HEAD.test(head) || CI_HEAD.test(head) || SCRIPT_HEAD.test(head))
-			return { kind: "role" };
+		if (STALL_HEAD.test(head) || CI_HEAD.test(head) || SCRIPT_HEAD.test(head)) return { kind: "role" };
 		if (REPORT_HEAD.test(head)) return "visible";
 		const cut = text.lastIndexOf("\n\n");
 		const hint = cut === -1 ? "" : text.slice(cut + 2);

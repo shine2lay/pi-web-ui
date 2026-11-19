@@ -266,11 +266,13 @@ describe("conn-events: a page's record is checked field by field", () => {
 	});
 
 	it("pages-live: keeps the view and shownMs; a view it doesn't know or a bad shownMs refuses the record", () => {
-		for (const view of ["roles", "initiatives", "chat", "other"] as const) {
+		for (const view of ["roles", "chat", "other"] as const) {
 			const r = rec({ view, shownMs: 2_150 });
 			expect(sanitizeRecord(r)).toEqual(r);
 		}
 		expect(sanitizeRecord(rec({ view: "terminal" as never }))).toBeNull();
+		// ops #1013: the Initiatives page is gone; a stale page's record naming it is refused
+		expect(sanitizeRecord(rec({ view: "initiatives" as never }))).toBeNull();
 		expect(sanitizeRecord(rec({ view: "<b>roles</b>" as never }))).toBeNull();
 		expect(sanitizeRecord(rec({ shownMs: -5 }))).toBeNull();
 		expect(sanitizeRecord(rec({ shownMs: "3000" as never }))).toBeNull();

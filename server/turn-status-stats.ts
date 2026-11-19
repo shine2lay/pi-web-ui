@@ -2,7 +2,7 @@
  * turn-status-stats (Ops #688, hypothesis H-STATUS-LINE): the turns of a transcript that another role
  * started, and whether each one's only text is valid status lines (server/turn-status.ts statusLinesOf).
  * Which turns another role started is quiet-turns' call (planQuietRuns, starterOf): the turns the page
- * folds with every switch off, i.e. begun and joined only by role messages, the Initiatives page's and the
+ * folds with every switch off, i.e. begun and joined only by role messages, the
  * work check's pokes, and Board orders. A reply answering a question asked for the owner, the 6 am report,
  * the owner's own messages, queue cards and scheduled wake-ups make a turn the owner's.
  *

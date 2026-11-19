@@ -1,8 +1,7 @@
 /**
  * agent-text-stats (Ops #688 part 2, hypothesis H-COMPACT-MSG): how long the text roles write for each
  * other is, from the host's own records: role messages (role-messages.json, the newest 1,000) by kind, and
- * Board posts (role-board.json) by kind. The app's own sends (the work check's and the Initiatives page's
- * pokes, the 6 am report) are left out: no agent wrote them.
+ * Board posts (role-board.json) by kind. The app's own sends (the work check's pokes, the 6 am report) are left out: no agent wrote them.
  *
  * Gives lengths and counts only, never text (rule 11). Pure: the script (scripts/agent-text-stats.mts)
  * reads the files.

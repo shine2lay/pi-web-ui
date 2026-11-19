@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 /**
- * pages-live (Ops #244, H-PAGES-LIVE-2 in docs/pages-live.md): the Roles and Initiatives pages stay calm
+ * pages-live (Ops #244, H-PAGES-LIVE-2 in docs/pages-live.md): the Roles page stays calm
  * across a tab switch.
  *
  * Coming back to a tab often finds the socket gone or in doubt. Roles' own data is back about 0.4 s after a
@@ -17,7 +17,7 @@
 export const LIVE_GRACE_MS = 8_000;
 
 /** What the window shows, as the connection trace records it. */
-export type PageView = "roles" | "initiatives" | "chat" | "other";
+export type PageView = "roles" | "chat" | "other";
 
 let view: PageView = "chat";
 /** When the tab last became visible (this clock, ms); null while it is hidden. */
@@ -33,7 +33,7 @@ function notify(): void {
 
 /** The views whose alarms wait for their own data. */
 export function graceView(v: PageView): boolean {
-	return v === "roles" || v === "initiatives";
+	return v === "roles";
 }
 
 /** How much of the grace is left for a wait that began at `start`: counted from the later of the start

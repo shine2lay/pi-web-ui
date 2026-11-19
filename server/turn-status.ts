@@ -67,7 +67,7 @@ export const TURN_STATES: readonly TurnState[] = [
 
 /** What started the turn, as far as its status goes: a role's question, request or reply (one that doesn't
  *  answer a question asked for the owner), a Board order, or a poke (the work check's wake about stalled
- *  work, the Initiatives page's ask for a progress update). */
+ *  work). */
 export type TurnStatusKind = "question" | "request" | "reply" | "order" | "poke";
 
 /** The states each kind allows, in the order its note names them. */

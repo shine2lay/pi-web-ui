@@ -977,7 +977,7 @@ export const LeftPanel = memo(function LeftPanel({
 						{renaming === `conv:${c.id}` ? null : taskStatus ? (
 							// left-task-status: a parked queued task's label takes the line.
 							// sidebar-no-tldr (Ops #621; owner, 2026-10-28, m77387): no TL;DR line under a chat's name;
-							// the right panel's TL;DR tab and the Roles and Initiatives pages show them.
+							// the right panel's TL;DR tab and the Roles page show them.
 							<span className="session-sub lp-task-status-line">{taskStatusChip(taskStatus)}</span>
 						) : (
 							<span className="session-sub">

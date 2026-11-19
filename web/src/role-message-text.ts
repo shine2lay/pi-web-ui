@@ -31,8 +31,6 @@ export interface ParsedRoleMessage {
 	replyTo?: string;
 	/** For the 6 am report request: the day it asks about. */
 	reportDate?: string;
-	/** progress-feed (task #85): the Initiatives page's ask for a progress update: the initiative's name. */
-	poke?: { name: string };
 	/** stall-wake (Ops #284): the work check's wake about stalled work: the items' names. */
 	stall?: { names: string };
 	/** ci-alert (Ops #720): the CI watch's alert about a CI run: the header's words (what happened, repo, workflow). */
@@ -55,10 +53,6 @@ export interface ScriptSender {
 
 const ID = "rm-[0-9a-f]{8}";
 const REPORT_RE = new RegExp(`^\\[Role message (${ID}) from the app \\u00b7 6 am report \\u00b7 ([^\\]]+)\\]$`);
-/** progress-feed (task #85): server/role-messages.ts roleMessageHeader for a poke. */
-const POKE_RE = new RegExp(
-	`^\\[Role message (${ID}) from the Initiatives page \\u00b7 progress update \\u00b7 ([^\\]]+)\\]$`,
-);
 /** stall-wake (Ops #284): server/role-messages.ts roleMessageHeader for the work check's wake. */
 const STALL_RE = new RegExp(`^\\[Role message (${ID}) from the work check \\u00b7 stalled work \\u00b7 ([^\\]]+)\\]$`);
 /** ci-alert (Ops #720): server/role-messages.ts roleMessageHeader for the CI watch's alert. */
@@ -74,7 +68,6 @@ const ROLE_RE = new RegExp(
 /** The hint lines the server adds (roleMessageHint); anything else stays part of the body. */
 const HINT_STARTS = [
 	"(The app's 6 am report request:",
-	"(The Initiatives page asks you,",
 	"(The work check found",
 	"(The CI watch found",
 	"(A notice from a script on this machine",
@@ -157,16 +150,13 @@ export function parseRoleMessageText(text: string): ParsedRoleMessage | null {
 	let rest = nl === -1 ? "" : text.slice(nl + 1);
 	let parsed: Omit<ParsedRoleMessage, "body" | "hint">;
 	const report = REPORT_RE.exec(head);
-	const poke = report ? null : POKE_RE.exec(head);
-	const stall = report || poke ? null : STALL_RE.exec(head);
-	const ci = report || poke || stall ? null : CI_RE.exec(head);
-	const script = report || poke || stall || ci ? null : SCRIPT_RE.exec(head);
+	const stall = report ? null : STALL_RE.exec(head);
+	const ci = report || stall ? null : CI_RE.exec(head);
+	const script = report || stall || ci ? null : SCRIPT_RE.exec(head);
 	if (report) {
 		parsed = { id: report[1], kind: "report", reportDate: report[2] };
 	} else if (stall) {
 		parsed = { id: stall[1], kind: "report", stall: { names: stall[2] } };
-	} else if (poke) {
-		parsed = { id: poke[1], kind: "report", poke: { name: poke[2] } };
 	} else if (ci) {
 		parsed = { id: ci[1], kind: "report", ci: { title: ci[2] } };
 	} else if (script) {
@@ -200,8 +190,6 @@ export interface RoleMessageView {
 	fromChat: string;
 	replyTo?: string;
 	reportDate?: string;
-	/** progress-feed (task #85): kind report from the Initiatives page: an ask for a progress update. */
-	poke?: { name: string; initiative?: string };
 	/** stall-wake (Ops #284): kind report from the work check: a wake about stalled work. */
 	stall?: { names: string };
 	/** ci-alert (Ops #720): kind report from the CI watch: an alert about a CI run. */
@@ -249,7 +237,6 @@ export function roleMessageViewOf(message: ChatMessageLike, text: string): RoleM
 		fromChat: p.chat ?? "",
 		...(p.replyTo ? { replyTo: p.replyTo } : {}),
 		...(p.reportDate ? { reportDate: p.reportDate } : {}),
-		...(p.poke ? { poke: p.poke } : {}),
 		...(p.stall ? { stall: p.stall } : {}),
 		...(p.ci ? { ci: p.ci } : {}),
 		...(p.script ? { script: p.script } : {}),

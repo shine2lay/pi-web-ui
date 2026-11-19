@@ -136,8 +136,6 @@ import {
 	usageLedgerProduction,
 } from "./usage-accounting-host.js";
 import { usageRoleWitness } from "./usage-accounting-witness.js";
-import { InitiativesWatch } from "./initiatives-watch.js";
-import { WorkPageWatch } from "./work-page.js";
 import { PAGES_FRESH_SKIP_MS, PagesRefresher } from "./pages-fresh.js";
 import { SubsLimitsHub, limitsFilePath } from "./subs-limits.js";
 import { initHttpProxy } from "./http-proxy.js";
@@ -161,11 +159,6 @@ import type {
 	UiRoleMessageRow,
 	UiRolesOverview,
 	UiRoleAskView,
-	UiDecisionsPage,
-	UiWorkPage,
-	UiDecisionRecordView,
-	UiUpdateDecision,
-	UiUpdateLink,
 	UiServiceInfo,
 	UiSubagentTemplate,
 	TerminalInfo,
@@ -1502,9 +1495,6 @@ export interface EngineService {
 	readRolesOverview?(): Promise<UiRolesOverview>;
 	/** usage-accounting (pi engine, Ops #322): set by index.ts once design B's pass runs; the Roles page reads it. */
 	usageAccounting?: UsageAccountingView | null;
-	/** initiatives-plan-data (pi engine): the whole work registry for the Initiatives page (read only); with an
-	 *  overview just made (pages-fresh), from that one. */
-	readWorkPage?(overview?: UiRolesOverview): Promise<UiWorkPage>;
 	/** roles-answer (pi engine): the whole ask behind a Needs-you item, for the Roles page's Answer dialog. */
 	rolesAskOpen?(key: unknown): Promise<{ ok: true; ask: UiRoleAskView } | { ok: false; error: string }>;
 	/** roles-answer (pi engine): the owner's answer from the Roles page, through the list of asks. */
@@ -1520,24 +1510,6 @@ export interface EngineService {
 	boardClose?(id: unknown, note: unknown): BoardChangeResult;
 	/** board (pi engine): set by index.ts; the board changed. */
 	onBoardChanged?: (() => void) | null;
-	/** initiatives-page (pi engine): the Initiatives tab's page, for one initiative ("" = Unfiled). */
-	initiativesPage?(initiative?: string, limit?: number): UiDecisionsPage;
-	/** who-fill (pi engine, Architecture #115): fill the Initiatives page's who-cache in the background. */
-	startWhoFill?(): void;
-	/** who-fill: the fill running now, which an Initiatives page waits for. */
-	whoFillPending?(): Promise<void> | undefined;
-	/** initiatives-page (pi engine): one kept record a card cites. */
-	decisionRecordView?(idOrRef: string): UiDecisionRecordView | undefined;
-	/** progress-feed (pi engine, task #85): the owner sets or clears an initiative's lead (the page only). */
-	setInitiativeLead?(initiative: unknown, lead: unknown): { ok: true } | { ok: false; error: string };
-	/** progress-feed: the owner's "Ask for an update" button. */
-	askInitiativeUpdate?(initiative: unknown): { ok: true; id: string; at: number } | { ok: false; error: string };
-	/** progress-feed: the owner looked at an initiative's Progress. */
-	initiativeSeen?(initiative: unknown): void;
-	/** progress-feed: everything one update links. */
-	initiativeUpdateLinks?(update: unknown): { links: UiUpdateLink[]; decisions: UiUpdateDecision[] } | undefined;
-	/** initiatives-page (pi engine): set by index.ts; the decisions or the reader changed. */
-	onDecisionsChanged?: (() => void) | null;
 	noteSocketOpen(): void;
 	noteSocketClose(): void;
 	isQuiesced(): boolean;
@@ -1992,25 +1964,6 @@ const subsLimits = new SubsLimitsHub({
 	},
 });
 
-/** initiatives-page: the Initiatives tab, per window (each with its own pick of initiative). */
-const initiativesWatch = new InitiativesWatch<object>(
-	(initiative, limit) => {
-		if (!service.initiativesPage) throw new Error("this engine has no Initiatives page");
-		return service.initiativesPage(initiative, limit);
-	},
-	// who-fill (#115): a page asked for while the who-cache is filled after a start waits for the fill.
-	{ log: (line) => console.log(line), ready: () => service.whoFillPending?.() },
-);
-
-/** initiatives-plan-data (Ops #223): the work registry for the Initiatives page, per window (keyed by its socket). */
-const workPageWatch = new WorkPageWatch<object>(
-	async () => {
-		if (!service.readWorkPage) throw new Error("this engine has no work registry");
-		return service.readWorkPage();
-	},
-	{ log: (line) => console.log(line) },
-);
-
 /** roles-overview: the Roles page (everything) and every top bar (the count of asks), per window. */
 const rolesWatch = new RolesWatch<object>(
 	async () => {
@@ -2020,13 +1973,11 @@ const rolesWatch = new RolesWatch<object>(
 	{ log: (line) => console.log(line) },
 );
 
-/** pages-fresh (Ops #245): one background refresher keeps the Roles overview and the work page ready, so either
- *  page opened is answered at once from that copy (pages-fresh.ts). Started when the server listens. */
+/** pages-fresh (Ops #245): one background refresher keeps the Roles overview ready, so the page opened is
+ *  answered at once from that copy (pages-fresh.ts). Started when the server listens. */
 const pagesRefresher = new PagesRefresher(
 	async () => {
-		const overview = await rolesWatch.refresh(PAGES_FRESH_SKIP_MS);
-		if (!service.readWorkPage) return;
-		await workPageWatch.refresh(PAGES_FRESH_SKIP_MS, overview ? () => service.readWorkPage!(overview) : undefined);
+		await rolesWatch.refresh(PAGES_FRESH_SKIP_MS);
 	},
 	{ log: (line) => console.log(line) },
 );
@@ -2857,82 +2808,6 @@ wss.on("connection", (ws, req) => {
 			case "roles_unwatch":
 				rolesWatch.drop(ws);
 				break;
-			case "initiatives_watch":
-				// initiatives-page: the Initiatives tab opened, or picked another initiative.
-				initiativesWatch.watch(ws, { initiative: msg.initiative, limit: msg.limit }, send);
-				break;
-			case "initiatives_unwatch":
-				initiativesWatch.drop(ws);
-				break;
-			case "work_page_watch":
-				// initiatives-plan-data: the Initiatives page wants the whole work registry, and its changes.
-				void workPageWatch.watch(ws, send);
-				break;
-			case "work_page_unwatch":
-				workPageWatch.drop(ws);
-				break;
-			case "decision_record": {
-				// initiatives-page: a card's source, in full (read-only).
-				const id = typeof msg.record === "string" ? msg.record.slice(0, 400) : "";
-				const view = id ? service.decisionRecordView?.(id) : undefined;
-				send(
-					view
-						? { type: "decision_record", record: id, view }
-						: { type: "decision_record", record: id, error: "That record isn't kept here." },
-				);
-				break;
-			}
-			case "initiative_lead": {
-				// progress-feed (task #85): the owner sets an initiative's lead on the page (this socket is his, like
-				// every owner action here); roles have no way to set one.
-				const reqId = typeof msg.reqId === "string" ? msg.reqId : undefined;
-				const initiative = typeof msg.initiative === "string" ? msg.initiative.slice(0, 80) : "";
-				const res = service.setInitiativeLead
-					? service.setInitiativeLead(initiative, msg.lead ?? null)
-					: { ok: false as const, error: "this engine has no Initiatives page" };
-				send({
-					type: "initiative_result",
-					reqId,
-					op: "lead",
-					initiative,
-					ok: res.ok,
-					...(res.ok ? {} : { error: res.error }),
-				});
-				if (res.ok) initiativesWatch.poke();
-				break;
-			}
-			case "initiative_poke": {
-				// progress-feed: the owner's "Ask for an update" button.
-				const reqId = typeof msg.reqId === "string" ? msg.reqId : undefined;
-				const initiative = typeof msg.initiative === "string" ? msg.initiative.slice(0, 80) : "";
-				const res = service.askInitiativeUpdate
-					? service.askInitiativeUpdate(initiative)
-					: { ok: false as const, error: "this engine has no Initiatives page" };
-				send({
-					type: "initiative_result",
-					reqId,
-					op: "poke",
-					initiative,
-					ok: res.ok,
-					...(res.ok ? { at: res.at } : { error: res.error }),
-				});
-				if (res.ok) initiativesWatch.poke();
-				break;
-			}
-			case "initiative_seen": {
-				if (typeof msg.initiative === "string") service.initiativeSeen?.(msg.initiative.slice(0, 80));
-				break;
-			}
-			case "initiative_update_links": {
-				const id = typeof msg.update === "string" ? msg.update.slice(0, 80) : "";
-				const res = id ? service.initiativeUpdateLinks?.(id) : undefined;
-				send(
-					res
-						? { type: "initiative_update_links", update: id, links: res.links, decisions: res.decisions }
-						: { type: "initiative_update_links", update: id, error: "That update isn't kept here." },
-				);
-				break;
-			}
 			case "board_post": {
 				// board: the owner posts from the Roles page's Board view (this socket is his, like every owner
 				// action here). Every Roles page follows the board through the change hook.
@@ -4480,8 +4355,6 @@ wss.on("connection", (ws, req) => {
 		removePluginSender();
 		notebookWatch.drop(ws);
 		rolesWatch.drop(ws);
-		initiativesWatch.drop(ws);
-		workPageWatch.drop(ws);
 		if (snapshotRetryTimer) {
 			clearTimeout(snapshotRetryTimer);
 			snapshotRetryTimer = null;
@@ -4535,8 +4408,6 @@ service.onBoardChanged = () => rolesWatch.poke();
 service.onRolesConfigChanged = () => rolesWatch.poke();
 // role-message-ladder: every window shows the open Owner questions.
 service.onRoleGuardChanged = () => pushRoleGuard();
-// initiatives-page: the Initiatives tab follows the decisions and the reader.
-service.onDecisionsChanged = () => initiativesWatch.poke();
 // subs-limits-box: the channel pi-multi-pass joins when a chat loads it (and the file, until then).
 subsLimits.start();
 // oauth-limits-refresh: a new OAuth sign-in re-checks every subscription, so the Limits box shows it at once.
@@ -4548,9 +4419,7 @@ service.onOAuthLogin = (provider) =>
 httpServer.listen(PORT, HOST, () => {
 	// session-index: History and Recent chats are ready for the windows that reconnect.
 	service.warmSessionIndex?.();
-	// who-fill (#115): the Initiatives page's who-cache, filled in slices so the first page isn't a cold build.
-	service.startWhoFill?.();
-	// pages-fresh (Ops #245): the Roles and Initiatives pages' data, kept ready from one interval on.
+	// pages-fresh (Ops #245): the Roles page's data, kept ready from one interval on.
 	if (service.readRolesOverview) pagesRefresher.start();
 	// carry-on: give plugins and MCP servers a moment to come up, then reopen the cut-off chats;
 	// stall-watch: then the queue chats, whose watchdog looks after their tasks' chats.

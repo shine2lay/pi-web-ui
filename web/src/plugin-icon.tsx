@@ -151,10 +151,16 @@ export function sanitizeIconSvg(raw: unknown): string | null {
 	return new XMLSerializer().serializeToString(root);
 }
 
-/** 插件徽标：有合法 iconSvg 就画 SVG，否则把 `icon` 原样当文本画
- *  （与原来 `{entry.icon ? <span>{entry.icon}</span> : null}` 完全一致）。
- *  调用方若不想把宿主图标词表名（如 "mic"）当文字画出来，自行按
- *  isGlyphIcon 过滤后再传 icon（见 SlotTabs）。 */
+/**
+ * 图标要不要当文本画：插件的 `icon` 既可能是 emoji/单字符（字面 glyph），也可能是宿主的图标词表名
+ * （folder / file-text / …）。只画不含 ASCII 字母的字面 glyph —— 绝不把 "file-text" 这样的词当文字显示
+ * （ops #1013：Show&Tell 的顶栏 tab 曾显示成 "file-text Show&Tell"）。唯一一份，各调用方都从这里取。
+ */
+export function isGlyphIcon(icon: string | undefined): icon is string {
+	return !!icon && !/[a-z]/i.test(icon);
+}
+
+/** 插件徽标：有合法 iconSvg 就画 SVG；否则 `icon` 是字面 glyph（isGlyphIcon）才当文本画，词表名不画。 */
 export function PluginIcon({
 	icon,
 	iconSvg,
@@ -168,7 +174,7 @@ export function PluginIcon({
 	if (safe) {
 		return <span className={className ?? "plugin-icon-svg"} aria-hidden dangerouslySetInnerHTML={{ __html: safe }} />;
 	}
-	if (icon) {
+	if (isGlyphIcon(icon)) {
 		return (
 			<span className={className ? `${className} plugin-icon-glyph` : "plugin-icon-glyph"} aria-hidden>
 				{icon}

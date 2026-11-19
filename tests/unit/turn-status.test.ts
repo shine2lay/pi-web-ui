@@ -8,7 +8,6 @@ import { type BoardPostRecord, boardOrderText } from "../../server/role-board.js
 import { makeMessageRoleTool } from "../../server/role-message-tool.js";
 import {
 	FOR_OWNER_TURN_HINT,
-	POKE_HINT,
 	STALL_DEAD_END_HINT,
 	STALL_HINT,
 	STALL_MIXED_HINT,
@@ -220,19 +219,11 @@ describe("turn-status: the incoming notes", () => {
 		expect(boardOrderText(post, "UTC", "steer")).not.toContain("status line");
 	});
 
-	it("work-check and Initiatives pokes name DONE, QUEUED #N and WAITING once", () => {
-		for (const h of [POKE_HINT, STALL_HINT, STALL_DEAD_END_HINT, STALL_MIXED_HINT]) {
+	it("work-check pokes name DONE, QUEUED #N and WAITING once", () => {
+		for (const h of [STALL_HINT, STALL_DEAD_END_HINT, STALL_MIXED_HINT]) {
 			expect(once(h, statusHint("poke")), h).toBe(1);
 			expect(h).not.toContain("Write nothing for the owner in this chat");
 		}
-		const poke = roleMessageHint({
-			...base,
-			kind: "report",
-			from: { role: "app", title: "the Initiatives page", chat: "Initiatives page", file: "" },
-			poke: { initiative: "team-in-temper", name: "Team in Temper", why: ["button"] },
-		} as Parts);
-		expect(poke).toBe(POKE_HINT);
-		expect(POKE_HINT).toContain("Post it with initiative_update, not message_role.");
 	});
 
 	it("leaves alone what the owner reads, the FYI note, the 6 am report and the owner's step", () => {

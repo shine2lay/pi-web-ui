@@ -18,7 +18,7 @@
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { JSX } from "react";
-import { PluginIcon } from "../plugin-icon";
+import { isGlyphIcon, PluginIcon } from "../plugin-icon";
 import { PluginPage } from "./PluginPage";
 import type { UiPluginInfo } from "../types";
 import type { UiSlotEntry } from "../ui-slots";
@@ -82,16 +82,6 @@ function saveActiveId(storageKey: string, id: string): void {
 	} catch {
 		// 隐私模式 / 配额满：忽略。
 	}
-}
-
-/**
- * 图标要不要当文本画：`UiSlotEntry.icon` 既可能是 emoji/单字符（插件给的字面 glyph），
- * 也可能是宿主的图标词表名（folder/settings/…，需要 react-icons 映射）。本容器不认识那套
- * 词表（映射属于顶栏渲染层的职责），所以**只画不含 ASCII 字母的字面 glyph**，词表名留空
- * ——绝不把 "folder" 这样的词当文字显示出来。
- */
-function isGlyphIcon(icon: string): boolean {
-	return icon.length > 0 && !/[a-z]/i.test(icon);
 }
 
 /** tab 文案兜底：label 为空串时退到条目文案 → 插件名 → id（有总比空白 tab 强）。 */
@@ -205,7 +195,7 @@ export function SlotTabs({
 						>
 							{tab.iconSvg ? (
 								<PluginIcon iconSvg={tab.iconSvg} className="slot-tab-icon" />
-							) : tab.icon && isGlyphIcon(tab.icon) ? (
+							) : isGlyphIcon(tab.icon) ? (
 								<span className="slot-tab-icon">{tab.icon}</span>
 							) : null}
 							<span className="slot-tab-label">{labelOf(tab)}</span>

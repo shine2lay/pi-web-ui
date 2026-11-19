@@ -30,7 +30,7 @@ import { BrowserControl } from "./BrowserControl";
 import { BROWSER_PAGE_TOOL_NAME } from "../../../server/tool-manager.js";
 import { NotifyToggle } from "./NotifyToggle";
 import type { SoundKind, SoundSettings } from "../sounds";
-import { PluginIcon } from "../plugin-icon";
+import { isGlyphIcon, PluginIcon } from "../plugin-icon";
 import { useI18n } from "../i18n";
 import {
 	isPluginViewItem,
@@ -158,10 +158,8 @@ interface TopBarProps {
 		}) => void;
 		restart: (id: string) => void;
 	};
-	view: "chat" | "terminal" | "git" | "roles" | "initiatives" | "openviking" | `plugin:${string}`;
-	onViewChange: (
-		view: "chat" | "terminal" | "git" | "roles" | "initiatives" | "openviking" | `plugin:${string}`,
-	) => void;
+	view: "chat" | "terminal" | "git" | "roles" | "openviking" | `plugin:${string}`;
+	onViewChange: (view: "chat" | "terminal" | "git" | "roles" | "openviking" | `plugin:${string}`) => void;
 	/** Installed optional plugins (<dataDir>/plugins) — one view tab each
 	 *  (view:false renderer-only plugins are filtered out by the caller). */
 	plugins: {
@@ -1440,7 +1438,7 @@ export function TopBar({
 								return (
 									<label key={it.id} className="plugin-topbar-overflow-select" title={it.hint ?? it.label}>
 										<span>
-											{it.icon && !/[a-z]/i.test(it.icon) ? `${it.icon} ` : ""}
+											{isGlyphIcon(it.icon) ? `${it.icon} ` : ""}
 											{it.label}
 										</span>
 										<select
@@ -1472,7 +1470,7 @@ export function TopBar({
 										if (!dispatchHostOverflow(it)) onUiAction?.(it);
 									}}
 								>
-									{it.icon && !/[a-z]/i.test(it.icon) ? `${it.icon} ` : ""}
+									{isGlyphIcon(it.icon) ? `${it.icon} ` : ""}
 									{it.label}
 								</button>
 							);

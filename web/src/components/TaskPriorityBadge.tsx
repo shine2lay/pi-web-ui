@@ -105,9 +105,3 @@ export const TaskPriorityBadge = memo(function TaskPriorityBadge({
 		</span>
 	);
 });
-
-declare module "../tasks-roles-v8/types" {
-	interface UiRoleTask {
-		priority?: TaskPriority;
-	}
-}

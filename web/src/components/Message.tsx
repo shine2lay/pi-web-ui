@@ -1663,7 +1663,6 @@ function CompactionCard({
 export function roleMessageLabel(m: RoleMessageView, t: Translate): string {
 	if (m.kind === "owner-question") return `${OWNER_QUESTION_LABEL} · ${m.what ?? ""}`;
 	if (m.kind === "report" && m.stall) return t("roleStallLabel", { names: m.stall.names });
-	if (m.kind === "report" && m.poke) return t("rolePokeLabel", { name: m.poke.name });
 	if (m.kind === "report" && m.ci) return t("roleCiLabel", { title: m.ci.title });
 	if (m.kind === "report" && m.script) {
 		const kind = m.script.kind === "request" ? t("roleScriptRequestWord") : t("roleScriptNoticeWord");
@@ -1736,14 +1735,6 @@ function RoleMessageCard({
 					<span className="chead-title rolemsg-title">{t("roleStallCardTitle", { names: m.stall.names })}</span>
 					<span className="rolemsg-from">
 						{m.stamped ? t("roleStallCardFrom", { id: m.id }) : t("roleStallCardFromText", { id: m.id })}
-					</span>
-				</>
-			) : m.kind === "report" && m.poke ? (
-				// progress-feed (task #85): the Initiatives page asks the lead for a progress update.
-				<>
-					<span className="chead-title rolemsg-title">{t("rolePokeCardTitle", { name: m.poke.name })}</span>
-					<span className="rolemsg-from">
-						{m.stamped ? t("rolePokeCardFrom", { id: m.id }) : t("rolePokeCardFromText", { id: m.id })}
 					</span>
 				</>
 			) : m.kind === "report" && m.script ? (

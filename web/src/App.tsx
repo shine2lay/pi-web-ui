@@ -298,7 +298,7 @@ function PanelRail({ side, onClick }: { side: PanelSide; onClick: () => void }) 
 }
 
 /** 顶栏视图：内置三个 + 每个已装插件一个 `plugin:<id>`。 roles-overview: plus the Roles page. */
-type ViewName = "chat" | "terminal" | "git" | "roles" | "initiatives" | "openviking" | `plugin:${string}`;
+type ViewName = "chat" | "terminal" | "git" | "roles" | "openviking" | `plugin:${string}`;
 
 /**
  * 插件项目会话的目录授权（issue #146）：插件经 host.openSession 打开一个新目录的会话前，
@@ -569,7 +569,7 @@ export function App() {
 	}, []);
 	useEffect(() => {
 		// pages-live (Ops #244): the connection note and its trace know which view is shown.
-		setPageView(view === "roles" || view === "initiatives" || view === "chat" ? view : "other");
+		setPageView(view === "roles" || view === "chat" ? view : "other");
 	}, [view]);
 	// 已安装且未在设置面板禁用的插件（决定 tab 与视图加载）。
 	const enabledPlugins = useMemo(

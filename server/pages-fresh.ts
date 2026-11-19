@@ -1,17 +1,15 @@
 /**
- * pages-fresh (Ops #245, H-PAGES-FRESH-1 in docs/pages-fresh.md): the Roles and Initiatives pages' data kept
- * ready in the background, so opening either page is answered at once from what the server already has.
+ * pages-fresh (Ops #245, H-PAGES-FRESH-1 in docs/pages-fresh.md): the Roles page's data kept ready in the
+ * background, so opening it is answered at once from what the server already has.
  *
- * One refresher for both, every PAGES_FRESH_MS while the server runs, whether or not a page is open. Its
- * round (given by index.ts) makes the Roles overview (RolesWatch.refresh: kept as the copy a new Roles watch
- * is answered with, with its time) and then the work page from that same overview (WorkPageWatch.refresh:
- * kept the same way); each is sent only where it changed. A round still running when the next one is due
+ * One refresher, every PAGES_FRESH_MS while the server runs, whether or not the page is open. Its round
+ * (given by index.ts) makes the Roles overview (RolesWatch.refresh: kept as the copy a new Roles watch is
+ * answered with, with its time), sent only where it changed. A round still running when the next one is due
  * isn't doubled: that tick is skipped. The first round waits one interval after the start, so it never adds
- * to the start's own work.
+ * to the start's own work. (The Initiatives page it also fed was removed, ops #1013.)
  *
- * Main thread, by the plan's slice rule: both builds' longest blocking slice measured 23 and 25 ms (under
- * 50 ms; docs/pages-fresh.md). The Initiatives decisions page (initiatives-watch.ts) isn't refreshed here:
- * its build is one 80-144 ms slice, so it stays built when a window asks, as before.
+ * Main thread, by the plan's slice rule: the build's longest blocking slice measured 23 ms (under 50 ms;
+ * docs/pages-fresh.md).
  *
  * Its cost is measured, not guessed: each round's wall time and the process's CPU time during it are summed
  * and said in the log once every PAGES_FRESH_REPORT_MS. The CPU figure is an upper bound: other work the

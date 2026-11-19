@@ -1,20 +1,18 @@
 /**
- * initiatives-plan-data (Ops #223): the whole work registry as the Initiatives page reads it
- * (pi-work-management's events.jsonl, replayed by server/work-page.ts with the store's own rules),
- * joined with the queues' facts from the Roles overview, and pushed to the windows that watch it.
- * Fixed fixtures only: never the live registry.
+ * initiatives-plan-data (Ops #223): the whole work registry as server/work-page.ts replays it
+ * (pi-work-management's events.jsonl, with the store's own rules), joined with the queues' facts from
+ * the Roles overview. Fixed fixtures only: never the live registry.
  */
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ServerMessage, UiRolesOverview, UiWorkPage } from "../../server/protocol.js";
+import type { UiRolesOverview, UiWorkPage } from "../../server/protocol.js";
 import {
 	WORK_PAGE_ACTIVITY_MAX,
 	WORK_PAGE_RECORDS_MAX,
 	WORK_PAGE_TASKS_MAX,
 	WorkPageFile,
-	WorkPageWatch,
 	workFactsFromOverview,
 	workPageFrom,
 	type WorkQueueFacts,
@@ -486,30 +484,5 @@ describe("WorkPageFile", () => {
 			[home, "waiting"],
 			[copy, "blocked"],
 		]);
-	});
-});
-
-describe("WorkPageWatch", () => {
-	it("sends the page at once, again only when it changed, and nothing after unwatch", async () => {
-		let page: UiWorkPage = workPageFrom("", [], 0);
-		let reads = 0;
-		const watch = new WorkPageWatch<string>(async () => ({ ...page, at: ++reads }), { pollMs: 60_000 });
-		const sent: ServerMessage[] = [];
-		await watch.watch("window", (m) => sent.push(m));
-		expect(sent).toEqual([{ type: "work_page", page: { ...page, at: 1 } }]);
-		expect(watch.polling).toBe(true);
-		// Only its time differs: nothing is sent.
-		await watch.look();
-		expect(sent).toHaveLength(1);
-		page = workPageFrom(`${FIXTURE.split("\n")[0]}\n`, [], 0);
-		await watch.look();
-		expect(sent).toHaveLength(2);
-		expect(sent[1]).toEqual({ type: "work_page", page: { ...page, at: 3 } });
-		watch.drop("window");
-		expect(watch.size).toBe(0);
-		expect(watch.polling).toBe(false);
-		page = workPageFrom("", [], 0);
-		await watch.look();
-		expect(sent).toHaveLength(2);
 	});
 });

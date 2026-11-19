@@ -169,7 +169,7 @@ const RECORD_KEYS = new Set([
 	"shownMs",
 ]);
 /** pages-live (Ops #244): the views a record may name. */
-const VIEWS: readonly NonNullable<ConnTraceRecord["view"]>[] = ["roles", "initiatives", "chat", "other"];
+const VIEWS: readonly NonNullable<ConnTraceRecord["view"]>[] = ["roles", "chat", "other"];
 
 const ms = (v: unknown): number | null =>
 	typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.min(Math.round(v), MAX_MS) : null;

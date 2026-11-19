@@ -1,13 +1,12 @@
 /**
  * decision-reader (task #84): batching, the answer's schema check, verbatim quotes and owner fields,
  * changes and repeats, filing (tag, markers, the model's guess), retries, the daily cap, and the
- * previews of older answers; with a fake model. Also the store's seed and the decision_log tool.
+ * previews of older answers; with a fake model. Also the store's seed.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runDecisionLog, type DecisionLogHost } from "../../server/decision-log-tool.js";
 import {
 	claudePoolMembers,
 	isLimitRefusal,
@@ -32,8 +31,6 @@ import {
 import { DecisionRecords, type DecisionRecord, type NewDecisionRecord } from "../../server/decision-records.js";
 import { RIDER_SYSTEM } from "../../server/decision-rider.js";
 import { DecisionStore, fileRecord, parseSettings, TEAM_IN_TEMPER } from "../../server/decision-store.js";
-import { buildDecisionsPage, citedRecords } from "../../server/decision-view.js";
-import type { RoleMessageSender } from "../../server/role-messages.js";
 
 let dir: string;
 let records: DecisionRecords;
@@ -419,14 +416,6 @@ describe("the reader", () => {
 		expect(his?.sources[0].quotes).toEqual([
 			"Owner in the Architecture chat: FROM NOW ON ONLY USE THE temper-dev no more TEST TEMPER",
 		]);
-		const page = buildDecisionsPage(
-			store,
-			citedRecords(store, records.list()),
-			readerStatus(store, reader(model), clock),
-		);
-		const view = (title: string) => page.decisions.find((d) => d.title === title);
-		expect(view("Only temper-dev from now on")).toMatchObject({ you: true, flags: [] });
-		expect(view("Tailnet only")).toMatchObject({ you: false, flags: ["claims-owner"] });
 		expect(byRef("bp-his").map((d) => d.title)).toEqual(["Only temper-dev"]);
 	});
 
@@ -531,11 +520,12 @@ describe("the reader", () => {
 		const rule = store.decisions().find((d) => d.title === "Use message_role")!;
 		// The trial record (filed by its marker) mentions the rule: the rule stays unfiled, and is listed there too.
 		expect([rule.initiative, rule.filedBy, rule.alsoIn]).toEqual([null, "", ["team-in-temper"]]);
-		const page = buildDecisionsPage(store, citedRecords(store, records.list()), readerStatus(store, undefined, clock), {
-			initiative: "team-in-temper",
-		});
-		expect(page.decisions.map((d) => d.title).sort()).toEqual(["Turns", "Use message_role"]);
-		expect(page.unfiled.decisions).toBe(1);
+		expect(
+			store
+				.decisions()
+				.map((d) => d.title)
+				.sort(),
+		).toEqual(["Turns", "Use message_role"]);
 	});
 
 	it("files all of a record's points by the model's answer for the record (after tag and markers)", async () => {
@@ -796,11 +786,6 @@ describe("the reader", () => {
 		expect(prompt).not.toContain("Run the scratch project");
 		expect(prompt).not.toContain("Members take turns one at a time");
 		// The taken-out words are found in the version before: no "quote not found" on the change.
-		const page = buildDecisionsPage(store, citedRecords(store, records.list()), readerStatus(store, undefined, clock), {
-			initiative: "",
-		});
-		const change = page.decisions.find((d) => d.id === known.id)!.changes[0];
-		expect(change.sources[0].flags).not.toContain("quote-not-found");
 		expect(store.get(known.id)!.changes[0].sources[0].was).toBe(
 			records.list().find((r) => r.ref === "chat-a.jsonl:10")!.id,
 		);
@@ -1519,30 +1504,7 @@ describe("previews of older answers", () => {
 	});
 });
 
-describe("the store and the decision_log tool", () => {
-	const sender: RoleMessageSender = {
-		role: "temper",
-		title: "temper",
-		file: "/x/temper.jsonl",
-		chat: "home chat",
-		handling: 0,
-	};
-	let changed = 0;
-	const host = (who: RoleMessageSender | string = sender): DecisionLogHost => ({
-		sender: () => who,
-		store: () => store,
-		record: (k) => records.list().find((r) => r.id === k || r.ref === k),
-		records: (ids) =>
-			new Map(
-				records
-					.list()
-					.filter((r) => ids.includes(r.id))
-					.map((r) => [r.id, r]),
-			),
-		changed: () => void changed++,
-		now: () => clock,
-	});
-
+describe("the store", () => {
 	// progress-feed (task #85): Team in Temper is seeded with the owner's own pick, Architecture.
 	it("seeds initiatives.json with Team in Temper (lead: the owner's pick), and files by its markers", () => {
 		expect(store.initiatives()).toEqual([TEAM_IN_TEMPER]);
@@ -1573,123 +1535,5 @@ describe("the store and the decision_log tool", () => {
 		expect(
 			fileRecord({ ...rec("x"), source: "plan", from: "temper", task: 52 } as DecisionRecord, store.initiatives())?.by,
 		).toBe("marker");
-	});
-
-	it("refuses a chat without a role", () => {
-		expect(() => runDecisionLog(host("This chat has no role."), { action: "list" })).toThrow("This chat has no role.");
-	});
-
-	it("adds a decision that lived in a file, with a link; it's the role's, and a claim that he decided is flagged", () => {
-		const r = runDecisionLog(host(), {
-			action: "add",
-			initiative: "team-in-temper",
-			title: "Copies reset",
-			what: "Temper moves each reviewer's copy to the review commit.",
-			link: "/x/M2/report.md",
-		});
-		expect(r.text).toContain("Added decision d1 under team-in-temper");
-		const claim = runDecisionLog(host(), {
-			action: "add",
-			what: "The owner chose serial turns.",
-			link: "/x/profile.md",
-		});
-		expect(claim.text).toContain("flags it");
-		const page = buildDecisionsPage(store, citedRecords(store, records.list()), readerStatus(store, undefined, clock));
-		const [d1, d2] = [...page.decisions].sort((a, b) => a.id.localeCompare(b.id));
-		expect(d1.sources[0]).toMatchObject({
-			writer: "temper",
-			approval: "role-entry",
-			you: false,
-			by: "role:temper",
-			link: "/x/M2/report.md",
-		});
-		expect(d2.flags).toEqual(["claims-owner"]);
-		expect(page.unfiled.decisions).toBe(1);
-		expect(() => runDecisionLog(host(), { action: "add", what: "No link." })).toThrow(/needs a link/);
-		expect(() => runDecisionLog(host(), { action: "add", what: "X", link: "y", initiative: "nope" })).toThrow(
-			/No initiative nope/,
-		);
-	});
-
-	it("points to one of his records: the code checks his own words", () => {
-		records.append({
-			source: "answer",
-			at: T0,
-			from: "owner",
-			to: "temper",
-			ref: "ask:toolu_9",
-			ask: "question",
-			questions: [
-				{
-					id: "q",
-					question: "Turns?",
-					options: [{ label: "One at a time" }, { label: "Free-flowing" }],
-					picked: ["Free-flowing"],
-				},
-			],
-		});
-		const yes = runDecisionLog(host(), {
-			action: "add",
-			what: "Free-flowing turns.",
-			owner_record: "ask:toolu_9",
-			quotes: ["Free-flowing"],
-		});
-		expect(yes.text).toContain("counts as his");
-		const no = runDecisionLog(host(), {
-			action: "add",
-			what: "Turns one at a time.",
-			owner_record: "ask:toolu_9",
-			quotes: ["One at a time"],
-		});
-		expect(no.text).toContain("doesn't count as his");
-		const page = buildDecisionsPage(store, citedRecords(store, records.list()), readerStatus(store, undefined, clock));
-		const byWhat = new Map(page.decisions.map((d) => [d.what, d]));
-		expect(byWhat.get("Free-flowing turns.")).toMatchObject({ you: true });
-		expect(byWhat.get("Free-flowing turns.")!.sources[0]).toMatchObject({
-			writer: "owner",
-			approval: "dialog-pick",
-			by: "role:temper",
-		});
-		expect(byWhat.get("Turns one at a time.")).toMatchObject({ you: false });
-		expect(() => runDecisionLog(host(), { action: "add", what: "X", owner_record: "ask:toolu_9" })).toThrow(
-			/needs quotes/,
-		);
-	});
-
-	it("fills, refiles, marks not a decision, adds a change and an initiative", () => {
-		runDecisionLog(host(), { action: "add", what: "Serial turns.", link: "/x/a.md" });
-		runDecisionLog(host(), {
-			action: "fill",
-			id: "d1",
-			impact: "Trials take twice as long.",
-			options: "Free-flowing: faster, harder to watch.",
-			until: "After the first trial.",
-		});
-		expect(store.get("d1")).toMatchObject({
-			impact: { text: "Trials take twice as long.", by: "role:temper" },
-			until: { text: "After the first trial." },
-		});
-		runDecisionLog(host(), { action: "fill", id: "d1", until: "" });
-		expect(store.get("d1")!.until).toBeUndefined();
-		expect(
-			runDecisionLog(host(), { action: "add", of: "d1", type: "reversed", what: "Free-flowing now.", link: "/x/b.md" })
-				.text,
-		).toContain("Added change c2 (reversed) to d1");
-		expect(() => runDecisionLog(host(), { action: "add", of: "d1", type: "sideways", what: "x", link: "y" })).toThrow(
-			/type must be one of/,
-		);
-		runDecisionLog(host(), { action: "add_initiative", name: "Decisions page", markers: ["Initiatives tab"] });
-		expect(store.initiatives().map((i) => i.id)).toEqual(["team-in-temper", "decisions-page"]);
-		runDecisionLog(host(), { action: "refile", id: "d1", initiative: "decisions-page" });
-		expect(store.get("d1")).toMatchObject({ initiative: "decisions-page", filedBy: "role:temper" });
-		runDecisionLog(host(), { action: "not_decision", id: "c2", why: "A status note." });
-		expect(store.findChange("c2")!.change.notDecision).toMatchObject({ by: "role:temper", why: "A status note." });
-		const listed = runDecisionLog(host(), { action: "list", initiative: "decisions-page" }).text;
-		expect(listed).toContain("d1 [decisions-page]");
-		expect(listed).toContain("c2 reversed");
-		expect(listed).toContain("(marked not a decision)");
-		runDecisionLog(host(), { action: "not_decision", id: "c2", restore: true });
-		expect(store.findChange("c2")!.change.notDecision).toBeUndefined();
-		expect(changed).toBeGreaterThan(5);
 	});
 });

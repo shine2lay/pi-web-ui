@@ -9,7 +9,7 @@ import {
 import { createPortal } from "react-dom";
 import { FiBox, FiMenu, FiSettings } from "react-icons/fi";
 import { PiPushPinFill, PiPushPinSlash } from "react-icons/pi";
-import { PluginIcon } from "../plugin-icon";
+import { isGlyphIcon, PluginIcon } from "../plugin-icon";
 import { useI18n } from "../i18n";
 import { useFloatingPanel } from "../use-floating-panel";
 
@@ -133,7 +133,7 @@ export function PluginMenu({
 						// 与顶栏/布局页同一套图标口径：词表名当文字画（这里没有词表，无图标就回落矢量），
 						// emoji/单字符原样画，插件自带 SVG 优先。回落不用 🧩 emoji：旧 Windows 缺这个
 						// 字会显示成空框（见 TopBar host:plugins），矢量图标永远能画出来。
-						const glyph = p.iconSvg ? undefined : p.icon && !/[a-z]/i.test(p.icon) ? p.icon : undefined;
+						const glyph = p.iconSvg ? undefined : isGlyphIcon(p.icon) ? p.icon : undefined;
 						return (
 							<div
 								key={p.id}

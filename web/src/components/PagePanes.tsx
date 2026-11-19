@@ -1,6 +1,6 @@
 /**
- * The three page views that live beside the chat: Roles, Initiatives and Memory
- * (openviking-dashboard).
+ * The two page views that live beside the chat: Roles and Memory (openviking-dashboard).
+ * (The Initiatives page was removed, ops #1013.)
  *
  * Split out of `App.tsx` so adding a page does not grow that file (Rule 23's 500-line cap and
  * `wt check`'s legacy ratchet). Each page is loaded lazily with its first opening and then stays
@@ -14,13 +14,11 @@ import { useVisitedViews } from "../visited-views";
 const RolesByProjectView = lazy(() =>
 	import("../roles-by-project/RolesByProjectView").then((m) => ({ default: m.RolesByProjectView })),
 );
-// initiatives-page-exact (#225): the supplied design; the old InitiativesView stays in source, unmounted.
-const InitiativesPage = lazy(() => import("./InitiativesPage").then((m) => ({ default: m.InitiativesPage })));
 // openviking-dashboard: the Memory tab, a memory explorer (design #316).
 const MemoryExplorerPage = lazy(() => import("./MemoryExplorerPage").then((m) => ({ default: m.MemoryExplorerPage })));
 
 export interface PagePanesProps {
-	/** The view shown right now (any of the app's views, not only these three). */
+	/** The view shown right now (any of the app's views, not only these two). */
 	readonly view: string;
 	/** Roles only: the native dialogs to show, or `[]` while the chat is not ready. */
 	readonly dialogs: RolesDialogs;
@@ -34,7 +32,6 @@ type RolesDialogs = RolesProps["dialogs"];
 export function PagePanes({ view, dialogs, onOpen, onAbout }: PagePanesProps): ReactNode {
 	const visited = useVisitedViews(view);
 	const rolesSeen = visited.has("roles");
-	const initiativesSeen = visited.has("initiatives");
 	const openVikingSeen = visited.has("openviking");
 	return (
 		<>
@@ -43,14 +40,6 @@ export function PagePanes({ view, dialogs, onOpen, onAbout }: PagePanesProps): R
 				{rolesSeen && (
 					<Suspense fallback={null}>
 						<RolesByProjectView active={view === "roles"} dialogs={dialogs} onOpen={onOpen} onAbout={onAbout} />
-					</Suspense>
-				)}
-			</div>
-			{/* initiatives-page: the supplied design with the work registry, decisions and the leads' updates. */}
-			<div className={`view-pane initiatives-pane ${view === "initiatives" ? "" : "hidden"}`}>
-				{initiativesSeen && (
-					<Suspense fallback={null}>
-						<InitiativesPage active={view === "initiatives"} onOpen={onOpen} />
 					</Suspense>
 				)}
 			</div>

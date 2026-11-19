@@ -1,5 +1,5 @@
 /**
- * The top bar's three page tabs: Roles, Initiatives and Memory (openviking-dashboard). Like every view button in
+ * The top bar's two page tabs: Roles and Memory (openviking-dashboard). Like every view button in
  * the top bar's toolbar they are plain buttons, the one shown marked aria-current="page" (a role=tab needs a
  * tablist around it, and the toolbar holds other buttons too: frontend #295).
  *
@@ -8,14 +8,14 @@
  * inline, so ordering, folding and user preferences behave exactly as before.
  */
 import type { ReactNode } from "react";
-import { FiDatabase, FiFlag, FiUsers } from "react-icons/fi";
+import { FiDatabase, FiUsers } from "react-icons/fi";
 import type { Translate } from "../i18n";
 
-export type PageTabView = "roles" | "initiatives" | "openviking";
+export type PageTabView = "roles" | "openviking";
 
 export interface PageTabsArgs {
 	readonly t: Translate;
-	/** The view shown right now (any view; only the three page tabs read it). */
+	/** The view shown right now (any view; only the page tabs read it). */
 	readonly view: string;
 	readonly onViewChange: (view: PageTabView) => void;
 	/** A tab the chat switched off is left out (same rule as every other host tab). */
@@ -27,7 +27,7 @@ export interface PageTabsArgs {
 /** The Roles tab's description ("5 waiting on you"); the top bar draws each tab once. */
 const ROLES_WAITING_ID = "roles-tab-waiting";
 
-/** The three page tabs, keyed by slot id (`null` where the chat switched the tab off). */
+/** The page tabs, keyed by slot id (`null` where the chat switched the tab off). */
 export function buildPageTabs({ t, view, onViewChange, tabOn, rolesAsks }: PageTabsArgs): Record<string, ReactNode> {
 	return {
 		// roles-overview: the Roles page; the amber badge counts what waits on the owner (none: no badge).
@@ -54,19 +54,6 @@ export function buildPageTabs({ t, view, onViewChange, tabOn, rolesAsks }: PageT
 						{t("rolesTabWaiting", { n: rolesAsks })}
 					</span>
 				)}
-			</button>
-		) : null,
-		// initiatives-page: each initiative's decisions, who really made them, and what they cost the owner.
-		"host:initiatives": tabOn("initiatives") ? (
-			<button
-				type="button"
-				aria-current={view === "initiatives" ? "page" : undefined}
-				className={`tb-tab initiatives-tab${view === "initiatives" ? " active" : ""}`}
-				data-tip={t("initiativesTabTip")}
-				onClick={() => onViewChange("initiatives")}
-			>
-				<FiFlag />
-				<span>{t("initiativesTab")}</span>
 			</button>
 		) : null,
 		// openviking-dashboard: what OpenViking is injecting and committing, and what the memory holds.

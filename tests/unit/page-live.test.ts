@@ -47,9 +47,8 @@ describe("page-live: the grace and the shared store", () => {
 		expect(graceLeft(T0, T0 - 5_000, T0 - 60_000)).toBe(8_000);
 	});
 
-	it("only Roles and Initiatives wait", () => {
+	it("only Roles waits", () => {
 		expect(graceView("roles")).toBe(true);
-		expect(graceView("initiatives")).toBe(true);
 		expect(graceView("chat")).toBe(false);
 		expect(graceView("other")).toBe(false);
 	});

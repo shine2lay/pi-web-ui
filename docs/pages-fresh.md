@@ -1,5 +1,7 @@
 # Roles and Initiatives open at once: kept fresh in the background
 
+> Ops #1013 (2026-11-18): the Initiatives page is gone; the refresher now keeps only the Roles overview fresh. The Initiatives parts below are history.
+
 Ops queue task #245 (accountable lead: Ops; project initiatives-page). The owner, 2026-10-19 18:55: "can you make it so that roles and initiative are updated periodcally so we are not fetching for long everytime we load". It also covers the part of the earlier ask (2026-10-18, m58098, "i hate that it says reconnecting for along time when i change tabs") that #244 (docs/pages-live.md) left for the Initiatives page.
 
 Server copy only. The owner didn't pick between a server copy and an extra copy in the browser (he answered "i see asks unconfirmed all the time" instead, which is #268); Ops chose the server copy: a browser copy would show older, unconfirmed data on every open, and it would store page data on his devices. It can be added later if he asks.

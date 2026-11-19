@@ -2,7 +2,7 @@
 /**
  * escape-hidden-question, H-ESCAPE-HIDDEN-QUESTION-1 (docs/escape-hidden-question.md): Escape answers a chat's
  * waiting ask only while that chat is on screen. The app hands Escape to the newest handler on its stack
- * (web/src/shortcut-stack.ts). The chat pane stays mounted, hidden, behind Roles, Initiatives, Schedules and the other
+ * (web/src/shortcut-stack.ts). The chat pane stays mounted, hidden, behind Roles, Schedules and the other
  * tabs, and its asks (the model's question, another chat's question answered here, an extension's select, confirm or
  * input) took Escape there too: Escape on a covering tab cancelled a question the owner never saw (#225's live look,
  * Oct 18). App now tells each ask whether the chat view is showing; off screen an ask passes Escape on but keeps its
@@ -18,21 +18,6 @@ import { resolve } from "node:path";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react-dom/test-utils";
 
-// The Initiatives page as #225's Escape test mounts it (tests/unit/initiatives-page-escape.test.ts): its frame is
-// #224's and its feeds come from the fixture. No page dialog is opened here.
-vi.mock("../../web/src/components/InitiativesExactView.js", () => ({ InitiativesExactView: () => null }));
-vi.mock("../../web/src/work-page-state.js", async (importOriginal) => {
-	const real = await importOriginal<typeof import("../../web/src/work-page-state.js")>();
-	const { PAGE } = await import("./initiatives-page-fixture.js");
-	const feed = { page: PAGE, status: "ready" as const };
-	return { ...real, useWorkPage: () => feed, reloadWorkPage: () => {} };
-});
-vi.mock("../../web/src/initiatives-state.js", async (importOriginal) => {
-	const real = await importOriginal<typeof import("../../web/src/initiatives-state.js")>();
-	const { DECISIONS } = await import("./initiatives-page-fixture.js");
-	const state = { page: DECISIONS, status: "ready" as const };
-	return { ...real, useInitiatives: () => state, reloadInitiatives: () => {}, selectInitiative: () => {} };
-});
 vi.mock("../../web/src/identity-state.js", async (importOriginal) => {
 	const real = await importOriginal<typeof import("../../web/src/identity-state.js")>();
 	const list = { identities: [] };
@@ -41,14 +26,13 @@ vi.mock("../../web/src/identity-state.js", async (importOriginal) => {
 
 import { Dialog } from "../../web/src/components/Dialog.js";
 import { DshQuestionDialog } from "../../web/src/components/DshQuestionDialog.js";
-import { InitiativesPage } from "../../web/src/components/InitiativesPage.js";
 import { Modal } from "../../web/src/components/Modal.js";
 import { setAppSend } from "../../web/src/app-globals.js";
 import { LanguageProvider } from "../../web/src/i18n.js";
 import { loadMarkdownExtras } from "../../web/src/components/Markdown.js";
 import { resetEscapeStack } from "../../web/src/shortcut-stack.js";
 
-type View = "chat" | "roles" | "initiatives" | "plugin:scheduler" | "terminal";
+type View = "chat" | "roles" | "plugin:scheduler" | "terminal";
 type Ask = "the model's question" | "an extension's ask";
 
 const QUESTION = {
@@ -62,8 +46,8 @@ const CANCEL: Record<Ask, object> = {
 	"an extension's ask": { type: "dialog_response", id: 7, value: null },
 };
 const ASKS = Object.keys(CANCEL) as Ask[];
-/** Tabs that cover the chat: Roles, Initiatives (no page dialog open), Schedules (the scheduler plugin), Terminal. */
-const COVERING: View[] = ["roles", "initiatives", "plugin:scheduler", "terminal"];
+/** Tabs that cover the chat: Roles, Schedules (the scheduler plugin), Terminal. */
+const COVERING: View[] = ["roles", "plugin:scheduler", "terminal"];
 
 let root: Root | null = null;
 let sent: object[] = [];
@@ -82,11 +66,6 @@ function Panes({ view, ask, modal }: { view: View; ask: Ask; modal: boolean }) {
 			ask === "the model's question" && createElement(DshQuestionDialog, { question: QUESTION, escapeEnabled: chatOn }),
 		),
 		createElement("div", { className: `view-pane roles-pane ${view === "roles" ? "" : "hidden"}` }),
-		createElement(
-			"div",
-			{ className: `view-pane initiatives-pane ${view === "initiatives" ? "" : "hidden"}` },
-			createElement(InitiativesPage, { active: view === "initiatives", onOpen: () => {} }),
-		),
 		createElement(Modal, { open: modal, onClose: () => closed.push("modal"), title: "Settings", children: "Roles" }),
 	);
 }

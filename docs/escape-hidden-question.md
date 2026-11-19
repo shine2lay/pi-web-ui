@@ -6,7 +6,7 @@ Ops queue task #239 (accountable lead: Ops; standalone). Found by #225's live lo
 
 **Wrong, and the evidence.**
 
-- #225's live look (Oct 18): Escape on the Initiatives tab tried to cancel the question waiting in the Ops lead chat, a question the owner couldn't see (`docs/initiatives-page-exact.md`, "Found in the live look").
+- #225's live look (Oct 18): Escape on the Initiatives tab tried to cancel the question waiting in the Ops lead chat, a question the owner couldn't see (that page and its notes were removed, ops #1013).
 - The cause is the app's Escape order (`web/src/shortcut-stack.ts`): one capture listener on the document hands Escape to the newest handler on its stack and stops it there. The chat pane stays mounted, only hidden, behind Roles, Initiatives, Schedules (the scheduler plugin's tab), Terminal, Git and the other plugin tabs, and its three kinds of ask keep their handlers on that stack all along: an extension's select, confirm or input (`web/src/components/Dialog.tsx`, `useEscapeKey(() => respond(null))`), and the question dialog (`web/src/components/DshQuestionDialog.tsx`), mounted twice in `web/src/App.tsx`: the model's question (`chat.question`) and another chat's question answered here (`chat.remoteQuestion`, with its `owner`).
 - #225's fix (`9b6c4e73`, H-INITIATIVES-ESCAPE-1) only puts the Initiatives page's own dialogs on top while one is open. With none open, or on any other tab, Escape still cancels the hidden ask, and the chat carries on with "cancelled" without asking again.
 

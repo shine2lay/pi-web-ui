@@ -3,8 +3,8 @@
  * effort-level-button (PATCHES.md): the composer's "Department effort level" button's data, per chat. The window
  * asks for the chat it shows (`get_effort_levels`) when it opens it, and once each socket's session is initialized
  * (the server refuses anything sent while it replays a new socket's startup commands); the server answers with
- * `effort_levels`, and pushes the same message to every window showing the chat after a pick. A module store in the
- * work-page-state.ts pattern (module values + listeners + `useSyncExternalStore`, a stable snapshot between changes).
+ * `effort_levels`, and pushes the same message to every window showing the chat after a pick. A module store
+ * (module values + listeners + `useSyncExternalStore`, a stable snapshot between changes).
  */
 import { useEffect, useSyncExternalStore } from "react";
 import type { EffortTier, UiEffortLevels } from "../../server/effort-level-protocol";

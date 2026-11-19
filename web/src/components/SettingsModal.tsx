@@ -32,7 +32,7 @@ import {
 	FiZap,
 } from "react-icons/fi";
 import { CopyButton } from "./copy-button";
-import { PluginIcon } from "../plugin-icon";
+import { isGlyphIcon, PluginIcon } from "../plugin-icon";
 import { HintTip } from "./HintTip";
 import { sortAgentPresets } from "./DshPresetBar";
 import { DSH_PERMISSION_ORDER, permDescKey, permLabelKey } from "./DshPermissionBar";
@@ -945,10 +945,10 @@ export function SettingsModal({
 		...pluginPages.map((p) => ({
 			id: pluginPageTabId(p.entry.id),
 			// 图标：插件给 emoji/单字符就照原样画；给的是宿主图标词表名（或没给）时用通用盒图标，
-			// 绝不把 "folder" 这样的词当文字显出来（口径同 SlotTabs.isGlyphIcon）。
+			// 绝不把 "folder" 这样的词当文字显出来（isGlyphIcon，plugin-icon.tsx）。
 			icon: p.entry.iconSvg ? (
 				<PluginIcon iconSvg={p.entry.iconSvg} />
-			) : p.entry.icon && !/[a-z]/i.test(p.entry.icon) ? (
+			) : isGlyphIcon(p.entry.icon) ? (
 				<span>{p.entry.icon}</span>
 			) : (
 				<FiBox />
@@ -2243,7 +2243,7 @@ export function SettingsModal({
 									pluginToolGroups.map((g) => (
 										<div key={g.plugin.id}>
 											<div className="set-row-desc">
-												{g.plugin.icon ? `${g.plugin.icon} ` : ""}
+												{isGlyphIcon(g.plugin.icon) ? `${g.plugin.icon} ` : ""}
 												{g.plugin.name} · {g.plugin.id}
 											</div>
 											{g.tools.map((tool) => (

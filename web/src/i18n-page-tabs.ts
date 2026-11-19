@@ -10,9 +10,6 @@ export const pageTabsEn = {
 	// The Roles tab's description when answers wait (its name stays its visible label, "Roles").
 	rolesTabWaiting: "{n} waiting on you",
 	rolesTabTip: "Roles: what every role is doing and what waits on you",
-	// initiatives-page: the Initiatives tab (decisions per initiative, who really decided, what they cost you).
-	initiativesTab: "Initiatives",
-	initiativesTabTip: "Initiatives: every decision behind each one, who really made it, and what it means for you",
 	// openviking-dashboard: the Memory tab (what OpenViking injects and commits, and what the memory holds).
 	openVikingTab: "Memory",
 	openVikingTabTip:

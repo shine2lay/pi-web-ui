@@ -1,5 +1,5 @@
 /**
- * Time words first written for the Roles page, now shared by the Initiatives pages and the queue status (pure
+ * Time words first written for the Roles page, now shared with the queue status (pure
  * functions, so the unit tests cover them): a clock time, a short age and an "ago".
  */
 

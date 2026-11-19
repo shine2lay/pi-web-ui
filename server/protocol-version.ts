@@ -99,4 +99,7 @@
 //     composer's "Department effort level" button. An old page shows no button; an old server never answers.
 // 54: roles-by-project - UiRolesOverview.taskBoard (groups, board rows) and UiWorkRecord.doneWhen on the roles
 //     payload. A new page on an old server would wait for taskBoard forever; the mismatch flag tells it to refresh.
-export const PROTOCOL_VERSION = 54;
+// 55: remove-initiatives-page (ops #1013) - the Initiatives tab is gone: initiatives_watch / work_page_watch /
+//     decision_record / initiative_lead / initiative_poke / initiative_seen / initiative_update_links and their
+//     answers are removed. An old page must refresh (the mismatch flag tells it); a new page never sends them.
+export const PROTOCOL_VERSION = 55;

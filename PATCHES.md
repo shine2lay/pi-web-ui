@@ -440,19 +440,6 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Result: H-LIVE-NEEDS-1 MISS on its premise (at the start nothing was miscounted, 0 = 0); after the install of 282512a6 the live owner-ask count still equals the queue records' count (1 stuck task, temper #116, passed on to the owner; 0 with a lead).
 - Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
-## initiatives-live: live Latest updates, and "Blocked" instead of "Needs attention" on the Initiatives page
-
-- `local` (owner 2026-10-19, via COO rm-63784858: "i want live progress in both role and initiatives"; he took "Needs attention" as meant for him; Ops #271). The contract it reads (#269, filled by #270's server) and hypothesis H-INIT-LIVE-1 with its result: `docs/live-progress.md`.
-- `web/src/initiatives-page/gaps.ts`: `latestOf`: Latest updates are the newest 3 of every record for the initiative: the registry's changes and the lead's posts (`activityOf`, as before; the lead's posts stay, with the lead's name), each open task's newest progress line ("#N <line>", by its queue's role, at the line's time) and each done task's summary ("#N done: <summary>", at when it was done), which takes the place of the registry's bare "done" line for that task there (All activity keeps every change). Agent text only through the Roles page's unsafe-text filter (`plain()`), clipped to the contract's 400 / 300 characters. A stuck task's gap line says "its question is with <lead>" when it has `withLead`.
-- `web/src/initiatives-page/tasks.ts`: chip, filter and counts read "Blocked" (was "Needs attention"); `onYou`: a task with `withLead` is never the owner's (no Needs you, Waiting on you or ON YOU); a stuck or asking task with `withLead` reads "Question with <lead>"; a stuck task with no listed question reads "Stuck on a question that isn’t listed: open its chat" (was "Waiting on you, but its question isn’t listed", wrong under rule 21); a working task with no next step shows its progress line with its age; a row's "updated" time counts its progress line.
-- `web/src/initiatives-page/model.ts`: Latest updates no longer hold only the lead's posts (they come from gaps.ts); the empty note reads "No updates recorded yet."; `leadReportAt` is the lead's newest post's age ("2h ago").
-- `web/src/initiatives-exact-view.ts`: the status word and filter label "Blocked"; `web/src/initiatives-exact-model.ts`: comments only.
-- `web/src/initiatives-u0/surface.html` (made by `scripts/extract-initiatives-template.mjs`, addition 13): "Last report · <time>" reads "Lead’s report · <age>". No other markup or layout change.
-- Unchanged: the layout, the server, the registry, how owner asks are read (`role.asks`). A page from an older server (no live-progress fields) shows what it showed before, in the new words.
-- Checks: `tests/unit/initiatives-live.test.ts` (merge and order, the lead's posts kept, a done summary in place of the bare done line with no lead post, an older server's page, unsafe and long text, "Question with <lead>" and never Needs you, what a blocked task waits on, the stuck note, Needs you kept for a question that reached the owner, the progress line's age, no "Needs attention" on the page); the words in `tests/unit/initiatives-page-model.test.ts`, `initiatives-page-tasks.test.ts` and `initiatives-exact.test.ts`; sealed `tests/initiatives-live-test.mjs` (the test server's own work page, with the contract's fields laid over its socket messages: a progress line first in Latest updates, "Waits on Temper #113 · …", "Question with Ops", nothing on the owner, "Blocked", no "Needs attention" at 1400 and 390 px; a task-done record shows as "#5 done: <summary>" within one refresh, 4.75 s and 4.88 s of 6 s in two runs); then the landing gate.
-- Result: H-INIT-LIVE-1 HIT. 6293f27f installed Oct 19 22:03 with every deploy check passing; in the live look at 22:08 (1400 and 390 px) the first Latest-updates line was the newest record in all 3 initiatives checked (22:08 Design, 22:07 Temper, 08:18 Architecture), and "Needs attention" appeared nowhere.
-- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
-
 ## queue-e2e-parent: the queue's browser tests give their new tasks a parent
 
 - `local` (Ops #275, essential maintenance; found by Ops #267, note n242). Hypothesis H-QUEUE-E2E-PARENT-1, the before and after sealed runs and the result: `docs/queue-e2e-parent.md`.
@@ -460,18 +447,6 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Each new-task plan they send now has `standalone: true`; plan changes (with `id`) stay as they were, keeping the task's parent. No check changed or loosened. Tests only: no app code changed, nothing to install. The nine are still outside the land gate.
 - Checks: the nine in sealed runs before (0 of 9 passed) and after (9 of 9), then the landing gate. A repeat of the after run under heavy machine load passed 7 of 9: queue-panel and queue-main-chat failed later timing checks, long after their first tasks; those go to their own Ops task (requested in rm-f4fecfd2), not this one.
 - Undo: revert this commit (the nine fail again at their first new task).
-
-## initiatives-projects-done: finished projects at a glance on the Initiatives page
-
-- `local` (owner 2026-10-19 via COO rm-0a0353b3, "you mentioned that a project done but i cant see that in initiatives page"; he picked "Yes, show them clearly"; Ops #274). Hypothesis H-PROJECTS-DONE-1 and result: `docs/initiatives-projects-done.md`.
-- `web/src/initiatives-page/model.ts`: `projectCount` (done, of all but the dropped ones, and dropped) and `finishedProjects` (done and dropped projects, newest first by their last recorded change: name, the project frame it opens, lead, done or dropped, date, its done-when count). An initiative's rows and the "in no initiative" box's rows list only active projects (and their tasks); with projects but none active they say "No active projects.".
-- `web/src/initiatives-exact-model.ts`: optional `projectCount` and `finishedProjects` on an initiative (`InitiativesExactFinishedProject`).
-- `web/src/initiatives-exact-view.ts`: the card's `projectsText` ("2 of 6 projects done · 1 dropped"; no line without projects); the fold's rows, count and "latest" date; `projectsOpen` and `toggleProjects`, closed by default, like `doneOpen`/`toggleDone`.
-- `web/src/initiatives-u0/surface.html` (made by `scripts/extract-initiatives-template.mjs`, additions 11-12): the card line under the outcomes count, in its style; the "Finished projects · N" fold right under Who's doing what's heading, in the Done fold's markup (44 px line, chevron, green tick, "latest <date>"); a row's name opens its project.
-- Limit: a finished project's tasks no longer show under Who's doing what (on 2026-10-19 no finished project had an open task).
-- Unchanged: done-when counting, the registry, the server, the rest of the layout.
-- Checks: `tests/unit/initiatives-projects-done.test.ts` (split, counts, dropped, no projects, all finished, the loose box, the card line, the fold closed above the first active row, its rows, a name opening its project), the updated rows in `tests/unit/initiatives-page-{model,plan,tasks}.test.ts`, and `tests/initiatives-projects-done-test.mjs` (sealed server and Chrome at 1400 and 390 px: card text and place, fold place, closed, 44 px, opens on click, rows, no finished project among the active rows, no sideways scroll), then the landing gate.
-- Undo: `pi-web-deploy rollback`, or revert this commit and deploy.
 
 ## live-progress-contract: the shared data contract for live progress on Roles and Initiatives
 
@@ -504,19 +479,6 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Follow-up (H-CHAT-CAP-1b, second commit): a window whose blank chat chat-slots closed logs one `[chat-slots]` line, not `[crash-guard]`, in `recoverLostActive`; the 21:04 install's log check had counted two such lines as crash notices. Checks: a case in `tests/unit/crash-guard.test.ts`; `tests/chat-slots-test.mjs` reads its server's log (no crash-guard notice, the closes logged as `[chat-slots]`).
 - Undo: revert these commits and install with `pi-web-deploy`.
 
-## initiatives-who-fill: the who-cache filled in the background after each start
-
-- `local` (Architecture #115, 2026-10-19; the owner's freeze work, bp-41b2f05f puts freeze fixes first). Hypothesis H-INIT-WHO-FILL: section 8 of `~/architecture-dept/debug/reconnect-2026-10-16/day-census-2026-10-19/RESULT.md`; proof and live check: `~/architecture-dept/work/who-fill/RESULT.md`.
-- Why: the who-cache (`initiatives-who-cache`, #99) lives in memory only, so the first Initiatives page build after every restart worked out who decided for every source on the main thread, 7.5-9.5 s with every chat frozen (9.5 s at 11:40:00 on Oct 19). Restarts are frequent with continuous deploys.
-- `server/who-fill.ts` (new): `fillWhoCache(decisions, recs, cache, opts)` walks every source of the decisions a page build walks (each decision's, then each change's) through the same `sourceView` that `decisionView` and `changeView` call, with the same record, was record and cache (the same keys; the views are thrown away), after one `newBuild()`, in slices: a slice stops once about 25 ms of work is done and the next waits for `setImmediate`. Source by source, not decision by decision, because on the live store ten decisions took over 50 ms each alone (up to 194 ms, one citing 81 sources) (offline, a per-decision fill's longest slice was 178-869 ms; per source, the longest slice's own CPU time was 35-41 ms). A fill whose cache was cleared meanwhile stops at the next slice (resolves null). `WhoFiller`: one fill at a time; `start()` during a fill asks for another after it; `pending()` is the running fill (never rejects); one log line per fill (`[who-fill] decisions= sources= answers= computed= slices= longest_ms= total_ms=`), or `[who-fill] failed: …` and pages build as before.
-- `server/who-cache.ts`: `epoch` (counts `clear()`), which the fill watches.
-- `server/agent-service.ts`: a `WhoFiller` on the page's cache, reading `decisionStore.decisions()` and `keptRecords().byId`; `startWhoFill()` and `whoFillPending()`. `keptRecords()` starts a fill when `sawFile` dropped the answers (file replaced or shrunk).
-- `server/initiatives-watch.ts`: optional `ready` hook. While it returns a fill, a page waits for it, then builds once: a watcher asked again meanwhile doesn't build twice, a dropped or replaced watcher gets nothing, a fill started during the wait is waited for too. One log line per page that waited (`[initiatives] page waited N ms for the who-fill`). Without a fill the page builds at once, as before.
-- `server/index.ts`: the watch's `ready` is `service.whoFillPending`; the fill starts when the server listens (`service.startWhoFill`). Engine interface: both optional.
-- Unchanged: `whoOf`, its answers, and its callers that don't use the cache (decision reader, decision_log tool, feed check, progress feed). Nothing is stored on disk.
-- Checks: `tests/unit/who-fill.test.ts` (11: slices yield, setImmediate between slices, a page after the fill equals a cold page with no whoOf call left, a clear stops the fill, a watch during a fill waits and sends once, a dropped/replaced watcher gets nothing, a fill started during the wait, a refill after a drop, a drop mid-fill restarts, a failed fill, the log line); the offline proof on a copy of the live store; the landing gate; the live check after install.
-- Undo: revert this commit and install with `pi-web-deploy`; the first page after a restart is a cold build again.
-
 ## gate-near-limit: the gate's cases near the 5 s test limit split, or given their own limit
 
 - `local` (Ops #252, project faster-landing, 2026-10-19). Hypothesis H-GATE-NEAR-LIMIT-1, how the cases were picked (every case on the default limit over 2.5 s in the newest 16 land logs, at most 8), the before and after times and the result: `docs/gate-near-limit.md`.
@@ -539,14 +501,6 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: the timing runs (3 before, 3 after, sealed), then the landing gate.
 - Undo: revert this commit.
 
-## initiatives-page-tasks: tasks, waiting on you and status on the Initiatives page
-
-- `local` (owner 2026-10-18, Ops home chat: design first, then features; "Side by side" for steps 2-4; Ops #227, project initiatives-page). Hypotheses H-INITIATIVES-PAGE-3, -3b and -3c and their results: `docs/initiatives-page-tasks.md`.
-- `web/src/initiatives-page/tasks.ts` fills "Who's doing what", Waiting on you, the ON YOU bar and every status chip from the `work_page` feed's task facts, by script. Under each project row go its open tasks (not done, dropped or removed): "#N title", the department, a state chip, the next action or what it waits on, and "updated <time>"; tasks linked straight to an initiative go in a row "Directly under this initiative". Clicking "#N title" opens the task's own chat, or its queue's chat while that isn't known. Waiting on you lists the open linked tasks' Needs-you questions ("from <department> · waiting <age>"; a click opens that chat), and the ON YOU bar counts them; it says nothing is waiting only when the registry was read whole and live and none are. `statusOf()` and the chips follow fixed rules in order: Done or Dropped (the registry's), Needs you, Needs attention (stuck or blocked), Paused by you (every open task paused by the owner), Moving (ready, working, asking or waiting), else a grey "No tasks yet" or "No open tasks"; projects and the projects-in-no-initiative box get theirs by the same rules (the box keeps step 1's grey "No initiative" while none of its tasks is open; -3b, after the first live check found it kept that word under a rules status), and the filter pills count and filter by them. No write actions: clicks only open chats.
-- Hooks, the smallest the core needed: a "Needs you" chip and status colours for a row's plain chip in the view; template additions 9-10 (`scripts/extract-initiatives-template.mjs`): a row's "#N title" and a waiting item's question are a button when they open a chat; `InitiativesPagePart.rows` (rows after the project rows) and `InitiativesPagePart.loose` (a box item's fields) in `model.ts`. Plan, gap and core fields are untouched. In `server/work-page.ts` (-3c, after the live check found every open Ops task twice): `WorkPageFile.get` looks up whether each link's queue file still exists, never its contents, and `workPageOf` leaves out the links whose file is gone. Those are a deleted chat's tasks, or a throwaway copy's, like the one pi-web-deploy's big-chat check opens, whose queue wrote its tasks into the registry under the copy's path. The registry itself is untouched.
-- Checks: `tests/unit/initiatives-page-tasks.test.ts` (fixture `tests/unit/initiatives-page-tasks-fixture.ts`) and `tests/unit/work-page.test.ts`'s gone-queue case, with the core model tests (step 1's "not connected yet" cases now expect the real rules) and the design's, one sealed look at 1440 px, then the landing gate and a look-only live check against the live registry and queues.
-- Undo: revert this commit (task rows, Waiting on you and the ON YOU bar say "Not connected yet" again, and chips show the registry's status). Reverting only -3c brings back a deleted queue's tasks, so a copy's tasks show twice.
-
 ## gate-tmpfs: sealed test folders in memory
 
 - `local` (Ops #243, project faster-landing, item 6; the owner's "can we improve the speed of tests?"). Hypothesis H-GATE-TMPFS-1 and result: `docs/gate-tmpfs.md`.
@@ -562,14 +516,6 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Web: `web/src/roles-exact-model.ts` `projectApprovalsOff()` (only an explicit `on: false`; reason through `plain()`); `web/src/roles-exact/page-status.ts` `approvalsOff`/`approvals` values and `approvalsTip()`; `web/src/roles-u0/surface.html`: an amber chip "Message approvals off" (the stale pill's colours) right before the status pill, its tooltip "Chains between roles stop at 6 messages and nobody can approve more. Reason: <reason>. Off since this server started at <time>." No banner, no row, no role on the chip; the pill is unchanged.
 - Checks: `tests/unit/roles-overview.test.ts` (degraded, ready, starting, absent, a throw, clipping) and `tests/unit/roles-exact.test.ts` (projection, chip shown and gone, tooltip, pill unchanged), then the landing gate and a look-only live check. Minimal checks at the owner's request. The deploy-output note is agent-tools' part (`lib/pi-web-check.mjs`).
 - Undo: revert this commit and deploy with `pi-web-deploy`; the page then shows nothing about approvals, as before.
-
-## initiatives-page-plan: goals, done-when items and projects on the Initiatives page
-
-- `local` (owner 2026-10-18, Ops home chat: design first, then features; "Side by side" for steps 2-4; Ops #226, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-2 and result: `docs/initiatives-page-plan.md`.
-- `web/src/initiatives-page/plan.ts` fills Goal (the record's outcome), Started (the day it was created), Outcomes and Done when for every initiative and project, from the `work_page` feed: each done-when item in the registry's order. A met item reads "Done · <day marked>" with "Proof: <proof>" as its step and "Marked by <role>" (or "you") as its owner; an open item lists the initiative's open projects with "x of y done", or "No project yet", never a done step, so only met items count as done. The "in no initiative" box says each project has its own.
-- Hook, the smallest the core needed: a project opens in the detail panel. `model.ts` builds one frame per project (`projectFrameId` in `types.ts`), which the parts fill like an initiative's; the input's new `details` list carries them, and a project row's or box item's `opens` names its frame. The view opens a frame from `details` like a card. Template additions 7-8 (`scripts/extract-initiatives-template.mjs`): a row's name and a box item's name are a button when they open something. Absent fields keep step 1's behaviour. What an initiative keeps (the lead's updates, decisions, hand-offs, gaps, activity) says where it shows.
-- Checks: `tests/unit/initiatives-page-plan.test.ts` (on `tests/unit/initiatives-page-fixture.ts`) with the core model, gaps and design tests, one sealed look at 1440 px, then the landing gate and a look-only live check against the live registry.
-- Undo: revert this commit (Goal, Started and Outcomes say "Not connected yet" again, and projects don't open).
 
 ## restart-requester: a chat carried on after a restart still answers the same messages
 
@@ -597,33 +543,6 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Checks: `scripts/check.sh --notes` passed, and failed on a duplicated PATCHES.md heading; the guard failed with `patches-union.test.ts` left off the list; then the landing gate.
 - Undo: revert this commit, and take `notes_paths` and `notes_check` out of pi-web-ui's entry in agent-tools' wt.yaml. Reverting only this commit is safe: check.sh then ignores `--notes` and runs its full check.
 
-## initiatives-page-gaps: gaps, activity and hand-offs on the Initiatives page
-
-- `local` (owner 2026-10-18, Ops home chat: design first, then features; "Side by side" for steps 2-4; Ops #228, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-4 and result: `docs/initiatives-page-gaps.md`.
-- `web/src/initiatives-page/gaps.ts` fills Gaps, Hand-offs and All activity for every initiative and the projects-in-no-initiative box, by script from what's recorded, no model. Gaps, a fixed list with its count in the header: blocked or stuck tasks of the initiative or its projects, with what they wait on as their queue recorded it; active projects with unmet done-when items and no open task; an active initiative's unmet done-when items while none of its projects is active. All activity: the registry's changes to the initiative, its projects and their tasks, plus the lead's progress updates, newest first, counted in the tab; items and proof as recorded. Hand-offs: the open questions and requests between two roles that carry the initiative's id (message_role's `initiative`, kept on role-message records since decision-records), from → to, first line and where each stands. What nobody records says "Not recorded".
-- Hook: `work_page`'s page carries an optional `handoffs` list (`UiWorkHandoff`), made by `RoleMessages.openHandoffs()` (the Roles page's open rule, first lines only) and attached in `readWorkPage()`. Additive, so no protocol bump: an old page ignores it, and the page says "Not recorded" without it. `model.ts` passes the progress feed and the clock to `gapsPart`. Second hook (H-INITIATIVES-PAGE-4b): the progress feed's `view()` sends the updates after its first 20 in brief (`UiProgress.older`: id, time, who, what changed as recorded), so All activity lists every update; optional and additive too, and the Progress section ignores it. Nothing else in the core changes.
-- Checks: `tests/unit/initiatives-page-gaps.test.ts` (fixture `tests/unit/initiatives-page-gaps-fixture.ts`) and the brief list's case in `tests/unit/progress-feed.test.ts`, with the core model tests, one sealed look at 1440 px, then the landing gate and a look-only live check against the live registry, queues and role-message store.
-- Undo: revert its commits, newest first (the H-INITIATIVES-PAGE-4b one, then fd4bc4e3): the three sections say "Not connected yet" again. Reverting only the newer one leaves Activity at the first 20 updates.
-
-## initiatives-page-exact: the Initiatives tab shows the supplied design
-
-- `local` (owner 2026-10-18, Ops home chat: "try to start with building out UI 1:1 then add in different features so i can see the progress iwth my own eyes"; Ops #225, project initiatives-page). Hypothesis H-INITIATIVES-PAGE-1 and result: `docs/initiatives-page-exact.md`.
-- The Initiatives tab mounts `InitiativesExactView` (#224) in place of `InitiativesView`, which stays in source, unmounted. While the tab is open it watches the `work_page` feed (#223); decisions and lead updates still come from the `initiatives_watch` and progress feeds. The feed's `problem` shows as the drawn error panel or old-data banner.
-- One core model, `web/src/initiatives-page/model.ts` (page states, header, cards, the projects-in-no-initiative box, detail frame, lead, counts, project rows, buttons, decisions, updates), and one module per later step: `plan.ts` (goal, started, done-when items), `tasks.ts` (task rows, waiting on you, the ON YOU bar, `statusOf()`), `gaps.ts` (gaps, activity, hand-offs). In this step each module returns its "Not connected yet" version, and the ON YOU bar never says nothing is waiting.
-- Buttons: Message <lead> opens the lead's home chat (the Roles page's open path); Change lead only for initiatives the decision log knows, through today's lead picker in a dialog. No other write action.
-- Escape closes the page's own dialog (Change lead, a decision's source) first: while one is open the page puts its handler on the app's Escape stack (`useEscapeKey`), so the chat pane's question dialog, on that stack even behind the tab, doesn't cancel its question and keep the dialog open (H-INITIATIVES-ESCAPE-1, found in the live look). `tsconfig.tests.json` includes `web/src/initiatives-design-fonts.d.ts` so a unit test can import the page.
-- Template additions 4-6 (`scripts/extract-initiatives-template.mjs`): the "in no initiative" box opens like an initiative; empty sections say so in the design's empty-list style; a project row can show a plain status chip. The view takes optional fields for them; absent keeps #224's behaviour.
-- Checks: `tests/unit/initiatives-page-model.test.ts` (fixture `tests/unit/initiatives-page-fixture.ts`) with `tests/unit/initiatives-exact.test.ts` and the Roles exact tests, `tests/unit/initiatives-page-escape.test.ts` (Escape with a waiting question behind the tab), a sealed look at 1440 and 390 px (`scripts/initiatives-exact-shot.mjs --page`, which fails when the page scrolls sideways), then the landing gate and a look-only live check.
-- Undo: revert this commit (the tab shows `InitiativesView` again).
-
-## initiatives-plan-data: one read-only feed of the whole work registry for the Initiatives page
-
-- `local` (owner 2026-10-18, "now lets plan for initiatives page to show all the planning work", Ops #223). Hypothesis H-INITIATIVES-DATA-1 and result: `docs/initiatives-plan-data.md`.
-- `server/work-page.ts` replays pi-work-management's whole log (`events.jsonl`, the Roles reader's path) by the store's own rules: every initiative and project with outcome, lead, status, times and done-when items with their met marks (proof, by, at), every linked task with its recorded status and block, and the newest 1000 changes. A line the store could never have written is skipped and flagged `unknown-change`; a half-written last line is left out; not JSON -> `unreadable`; over 32 MiB, 500 records or 2000 tasks -> `too-big`. Each task is joined with the Roles overview's projection of its queue (chat, next action, requester, owner pause, open owner ask); missing pieces stay absent.
-- Socket: `work_page_watch` / `work_page_unwatch`, answered with `work_page { page | error }` at once and on change (5 s look while watched); protocol 51. Owned by the Initiatives tab (`server/tabs.ts`). Read only; `work-records.ts`, `roles-overview.ts` and what the Roles page gets are unchanged. Nothing in the app asks for it yet (the wiring task does).
-- Checks: `tests/unit/work-page.test.ts` (fixture replay against the exact expected page, problems, limits, facts from an overview, file reader, watch), with `tests/unit/work-records.test.ts` and `tests/unit/roles-overview.test.ts` unchanged, then the landing gate.
-- Undo: revert this commit.
-
 ## gate-plugin-dom: the plugin-dom test waits for its background rescans before teardown
 
 - `local` (Ops #229, project faster-landing, 2026-10-18; essential maintenance: the flake refused every role's pi-web-ui lands). Hypothesis H-GATE-PLUGIN-DOM-1, the tracer's finding, the before and after counts and the result: `docs/gate-plugin-dom-flake.md`.
@@ -631,18 +550,6 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Test-only: no app code changed, nothing to install. The gate is not weakened: no error filter, console silencing or retry.
 - Checks: the file's 19 tests; the measure loop (the file 40 times, 6 at once, sealed, `TZ=UTC`): runs with the error 1 of 120 before, 0 of 120 after; traced runs writing to the console after the last test 40 of 40 before, 0 of 40 after. Then the landing gate.
 - Undo: revert this commit.
-
-## initiatives-exact: the supplied Initiatives design as an inert, data-driven view
-
-- `local` (owner 2026-10-18, Ops home chat: "now lets plan for initiatives page to show all the planning work"; dialog answer "Your design, 1:1"; Ops #224, project initiatives-page). Hypothesis H-INITIATIVES-EXACT-1 and result: `docs/initiatives-exact.md`.
-- Inert: nothing mounts it yet and the current Initiatives page is unchanged. The wiring task fills it with real data and ships it.
-- The owner's design (Design #76's extended copy with the 8 accepted states; both design files' sha256 are checked) becomes the template `web/src/initiatives-u0/surface.html`, written by `scripts/extract-initiatives-template.mjs` (`--check` reruns it against the file). In the design's own markup: the "in no initiative" box takes its heading and items from input; a "Who's doing what" row can carry child task rows, indented 16 px; a control whose callback is absent isn't shown.
-- One binder: Roles' binder moves to `web/src/exact-surface.ts` as `bindSurface(doc, template, read, opts)`; `bindRolesSurface` is a thin wrapper, so what Roles renders is unchanged.
-- `web/src/initiatives-exact-view.ts` ports the design component's own state logic (selection, tabs, filter pills with counts, open outcomes) and reads only `InitiativesExactInput` (`web/src/initiatives-exact-model.ts`): every field optional, no sample data. The 8 drawn states come from input.
-- `web/src/components/InitiativesExactView.tsx` mounts it in a script-free frame (`sandbox="allow-same-origin"`), fixed dark look, host-side timers, cleanup on unmount; fonts are checked by sha256 before use.
-- Fonts: the design's 11 embedded woff2 files, pinned by sha256 and size (`web/src/initiatives-u0/font-pins.ts`) and declared as its 32 @font-face rules. `web/initiatives-design-assets.ts` (Vite plugin; `PI_INITIATIVES_DESIGN_ASSETS` relocates them) fails every build when one is missing or changed.
-- Checks: `tests/unit/initiatives-exact.test.ts` (fixture from the design's 4 sample initiatives, test-only: key strings, selection, tabs and filters, child rows, the empty state and the other drawn states, hidden controls, no sample text in shipped files, the font check) with the Roles exact tests unchanged; one sealed look, `scripts/initiatives-exact-shot.mjs`; then the landing gate.
-- Undo: revert this commit (nothing is installed or mounted by it).
 
 ## gate-side-by-side: quick checks run beside the unit tests
 
@@ -983,15 +890,6 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - Unchanged: who may answer (the owner's own answer in the task's chat still wins first), Auto approve/Auto start, lanes, pauses and Stop, browser/Telegram ownership (#108; the Telegram plugin, plugin-owned, shows only the start of a long package: residual limitation, the whole package is in the browser's Queue tab). No migration or retransmission of existing questions.
 - Tests: `tests/unit/queue-host.test.ts` (coordinator, `queueCoordinator` incl. `"none"`), `stuck-asks.test.ts`, `task-queue.test.ts` ("task-question decisions"), `asks.test.ts`, `task-queue-panel.test.ts`, `roles-view.test.ts`; sealed `tests/queue-ops-detail-test.mjs` (real pi-queue, no model call: the package in the Queue tab on desktop and phone, dark and White, whole, raw HTML stays text, Tab/End keyboard, axe, no overflow).
 
-## progress-feed: the Initiatives page's Progress, one lead's linked updates per initiative
-
-- `local` (Ops queue #85; owner via COO rm-ba07e068, Oct 9: one feed per initiative from its lead, "Lead + sources"; Oct 10: "only enable it for teams in temper"). Settings `feedInitiatives` (only Team in Temper), `feedAutoPoke` (default false: Ops #626, owner 2026-10-28 m77626, the automatic asks woke leads on every done task and every day; only the button and catch-ups ask), `pokeEveryHours` 3, `dailyAt` "17:00", `feedReaderCheck`. Other initiatives show "Progress: off" and nothing is kept, asked or read for them.
-- Lead per initiative (`lead`, `leadSet {by, at, source}` in initiatives.json), set only by the owner: the page's role picker (`initiative_lead`, browser only, no tool) or his own answer; Team in Temper seeded once with Architecture, his dialog pick (dr-2941468511bb, "Set by you, Oct 9").
-- `initiative_update` tool (`new` / `post` / `read`): only the lead posts (others: "the lead is X"); fields about 1,500 characters, text only; sources = record or decision ids; updates kept as `update` records. TL;DR lines kept as `tldr` records (initiative: the line's own, else its task chat's queued task, else the reader's filing). The decision reader skips both.
-- Asks ("pokes") to the lead's home chat via role-message delivery from "the Initiatives page" (outside the caps, fresh chain): on a done task, a new decision or change, daily, unsent flags on any update (including earlier updates in the same turn, and checks finishing after an ask), and the owner's Ask button; at most one automatic ask per 3 h, none when nothing is new or one is open (an ask is answered once an update follows it and neither the home chat nor the chat that posted it, such as a queued task, is in a turn); a catch-up (`pi-web-ui decisions catch-up`) asks round after round until nothing is unlinked.
-- Second-hand check (`server/feed-check.ts`): code flags owner credit no owner record backs and numbers, money, dates and durations its linked records don't hold; the reader (cheapest Claude, no tools) labels paraphrased impact, cost, option and date with quotes that code checks. Stand-alone `scripts/feed-check.mts`. Stage tests (rule 16): REPLAY-FEED.md (3 runs each, both bars met). The check reads a linked record with the decisions and changes filed from it, the reader sees those first, and "Other decisions: not known." is not given (live catch-up 10-13: 12 of 13 reader flags were false; checker round 6 30/30 x3). The reader skips accounts pi-multi-pass marks signed out (read only) and re-reads an update whose reader call failed (10 min apart, 3 tries) or was off; a re-read only adds flags. Reader labels carry `READER_VERSION` (2); an older version's labels stay saved but count nowhere and their update is read again; a flag a later read raises goes back to the lead once, even after that update's other flags went back.
-- Protocol 49. Tests: `tests/unit/progress-feed.test.ts` (throttle with a fake clock, lead-only, TL;DR inheritance, owner-credit and claim flags, unlinked list, seeded lead; each check fails without its code), sealed `tests/progress-feed-test.mjs` (picker -> Ask -> poke in a sealed home chat -> the lead posts -> sources and a flag show; 1440/390 px, dark and White, axe). Details: [docs/progress-feed.md](docs/progress-feed.md).
-
 ## lead-bar: the left bar shows only the role leads and their task chats
 
 - `local` (owner via COO rm-788e4038, 2026-10-12, Ops queue #132: "make the recent chats, to only the lead + the tasks they are working on, no other items in the left hand bar"). With role leads (identities with a home chat) the left bar shows one row per lead in the Roles page's order (self-start first, then the rest, each by id; found by identity and file, never by title; rows never move), each with the chats of its queue's open, started tasks under it (newest first, their marks kept, the lead's fold toggle and count), plus one "Open now" row for the chat on screen when it's neither. A lead's row is its chat's row as today: open (its live row), running elsewhere (the take-over row), saved only (an idle row that opens it, a History row's menu, no hover delete) or its file gone (greyed, "Home chat not found"). Nothing else is a row.
@@ -1132,8 +1030,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 | faint-contrast               | `local` | `web/src/styles.css` (`:root` `--text-faint`, new `--text-disabled`, five `:disabled` rules), `make-light-theme.mjs` (White palette, `--text-disabled` fallback, `CLASSIC_LIGHT_NOTICE`), `themes/*.css` (regenerated; Translucent / Transparent and the six hand-made themes by hand), `tests/faint-contrast-test.mjs` (new), `tests/unit/faint-contrast.test.ts` (new)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | quiet-turns                  | `local` | `server/quiet-turns.ts` (new), `agent-service.ts`, `role-messages.ts`, `role-board.ts`, `protocol.ts`, `client-state.ts`, `settings-service.ts`, `index.ts`, `web/src/quiet-turns.ts` (new), `MessageList.tsx`, `RoleMessageRow.tsx`, `SettingsModal.tsx`, `App.tsx`, `i18n.tsx`, `locales/*.json`, `styles.css`, `docs/roles-overview.md`, `tests/quiet-turns-test.mjs` (new), `tests/unit/quiet-turns.test.ts` (new)                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | accent-contrast              | `local` | `web/src/styles.css` (`:root` `--accent-text`, `--accent-fill`, `--accent-fill-hover`, `--amber-fg`; 148 text rules, the accent fills under white text), `model-management.css`, `exchange-fold.css`, `ToolApprovalDialog.tsx`, `RollbackDialog.tsx`, `ModelConfigModal.tsx`, `plugins/db-client`, `plugins/vscode-editor`, `make-light-theme.mjs` (identity tokens, White `--amber-fg`), `themes/*.css`, `tests/faint-contrast-test.mjs` (pins gone, live-queue fixture), `tests/accent-contrast-test.mjs` (new), `tests/unit/accent-contrast.test.ts` (new)                                                                                                                                                                                                                                                                                                               |
-| initiatives-page             | `local` | `server/decision-reader.ts`, `decision-model.ts`, `decision-who.ts`, `decision-store.ts`, `decision-view.ts`, `decision-log-tool.ts`, `decision-previews.ts`, `initiatives-watch.ts` (all new), `agent-service.ts`, `index.ts`, `control-socket.ts`, `protocol.ts`, `protocol-version.ts`, `tabs.ts`, `tool-manager.ts`, `asks.ts`, `decision-records.ts`, `bin/pi-web-ui.mjs` (`decisions read`), `web/src/components/InitiativesView.tsx`, `initiatives-state.ts`, `initiatives-view-model.ts`, `initiatives-view.css` (new), `App.tsx`, `TopBar.tsx`, `ui-slots.ts`, `use-chat.ts`, `open-chat-link.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/decision-reader.test.ts`, `decision-who.test.ts`, `initiatives-view.test.ts`, `tests/initiatives-page-test.mjs` (new), `tests/unit/ui-slots.test.ts`, `tool-registration.test.ts`, `docs/initiatives-page.md` (new)   |
-| progress-feed                | `local` | `server/progress-feed.ts`, `feed-check.ts`, `initiative-update-tool.ts` (all new), `decision-store.ts`, `decision-records.ts`, `decision-reader.ts`, `decision-view.ts`, `decision-who.ts`, `role-messages.ts`, `quiet-turns.ts`, `agent-service.ts`, `index.ts`, `control-socket.ts`, `protocol.ts`, `protocol-version.ts` (49), `tool-manager.ts`, `bin/pi-web-ui.mjs` (`decisions feed`, `decisions catch-up`), `scripts/feed-check.mts` (new), `web/src/components/ProgressSection.tsx` (new), `InitiativesView.tsx`, `Message.tsx`, `RoleMessageRow.tsx`, `initiatives-state.ts`, `initiatives-view-model.ts`, `initiatives-view.css`, `role-message-text.ts`, `use-chat.ts`, `protocol-version.ts`, `i18n.tsx`, `locales/*.json`, `tests/unit/progress-feed.test.ts`, `tests/progress-feed-test.mjs` (new), `docs/progress-feed.md` (new), `docs/initiatives-page.md` |
+| initiatives-page             | `local` | page removed (ops #1013); kept: `server/decision-reader.ts`, `decision-model.ts`, `decision-who.ts`, `decision-store.ts`, `decision-previews.ts`, `agent-service.ts`, `control-socket.ts`, `decision-records.ts`, `bin/pi-web-ui.mjs` (`decisions read`), `tests/unit/decision-reader.test.ts`, `decision-who.test.ts`   |
 | reconnect-trace              | `local` | `server/conn-events.ts` (new), `index.ts`, `plugins.ts` (`host.connNotices`), `plugin-api-catalog.ts`, `protocol.ts`, `plugin-sdk/`, `plugins/telegram/` (0.2.3), `web/src/conn-trace.ts` (new), `use-chat.ts`, `tests/reconnect-trace-test.mjs` (new), `tests/lib/own-server.mjs`, `tests/unit/conn-events.test.ts` (new), `conn-trace.test.ts` (new), `plugin-telegram.test.ts`, `plugin-api-catalog.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | roles-u0-renderer            | `local` | inert, no importer: `web/src/roles-u0/` (new: `surface.html`, `state-chip.html`, `surface.ts`, `layout.ts`, `fields.ts`, `native.ts`, `mount.ts`, `types.ts`), `tests/roles-u0/` (new), `tests/unit/roles-u0.test.ts`, `roles-u0-rgba.test.ts` (new), `.prettierignore`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | queue-lead-reminders         | `local` | `server/queue-blocks.ts`, `queue-host.ts`, `task-queue.ts`, `protocol.ts`, `agent-service.ts`, `role-messages.ts`, `web/src/components/TaskQueuePanel.tsx`, `i18n.tsx`, `locales/*.json`, `tests/unit/queue-lead-reminders.test.ts` (new), `tests/queue-lead-reminders-test.mjs` (new); paired with pi-queue                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -7286,7 +7183,11 @@ revert this control patch through `wt` and `pi-web-deploy`. Do not delete/refund
 
 **Why** (queue task #84, owner-approved plan; Data rm-541b44a1, rm-3bbf8e94; the owner picked "A small model
 reads each record"): the owner approved things without seeing their impact. One page, per initiative, shows
-every design decision and its later changes, who really decided (as two facts, never a merged "who"), and
+what it costs him. Task #85 adds the lead's Progress section above Decisions.
+
+**Removed in part (ops #1013, `remove-initiatives-page` below)**: the page, its tab, `initiatives-watch.ts`,
+`decision-view.ts`, the `decision_log` tool and `initiative_update`/progress feed are gone. What stays: the
+reader, `decision-store.ts`, `decision-records.ts` and the `decisions` CLI (`backfill`, `status`, `read`).
 what it costs him. Task #85 adds the lead's Progress section above Decisions.
 
 ### Changes
@@ -7911,72 +7812,6 @@ B3, B5, N1, B2, B4; hypothesis H-LADDER-LAST-1 in `docs/role-message-fresh-start
 - On an upstream sync this patch touches the guard host's `start()`/`stop()`, the lock (`takeLock()`,
   `lockLost()`), `beginGeneration()` and the approval calls' checks after each await: keep the off switch
   ahead of the lock, and the fresh start only on the failed-recover branch.
-
-## initiatives-who-cache
-
-**Status**: `local`
-**Baseline**: v0.96.1 (`mine` at 5502ea8f).
-
-The Initiatives page keeps who decided between builds, so only the first build after a start pays for it.
-
-**Why** (owner 2026-10-18, his freeze work given to Architecture: "do all the work yourself directly";
-Architecture #99, H-INIT-WHO-CACHE in the daily log): #95's profiles found that every Initiatives page
-build works out who decided (decision-who's `whoOf`) for all 3,991 decisions and 6,281 sources, whichever
-initiative is shown: 4.4-5.2 s offline and 7.5-9.5 s live, with the server blocked meanwhile. It runs for
-each watching tab on every page open, reconnect and decision change. A freeze drops the other tabs'
-sockets and each reconnect builds the page again, so the freezes fed each other (11 freezes of 7-10 s in
-under 2 minutes at 22:05 on Oct 18).
-
-### Changes
-
-- `server/who-cache.ts` (new): `WhoCache.get(rec, src, was)` returns `whoOf`'s answer, kept under the
-  record's id, the was record's id and the source's `by`, `part`, `claimsOwner` and `quotes` (one JSON
-  array, so no text can run into the next field; a missing record is `-`).
-  - It hands out copies with their own `flags` and `places` arrays, so no caller can change a kept answer.
-  - `newBuild()` drops the answers neither of the last two builds used.
-  - `sawFile(ino, size)` drops every answer when the records file was replaced (another inode) or shrank;
-    a file that only grew keeps them.
-- `server/decision-view.ts`: `buildDecisionsPage`'s options take an optional `whoCache`, passed through
-  `decisionView` and `changeView` to `sourceView`. Without one everything is worked out as before: the
-  decision reader, the decision_log tool, the feed check and the progress feed don't use one.
-- `server/agent-service.ts`: one `WhoCache` for the Initiatives page. `keptRecords()` keys its index on the
-  file's inode too, and tells the cache about every new read.
-- `tests/unit/who-cache.test.ts` (new); no existing test changed.
-
-Why keeping answers is safe: `whoOf` reads only its arguments. `records.jsonl` only grows through
-`append()`, which refuses a second source and ref; `list()` keeps the first line of each, and a record's
-id is a hash of its source and ref. So a kept id never reads differently while the file only grows.
-decision-recovery rewrites the file through a temp file and a rename (a new inode).
-
-### How it was checked
-
-- `tests/unit/who-cache.test.ts` (8 tests): the cached page equals the uncached one for every selection
-  and limit, cold and warm, with no `whoOf` call while warm; an appended record shows; a replaced, shrunk
-  or deleted file drops every answer; kept answers are copies; unused answers go after two builds; texts
-  holding the key's separators don't share a key.
-- On a copy of the live store (Oct 18 22:47: 3,991 decisions, 6,281 sources, 7,682 records; every id is
-  `recordId(source, ref)`, none shared), the page with the cache deep-equals the page without it for both
-  initiatives, Unfiled and all decisions, at limits 200 and 2000:
-  - cold (a new cache per page) and warm (one cache; no answer worked out again);
-  - on the file cut 5,867 lines shorter (a new file: the cache cleared);
-  - after appending those lines back (the same file: the cache kept; 2,520 answers worked out again, the
-    sources citing them);
-  - after rewording 184 cited messages under the same ids (a new file, not smaller: the cache cleared). A
-    cache not told of it showed 1,048 of 3,991 decisions differently.
-- Bench, the first initiative at limit 200: builds 1-5, each side in its own process, 4 rounds (pinned to
-  cores 5-9,15-19; other gates kept the load average at 8-31, so the times wander). Without the cache
-  every build took 5.6-16.4 s (build 1: median 9.2 s). With it build 1 took 5.8-16.1 s (median 9.6 s) and
-  builds 2-5 took 0.09-0.47 s.
-- Script and output: `~/architecture-dept/work/who-cache/` (`proof.mjs`, numbers only). Then the land
-  gate, and the live check after install (daily log, H-INIT-WHO-CACHE).
-
-### Undo and syncing
-
-- Revert this commit with `wt`, then install with `pi-web-deploy`. Nothing is stored: the cache lives in
-  memory and starts empty at every start.
-- On an upstream sync: the decisions page is this fork's own; keep `whoCache` optional so the other
-  callers work unchanged. If `whoOf` ever reads more than its arguments, or records start changing in
-  place, the key must grow with it or the cache must go.
 
 ## pages-live
 
@@ -9010,3 +8845,12 @@ no decision record was written for it.
 - Checks: `tests/unit/home-chat-no-rename.test.ts` (6): (a) guidance and the composed prompt of a home chat have no conv rename, an ordinary chat's do; (b) a home chat's marker renames nothing, emits nothing, `stripMarkers` removes it, notify still runs; (c) manual rename of a home chat; (d) an ordinary chat renames by marker. Before the change (a) x2 and (b) failed; planted faults (block manual rename of home chats; drop conv everywhere) fail (c) and (d).
 - Sync cost: `home-chat-rename.ts`, one `buildGuidance` argument, two `dropRenameInHomeChat` calls, `ComposeSource`. Undo: revert the commit and this entry, then `pi-web-deploy`.
 
+## remove-initiatives-page: no Initiatives page; plugin icon names never drawn as text
+
+- `local`, never upstream (Ops #1013; Shine 2026-11-18: "lets remove initiative page since it doesnt do anything right now, and rename file-text show&Tell on top right to just show&Tell").
+- Removed whole (rule 23, no flag): the top-bar item `host:initiatives` and its tab name, the view and every module only it used (`InitiativesView`, `InitiativesExactView`, `InitiativesPage`, `ProgressSection`, `initiatives-page/`, `initiatives-u0/`, `initiatives-exact-*`, `initiatives-state.ts`, `work-page-state.ts`, `tasks-roles-v8/` except `styles-tokens.ts`, which the Roles page reads), the server feeds only it read (`initiatives-watch.ts`, `decision-view.ts`, `decision-log-tool.ts`, `initiative-update-tool.ts`, `progress-feed.ts`, `feed-check.ts`, `who-cache.ts`, `who-fill.ts`, `WorkPageWatch`, the `initiatives_watch`/`work_page_watch`/`decision_record`/`initiative_*` messages, the page's progress-update "poke" and its header/hint/label), their tests, docs, i18n keys and the entries `initiatives-live`, `initiatives-projects-done`, `initiatives-who-fill`, `initiatives-page-tasks`, `initiatives-page-plan`, `initiatives-page-gaps`, `initiatives-page-exact`, `initiatives-plan-data`, `initiatives-exact`, `progress-feed`, `initiatives-who-cache`. Protocol 55.
+- Kept (other callers, git grep): the work registry and its tools, `work-page.ts` `readWorkPage` (stall watch, dead end), `live-progress.ts`, the decision reader/store/records and the `decisions` CLI, the Roles and Memory pages.
+- `?view=initiatives` opens the default view; a saved tab preference naming `host:initiatives` is ignored (the top bar builds without it); a stale page's connection record naming the view is refused (`conn-events.ts`).
+- Plugin icons: `isGlyphIcon` (`web/src/plugin-icon.tsx`) is the one rule; `PluginIcon`, `TopBar` and `SettingsModal` (two places) use it, so an icon name such as Show&Tell's `"file-text"` without `iconSvg` draws nothing and the tab reads "Show&Tell"; an emoji or glyph is still drawn.
+- Checks: `tests/unit/remove-initiatives-page.test.ts` (7): (a) no item or tab name, `?view=initiatives` falls back, an old saved preference still builds the top bar; (b) a name draws no text, Show&Tell reads just "Show&Tell"; (c) an emoji still shows. 6 failed before the change (proof `~/ops-checks/remove-initiatives-page/`).
+- Sync cost: none added (code removed). Undo: revert the commit and this entry, then `pi-web-deploy`.

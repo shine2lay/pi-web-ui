@@ -33,9 +33,6 @@
  *   → {"cmd":"decisions_status"}  ← {"ok":true,"decisions":{file, backfill, counts, reader, decisions}}
  *   → {"cmd":"decisions_read","maxBatches":N}  ← {"ok":true,"decisions":{started}} (the decision reader reads
  *     now, in the background, within its settings and daily cap; initiatives-page, task #84)
- *   → {"cmd":"feed_status"}  ← {"ok":true,"feed":{settings, <initiative>: {lead, updates, unlinked, open, ...}}}
- *   → {"cmd":"feed_catch_up","initiative":"team-in-temper","date":"YYYY-MM-DD"}  ← {"ok":true,"feed":{id,unlinked}}
- *     (progress-feed, task #85: the one-time catch-up ask to the initiative's lead, from that day on)
  *   → {"cmd":"stall_list"}  ← {"ok":true,"stall":{mode, settings, running, rounds, at, tookMs, findings, items}}
  *     (stall-watch, Ops #283: the stall check's last round; read only)
  *   → anything else           ← {"ok":false,"error":"..."}
@@ -94,8 +91,6 @@ type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesc
 			| "decisionsStatus"
 			| "decisionsRead"
 			| "decisionsRecoverCall"
-			| "feedStatus"
-			| "feedCatchUp"
 			| "stallList"
 		>
 	>;
@@ -127,11 +122,7 @@ export interface ControlCommand {
 		| "decisions_status"
 		| "decisions_read"
 		| "decisions_recover_call"
-		| "feed_status"
-		| "feed_catch_up"
 		| "stall_list";
-	/** feed_catch_up: the initiative (date = the day it covers from). */
-	initiative?: unknown;
 	/** decisions_recover_call: fixed operation metadata, never supplied proof/approval. */
 	recovery?: unknown;
 	/** decisions_read: at most this many calls. */
@@ -192,8 +183,6 @@ export interface ControlStatus {
 	noLiveConversation?: boolean;
 	/** decision-records: decisions_backfill's progress, or decisions_status. */
 	decisions?: unknown;
-	/** progress-feed: feed_status, or what feed_catch_up sent. */
-	feed?: unknown;
 	/** stall-watch (Ops #283): stall_list's last round. */
 	stall?: unknown;
 }
@@ -517,22 +506,6 @@ export function startControlServer(opts: {
 							? { ok: true, decisions: service.decisionsStatus() }
 							: { ok: false, error: "decision records aren't kept here" };
 						break;
-					case "feed_status":
-						resp = service.feedStatus
-							? { ok: true, feed: service.feedStatus() }
-							: { ok: false, error: "this engine has no progress feed" };
-						break;
-					case "feed_catch_up": {
-						if (!service.feedCatchUp) {
-							resp = { ok: false, error: "this engine has no progress feed" };
-							break;
-						}
-						const res = service.feedCatchUp(req.initiative, req.date);
-						resp = res.ok
-							? { ok: true, feed: { id: res.id, unlinked: res.unlinked } }
-							: { ok: false, error: res.error };
-						break;
-					}
 					case "stall_list": {
 						const list = service.stallList?.();
 						resp = list ? { ok: true, stall: list } : { ok: false, error: "the stall check isn't running here" };
