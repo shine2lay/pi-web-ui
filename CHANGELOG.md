@@ -10,6 +10,10 @@
 
 ## [Unreleased]
 
+## [0.96.1-mine.1] — 2026-11-18
+
+- First versioned release of our pi-web-ui fork, built on upstream 0.96.1. From now on the installer can pin this exact version.
+
 ## [0.96.1] — 2026-09-26
 
 ### Fixed
