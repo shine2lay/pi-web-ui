@@ -81,7 +81,9 @@ server/
 ├── conversation-touches.ts # 会话「触碰文件集」提取（纯函数，零 node 依赖）
 ├── delegate-task.ts        # 结构化派单工具 delegate_task（委派协议的代码级硬化）
 ├── eval-tool.ts            # 受控的持久代码求值沙箱工具（eval，opt-in）
-├── hashline-engine.ts      # 基于内容哈希锚定与语法块解析的高可靠 Patch 引擎
+├── hashline-engine.ts      # 基于内容哈希锚定的两阶段原子 Patch 执行引擎
+├── hashline-parser.ts      # Hashline 补丁严格语法解析与锚点/边界校验
+├── hashline-merge.ts       # 语法块边界解析、LRU 快照库与三路冲突自愈
 ├── patch-tool.ts           # 导出给 AI 的结构化补丁工具（Hashline Patch Tool）
 ├── lsp-tool.ts             # 导出给 AI 的原生 LSP 语言服务器工具
 ├── schedule-agent-tool.ts  # 把内置调度器暴露给 Agent（issue #193）

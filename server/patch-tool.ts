@@ -42,7 +42,7 @@ Each file section starts with \`[path#TAG]\` (or \`[path]\` if the hash is unkno
 - \`PUT N.=M:\` replace lines N..M (inclusive) with the following \`+TEXT\` lines.
 - \`PUT N*:\` replace the whole syntactic block starting at line N (closing brace/indent auto-resolved).
 - \`PUT <N:\` insert before line N (\`<1\` = head of file); \`PUT >N:\` insert after (\`>$\` = end).
-- \`CUT N.=M [@name]\` / \`CUT N* [@name]\` delete lines and save to register; \`PUT <N @name\` / \`PUT >N @name\` paste it.
+- \`CUT N.=M [@name]\` / \`CUT N* [@name]\` delete lines and save to register; \`PUT <N @name\` / \`PUT >N @name\` / \`PUT >$ @name\` paste it.
 - \`REM\` delete file; \`MV dest/path\` move/rename file.
 - Body rows under \`:\` headers MUST start with \`+\` (\`+\` alone = blank line).
 On divergence the engine attempts a 3-way merge. After success the tool returns the next anchor tag and live LSP diagnostics.`,

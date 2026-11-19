@@ -1,465 +1,48 @@
 /**
- * hashline-engine.ts — 基于内容哈希锚定与语法块解析的高可靠 Patch 引擎。
+ * hashline-engine.ts — Atomic two-phase Hashline patch executor.
  *
- * 核心设计（借鉴 @oh-my-pi/hashline）：
- * 1. [path#TAG] 内容哈希锚点：每个 hunk 绑定文件内容的 4-hex 校验和，杜绝模型基于陈旧行号盲改。
- * 2. PUT N*= 语法块级替换：通过括号嵌套（Brace matching）与缩进（Indentation）自动识别代码块闭合，
- *    模型无需数行号，消除最常见的行号漂移问题。
- * 3. 3-Way Merge 冲突自愈：若磁盘文件已被修改导致哈希不匹配，通过快照与 diff 进行三方合并，
- *    无重叠冲突时平滑合入，冲突时提供带行号的准确定位提示。
- * 4. 寄存器支持（CUT / PUT @reg）：支持在跨文件或同文件内部移动代码段。
+ * Phase 1 validates syntax, path bounds, hashes/3-way recovery, line bounds,
+ * block spans, overlap invariants, and named `@register` availability in memory.
+ * Phase 2 writes/deletes files on disk only when every section passes Phase 1.
  */
 
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import {
+	checkHunkLineBounds,
+	computeFileHash,
+	formatHashlineHeader,
+	formatNumberedLines,
+	HL_HASH_LENGTH,
+	isRegisterDefinedLater,
+	normalizeLineEndings,
+	parseHashlinePatch,
+	type Hunk,
+	type HunkOpKind,
+	type PatchParseError,
+	type PatchParseResult,
+	type PatchSection,
+} from "./hashline-parser.js";
+import { globalSnapshotStore, HashlineSnapshotStore, resolveBlockSpan, tryRecoverEdits } from "./hashline-merge.js";
 import { checkPatchPathBounds, resolvePatchPath } from "./patch-worktree-bounds.js";
 
-export const HL_HASH_LENGTH = 4;
-
-/** 归一化文本换行符与尾随空白（确保哈希跨平台一致） */
-export function normalizeLineEndings(text: string): string {
-	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-/** 计算文件的 4 位十六进制内容哈希（大写） */
-export function computeFileHash(text: string): string {
-	const normalized = normalizeLineEndings(text).replace(/[ \t]+(?=\n|$)/g, "");
-	const hash = createHash("sha256").update(normalized, "utf8").digest("hex");
-	return hash.slice(0, HL_HASH_LENGTH).toUpperCase();
-}
-
-/** 为文件生成带哈希的段头：[src/app.ts#A1B2] */
-export function formatHashlineHeader(filePath: string, hash: string): string {
-	return `[${filePath}#${hash}]`;
-}
-
-/** 为文本输出带行号的展示视图：1:line1\n2:line2 */
-export function formatNumberedLines(text: string, startLine = 1): string {
-	const lines = normalizeLineEndings(text).split("\n");
-	return lines.map((l, i) => `${startLine + i}:${l}`).join("\n");
-}
-
-// ----------------------------------------------------------------------------
-// 语法块解析（Block Resolver）
-// ----------------------------------------------------------------------------
-
-/**
- * 启发式语法块边界解析：从 startLine（1-indexed）开始，定位该语句块的闭合行。
- * 支持：
- * 1. 括号/大括号嵌套语言（JS/TS/Rust/Go/C/C++/Java/PHP）：匹配同深度闭合 '}'。
- * 2. 缩进敏感语言（Python/YAML/Makefile）：匹配缩进回退的边界。
- * 3. Markdown 标题：匹配同级或更高级标题的边界。
- */
-export function resolveBlockSpan(
-	lines: readonly string[],
-	startLine: number,
-	filePath = "",
-): { start: number; end: number } {
-	const n = lines.length;
-	const sIdx = Math.max(0, Math.min(n - 1, startLine - 1));
-	const startContent = lines[sIdx] ?? "";
-	const trimmedStart = startContent.trim();
-
-	// 1. Markdown 标题：## Title -> 下一个同级或更高级标题
-	const isMd = /\.(md|markdown|mdx)$/i.test(filePath);
-	const mdHeaderMatch = trimmedStart.match(/^(#{1,6})\s+/);
-	if (isMd && mdHeaderMatch) {
-		const level = mdHeaderMatch[1].length;
-		let endIdx = sIdx;
-		for (let i = sIdx + 1; i < n; i++) {
-			const line = lines[i].trim();
-			const m = line.match(/^(#{1,6})\s+/);
-			if (m && m[1].length <= level) break;
-			endIdx = i;
-		}
-		return { start: sIdx + 1, end: endIdx + 1 };
-	}
-
-	// 2. 缩进语言判定（Python、YAML、Make）
-	const isIndentLang = /\.(py|yaml|yml|makefile|dockerfile)$/i.test(filePath) || !startContent.includes("{");
-	if (isIndentLang && (trimmedStart.endsWith(":") || !trimmedStart.includes("{"))) {
-		const baseIndent = startContent.match(/^[ \t]*/)?.[0].length ?? 0;
-		let endIdx = sIdx;
-		for (let i = sIdx + 1; i < n; i++) {
-			const line = lines[i];
-			if (line.trim().length === 0) {
-				// 空行不打断块，只要后面还有更深缩进
-				continue;
-			}
-			const curIndent = line.match(/^[ \t]*/)?.[0].length ?? 0;
-			if (curIndent <= baseIndent) {
-				break;
-			}
-			endIdx = i;
-		}
-		return { start: sIdx + 1, end: endIdx + 1 };
-	}
-
-	// 3. 大括号 / 括号计数解析（JS/TS/Rust/Go/C/C++ 等）
-	let braceDepth = 0;
-	let parenDepth = 0;
-	let bracketDepth = 0;
-	let seenOpen = false;
-	let endIdx = sIdx;
-
-	for (let i = sIdx; i < n; i++) {
-		const line = lines[i];
-		let inString: string | null = null;
-		let escaped = false;
-
-		for (let j = 0; j < line.length; j++) {
-			const char = line[j];
-			const next = line[j + 1];
-
-			if (escaped) {
-				escaped = false;
-				continue;
-			}
-			if (char === "\\") {
-				escaped = true;
-				continue;
-			}
-			if (inString) {
-				if (char === inString) inString = null;
-				continue;
-			}
-			if (char === '"' || char === "'" || char === "`") {
-				inString = char;
-				continue;
-			}
-			// 单行注释
-			if (char === "/" && next === "/") break;
-
-			if (char === "{") {
-				braceDepth++;
-				seenOpen = true;
-			} else if (char === "}") {
-				braceDepth--;
-			} else if (char === "(") {
-				parenDepth++;
-			} else if (char === ")") {
-				parenDepth--;
-			} else if (char === "[") {
-				bracketDepth++;
-			} else if (char === "]") {
-				bracketDepth--;
-			}
-		}
-
-		endIdx = i;
-		if (seenOpen && braceDepth <= 0 && parenDepth <= 0 && bracketDepth <= 0) {
-			break;
-		}
-	}
-
-	return { start: sIdx + 1, end: endIdx + 1 };
-}
-
-// ----------------------------------------------------------------------------
-// 补丁语法抽象语法树与解析器
-// ----------------------------------------------------------------------------
-
-export type HunkOpKind =
-	| "put_range" // PUT 10.=25:
-	| "put_block" // PUT 10*:
-	| "insert_before" // PUT <10:
-	| "insert_after" // PUT >10:
-	| "insert_after_block" // PUT >10*:
-	| "cut_range" // CUT 10.=25 [@reg]
-	| "cut_block" // CUT 10* [@reg]
-	| "paste_at" // PUT <10 @reg 或 PUT >10 @reg
-	| "paste_over_range" // PUT 10.=25 @reg
-	| "paste_over_block" // PUT 10* @reg
-	| "remove_file" // REM
-	| "move_file"; // MV dest/path.ts
-
-export interface Hunk {
-	kind: HunkOpKind;
-	lineStart?: number;
-	lineEnd?: number;
-	registerName?: string;
-	targetPath?: string;
-	bodyLines: string[];
-}
-
-export interface PatchSection {
-	filePath: string;
-	expectedHash?: string;
-	hunks: Hunk[];
-}
-
-/**
- * 解析 Hashline 补丁文本
- */
-export function parseHashlinePatch(patchText: string): PatchSection[] {
-	const lines = normalizeLineEndings(patchText).split("\n");
-	const sections: PatchSection[] = [];
-	let currentSection: PatchSection | null = null;
-	let currentHunk: Hunk | null = null;
-
-	const flushHunk = () => {
-		if (currentHunk && currentSection) {
-			currentSection.hunks.push(currentHunk);
-			currentHunk = null;
-		}
-	};
-
-	const flushSection = () => {
-		flushHunk();
-		if (currentSection) {
-			sections.push(currentSection);
-			currentSection = null;
-		}
-	};
-
-	for (let i = 0; i < lines.length; i++) {
-		const rawLine = lines[i];
-		const trimmed = rawLine.trim();
-
-		// 1. 段落头: [path#TAG] 或 [path]
-		const secMatch = rawLine.match(/^\s*\[([^#\]]+)(?:#([0-9a-fA-F]{4}))?\]\s*$/);
-		if (secMatch) {
-			flushSection();
-			currentSection = {
-				filePath: secMatch[1].trim(),
-				expectedHash: secMatch[2] ? secMatch[2].toUpperCase() : undefined,
-				hunks: [],
-			};
-			continue;
-		}
-
-		if (!currentSection) {
-			// 未进入段落前的空白或注释跳过
-			continue;
-		}
-
-		// 2. 文件级指令: REM (删除当前文件)
-		if (/^REM\b/i.test(trimmed)) {
-			flushHunk();
-			currentSection.hunks.push({ kind: "remove_file", bodyLines: [] });
-			continue;
-		}
-
-		// 3. 文件级指令: MV dest (重命名/移动当前文件)
-		const mvMatch = trimmed.match(/^MV\s+([^\s]+)/i);
-		if (mvMatch) {
-			flushHunk();
-			currentSection.hunks.push({ kind: "move_file", targetPath: mvMatch[1], bodyLines: [] });
-			continue;
-		}
-
-		// 4. CUT 指令: CUT N.=M [@reg] 或 CUT N* [@reg]
-		const cutMatch = trimmed.match(/^CUT\s+(\d+)(?:\.=(\d+)|\*)\s*(?:@([a-zA-Z0-9_-]+))?/);
-		if (cutMatch) {
-			flushHunk();
-			const start = parseInt(cutMatch[1], 10);
-			const isBlock = trimmed.includes("*");
-			const end = cutMatch[2] ? parseInt(cutMatch[2], 10) : start;
-			const reg = cutMatch[3];
-			currentSection.hunks.push({
-				kind: isBlock ? "cut_block" : "cut_range",
-				lineStart: start,
-				lineEnd: isBlock ? undefined : end,
-				registerName: reg,
-				bodyLines: [],
-			});
-			continue;
-		}
-
-		// 5. 粘贴指令 (无冒号头): PUT <N @reg / PUT >N @reg / PUT N.=M @reg / PUT N* @reg
-		const pasteMatch = trimmed.match(/^PUT\s+(<|>)?(\d+)(?:\.=(\d+)|\*)?\s+@([a-zA-Z0-9_-]+)/);
-		if (pasteMatch && !trimmed.endsWith(":")) {
-			flushHunk();
-			const prefix = pasteMatch[1]; // < 或 >
-			const num = parseInt(pasteMatch[2], 10);
-			const endNum = pasteMatch[3] ? parseInt(pasteMatch[3], 10) : num;
-			const isBlock = trimmed.includes("*");
-			const reg = pasteMatch[4];
-			let kind: HunkOpKind;
-			if (prefix === "<") {
-				kind = "insert_before";
-			} else if (prefix === ">") {
-				kind = "insert_after";
-			} else if (isBlock) {
-				kind = "paste_over_block";
-			} else {
-				kind = "paste_over_range";
-			}
-			currentSection.hunks.push({
-				kind,
-				lineStart: num,
-				lineEnd: endNum,
-				registerName: reg,
-				bodyLines: [],
-			});
-			continue;
-		}
-
-		// 6. 替换或插入指令头 (带冒号):
-		// PUT N.=M: / PUT N*: / PUT <N: / PUT >N: / PUT >N*: / PUT <$: / PUT >$:
-		const putHeaderMatch = trimmed.match(/^PUT\s+(<|>)?(\d+|\$)(?:\.=(\d+)|\*)?:$/);
-		if (putHeaderMatch) {
-			flushHunk();
-			const prefix = putHeaderMatch[1];
-			const anchorStr = putHeaderMatch[2];
-			const start = anchorStr === "$" ? -1 : parseInt(anchorStr, 10);
-			const end = putHeaderMatch[3] ? parseInt(putHeaderMatch[3], 10) : start;
-			const isBlock = trimmed.includes("*");
-
-			let kind: HunkOpKind;
-			if (prefix === "<") {
-				kind = "insert_before";
-			} else if (prefix === ">") {
-				kind = isBlock ? "insert_after_block" : "insert_after";
-			} else if (isBlock) {
-				kind = "put_block";
-			} else {
-				kind = "put_range";
-			}
-
-			currentHunk = {
-				kind,
-				lineStart: start,
-				lineEnd: isBlock ? undefined : end,
-				bodyLines: [],
-			};
-			continue;
-		}
-
-		// 7. 内容行 (以 '+' 开头)
-		if (rawLine.startsWith("+")) {
-			if (currentHunk) {
-				currentHunk.bodyLines.push(rawLine.slice(1));
-			}
-			continue;
-		}
-	}
-
-	flushSection();
-	return sections;
-}
-
-// ----------------------------------------------------------------------------
-// 快照存储与三方合并恢复（Snapshot Store & 3-Way Merge Recovery）
-// ----------------------------------------------------------------------------
-
-export class HashlineSnapshotStore {
-	/** 单个文件保留的快照代数上限（LRU）：全局单例会跨整个会话存活，反复编辑
-	 *  同一文件会让快照按编辑次数无界增长，必须驱逐最旧一代。 */
-	private static readonly MAX_PER_FILE = 200;
-
-	private snapshots = new Map<string, Map<string, string>>(); // path -> (hash -> content)
-
-	record(filePath: string, text: string): string {
-		const hash = computeFileHash(text);
-		let fileMap = this.snapshots.get(filePath);
-		if (!fileMap) {
-			fileMap = new Map();
-			this.snapshots.set(filePath, fileMap);
-		}
-		// 先删后插：覆盖同代快照的同时把访问序刷到尾部（Map 插入序即 LRU 序）
-		fileMap.delete(hash);
-		fileMap.set(hash, text);
-		while (fileMap.size > HashlineSnapshotStore.MAX_PER_FILE) {
-			const oldest = fileMap.keys().next().value;
-			if (oldest === undefined) break;
-			fileMap.delete(oldest);
-		}
-		return hash;
-	}
-
-	get(filePath: string, hash: string): string | undefined {
-		const fileMap = this.snapshots.get(filePath);
-		if (!fileMap) return undefined;
-		const key = hash.toUpperCase();
-		const hit = fileMap.get(key);
-		if (hit !== undefined) {
-			// get 命中即 refresh：重插到尾部，正在参与三方合并的快照不被 LRU 驱逐
-			fileMap.delete(key);
-			fileMap.set(key, hit);
-		}
-		return hit;
-	}
-}
-
-/** 全局会话级快照单例 */
-export const globalSnapshotStore = new HashlineSnapshotStore();
-
-/**
- * 启发式三方行合并：
- * baseLines: 制作补丁时的原始文件快照
- * currentLines: 磁盘当前的最新文件
- * targetHunks: 针对 baseLines 计算出的目标改动行区间
- *
- * 核心逻辑：若磁盘文件的改动未侵入 targetHunks 所在的锚点行，则将锚点行映射到最新文件的对应行，安全完成合并。
- */
-export function tryRecoverEdits(
-	baseText: string,
-	currentText: string,
-	hunks: Hunk[],
-	filePath: string,
-): { success: boolean; remappedHunks?: Hunk[]; reason?: string } {
-	const baseLines = normalizeLineEndings(baseText).split("\n");
-	const curLines = normalizeLineEndings(currentText).split("\n");
-
-	// 若内容完全相同，无需恢复
-	if (baseText === currentText) return { success: true, remappedHunks: hunks };
-
-	// 简单行偏移探测：计算首个不一致行与行数差
-	let firstDiff = -1;
-	for (let i = 0; i < Math.max(baseLines.length, curLines.length); i++) {
-		if (baseLines[i] !== curLines[i]) {
-			firstDiff = i + 1;
-			break;
-		}
-	}
-
-	if (firstDiff === -1) return { success: true, remappedHunks: hunks };
-
-	// 检查是否有 hunk 的锚点位于差异产生点之前或之后
-	const delta = curLines.length - baseLines.length;
-	const remapped: Hunk[] = [];
-
-	for (const hunk of hunks) {
-		const start = hunk.lineStart ?? 1;
-		const end = hunk.lineEnd ?? start;
-
-		if (start < firstDiff && end < firstDiff) {
-			// 在差异行之前，行号保持不变
-			remapped.push({ ...hunk });
-		} else {
-			// 差异行之后，尝试应用行号平移 delta
-			const shiftedStart = Math.max(1, start + delta);
-			const shiftedEnd = Math.max(1, end + delta);
-
-			// 校验平移后的周围文本是否与 base 时的上下文匹配
-			const baseSnippet = baseLines.slice(Math.max(0, start - 2), Math.min(baseLines.length, end + 1)).join("\n");
-			const curSnippet = curLines
-				.slice(Math.max(0, shiftedStart - 2), Math.min(curLines.length, shiftedEnd + 1))
-				.join("\n");
-
-			if (baseSnippet.trim() === curSnippet.trim() || delta === 0) {
-				remapped.push({
-					...hunk,
-					lineStart: shiftedStart,
-					lineEnd: hunk.lineEnd !== undefined ? shiftedEnd : undefined,
-				});
-			} else {
-				return {
-					success: false,
-					reason: `The target file was changed externally near line ${firstDiff}; the patch anchor (line ${start}) conflicts`,
-				};
-			}
-		}
-	}
-
-	return { success: true, remappedHunks: remapped };
-}
-
-// ----------------------------------------------------------------------------
-// 补丁执行器（Patcher）
-// ----------------------------------------------------------------------------
+export {
+	computeFileHash,
+	formatHashlineHeader,
+	formatNumberedLines,
+	globalSnapshotStore,
+	HashlineSnapshotStore,
+	HL_HASH_LENGTH,
+	normalizeLineEndings,
+	parseHashlinePatch,
+	resolveBlockSpan,
+	tryRecoverEdits,
+	type Hunk,
+	type HunkOpKind,
+	type PatchParseError,
+	type PatchParseResult,
+	type PatchSection,
+};
 
 export interface ApplySectionResult {
 	filePath: string;
@@ -479,8 +62,7 @@ export interface PatchApplyReport {
 }
 
 /**
- * 应用 Hashline 补丁
- * 支持传入虚拟或物理文件读写器（便于单元测试或沙箱执行）
+ * Apply a Hashline patch atomically across one or more files.
  */
 export function applyHashlinePatch(
 	patchText: string,
@@ -525,19 +107,44 @@ export function applyHashlinePatch(
 	const write = options.writeFile ?? defaultWrite;
 	const remove = options.deleteFile ?? defaultDelete;
 
-	const sections = parseHashlinePatch(patchText);
-	if (sections.length === 0) {
-		return { ok: false, summary: "Could not parse any valid [path#TAG] patch section from the input", results: [] };
+	const parsed = parseHashlinePatch(patchText);
+	if (parsed.errors.length > 0) {
+		const bulletLines = parsed.errors.map((e) => `• ${e.message}`).join("\n");
+		return {
+			ok: false,
+			summary: `Patch syntax error (0 files written):\n${bulletLines}`,
+			results: [],
+			error: parsed.errors[0].message,
+		};
 	}
 
-	const clipboard = new Map<string, string[]>(); // 命名剪切板寄存器
-	const plannedWrites = new Map<string, string>(); // path -> 新内容
+	const sections = parsed.sections;
+	if (sections.length === 0) {
+		return {
+			ok: false,
+			summary: "Could not parse any valid [path#TAG] patch section from the input",
+			results: [],
+			error: "No valid patch sections",
+		};
+	}
+
+	const clipboard = new Map<string, string[]>();
+	const plannedWrites = new Map<string, string>();
 	const plannedDeletes = new Set<string>();
 	const results: ApplySectionResult[] = [];
 
-	// ===== 阶段 1: 预检所有文件并计算目标内容 =====
-	for (const sec of sections) {
-		// 越界安全防护
+	// ===== Phase 1: Validate all sections and compute target contents in memory =====
+	for (let secIdx = 0; secIdx < sections.length; secIdx++) {
+		const sec = sections[secIdx];
+		if (sec.hunks.length === 0) {
+			return {
+				ok: false,
+				summary: `Empty patch section [${sec.filePath}]: section contains 0 operations (0 files written).`,
+				results: [],
+				error: `Empty patch section: ${sec.filePath}`,
+			};
+		}
+
 		const srcBounds = checkPatchPathBounds(sec.filePath, { cwd, allowLinkedWorktrees, homeDir });
 		if (!srcBounds.ok) {
 			return {
@@ -548,7 +155,6 @@ export function applyHashlinePatch(
 			};
 		}
 
-		// 同一次 patch 内对同文件的后续段落，优先使用前面段落生成的新内容
 		const currentText = plannedWrites.get(sec.filePath) ?? read(sec.filePath);
 		if (currentText === null) {
 			return {
@@ -561,19 +167,18 @@ export function applyHashlinePatch(
 
 		const isCrlf = currentText.includes("\r\n");
 		const eol = isCrlf ? "\r\n" : "\n";
-
 		const liveHash = computeFileHash(currentText);
-		let workingText = currentText;
+		const workingText = currentText;
 		let isRecovered = false;
+		let sectionHunks = sec.hunks.map((h) => ({ ...h, bodyLines: [...h.bodyLines] }));
 
-		// 哈希校验与三方冲突自愈（快照按绝对路径优先隔离，兼容相对路径回退）
 		const absFilePath = srcBounds.resolvedPath;
 		if (sec.expectedHash && sec.expectedHash !== liveHash) {
 			const snapshot = store.get(absFilePath, sec.expectedHash) ?? store.get(sec.filePath, sec.expectedHash);
 			if (snapshot) {
-				const recovery = tryRecoverEdits(snapshot, currentText, sec.hunks, sec.filePath);
+				const recovery = tryRecoverEdits(snapshot, currentText, sectionHunks, sec.filePath);
 				if (recovery.success && recovery.remappedHunks) {
-					sec.hunks = recovery.remappedHunks;
+					sectionHunks = recovery.remappedHunks;
 					isRecovered = true;
 				} else {
 					return {
@@ -593,17 +198,18 @@ export function applyHashlinePatch(
 			}
 		}
 
+		const isEmptyFile = workingText.length === 0;
 		const hasTrailingNewline = workingText.endsWith("\n");
-		let lines = normalizeLineEndings(workingText).split("\n");
-		if (hasTrailingNewline && lines.length > 0 && lines[lines.length - 1] === "") {
+		const lines = isEmptyFile ? [] : normalizeLineEndings(workingText).split("\n");
+		if (!isEmptyFile && hasTrailingNewline && lines.length > 0 && lines[lines.length - 1] === "") {
 			lines.pop();
 		}
+
 		let isDeleted = false;
 		let moveDest: string | undefined = undefined;
 
-		// 倒序/顺序处理 hunks。为了保证行号不受前面 hunk 影响，从后往前执行行号替换；
-		// 但先提取 CUT 的内容到寄存器
-		for (const h of sec.hunks) {
+		for (let hIdx = 0; hIdx < sectionHunks.length; hIdx++) {
+			const h = sectionHunks[hIdx];
 			if (h.kind === "remove_file") {
 				isDeleted = true;
 				break;
@@ -623,7 +229,11 @@ export function applyHashlinePatch(
 				continue;
 			}
 
-			// 语法块展开
+			const boundsErr = checkHunkLineBounds(h, lines.length, sec.filePath);
+			if (boundsErr) {
+				return { ok: false, summary: boundsErr.summary, results: [], error: boundsErr.error };
+			}
+
 			if (h.kind === "put_block" || h.kind === "cut_block" || h.kind === "paste_over_block") {
 				const span = resolveBlockSpan(lines, h.lineStart ?? 1, sec.filePath);
 				h.lineStart = span.start;
@@ -634,13 +244,30 @@ export function applyHashlinePatch(
 				h.kind = "insert_after";
 			}
 
-			// 捕获到寄存器
 			if (h.kind === "cut_range" || h.kind === "cut_block") {
 				const start = Math.max(1, h.lineStart ?? 1);
 				const end = Math.min(lines.length, h.lineEnd ?? start);
 				const captured = lines.slice(start - 1, end);
-				const regKey = h.registerName || "_anon";
-				clipboard.set(regKey, captured);
+				if (h.registerName) {
+					clipboard.set(h.registerName, captured);
+				}
+			} else if (h.registerName && !clipboard.has(h.registerName)) {
+				if (isRegisterDefinedLater(sections, secIdx, hIdx, h.registerName)) {
+					return {
+						ok: false,
+						summary: `Register @${h.registerName} in [${sec.filePath}] is used before it is populated (0 files written). Put the CUT ... @${h.registerName} section/hunk before PUT ... @${h.registerName}.`,
+						results: [],
+						error: `Out-of-order register @${h.registerName} in ${sec.filePath}`,
+					};
+				}
+				const available = [...clipboard.keys()].map((k) => `@${k}`);
+				const hint = available.length > 0 ? ` (defined registers: ${available.join(", ")})` : " (no registers defined)";
+				return {
+					ok: false,
+					summary: `Unknown register @${h.registerName} in [${sec.filePath}]: no prior CUT ... @${h.registerName} defined it${hint} (0 files written).`,
+					results: [],
+					error: `Unknown register @${h.registerName} in ${sec.filePath}`,
+				};
 			}
 		}
 
@@ -655,39 +282,13 @@ export function applyHashlinePatch(
 			continue;
 		}
 
-		// 行号越界校验与重叠校验
-		for (const h of sec.hunks) {
-			if (h.kind === "remove_file" || h.kind === "move_file") continue;
-			if (h.lineStart !== -1 && typeof h.lineStart === "number") {
-				if (h.lineStart < 1 || h.lineStart > Math.max(1, lines.length)) {
-					return {
-						ok: false,
-						summary: `Line out of range: ${sec.filePath} line ${h.lineStart} (the file has only ${lines.length} lines). Check the line numbers again with the read tool.`,
-						results: [],
-						error: `Line out of bounds: line ${h.lineStart} in ${sec.filePath} (${lines.length} lines total)`,
-					};
-				}
-				if (h.lineEnd !== undefined && h.lineEnd > Math.max(1, lines.length)) {
-					return {
-						ok: false,
-						summary: `Line out of range: ${sec.filePath} end line ${h.lineEnd} is past the end of the file (${lines.length} lines).`,
-						results: [],
-						error: `Line out of bounds: end line ${h.lineEnd} in ${sec.filePath} (${lines.length} lines total)`,
-					};
-				}
-			}
-		}
-
+		const origLineCount = lines.length;
 		const replacementSpans: Array<{ start: number; end: number }> = [];
-		for (const h of sec.hunks) {
+		for (const h of sectionHunks) {
 			let s: number;
 			let e: number;
 			if (h.kind === "insert_before" || h.kind === "insert_after") {
-				// insert 类 hunk 也纳入重叠校验（锚点单行）：执行时按行号降序 splice，
-				// 若锚点行被同补丁的 replace/cut 覆盖删除、或与其它 insert 锚点重合，
-				// 插入位置会随前面的改动串位，产出与模型意图不符的内容。保守策略：
-				// 锚点行与任何 replace span / 其它 insert 锚点重叠即报错。
-				s = h.lineStart === -1 ? lines.length : (h.lineStart ?? 1);
+				s = h.lineStart === -1 ? origLineCount : (h.lineStart ?? 1);
 				e = s;
 			} else if (
 				h.kind === "put_range" ||
@@ -697,8 +298,8 @@ export function applyHashlinePatch(
 				h.kind === "paste_over_range" ||
 				h.kind === "paste_over_block"
 			) {
-				s = h.lineStart === -1 ? lines.length : (h.lineStart ?? 1);
-				e = h.lineEnd ?? s;
+				s = h.lineStart === -1 ? origLineCount : (h.lineStart ?? 1);
+				e = h.lineEnd === -1 ? origLineCount : (h.lineEnd ?? s);
 			} else {
 				continue;
 			}
@@ -715,12 +316,11 @@ export function applyHashlinePatch(
 			replacementSpans.push({ start: s, end: e });
 		}
 
-		// 按行号从大到小排序执行，避免前方修改引起后续行号错位
-		const sortedHunks = [...sec.hunks]
+		const sortedHunks = sectionHunks
 			.filter((h) => h.kind !== "remove_file" && h.kind !== "move_file")
 			.sort((a, b) => {
-				const lineA = a.lineStart === -1 ? lines.length : (a.lineStart ?? 0);
-				const lineB = b.lineStart === -1 ? lines.length : (b.lineStart ?? 0);
+				const lineA = a.lineStart === -1 ? origLineCount : (a.lineStart ?? 0);
+				const lineB = b.lineStart === -1 ? origLineCount : (b.lineStart ?? 0);
 				return lineB - lineA;
 			});
 
@@ -732,13 +332,12 @@ export function applyHashlinePatch(
 			if (h.kind === "cut_range" || h.kind === "cut_block") {
 				contentToInsert = [];
 			} else if (h.registerName) {
-				contentToInsert = clipboard.get(h.registerName) ?? [];
+				contentToInsert = clipboard.get(h.registerName)!;
 			} else {
 				contentToInsert = h.bodyLines;
 			}
 
-			let start = h.lineStart ?? 1;
-			if (start === -1) start = lines.length; // $ 尾部锚点
+			const start = h.lineStart === -1 ? origLineCount : (h.lineStart ?? 1);
 
 			if (h.kind === "insert_before") {
 				const idx = Math.max(0, Math.min(lines.length, start - 1));
@@ -757,14 +356,16 @@ export function applyHashlinePatch(
 				h.kind === "paste_over_block"
 			) {
 				const s = Math.max(1, start);
-				const e = Math.min(lines.length, h.lineEnd ?? s);
+				const resolvedEnd = h.lineEnd === -1 ? origLineCount : (h.lineEnd ?? s);
+				const e = Math.min(lines.length, resolvedEnd);
 				const count = Math.max(0, e - s + 1);
 				lines.splice(s - 1, count, ...contentToInsert);
 				linesChangedCount += Math.max(count, contentToInsert.length);
 			}
 		}
 
-		const newContent = lines.join(eol) + (hasTrailingNewline ? eol : "");
+		const emitTrailingNewline = hasTrailingNewline || (isEmptyFile && lines.length > 0);
+		const newContent = lines.length === 0 ? "" : lines.join(eol) + (emitTrailingNewline ? eol : "");
 		if (moveDest) {
 			plannedDeletes.add(sec.filePath);
 			plannedWrites.set(moveDest, newContent);
@@ -790,11 +391,9 @@ export function applyHashlinePatch(
 		}
 	}
 
-	// ===== 阶段 2: 全部校验通过，统一落盘 =====
-	// 先执行所有写入，确保新文件与移动目标成功落盘，避免先删后写异常时永久丢失源文件
+	// ===== Phase 2: Commit all planned writes first, then deletes =====
 	for (const [p, content] of plannedWrites.entries()) {
 		write(p, content);
-		// 记住新快照（统一采用绝对路径隔离多工作区）
 		store.record(resolvePatchPath(cwd, p, homeDir), content);
 	}
 	for (const p of plannedDeletes) {
