@@ -3423,8 +3423,18 @@ button.rolemsg-fold:focus-visible {
 	gap: 3px;
 }
 /* queue-main-chat: the task asked its main chat: one plain line, nothing for the user to do. */
-.task-queue-asking {
+.task-queue-asking,
+.task-queue-waiting-on {
 	margin-top: 2px;
+}
+/* owner-requester (Ops #1051): the chat waits on the other owner's answer: one passive line above the input. */
+.chat-waiting-on {
+	margin: 0 auto 6px;
+	padding: 4px 10px;
+	max-width: 100%;
+	color: var(--text-faint);
+	font-size: 12px;
+	text-align: center;
 }
 /* task-question decisions (rule 21): the whole package a question for the owner came with: open, readable,
    scrolling on its own (keyboard-focusable) so a long one doesn't push the answer off a phone screen. */

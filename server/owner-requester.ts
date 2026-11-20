@@ -8,9 +8,12 @@
  * - a typed web message's sent-by (Ops #972) sets its turn's owner input (queue-requester requesterForAdmission);
  * - queue_add copies the turn's inputs into the task's origin, and the task's own chat gets that origin;
  * - message_role stamps the sending chat's person on its record; the receiving turn's role input carries it.
- * Owner asks (asks.ts Ask.requester) take it from their chat or task. Every web card then says
- * "For Wai" / "For Shine" (anyone may still answer); Telegram stays Shine's alone (m97662 "Web only for now"):
- * a Wai item never reaches a plugin, and telegram_send from a Wai chat sends nothing.
+ * Owner asks (asks.ts Ask.requester) take it from their chat or task. Web cards are per owner (Ops #1051, Shine
+ * 2026-11-20 "this question should only show up for Wai"): a browser connection is its Tailscale login's person
+ * (askIsForViewer), and an ask shows, counts and alerts only on its own owner's connections; the other owner sees
+ * only "Waiting on <name>" on the asking chat's page and Queue tab row. Either may still answer (no lock).
+ * Telegram stays Shine's alone (m97662 "Web only for now"): a Wai item never reaches a plugin, and
+ * telegram_send from a Wai chat sends nothing.
  * The one reader of "who is this for" is here; nothing else parses it.
  */
 import type { UiTaskRequester } from "./protocol.js";
@@ -53,6 +56,32 @@ export function requesterName(person: string | undefined): string {
 /** Off-web owner channels (Telegram) are the default owner's alone; a named person's items stay in the web app. */
 export function reachesOwnerChannels(person: string | undefined): boolean {
 	return person === undefined;
+}
+
+/** Who a browser connection is (Ops #1051): `person` = the people.json name of a listed person who isn't the
+ *  default owner (absent: the default owner, a login nobody listed, or no login); `listed` = every such name. */
+export interface OwnerViewer {
+	person?: string;
+	listed: ReadonlySet<string>;
+}
+
+/** A connection that is the default owner's (no login, his login, an unlisted login, a headless client). */
+export const DEFAULT_VIEWER: OwnerViewer = Object.freeze({ listed: new Set<string>() });
+
+/** The owner an ask (or a queued task's card) for `askPerson` belongs to: a person people.json doesn't list
+ *  counts as the default owner, so nothing is shown to nobody. */
+export function askOwnerName(askPerson: string | undefined, viewer: OwnerViewer): string {
+	return requesterName(askPerson !== undefined && viewer.listed.has(askPerson) ? askPerson : undefined);
+}
+
+/** Whether an ask for `askPerson` is this connection's to see, count and be alerted about: its owner is the viewer. */
+export function askIsForViewer(askPerson: string | undefined, viewer: OwnerViewer): boolean {
+	return askOwnerName(askPerson, viewer) === requesterName(viewer.person);
+}
+
+/** The other owner's passive line, in place of the question: no text, options or answer form. */
+export function waitingOnLine(name: string): string {
+	return `Waiting on ${name}`;
 }
 
 /** What is recorded for an item kept off Telegram. */

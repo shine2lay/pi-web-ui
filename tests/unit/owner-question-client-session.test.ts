@@ -16,6 +16,7 @@ import {
 } from "../../server/owner-question-holds.js";
 import { OwnerQuestionRouter } from "../../server/owner-question-router.js";
 import { HELD_FOR_COO_LINE } from "../../server/owner-question-surfaces.js";
+import { DEFAULT_VIEWER, type OwnerViewer } from "../../server/owner-requester.js";
 import type {
 	ServerMessage,
 	UiQueueChatStatus,
@@ -67,10 +68,12 @@ const statics = ClientSession as unknown as {
 	stuckAsks: Map<string, { askId: string; sig: string; target: string }>;
 	stuckReconcileTimer: ReturnType<typeof setTimeout> | null;
 	queueStatuses: ReadonlyMap<string, UiQueueChatStatus>;
-	queueStatusesForOwner(): ReadonlyMap<string, UiQueueChatStatus>;
-	lineAboutHeldAsk(conv: unknown, lines: readonly UiTldrLine[]): boolean;
-	noticeAboutHeldCard(conv: unknown, message: string): boolean;
+	queueStatusesForOwner(viewer: OwnerViewer): ReadonlyMap<string, UiQueueChatStatus>;
+	lineAboutHeldAsk(conv: unknown, lines: readonly UiTldrLine[], viewer: OwnerViewer): boolean;
+	noticeAboutHeldCard(conv: unknown, message: string, viewer: OwnerViewer): boolean;
 };
+/** The chat list's check of a needs-you line, in a window of the default owner (owner-requester, Ops #1051). */
+const heldLine = (conv: unknown, lines: readonly UiTldrLine[]) => statics.lineAboutHeldAsk(conv, lines, DEFAULT_VIEWER);
 const call = <T>(client: ClientSession, name: string, ...args: unknown[]): T =>
 	(Reflect.get(ClientSession.prototype, name) as (...a: unknown[]) => T).call(client, ...args);
 
@@ -222,9 +225,9 @@ function taskSevenMarks(lead: FakeChat, taskChat: string) {
 		chat: { file: taskChat, title: "Task 7" },
 	};
 	return {
-		lineInChatList: !statics.lineAboutHeldAsk(lead, [line]),
-		needsDecisionLabel: statics.queueStatusesForOwner().has(taskChat),
-		notice: !statics.noticeAboutHeldCard(lead, "Task #7 needs you: Which port?"),
+		lineInChatList: !statics.lineAboutHeldAsk(lead, [line], DEFAULT_VIEWER),
+		needsDecisionLabel: statics.queueStatusesForOwner(DEFAULT_VIEWER).has(taskChat),
+		notice: !statics.noticeAboutHeldCard(lead, "Task #7 needs you: Which port?", DEFAULT_VIEWER),
 	};
 }
 
@@ -371,8 +374,8 @@ describe("ClientSession with the switch on", () => {
 		expect(id).toBeDefined();
 		expect(taskSevenMarks(lead, taskChat)).toEqual(hidden);
 		// Other notices, and another task's, show as before.
-		expect(statics.noticeAboutHeldCard(lead, "Queue started: 3 tasks")).toBe(false);
-		expect(statics.noticeAboutHeldCard(lead, "Task #8 needs you: Which port?")).toBe(false);
+		expect(statics.noticeAboutHeldCard(lead, "Queue started: 3 tasks", DEFAULT_VIEWER)).toBe(false);
+		expect(statics.noticeAboutHeldCard(lead, "Task #8 needs you: Which port?", DEFAULT_VIEWER)).toBe(false);
 		// Once the card reaches him, every mark shows again.
 		vi.setSystemTime(T0 + HOLD_SAFETY_NET_MS);
 		expect(router.sweep()).toEqual([id]);
@@ -394,18 +397,18 @@ describe("ClientSession with the switch on", () => {
 			...more,
 		});
 		const own = line("own", held!.createdAt - 1_000);
-		expect(statics.lineAboutHeldAsk(asking, [own])).toBe(true);
-		expect(statics.lineAboutHeldAsk(asking, [line("just-after", held!.createdAt + 5_000)])).toBe(true);
+		expect(heldLine(asking, [own])).toBe(true);
+		expect(heldLine(asking, [line("just-after", held!.createdAt + 5_000)])).toBe(true);
 		// A later line is about something else; another chat's line, and one copied up from a task chat, show as before.
-		expect(statics.lineAboutHeldAsk(asking, [own, line("later", held!.createdAt + 6_000)])).toBe(false);
-		expect(statics.lineAboutHeldAsk(chat("elsewhere"), [own])).toBe(false);
+		expect(heldLine(asking, [own, line("later", held!.createdAt + 6_000)])).toBe(false);
+		expect(heldLine(chat("elsewhere"), [own])).toBe(false);
 		const copied = line("copied", held!.createdAt, { chat: { file: join(dir, "task-9.jsonl"), title: "Task 9" } });
-		expect(statics.lineAboutHeldAsk(asking, [copied])).toBe(false);
+		expect(heldLine(asking, [copied])).toBe(false);
 		// Answered on its own page: the line shows again, and the chat list is redrawn.
 		mine.client.resolveQuestion(snapshotQuestion(mine)!.id, [{ id: "port", selected: ["8080"] }]);
 		await expect(answer).resolves.toEqual([{ id: "port", selected: ["8080"] }]);
 		expect(other.listed()).toBeGreaterThan(1);
-		expect(statics.lineAboutHeldAsk(asking, [own])).toBe(false);
+		expect(heldLine(asking, [own])).toBe(false);
 	});
 
 	it("a held permission prompt answered on its own page redraws the chat list; once let through, its line shows", async () => {
@@ -419,7 +422,7 @@ describe("ClientSession with the switch on", () => {
 			needsYou: true,
 			ts: askHub.get(id!)!.createdAt,
 		};
-		expect(statics.lineAboutHeldAsk(asking, [own])).toBe(true);
+		expect(heldLine(asking, [own])).toBe(true);
 		expect(mine.client.resolveToolApproval(id!, "approve")).toBe(true);
 		await expect(first).resolves.toMatchObject({ decision: "approve" });
 		expect(other.listed()).toBe(2);
@@ -427,7 +430,7 @@ describe("ClientSession with the switch on", () => {
 		const [again] = heldIds();
 		expect(router.release(again!, "coo", "Harmless.")).toEqual({ ok: true });
 		const ownAgain = { ...own, ts: askHub.get(again!)!.createdAt };
-		expect(statics.lineAboutHeldAsk(asking, [ownAgain])).toBe(false);
+		expect(heldLine(asking, [ownAgain])).toBe(false);
 		expect(other.client.resolveToolApproval(again!, "approve")).toBe(true);
 		await expect(second).resolves.toMatchObject({ decision: "approve" });
 	});
@@ -440,12 +443,12 @@ describe("ClientSession with the switch off", () => {
 		const { taskChat } = stuckTaskSeven(lead);
 		const shown = { lineInChatList: true, needsDecisionLabel: true, notice: true };
 		expect(taskSevenMarks(lead, taskChat)).toEqual(shown);
-		expect(statics.queueStatusesForOwner()).toBe(statics.queueStatuses);
+		expect(statics.queueStatusesForOwner(DEFAULT_VIEWER)).toBe(statics.queueStatuses);
 		ClientSession.reconcileStuckAsks();
 		expect(heldIds()).toEqual([]);
 		expect(listedIds()).toHaveLength(1);
 		expect(taskSevenMarks(lead, taskChat)).toEqual(shown);
-		expect(statics.queueStatusesForOwner()).toBe(statics.queueStatuses);
+		expect(statics.queueStatusesForOwner(DEFAULT_VIEWER)).toBe(statics.queueStatuses);
 	});
 
 	it("asks show exactly as before: the same messages, no line anywhere, nothing written for COO", async () => {
@@ -485,7 +488,7 @@ describe("ClientSession with the switch off", () => {
 		expect(router.sweep()).toEqual([]);
 		expect(existsSync(join(dir, OWNER_QUESTION_HOLDS_FILE))).toBe(false);
 		const own: UiTldrLine = { id: "own", text: "Needs you: which port?", needsYou: true, ts: Date.now() };
-		expect(statics.lineAboutHeldAsk(asking, [own])).toBe(false);
+		expect(heldLine(asking, [own])).toBe(false);
 		other.client.resolveQuestion(question!.id, [{ id: "port", selected: ["8080"] }]);
 		other.client.resolveToolApproval(approval!.id, "approve");
 		await expect(answer).resolves.toEqual([{ id: "port", selected: ["8080"] }]);

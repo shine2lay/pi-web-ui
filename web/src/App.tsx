@@ -2551,6 +2551,12 @@ export function App() {
 								}
 							/>
 						)}
+						{/* owner-requester (Ops #1051): this chat waits on the other owner's answer; his question isn't shown here. */}
+						{chat.state?.waitingOn && (
+							<div className="chat-waiting-on" role="status">
+								{chat.state.waitingOn}
+							</div>
+						)}
 						<ChatInput
 							composerLeading={uiSlots["composer.leading"]}
 							composerActions={uiSlots["composer.actions"]}

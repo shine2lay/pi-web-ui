@@ -458,6 +458,9 @@ export interface UiTaskQueueTask {
 	/** queue-main-chat: working again with its main chat's answer to its last question (a Telegram ask for
 	 *  that question then goes away saying so). */
 	mainAnswered?: boolean;
+	/** owner-requester (Ops #1051): stuck on the other owner's answer: "Waiting on <name>" in place of the question,
+	 *  choices, owner context and answer form (none of them sent to this window). */
+	waitingOn?: string;
 	/** waiting：在等什么。 */
 	wait?: UiTaskQueueWait;
 	/** done：做了什么（agent 的总结）。 */
@@ -824,6 +827,9 @@ export interface UiState {
 	pendingQuestion?: UiPendingQuestion | null;
 	/** 待用户审批的高危工具调用（Edit & Run 人机协同）。当前对话有待审批时携带，切会话/刷新恢复。 */
 	pendingApproval?: UiToolApproval | null;
+	/** owner-requester (Ops #1051): this chat waits on the other owner's answer ("Waiting on Wai"); his question,
+	 *  dialog or card isn't shown in this window. null = nothing waits on another owner (always sent: deltas merge). */
+	waitingOn?: string | null;
 	/** 子代理同行交接协同关系链（Peer-to-Peer Handoff relationships: fromRunId -> toRunId）。 */
 	subagentHandoffs?: Array<{ fromRunId: string; toRunId: string; timestamp: number }>;
 	/**
@@ -2592,6 +2598,9 @@ export interface UiRoleTask {
 	/** queue-paused: paused by the owner (the task itself or its whole queue): since when and why.
 	 *  A paused task never counts as needing the owner. */
 	paused?: UiTaskQueueHold;
+	/** owner-requester (Ops #1051): stuck on the other owner's answer ("Waiting on <name>"): not a decision for
+	 *  this window (no `stuck`, no `next`). */
+	waitingOn?: string;
 	/** roles-panel: where it belongs, from its queue entry (absent: not recorded). */
 	parent?: UiTaskParent;
 	initiative?: string;

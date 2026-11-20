@@ -222,6 +222,14 @@ is made, and a chat mostly writes its own needs-you line just before it asks: a 
 a sound. A task whose card is held doesn't count as waiting on the owner, so the stall watch may call it quiet if COO
 keeps it long.
 
+**Per owner (Ops #1051).** Shine and Wai each see only their own questions. Every browser window knows whose it is
+from its Tailscale login (no login, Shine's login or a login people.json doesn't list = Shine). A question asked for
+Wai shows its dialog, card, count, sound, notification and needs-you marks only in Wai's windows, and the reverse for
+Shine; a question with no named owner is Shine's. The other owner sees one passive line instead, without the question
+or an answer form: "Waiting on Wai" (or "Waiting on Shine") on the asking chat's page and on its Queue tab row. One
+rule decides it (`askIsForViewer` in `server/owner-requester.ts`); the Roles page and the top-bar count are projected
+per window (`server/owner-viewer.ts`). Either owner's answer is still accepted. Telegram is unchanged: Shine's only.
+
 ## COO's desk: the card, the tool and the safety net (#686)
 
 COO sees a held question before the owner does, can add context, and never answers in his place. Three modules,

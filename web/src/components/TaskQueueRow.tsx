@@ -77,12 +77,13 @@ export function renderTaskQueueRow({
 	const over = kind === "done" || kind === "dropped";
 	const wait = kind === "waiting" ? task.wait : undefined;
 	const held = taskQueueHeldOf(queue, task);
-	const binding =
-		task.status === "stuck" ? answerBinding(answerBindings, conversationId, queue.queueId, task) : undefined;
+	// owner-requester (Ops #1051): the server sends another owner's card as "Waiting on <name>" only.
+	const ownCard = task.status === "stuck" && task.waitingOn === undefined;
+	const binding = ownCard ? answerBinding(answerBindings, conversationId, queue.queueId, task) : undefined;
 	const cls = [
 		"task-queue-task",
 		kind,
-		task.status === "stuck" && !held ? "needs-you" : "",
+		ownCard && !held ? "needs-you" : "",
 		held ? "paused" : "",
 		task.status === "asking" ? "asking" : "",
 		task.status === "blocked" ? "blocked" : "",
@@ -213,7 +214,12 @@ export function renderTaskQueueRow({
 				</div>
 			)}
 			{task.status === "blocked" && task.block && <BlockedLine block={task.block} onOpenChat={onOpenChat} />}
-			{task.status === "stuck" && (
+			{task.status === "stuck" && task.waitingOn !== undefined && (
+				<div className="task-queue-waiting-on">
+					<span className="task-queue-hint">{task.waitingOn}</span>
+				</div>
+			)}
+			{ownCard && (
 				<div className="task-queue-question">
 					{!held && <span className="task-queue-badge">{t("taskQueueNeedsYou")}</span>}
 					{!held && <OwnerQuestionRoute route={binding?.route} />}

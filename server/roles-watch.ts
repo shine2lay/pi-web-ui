@@ -21,13 +21,20 @@ export interface RolesWatchOptions {
 	log?: (line: string) => void;
 }
 
+/** owner-requester (Ops #1051): what one window's viewer `V` is shown of an overview (the page and its count). */
+export type RolesView<V> = (overview: UiRolesOverview, viewer: V) => UiRolesOverview;
+
 /**
  * One window's watch. A full watcher's first overview may be the last one built (sent at once on watch); the window
  * counts its data as current only once a later check reaches it (pages-live, Ops #244), so the first look that
  * finishes after the watch confirms it even when nothing changed, instead of leaving it to the heartbeat.
  */
-interface RolesWatcher {
+interface RolesWatcher<V> {
 	full: boolean;
+	/** Whose window it is (owner-requester, Ops #1051). */
+	viewer: V;
+	/** The count of asks it was last sent (count-only watchers hear only a change). */
+	asks: number | null;
 	send: (msg: ServerMessage) => void;
 	/** checkedAt of the first overview this window got; null until it got one. */
 	firstAt: number | null;
@@ -36,8 +43,8 @@ interface RolesWatcher {
 }
 
 /** The windows watching the roles, keyed by their socket: looks again on a timer and on pokes. */
-export class RolesWatch<K> {
-	private readonly watchers = new Map<K, RolesWatcher>();
+export class RolesWatch<K, V = undefined> {
+	private readonly watchers = new Map<K, RolesWatcher<V>>();
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private running: Promise<void> | null = null;
 	private again = false;
@@ -49,6 +56,7 @@ export class RolesWatch<K> {
 	constructor(
 		private readonly read: () => Promise<UiRolesOverview>,
 		opts: RolesWatchOptions = {},
+		private readonly view: RolesView<V> = (overview) => overview,
 	) {
 		this.o = {
 			fullMs: opts.fullMs ?? 3_000,
@@ -60,21 +68,42 @@ export class RolesWatch<K> {
 	}
 
 	/** This window wants everything (full) or just the count; it gets what is known at once. */
-	watch(key: K, full: boolean, send: (msg: ServerMessage) => void): void {
-		const watcher: RolesWatcher = { full, send, firstAt: null, confirmed: false };
+	watch(key: K, full: boolean, send: (msg: ServerMessage) => void, ...viewer: V extends undefined ? [] : [V]): void {
+		const watcher: RolesWatcher<V> = {
+			full,
+			send,
+			viewer: viewer[0] as V,
+			asks: null,
+			firstAt: null,
+			confirmed: false,
+		};
 		this.watchers.set(key, watcher);
 		const last = this.last;
 		if (last) {
-			const asks = last.overview.asks.length;
 			if (full) this.sendOverview(watcher, last.overview, last.checkedAt);
-			else send({ type: "roles", asks });
+			else this.sendCount(watcher, last.overview, true);
 			if (full) watcher.firstAt = last.checkedAt;
 		}
 		this.schedule(last ? this.o.debounceMs : 0);
 	}
 
-	private sendOverview(w: RolesWatcher, overview: UiRolesOverview, checkedAt: number): void {
-		w.send({ type: "roles", overview, asks: overview.asks.length, checkedAt });
+	/** The count of asks `w`'s viewer is shown of `overview`. */
+	private asksFor(w: RolesWatcher<V>, overview: UiRolesOverview): number {
+		return this.view(overview, w.viewer).asks.length;
+	}
+
+	private sendOverview(w: RolesWatcher<V>, overview: UiRolesOverview, checkedAt: number): void {
+		const shown = this.view(overview, w.viewer);
+		w.asks = shown.asks.length;
+		w.send({ type: "roles", overview: shown, asks: w.asks, checkedAt });
+	}
+
+	/** A top bar's count, when it changed for its viewer (or `always`). */
+	private sendCount(w: RolesWatcher<V>, overview: UiRolesOverview, always = false): void {
+		const asks = this.asksFor(w, overview);
+		if (!always && w.asks === asks) return;
+		w.asks = asks;
+		w.send({ type: "roles", asks });
 	}
 
 	drop(key: K): void {
@@ -170,15 +199,13 @@ export class RolesWatch<K> {
 			const error = (err as Error)?.message || String(err);
 			if (error !== this.lastError) this.o.log?.(`[roles] couldn't make the overview: ${error}`);
 			this.lastError = error;
-			const asks = this.last?.overview.asks.length ?? 0;
-			for (const w of this.watchers.values()) if (w.full) w.send({ type: "roles", asks, error });
+			for (const w of this.watchers.values()) if (w.full) w.send({ type: "roles", asks: w.asks ?? 0, error });
 			return;
 		}
 		this.lastError = null;
 		const { at: _at, ...rest } = overview;
 		const json = JSON.stringify(rest);
 		const prev = this.last;
-		const asks = overview.asks.length;
 		const now = overview.at;
 		if (prev && prev.json === json) {
 			prev.checkedAt = now;
@@ -188,19 +215,18 @@ export class RolesWatch<K> {
 				if (!w.full) continue;
 				const confirms = !w.confirmed && w.firstAt !== null && now > w.firstAt;
 				if (!beat && !confirms) continue;
-				w.send({ type: "roles", asks, checkedAt: now });
+				w.send({ type: "roles", asks: w.asks ?? this.asksFor(w, prev.overview), checkedAt: now });
 				if (confirms) w.confirmed = true;
 			}
 			return;
 		}
-		const countChanged = !prev || prev.overview.asks.length !== asks;
 		this.last = { overview, json, checkedAt: now, heard: now };
 		for (const w of this.watchers.values()) {
 			if (w.full) {
 				this.sendOverview(w, overview, now);
 				if (w.firstAt === null) w.firstAt = now;
 				else if (now > w.firstAt) w.confirmed = true;
-			} else if (countChanged) w.send({ type: "roles", asks });
+			} else this.sendCount(w, overview);
 		}
 	}
 }

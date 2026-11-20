@@ -17,6 +17,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, statSync } from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
+import type { OwnerViewer } from "./owner-requester.js";
 
 /** Longest name kept. */
 export const SENT_BY_NAME_MAX = 80;
@@ -149,6 +150,17 @@ export class PeopleBook {
 		return person
 			? { login: sender.login, name: person.name, owner: person.owner }
 			: { login: sender.login, name: sender.name, owner: false };
+	}
+
+	/** owner-requester (Ops #1051): who a browser connection is, for what its windows are shown. A login people.json
+	 *  lists as a person other than the default owner is that person; anything else (no login, his login, an unlisted
+	 *  login, people.json missing or broken) is the default owner. */
+	viewerOf(sender: TailscaleSender | undefined): OwnerViewer {
+		this.refresh();
+		const listed = new Set<string>();
+		for (const p of this.people.values()) if (!p.owner) listed.add(p.name);
+		const person = sender ? this.people.get(sender.login) : undefined;
+		return person && !person.owner ? { person: person.name, listed } : { listed };
 	}
 
 	/** Express middleware: logs a request's login (seen). */

@@ -77,7 +77,8 @@ export function taskQueueSections(q: UiTaskQueue | undefined): TaskQueueSections
 
 export function taskQueueStatusKey(q: UiTaskQueue, s: TaskQueueSections): TKey {
 	if (q.hold) return "taskQueueStatusPausedByYou";
-	const needsYou = (t: UiTaskQueueTask | undefined) => t?.status === "stuck" && !t.hold;
+	// owner-requester (Ops #1051): not another owner's card (the server marks it waitingOn).
+	const needsYou = (t: UiTaskQueueTask | undefined) => t?.status === "stuck" && !t.hold && t.waitingOn === undefined;
 	if (needsYou(s.current) || s.inChats.some(needsYou)) return "taskQueueStatusStuck";
 	if (q.running) {
 		if (s.current) return "taskQueueStatusWorking";

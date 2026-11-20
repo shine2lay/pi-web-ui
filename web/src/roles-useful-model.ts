@@ -805,7 +805,8 @@ function rowState(row: Fields, reported: ReportedStatus | null): RowState {
 			return row.askOps === undefined ? "asking-main" : "asking";
 		case "stuck":
 			// Task questions go to Ops or the task's lead first (rule 21): "needs you" is for asks only.
-			return "needs-decision";
+			// owner-requester (Ops #1051): another owner's card (waitingOn from the server) is on hold here.
+			return typeof row.waitingOn === "string" ? "on-hold" : "needs-decision";
 		case "waiting":
 			return "on-hold";
 		case "blocked":
@@ -951,7 +952,7 @@ function projectRole(row: Fields, id: string, now?: number): ProjectedRole {
 	const decisionKeys: string[] = [];
 	for (const raw of taskRows) {
 		const task = object(raw);
-		if (!task || task.status !== "stuck" || !taskId(task.id)) continue;
+		if (!task || task.status !== "stuck" || !taskId(task.id) || typeof task.waitingOn === "string") continue;
 		if (marker(task, "paused") === "reported-paused" || hold === "reported-paused") continue;
 		// roles-live: a question still with a lead isn't the owner's ask (docs/live-progress.md, the owner rule).
 		if (roleId(task.withLead) && task.withLead !== "owner") continue;

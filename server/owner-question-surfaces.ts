@@ -6,14 +6,22 @@
 // recommendation once COO let it through, and whether it is still held. A held ask shows only on
 // the asking chat's own page and the Queue tab, marked HELD_FOR_COO_LINE; plugins (Telegram), other
 // windows, Needs you and the counts don't get it. An ask with no route (the switch off) shows no line,
-// as before. docs/owner-question-routing.md.
+// as before. Each window gets only its own owner's asks (owner-requester, Ops #1051: askIsForViewer); the
+// helpers named "...OtherOwners..." / askShownToViewer apply that rule. docs/owner-question-routing.md.
 // ---------------------------------------------------------------------------
 
 import { resolve } from "node:path";
 import { type Ask, type AskEvent, type AskFieldAnswer, type AskResult, askHub, isAskHeld } from "./asks.js";
 import type { UiDialog, UiOwnerQuestionRoute, UiTaskQueueTask, UiTldrLine } from "./protocol.js";
 import { CAME_THROUGH_COO_LABEL } from "./owner-question-route.js";
-import { DEFAULT_REQUESTER, reachesOwnerChannels, requesterName } from "./owner-requester.js";
+import {
+	askIsForViewer,
+	DEFAULT_REQUESTER,
+	type OwnerViewer,
+	reachesOwnerChannels,
+	requesterName,
+	requesterPersonOf,
+} from "./owner-requester.js";
 import { asAnswerer } from "./sent-by.js";
 import { newestWaiting, writtenForAsk } from "./roles-row.js";
 import { stuckTarget } from "./stuck-asks.js";
@@ -113,15 +121,57 @@ export function linesAboutHeldAsks(
 	chatFile: string | null | undefined,
 	asks: Iterable<Ask>,
 ): Set<string> {
+	return linesWrittenForAsks(lines, chatFile, [...asks].filter(isAskHeld));
+}
+
+/** owner-requester (Ops #1051): the ids of the needs-you lines `lines` wrote for asks that aren't `viewer`'s. */
+export function linesAboutOtherOwnersAsks(
+	lines: readonly UiTldrLine[],
+	chatFile: string | null | undefined,
+	asks: Iterable<Ask>,
+	viewer: OwnerViewer,
+): Set<string> {
+	return linesWrittenForAsks(
+		lines,
+		chatFile,
+		[...asks].filter((a) => !askIsForViewer(a.requester, viewer)),
+	);
+}
+
+/** The ids of the needs-you lines `lines` (one chat's, `chatFile`) wrote for its asks among `asks`. */
+function linesWrittenForAsks(
+	lines: readonly UiTldrLine[],
+	chatFile: string | null | undefined,
+	asks: readonly Ask[],
+): Set<string> {
 	const ids = new Set<string>();
 	if (!chatFile) return ids;
 	const file = resolve(chatFile);
 	for (const ask of asks) {
-		if (ask.kind === "stuck" || !isAskHeld(ask) || !ask.sessionFile || resolve(ask.sessionFile) !== file) continue;
+		if (ask.kind === "stuck" || !ask.sessionFile || resolve(ask.sessionFile) !== file) continue;
 		const line = newestWaiting(lines.filter((l) => !l.chat && writtenForAsk(l, ask.createdAt)));
 		if (line) ids.add(line.id);
 	}
 	return ids;
+}
+
+/** owner-requester (Ops #1051): whether a window of `viewer` showing `windowConversationId` gets `ask` (from
+ *  `askConversationId`) popped up and listed: it is his, and one held for COO first only on its own chat's page. */
+export function askShownToViewer(
+	ask: Ask | undefined,
+	askConversationId: string | undefined,
+	windowConversationId: string | undefined,
+	viewer: OwnerViewer,
+): boolean {
+	return (
+		askIsForViewer(ask?.requester, viewer) &&
+		shownToWindow(isAskHeld(ask), askConversationId, windowConversationId)
+	);
+}
+
+/** owner-requester (Ops #1051): a queued task stuck on another owner's answer than `viewer`'s. */
+export function taskIsOtherOwners(task: UiTaskQueueTask | undefined, viewer: OwnerViewer): boolean {
+	return task?.status === "stuck" && !askIsForViewer(requesterPersonOf(task.origin), viewer);
 }
 
 /** Whether a window showing `windowConversationId` gets an ask from `askConversationId` popped up. */
@@ -182,6 +232,32 @@ export function lineAboutUnseenCard(
 	if (task?.status !== "stuck") return false;
 	const target = stuckTarget(queueFile, task);
 	return target !== undefined && !reached(target);
+}
+
+/** owner-requester (Ops #1051): pi-queue's TL;DR line about the task in the chat `lineChatFile` speaks of a task
+ *  stuck on another owner's answer than `viewer`'s. */
+export function lineAboutOtherOwnersTask(
+	lineChatFile: string | undefined,
+	tasks: readonly UiTaskQueueTask[],
+	viewer: OwnerViewer,
+): boolean {
+	if (!lineChatFile) return false;
+	const about = resolve(lineChatFile);
+	return taskIsOtherOwners(
+		tasks.find((t) => t.chat?.file !== undefined && resolve(t.chat.file) === about),
+		viewer,
+	);
+}
+
+/** owner-requester (Ops #1051): `message` is pi-queue's "Task #N needs you" about a task in `tasks` stuck on
+ *  another owner's answer than `viewer`'s. */
+export function queueNoticeAboutOtherOwner(
+	message: string,
+	tasks: readonly UiTaskQueueTask[],
+	viewer: OwnerViewer,
+): boolean {
+	const m = QUEUE_NEEDS_YOU_NOTICE.exec(message);
+	return !!m && taskIsOtherOwners(tasks.find((t) => t.id === Number(m[1])), viewer);
 }
 
 /** pi-queue's pop-up notice for a task that needs the owner: "Task #N needs you", then the question. */
