@@ -146,12 +146,13 @@ describe("escape-hidden-question: Escape answers a chat's ask only while the cha
 	it("App tells every chat ask it mounts whether the chat view is showing, by the test that hides the chat pane", () => {
 		const app = readFileSync(resolve(process.cwd(), "web/src/App.tsx"), "utf8");
 		expect(app).toContain('<div className={`view-pane ${view === "chat" ? "" : "hidden"}`}>');
-		const mounts = [...app.matchAll(/<(Dialog|DshQuestionDialog)\b/g)].map((found) => {
+		// owner-requester (Ops #1051): the model's question mounts through ChatOwnerQuestion, which passes it on.
+		const mounts = [...app.matchAll(/<(Dialog|DshQuestionDialog|ChatOwnerQuestion)\b/g)].map((found) => {
 			const at = found.index ?? -1;
 			return app.slice(at, app.indexOf("/>", at));
 		});
 		// The obsolete remote-preview dialog was removed with the Elsewhere peek path.
-		expect(mounts.map((mount) => mount.split(/\s/)[0])).toEqual(["<Dialog", "<DshQuestionDialog"]);
+		expect(mounts.map((mount) => mount.split(/\s/)[0])).toEqual(["<Dialog", "<ChatOwnerQuestion"]);
 		for (const mount of mounts) expect(mount).toContain('escapeEnabled={view === "chat"}');
 	});
 });
