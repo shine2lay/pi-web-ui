@@ -10,7 +10,14 @@
 // ---------------------------------------------------------------------------
 
 import { askIsForViewer, askOwnerName, type OwnerViewer, requesterPersonOf, waitingOnLine } from "./owner-requester.js";
-import type { UiRoleAsk, UiRoleOverview, UiRoleTask, UiTaskQueue, UiTaskQueueTask, UiTaskRequester } from "./protocol.js";
+import type {
+	UiRoleAsk,
+	UiRoleOverview,
+	UiRoleTask,
+	UiTaskQueue,
+	UiTaskQueueTask,
+	UiTaskRequester,
+} from "./protocol.js";
 import type { UiBoardGroup, UiBoardTask, UiRolesOverview, UiTaskBoard } from "./roles-board-protocol.js";
 
 /** A cache key for a viewer (the same person with the same people.json gets the same view object). */
@@ -103,7 +110,9 @@ function boardForViewer(board: UiTaskBoard, hidden: ReadonlyMap<string, string>)
 	if (moved.size === 0) return board;
 	const regroup = (g: UiBoardGroup): UiBoardGroup => {
 		const n = moved.get(g.key) ?? 0;
-		return n ? { ...g, counts: { ...g.counts, "needs-you": g.counts["needs-you"] - n, waiting: g.counts.waiting + n } } : g;
+		return n
+			? { ...g, counts: { ...g.counts, "needs-you": g.counts["needs-you"] - n, waiting: g.counts.waiting + n } }
+			: g;
 	};
 	return { ...board, tasks, groups: board.groups.map(regroup), roleGroups: board.roleGroups.map(regroup) };
 }

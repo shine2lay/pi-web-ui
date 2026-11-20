@@ -48,6 +48,7 @@ interface FakeChat {
 	session: { sessionFile: string; sessionManager: { getSessionFile(): string; getSessionId(): string } };
 	dialogs: { current: { id: number; kind: "confirm"; title: string; args: string[] } | null };
 	turnRecord?: RoleTurnRecord;
+	ownerLastWroteAt?: number;
 }
 interface Win {
 	name: string;

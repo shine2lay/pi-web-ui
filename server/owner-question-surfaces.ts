@@ -164,8 +164,7 @@ export function askShownToViewer(
 	viewer: OwnerViewer,
 ): boolean {
 	return (
-		askIsForViewer(ask?.requester, viewer) &&
-		shownToWindow(isAskHeld(ask), askConversationId, windowConversationId)
+		askIsForViewer(ask?.requester, viewer) && shownToWindow(isAskHeld(ask), askConversationId, windowConversationId)
 	);
 }
 
@@ -257,7 +256,13 @@ export function queueNoticeAboutOtherOwner(
 	viewer: OwnerViewer,
 ): boolean {
 	const m = QUEUE_NEEDS_YOU_NOTICE.exec(message);
-	return !!m && taskIsOtherOwners(tasks.find((t) => t.id === Number(m[1])), viewer);
+	return (
+		!!m &&
+		taskIsOtherOwners(
+			tasks.find((t) => t.id === Number(m[1])),
+			viewer,
+		)
+	);
 }
 
 /** pi-queue's pop-up notice for a task that needs the owner: "Task #N needs you", then the question. */

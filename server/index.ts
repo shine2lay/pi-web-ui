@@ -2800,9 +2800,11 @@ wss.on("connection", (ws, req) => {
 				if (typeof questionId !== "string" || typeof generation !== "string" || typeof choice !== "string") break;
 				if (!acceptedBrowser) {
 					// Only a browser page (allowed Origin) answers for the owner; scripts and internal sockets never do.
-					void roleGuardMessage(viewer, { questionId, ok: false, error: "only the app's page can answer" }).then((m) => {
-						if (!closed) send(m);
-					});
+					void roleGuardMessage(viewer, { questionId, ok: false, error: "only the app's page can answer" }).then(
+						(m) => {
+							if (!closed) send(m);
+						},
+					);
 					break;
 				}
 				void (

@@ -10376,7 +10376,10 @@ export class ClientSession {
 				// 的对话的那台知道这是谁在问。
 				// owner-question routing (Ops #685): with which way it came (nothing while the switch is off).
 				// owner-requester (Ops #1051): only its owner's windows.
-				ClientSession.broadcastAsk({ ...questionPendingMessage(id, entry), ...routeOfAsk(askHub.get(id)) }, askHub.get(id));
+				ClientSession.broadcastAsk(
+					{ ...questionPendingMessage(id, entry), ...routeOfAsk(askHub.get(id)) },
+					askHub.get(id),
+				);
 				return;
 			}
 			// 刷新/重连的空窗：等一会儿。期间页面回来了 → 快照把对话框补出来
@@ -10462,8 +10465,7 @@ export class ClientSession {
 	private waitingOnHere(): string | null {
 		const convId = this.activeId;
 		const asks: (Ask | undefined)[] = [];
-		for (const [id, p] of this.pendingQuestions)
-			if (p.conversationId === convId) asks.push(askHub.get(p.askId ?? id));
+		for (const [id, p] of this.pendingQuestions) if (p.conversationId === convId) asks.push(askHub.get(p.askId ?? id));
 		for (const [id, p] of this.pendingApprovals) if (p.conversationId === convId) asks.push(askHub.get(id));
 		const d = this.conv?.dialogs.current;
 		if (d) asks.push(askHub.get(ClientSession.dialogAskId(d)));
