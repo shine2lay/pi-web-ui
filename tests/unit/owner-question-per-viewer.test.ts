@@ -13,6 +13,7 @@ import { noteOwnerInput } from "../../server/owner-input-time.js";
 import { pluginAsks, pluginSeesAskEvent } from "../../server/owner-question-surfaces.js";
 import { askIsForViewer, DEFAULT_VIEWER, type OwnerViewer } from "../../server/owner-requester.js";
 import { queueForViewer, rolesOverviewForViewer } from "../../server/owner-viewer.js";
+import { dialogAskOf, dialogIdListed, viewerSees } from "../../server/owner-window.js";
 import type {
 	ServerMessage,
 	UiQueueChatStatus,
@@ -138,7 +139,7 @@ function win(name: string, convs: Map<string, FakeChat>, activeId: string, viewe
 		flushSnapshot: { value: () => {} },
 		emitConversations: { value: () => {} },
 	});
-	client.setViewer(viewer);
+	client.ownerViewer = viewer; // as AgentService.attach sets it from the socket's login
 	statics.liveSessions.add(client);
 	cleanups.push(() => statics.liveSessions.delete(client));
 	return { name, client, sent, viewer };
@@ -165,7 +166,11 @@ const snapshotApproval = (w: Win) => call<UiState["pendingApproval"]>(w.client, 
 const chatListQuestion = (w: Win, convId: string) =>
 	call<{ id: string } | undefined>(w.client, "getPendingQuestionForConv", convId);
 const waitingOn = (w: Win) => call<string | null>(w.client, "waitingOnHere");
-const seesAsk = (w: Win, id: string) => call<boolean>(w.client, "seesAsk", askHub.get(id));
+/** A pop-up as a window gets it: the chat list's "?" (dialogId) and the page's dialog (the snapshot's check). */
+const dialogShown = (w: Win, d: { id: number }) => ({
+	listed: "dialogId" in dialogIdListed(d, w.viewer),
+	page: viewerSees(dialogAskOf(d), w.viewer),
+});
 
 /** What a window got of the open question: pop-up, snapshot dialog, chat list "?", the page's passive line. */
 function questionSurfaces(w: Win, convId: string) {
@@ -259,9 +264,9 @@ describe("permission prompts and extension dialogs (plan approval)", () => {
 		const dialog = { id: 41, kind: "confirm" as const, title: "Add this task?", args: ["The plan"] };
 		w.asking.dialogs.current = dialog;
 		askHub.add(dialogAsk("dlg-41", dialog, { conversationId: w.asking.id, requester: "Wai" }), () => ({ ok: true }));
-		expect(seesAsk(w.waiHere, "dlg-41")).toBe(true);
-		expect(seesAsk(w.shineHere, "dlg-41")).toBe(false);
-		expect(seesAsk(w.none, "dlg-41")).toBe(false);
+		expect(dialogShown(w.waiHere, dialog)).toEqual({ listed: true, page: true });
+		expect(dialogShown(w.shineHere, dialog)).toEqual({ listed: false, page: false });
+		expect(dialogShown(w.none, dialog)).toEqual({ listed: false, page: false });
 		expect(waitingOn(w.shineHere)).toBe("Waiting on Wai");
 		expect(waitingOn(w.waiHere)).toBeNull();
 	});

@@ -84,6 +84,11 @@ export function pluginAnswer(id: string, answers: AskFieldAnswer[], from: string
 
 const dialogViews = new WeakMap<UiDialog, { sig: string; view: UiDialog }>();
 
+/** telegram-answers: a chat pop-up's id in the list of asks. */
+export function dialogAskId(ui: Pick<UiDialog, "id">): string {
+	return `dlg-${ui.id}`;
+}
+
 /**
  * An extension's dialog as its chat's page gets it: with its route lines when it has any. With none
  * (the switch off) it is the dialog itself, as before; otherwise the same view object while its lines

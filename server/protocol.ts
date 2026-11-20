@@ -416,7 +416,7 @@ export interface UiOwnerContact {
 	sendFailedAt?: number;
 }
 
-export interface UiTaskQueueTask {
+export interface UiTaskQueueTask extends UiOwnerWaitingOn {
 	/** Optional original proposal provenance; never used for permissions. */
 	origin?: UiTaskRequester;
 	/** queue-autonomy: attribution for the latest plan, absent for old records. */
@@ -458,9 +458,6 @@ export interface UiTaskQueueTask {
 	/** queue-main-chat: working again with its main chat's answer to its last question (a Telegram ask for
 	 *  that question then goes away saying so). */
 	mainAnswered?: boolean;
-	/** owner-requester (Ops #1051): stuck on the other owner's answer: "Waiting on <name>" in place of the question,
-	 *  choices, owner context and answer form (none of them sent to this window). */
-	waitingOn?: string;
 	/** waiting：在等什么。 */
 	wait?: UiTaskQueueWait;
 	/** done：做了什么（agent 的总结）。 */
@@ -603,16 +600,6 @@ export interface UiTaskQueueAnswerBinding {
 	brief?: UiOwnerCardBriefLine[];
 	/** owner-question routing (Ops #685): which way it came, shown before the brief. */
 	route?: UiOwnerQuestionRoute;
-}
-
-/** Whose an owner ask is and which way it came, as every card shows it first: "For <name>" (Ops #973), its line
- *  ("You were chatting here …", "Came through COO", HELD_FOR_COO_LINE while held; Ops #685), then COO's note. */
-export interface UiOwnerQuestionRoute {
-	requester?: string; // whose question it is, shown "For <name>" ("Shine" when no one else asked)
-	line?: string; // which way it came; absent while owner-question routing gave it no line
-	note?: string;
-	recommendation?: string;
-	held?: true; // still with COO: shown only on the asking chat's page and the Queue tab, answerable there
 }
 
 /** owner-card-brief (Ops #682): one line of the plain brief every queue card to the owner opens with,
@@ -827,9 +814,7 @@ export interface UiState {
 	pendingQuestion?: UiPendingQuestion | null;
 	/** 待用户审批的高危工具调用（Edit & Run 人机协同）。当前对话有待审批时携带，切会话/刷新恢复。 */
 	pendingApproval?: UiToolApproval | null;
-	/** owner-requester (Ops #1051): this chat waits on the other owner's answer ("Waiting on Wai"); his question,
-	 *  dialog or card isn't shown in this window. null = nothing waits on another owner (always sent: deltas merge). */
-	waitingOn?: string | null;
+	waitingOn?: string | null; // Ops #1051: "Waiting on Wai" (the other owner's ask, not shown here); null = none
 	/** 子代理同行交接协同关系链（Peer-to-Peer Handoff relationships: fromRunId -> toRunId）。 */
 	subagentHandoffs?: Array<{ fromRunId: string; toRunId: string; timestamp: number }>;
 	/**
@@ -2559,7 +2544,7 @@ export interface UiTouchSystemSummary {
 }
 
 /** roles-overview: a task of a role's home queue. */
-export interface UiRoleTask {
+export interface UiRoleTask extends UiOwnerWaitingOn {
 	/** Original proposal inputs, separate from plan approval. */
 	requester?: UiTaskRequester;
 	id: number;
@@ -2598,9 +2583,6 @@ export interface UiRoleTask {
 	/** queue-paused: paused by the owner (the task itself or its whole queue): since when and why.
 	 *  A paused task never counts as needing the owner. */
 	paused?: UiTaskQueueHold;
-	/** owner-requester (Ops #1051): stuck on the other owner's answer ("Waiting on <name>"): not a decision for
-	 *  this window (no `stuck`, no `next`). */
-	waitingOn?: string;
 	/** roles-panel: where it belongs, from its queue entry (absent: not recorded). */
 	parent?: UiTaskParent;
 	initiative?: string;
@@ -3183,6 +3165,9 @@ export interface UiRoleBoardOrder {
 
 /** roles-overview (UiRolesOverview) and the roles-by-project board types live in roles-board-protocol.ts. */
 export type * from "./roles-board-protocol.js";
+/** Owner-question route and waiting line (Ops #685, #973, #1051) live in owner-question-protocol.ts. */
+export type * from "./owner-question-protocol.js";
+import type { UiOwnerQuestionRoute, UiOwnerWaitingOn } from "./owner-question-protocol.js";
 
 /** ladder-alarm: the approval step's state as the Roles page shows it. */
 export interface UiMessageApprovals {

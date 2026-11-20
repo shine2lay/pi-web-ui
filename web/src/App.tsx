@@ -35,7 +35,7 @@ import { FiRefreshCw } from "react-icons/fi";
 
 import { StatusDock } from "./components/StatusDock";
 import { Dialog } from "./components/Dialog";
-import { DshQuestionDialog } from "./components/DshQuestionDialog";
+import { ChatOwnerQuestion } from "./components/DshQuestionDialog";
 import { RoleGuardOwnerQuestions } from "./components/RoleGuardOwnerQuestions";
 // 终端视图懒加载：xterm.js 体积大且只在切到终端时才需要，拆出主包
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
@@ -2541,22 +2541,15 @@ export function App() {
 								)}
 							</div>
 						)}
-						{chat.question && (
-							<DshQuestionDialog
-								question={chat.question}
-								escapeEnabled={view === "chat"}
-								conversationTitle={
-									chat.question.conversationTitle ||
-									chat.conversations.find((c) => c.id === (chat.question?.conversationId || activeConvId))?.title
-								}
-							/>
-						)}
-						{/* owner-requester (Ops #1051): this chat waits on the other owner's answer; his question isn't shown here. */}
-						{chat.state?.waitingOn && (
-							<div className="chat-waiting-on" role="status">
-								{chat.state.waitingOn}
-							</div>
-						)}
+						<ChatOwnerQuestion
+							question={chat.question}
+							waitingOn={chat.state?.waitingOn}
+							escapeEnabled={view === "chat"}
+							conversationTitle={
+								chat.question?.conversationTitle ||
+								chat.conversations.find((c) => c.id === (chat.question?.conversationId || activeConvId))?.title
+							}
+						/>
 						<ChatInput
 							composerLeading={uiSlots["composer.leading"]}
 							composerActions={uiSlots["composer.actions"]}

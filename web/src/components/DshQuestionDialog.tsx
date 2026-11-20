@@ -58,6 +58,24 @@ interface DshQuestionDialogProps {
  * 文本渲染：question/detail/description/preview 统一走 Markdown（rawHtml），
  * 模型可自由写 markdown 或 HTML —— 由模型自选、信任模型。
  */
+/** owner-requester (Ops #1051): the chat page's open question, or, when the chat waits on the other owner's answer,
+ *  only the server's passive "Waiting on <name>" line (his question isn't sent to this window). */
+export function ChatOwnerQuestion({
+	question,
+	waitingOn,
+	...rest
+}: Omit<DshQuestionDialogProps, "question"> & {
+	question: DshQuestionDialogProps["question"] | null | undefined;
+	waitingOn: string | null | undefined;
+}) {
+	if (question) return <DshQuestionDialog question={question} {...rest} />;
+	return waitingOn ? (
+		<div className="chat-waiting-on" role="status">
+			{waitingOn}
+		</div>
+	) : null;
+}
+
 export function DshQuestionDialog({ question, conversationTitle, escapeEnabled = true }: DshQuestionDialogProps) {
 	const t = useT();
 	const convTitle = question.conversationTitle || conversationTitle;

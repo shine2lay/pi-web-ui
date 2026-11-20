@@ -144,9 +144,7 @@ import { ChatOpenTracker, preciseNow } from "./chat-open-timing.js";
 import { globalLspPool } from "./lsp-tool.js";
 import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
 import { asAnswerer, PeopleBook, type SentBy } from "./sent-by.js";
-import { askHub } from "./asks.js";
-import { askIsForViewer, DEFAULT_VIEWER, type OwnerViewer } from "./owner-requester.js";
-import { rolesOverviewForViewer, viewerKey } from "./owner-viewer.js";
+import { type OwnerViewer, roleGuardForViewer, rolesOverviewForViewer, viewerOfSocket } from "./owner-viewer.js";
 import type {
 	BgServer,
 	CachedWindow,
@@ -1425,7 +1423,6 @@ export interface DispatchSession {
 export interface EngineService {
 	/** W2: exact client + conversation catalog; unsupported engines do not mount the route. */
 	toolInspectorDependencies?(): ToolInspectorDependencies;
-	/** `viewer` (owner-requester, Ops #1051): whose window it is; absent = the default owner's. */
 	attach(clientId: string, send: (msg: ServerMessage) => void, viewer?: OwnerViewer): Promise<DispatchSession>;
 	detach(clientId: string, send: (msg: ServerMessage) => void): void;
 	get(clientId: string): DispatchSession | undefined;
@@ -1910,41 +1907,28 @@ function roleMessagesMessage(): ServerMessage {
 }
 
 /** role-message-ladder: the open Owner questions (A's approval dialog), with this page's answer result. */
-async function roleGuardMessage(
-	viewer: OwnerViewer,
-	result?: { questionId: string; ok: boolean; error?: string },
-): Promise<ServerMessage> {
+async function roleGuardMessage(result?: { questionId: string; ok: boolean; error?: string }): Promise<ServerMessage> {
 	let questions: UiRoleGuardQuestion[] = [];
 	try {
 		questions = (await service.roleGuardQuestions?.()) ?? [];
 	} catch {
 		/* none shown: the ladder holds them */
 	}
-	// owner-requester (Ops #1051): only the owner it is for (none named: the default owner).
-	questions = questions.filter((q) => askIsForViewer(askHub.get(q.questionId)?.requester, viewer));
 	return { type: "role_guard_questions", questions, ...(result ? { result } : {}) };
 }
 
-/** owner-requester (Ops #1051): whose window each browser socket is (its Tailscale login, at connect). */
-const socketViewers = new WeakMap<WebSocket, OwnerViewer>();
-
-/** role-message-ladder: the open Owner questions changed: every window gets the ones for its viewer. */
+/** role-message-ladder: the open Owner questions changed: every window gets its owner's (Ops #1051). */
 function pushRoleGuard(): void {
-	const byViewer = new Map<string, Promise<string>>();
-	for (const client of wss.clients) {
-		if (client.readyState !== WebSocket.OPEN) continue;
-		const viewer = socketViewers.get(client) ?? DEFAULT_VIEWER;
-		let payload = byViewer.get(viewerKey(viewer));
-		if (!payload) byViewer.set(viewerKey(viewer), (payload = roleGuardMessage(viewer).then((m) => JSON.stringify(m))));
-		void payload.then((p) => {
-			if (client.readyState !== WebSocket.OPEN) return;
+	void roleGuardMessage().then((m) => {
+		for (const client of wss.clients) {
+			if (client.readyState !== WebSocket.OPEN) continue;
 			try {
-				client.send(p);
+				client.send(JSON.stringify(roleGuardForViewer(m, client)));
 			} catch {
 				/* a dead socket: cleaned up elsewhere */
 			}
-		});
-	}
+		}
+	});
 }
 
 /** role-messages: the list changed: every window gets it. */
@@ -2301,9 +2285,7 @@ wss.on("connection", (ws, req) => {
 	// Origin/auth admission already passed. Non-browser sockets and internal clients stay unowned.
 	const acceptedBrowser = typeof req.headers.origin === "string" && originAllowed(req);
 	const tailscaleSender = acceptedBrowser ? peopleBook.noteSocket(req.headers) : undefined; // sent-by (Ops #972)
-	// owner-requester (Ops #1051): whose window this is; no login or an unknown one = the default owner.
-	const viewer = peopleBook.viewerOf(tailscaleSender);
-	socketViewers.set(ws, viewer);
+	const viewer = viewerOfSocket(ws, peopleBook.viewerOf(tailscaleSender)); // owner-requester (Ops #1051)
 	// Count attached sockets (the control socket reports REAL sockets, not cached client-session objects).
 	service.noteSocketOpen();
 	let clientId: string | null = null;
@@ -2406,6 +2388,7 @@ wss.on("connection", (ws, req) => {
 	// messagesStart and falls back to load_older for history outside the cached engine window.
 	const historyTransport = createHistoryTransport(sendRaw);
 	const send = historyTransport.send;
+	const sendRoleGuard = (m: ServerMessage) => void (closed || send(roleGuardForViewer(m, ws))); // only its owner's
 
 	// Plugins broadcast to every open socket; unregister on close below.
 	// Plugins broadcast to every open socket; unregister on close below. The
@@ -2789,9 +2772,7 @@ wss.on("connection", (ws, req) => {
 				break;
 			case "role_guard_get":
 				// role-message-ladder: a page asks for the open Owner questions.
-				void roleGuardMessage(viewer).then((m) => {
-					if (!closed) send(m);
-				});
+				void roleGuardMessage().then(sendRoleGuard);
 				break;
 			case "role_guard_owner_answer": {
 				// role-message-ladder: the owner answers in the app. This socket passed the app's own sign-in, which is the
@@ -2800,11 +2781,7 @@ wss.on("connection", (ws, req) => {
 				if (typeof questionId !== "string" || typeof generation !== "string" || typeof choice !== "string") break;
 				if (!acceptedBrowser) {
 					// Only a browser page (allowed Origin) answers for the owner; scripts and internal sockets never do.
-					void roleGuardMessage(viewer, { questionId, ok: false, error: "only the app's page can answer" }).then(
-						(m) => {
-							if (!closed) send(m);
-						},
-					);
+					void roleGuardMessage({ questionId, ok: false, error: "only the app's page can answer" }).then(sendRoleGuard);
 					break;
 				}
 				void (
@@ -2812,10 +2789,8 @@ wss.on("connection", (ws, req) => {
 					Promise.resolve({ ok: false, error: "not available" })
 				)
 					.catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
-					.then((r) => roleGuardMessage(viewer, { questionId, ...r }))
-					.then((m) => {
-						if (!closed) send(m);
-					});
+					.then((r) => roleGuardMessage({ questionId, ...r }))
+					.then(sendRoleGuard);
 				break;
 			}
 			case "role_messages_pause":

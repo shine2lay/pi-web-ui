@@ -805,8 +805,7 @@ function rowState(row: Fields, reported: ReportedStatus | null): RowState {
 			return row.askOps === undefined ? "asking-main" : "asking";
 		case "stuck":
 			// Task questions go to Ops or the task's lead first (rule 21): "needs you" is for asks only.
-			// owner-requester (Ops #1051): another owner's card (waitingOn from the server) is on hold here.
-			return typeof row.waitingOn === "string" ? "on-hold" : "needs-decision";
+			return typeof row.waitingOn === "string" ? "on-hold" : "needs-decision"; // other owner's: Ops #1051
 		case "waiting":
 			return "on-hold";
 		case "blocked":

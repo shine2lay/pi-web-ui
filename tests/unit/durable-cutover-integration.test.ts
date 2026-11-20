@@ -414,7 +414,7 @@ describe("W2 Tool Inspector integration", () => {
 		expect(index).toContain("toolInspectorDependencies?(): ToolInspectorDependencies");
 		expect(index).toContain("const historyTransport = createHistoryTransport(sendRaw)");
 		expect(index).toContain("historyTransport.loadEarlier(msg");
-		expect(index).toContain("() => service.attach(cid, send)");
+		expect(index).toContain("() => service.attach(cid, send, viewer)");
 		expect(agent).toContain("attachToolInspector(created.session, toolInspectorStoreFor(this.stateStore.dataDir))");
 		expect(agent).toContain("this.clients.get(clientId)?.toolInspectorSession(convId)");
 		expect(agent).toContain("this.convs.get(conversationId)?.session");

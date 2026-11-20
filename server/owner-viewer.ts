@@ -9,8 +9,17 @@
 // The pop-ups, the chat list marks and the snapshots apply the same rule in agent-service.ts. docs/owner-question-routing.md.
 // ---------------------------------------------------------------------------
 
-import { askIsForViewer, askOwnerName, type OwnerViewer, requesterPersonOf, waitingOnLine } from "./owner-requester.js";
+import { askHub } from "./asks.js";
+import {
+	askIsForViewer,
+	askOwnerName,
+	DEFAULT_VIEWER,
+	type OwnerViewer,
+	requesterPersonOf,
+	waitingOnLine,
+} from "./owner-requester.js";
 import type {
+	ServerMessage,
 	UiRoleAsk,
 	UiRoleOverview,
 	UiRoleTask,
@@ -20,8 +29,27 @@ import type {
 } from "./protocol.js";
 import type { UiBoardGroup, UiBoardTask, UiRolesOverview, UiTaskBoard } from "./roles-board-protocol.js";
 
+export type { OwnerViewer };
+
+const socketViewers = new WeakMap<object, OwnerViewer>();
+
+/** index.ts: remember whose window `socket` is (its Tailscale login, at connect), and give it back. */
+export function viewerOfSocket(socket: object, viewer: OwnerViewer): OwnerViewer {
+	socketViewers.set(socket, viewer);
+	return viewer;
+}
+
+/** role-message-ladder: the open Owner questions message as a socket's window gets it: only its owner's (an
+ *  unknown socket is the default owner's). Other messages pass unchanged. */
+export function roleGuardForViewer(m: ServerMessage, socket: object): ServerMessage {
+	if (m.type !== "role_guard_questions") return m;
+	const viewer = socketViewers.get(socket) ?? DEFAULT_VIEWER;
+	const questions = m.questions.filter((q) => askIsForViewer(askHub.get(q.questionId)?.requester, viewer));
+	return { ...m, questions };
+}
+
 /** A cache key for a viewer (the same person with the same people.json gets the same view object). */
-export function viewerKey(viewer: OwnerViewer): string {
+function viewerKey(viewer: OwnerViewer): string {
 	return JSON.stringify([viewer.person ?? "", [...viewer.listed].sort()]);
 }
 
