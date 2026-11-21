@@ -70,3 +70,13 @@ lived in an acceptance folder with its own config, outside the gate):
   next, dead-end "unknown"; fault removed: complete round, heartbeat written, alarm re-armed; broken again:
   one more alarm.
 - Off switch: `"mode": "dry"` (finds, wakes nobody) or `"off"` in `~/.pi-web-ui/stall-watch.json`.
+
+## Result: H-STALL-WHOLE-1 HIT
+
+Installed 2026-11-21 19:00 UTC (`d129419f`). The first live round, 19:01:32 UTC, logged `stall: round
+complete: 3217 linked tasks read, 0 findings` (263 ms) and wrote the heartbeat; no "round skipped" line
+since. It sent no wakes: nothing is stuck by the watch's rules today (one project is on an owner wait). The
+planted fault alarmed once and re-armed as expected (above). One miss in the rollout, not the hypothesis:
+the dead man's switch row went live two minutes before the first heartbeat existed, so its 19:00 check
+sent one "stall-watch: last unknown" alarm; it reads ok from 19:01 on. Next time, land the watched file's
+writer before its row.
