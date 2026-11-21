@@ -8,7 +8,8 @@
  * deterministically"):
  * - the model sees the message starting with one line `[From: <name>]` (withSenderLines, run on pi's
  *   `context` event before every model call, so it holds after restarts too);
- * - the page shows a `<name>` label (serialize.ts copies `sentBy` onto the UiMessage).
+ * - the page's message header shows `<name>` in place of "You" (serialize.ts copies `sentBy` onto the
+ *   UiMessage; web/src/message-role-label.ts, Ops #1052).
  * The words pi stores and its input hooks, queue and owner-question answers see stay exactly as typed.
  * No Tailscale identity = no `sentBy`, no line, no label: as before. A slash command gets nothing.
  */

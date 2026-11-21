@@ -7733,11 +7733,10 @@ body:not(.has-wallpaper)::after {
 	color: var(--amber-fg);
 }
 
-/* sent-by (Ops #972): who typed this message (from the Tailscale login). */
-.msg-sent-by {
-	font-size: 11px;
-	font-weight: 600;
-	color: var(--text-dim);
+/* sent-by (Ops #972, #1052): a sender's name in place of "You" (only that label carries a login title);
+   names run up to 80 characters, so a long one is cut short. */
+.msg-role[title],
+.msg-collapsed-role[title] {
 	max-width: 16em;
 	overflow: hidden;
 	text-overflow: ellipsis;

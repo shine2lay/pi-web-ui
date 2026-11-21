@@ -62,7 +62,7 @@ import { openRollbackDialog } from "../rollback-state";
 import { BUILTIN_UI_ITEMS, type UiSlotEntry } from "../ui-slots";
 import { appSend } from "../app-globals";
 import { parseActionSuggestions } from "../action-suggestions";
-import { SentByLabel } from "./SentByLabel";
+import { messageRoleLabel, messageSender } from "../message-role-label";
 
 /** 编辑重问编辑器里直接拖入/粘贴文件的上限（与服务端 MAX_UPLOAD_BYTES 一致）。 */
 const MAX_EDIT_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -610,7 +610,7 @@ export const Message = memo(function Message({
 
 	/** 右键目标的可读名：消息纯文本截到 40 字；纯工具调用的助手消息没有文本，
 	 *  回落角色名 —— 菜单的定位信息（读屏 aria-label、宿主排障）不该是空的。 */
-	const ctxLabel = truncateText(messagePlainText(message.content), 40) || roleLabel(message.role, t);
+	const ctxLabel = truncateText(messagePlainText(message.content), 40) || messageRoleLabel(message, t);
 
 	// ---- 本地 TTS：消息工具条「朗读」按钮（host:msg-speak，复制三件套旁边） ----
 	// speaking 状态是浏览器级单例（tts.ts），这里只订阅；sourceId = 消息 id，
@@ -1093,7 +1093,7 @@ export const Message = memo(function Message({
 						<FiChevronUp /> {t("collapseMsg")}
 					</button>
 				)}
-				<span className="msg-role">
+				<span className="msg-role" title={roleMsg ? undefined : messageSender(message)?.login}>
 					{roleMsg
 						? roleMessageLabel(roleMsg, t)
 						: message.role === "custom"
@@ -1106,9 +1106,8 @@ export const Message = memo(function Message({
 										: message.customType === "queue-paused"
 											? t("queuePausedNoteLabel")
 											: `${t("plugin")} · ${message.customType ?? t("unknown")}`
-							: roleLabel(message.role, t)}
+							: messageRoleLabel(message, t)}
 				</span>
-				{!roleMsg && <SentByLabel sentBy={message.sentBy} />}
 				{message.model && <span className="msg-model">{message.model}</span>}
 				{message.timestamp && <span className="msg-time">{formatTime(message.timestamp)}</span>}
 				{qnIndex !== undefined && onJump && (
@@ -2036,25 +2035,6 @@ function Block({
 	}
 
 	return null;
-}
-
-export function roleLabel(role: string, t: Translate): string {
-	switch (role) {
-		case "user":
-			return t("role.user");
-		case "assistant":
-			return t("role.assistant");
-		case "toolResult":
-			return t("role.tool");
-		case "bashExecution":
-			return t("role.bash");
-		case "branchSummary":
-			return t("role.branch");
-		case "compactionSummary":
-			return t("role.compaction");
-		default:
-			return role;
-	}
 }
 
 function formatTime(ts: number): string {

@@ -1,7 +1,8 @@
 import { memo } from "react";
 import type { UiMessage } from "../types";
 import { useT } from "../i18n";
-import { asBash, asImage, asText, asThinking, asToolCall, roleLabel } from "./Message";
+import { messageRoleLabel, messageSender } from "../message-role-label";
+import { asBash, asImage, asText, asThinking, asToolCall } from "./Message";
 import { isExportableMessage, toggleExportImageSelect, useExportImage } from "../export-image-state";
 
 import { parseSkillBlock } from "../skill-block";
@@ -102,12 +103,15 @@ export const CollapsedMessage = memo(function CollapsedMessage({ message, onExpa
 					onChange={() => toggleExportImageSelect(message.id)}
 				/>
 			)}
-			<span className={`msg-collapsed-role role-${queueLine !== null ? "queue" : message.role}`}>
+			<span
+				className={`msg-collapsed-role role-${queueLine !== null ? "queue" : message.role}`}
+				title={queueLine !== null ? undefined : messageSender(message)?.login}
+			>
 				{queueLine !== null
 					? t("queueReportLabel")
 					: message.role === "custom" && message.customType === "file"
 						? t("attachment")
-						: roleLabel(message.role, t)}
+						: messageRoleLabel(message, t)}
 			</span>
 			<span className="msg-collapsed-body">
 				{preview && <span className="msg-collapsed-preview">{preview}</span>}
