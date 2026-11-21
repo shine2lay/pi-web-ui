@@ -96,6 +96,8 @@ export interface TranscriptScan {
 	queue: TaskQueueEntryLike[];
 	/** Native session-header queue ID; never inferred from a path or role home name. */
 	sessionId?: string;
+	/** silence-watch (Ops #1059, F3): the newest assistant message's time (ms): the chat's last turn. */
+	lastTurnAt?: number;
 	/** Task id -> the time of its latest "stuck" entry (when it started waiting on the owner). */
 	stuckAt: Map<number, number>;
 	/** live-progress: task id -> where its latest "stuck" entry says the question went (absent: no route). */
@@ -106,7 +108,16 @@ export interface TranscriptScan {
 	model?: { provider: string; modelId: string };
 }
 
-type LineKind = "session" | "tldr" | "queue" | "user" | "replyTool" | "model";
+type LineKind = "session" | "tldr" | "queue" | "user" | "replyTool" | "model" | "assistant";
+
+/** An entry's own time, from its first bytes (the SDK writes it before the message). */
+const ENTRY_TIME = /^\{"type":"message",[^{]*?"timestamp":"([^"]{10,40})"/;
+
+/** silence-watch (F3): an assistant line's time from its first bytes (its text is never parsed). */
+export function assistantTime(head: string): number | undefined {
+	const t = Date.parse(ENTRY_TIME.exec(head)?.[1] ?? "");
+	return Number.isFinite(t) && t > 0 ? t : undefined;
+}
 
 /** What a transcript line is, from its first bytes (null: nothing the page needs). */
 export function lineKind(head: string): LineKind | null {
@@ -120,6 +131,7 @@ export function lineKind(head: string): LineKind | null {
 	}
 	if (!head.includes('"type":"message"')) return null;
 	if (head.includes('"role":"user"')) return "user";
+	if (head.includes('"message":{"role":"assistant"')) return "assistant";
 	// The owner's answer in a questionnaire or a plan approval box (tldr-lines REPLY_TOOLS).
 	if (
 		head.includes('"role":"toolResult"') &&
@@ -206,6 +218,12 @@ export class TranscriptScans {
 				kind = lineKind(head);
 				// The owner's messages matter only while a needs-you line waits for an answer.
 				if ((kind === "user" || kind === "replyTool") && !s.waiting) kind = null;
+				// silence-watch (F3): only its time is kept, from the head; the rest of the line is skipped.
+				if (kind === "assistant") {
+					const t = assistantTime(head);
+					if (t !== undefined) s.lastTurnAt = Math.max(s.lastTurnAt ?? 0, t);
+					kind = null;
+				}
 				if (kind === null) {
 					skip = true;
 					parts = [];

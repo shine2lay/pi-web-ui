@@ -643,6 +643,7 @@ import {
 	type StallExtra,
 } from "./stall-watch.js";
 import { STALL_LEDGER_FILE, StallWake, stallStretchEnded, stallWakesOn, withStall } from "./stall-wake.js";
+import { serverSilenceWatch } from "./silence-wake.js";
 import { deadEndAnswer } from "./dead-end.js";
 import { launchOrigin, toServiceInfo } from "./launch-origin.js";
 import { imageIfVersion, type ChatImage } from "./chat-image.js";
@@ -18758,8 +18759,7 @@ export class AgentService {
 		if (this.stallWatch) return;
 		// H-STALL-COST-1: only the records file's new lines, not keptRecords()' whole parse.
 		this.stallLeadUpdates = new LeadUpdatesFile(() => this.decisions.file);
-		// stall-wake (Ops #284): only mode on sends; dry remains the code default. The owner can change it
-		// between rounds. This check has its own caps; delivery uses the role message store's normal path.
+		// stall-wake (Ops #284): only mode on sends (dry is the default; read each round); own caps, normal delivery.
 		const settings = () => stallSettings();
 		const dry = new StallDryLog((line) => console.log(line), settings);
 		let snapshot: { page: UiWorkPage; extra: StallExtra } | undefined;
@@ -18780,6 +18780,7 @@ export class AgentService {
 			join(this.stateStore.dataDir, STALL_LEDGER_FILE),
 			settings,
 		);
+		const silence = serverSilenceWatch(this.stallWake, settings, () => this.rolesReader?.scans); // Ops #1059
 		this.stallWatch = new StallWatch({
 			settings,
 			act: (findings, now) => {
@@ -18787,12 +18788,11 @@ export class AgentService {
 				else if (settings().mode === "dry") dry.act(findings, now);
 			},
 			read: async () => {
-				// H-STALL-COST-2: the newest overview when young enough (pages-fresh makes one every 15 s), else one
-				// made now. Only the queue facts come from it; a task's state is the registry's, read now.
+				// H-STALL-COST-2: the newest overview if young (pages-fresh, 15 s), else made now; queue facts only.
 				const overview = youngEnough(this.newestOverview, Date.now()) ?? (await this.readRolesOverview());
 				const inputs = await this.readWorkRegistry(overview, await this.stallLeadUpdates!.get());
 				if (inputs.registry.complete) snapshot = inputs; // Q-STALL-1: never an incomplete page
-				return inputs;
+				return silence.after(inputs); // silence-watch.md: a lead silent 60 min on a waiting task
 			},
 			// Q-STALL-1: an incomplete read pages the owner the lane watchdog's way; a complete round leaves a heartbeat.
 			alarm: (n) => this.sendQueueAlarm?.(n) ?? Promise.resolve({ ok: false, error: "no owner alarm route" }),

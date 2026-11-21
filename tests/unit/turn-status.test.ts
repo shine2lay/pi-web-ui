@@ -6,14 +6,8 @@ import { describe, expect, it } from "vitest";
 import { AI_READER_POINTER, makeBoardTool } from "../../server/board-tool.js";
 import { type BoardPostRecord, boardOrderText } from "../../server/role-board.js";
 import { makeMessageRoleTool } from "../../server/role-message-tool.js";
-import {
-	FOR_OWNER_TURN_HINT,
-	STALL_DEAD_END_HINT,
-	STALL_HINT,
-	STALL_MIXED_HINT,
-	STALL_OWNER_HINT,
-	roleMessageHint,
-} from "../../server/role-messages.js";
+import { FOR_OWNER_TURN_HINT, roleMessageHint } from "../../server/role-messages.js";
+import { STALL_DEAD_END_HINT, STALL_HINT, STALL_MIXED_HINT, STALL_OWNER_HINT } from "../../server/stall-hints.js";
 import {
 	DETAIL_WORDS_MAX,
 	STATES_FOR,

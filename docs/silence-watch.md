@@ -60,7 +60,7 @@ partial list.
 
 ## The seam
 
-`server/silence-watch.ts` (step 1: types and stub bodies, no live caller):
+`server/silence-watch.ts` (pure; step 1 landed the stubs, step 2 built them):
 
 - `findSilentWaits(waits: SilentWaitInput[], turns: HomeChatTurns, now, { waitMinutes, sent }): SilentWait[]`.
   A wait is `{ task: { queue, id }, role, kind: "question" | "block", start, decidingRole, nextNudgeAt }`;
@@ -72,8 +72,8 @@ reason, detail }` and `waitsOf` is never called; on a complete one the findings.
 
 ## Acceptance cases
 
-`tests/acceptance/silence-watch.test.ts` (`npm run test:silence-watch`), outside the land gate until step 2
-builds it and moves it into `tests/unit`. The frozen records are `tests/acceptance/silence-watch/replay-7d.json`
+`tests/unit/silence-watch.test.ts`, in the land gate since step 2 (written outside it by step 1, red on the
+stub). The frozen records are `tests/unit/silence-watch/replay-7d.json`
 (325 waits, 2,385 turn times; ids, roles, times and states only), built by `build-fixture.py` beside it from the
 replay's own episode reader.
 
@@ -89,14 +89,8 @@ replay's own episode reader.
 - S11: an incomplete read: no finding, `waitsOf` not called; a complete read finds.
 - S12: replay parity: rounds at every wait's start + 60 in the window give exactly the five lead wakes.
 
-All but F0 fail on the stub today (it finds nothing). The covered halves of S6, S7 and S9 would pass on their
-own; each case also asserts the wake that makes it fail until built. A reference body (not landed) passed all
-16, so the cases can be met.
+All but F0 failed on the step-1 stub; each case asserts the wake that made it fail until built.
 
-## Owed by step 2 (Ops #1059)
+## Built (step 2)
 
-- F1: the one queue reader (`task-queue-replay.ts` / `task-queue-apply.ts`) keeps `ask.at`, `from`,
-  `routedAt`, `step`, `n` and `parked` (today it keeps only who the question is with).
-- F3: `TranscriptScans.lineKind` keeps assistant-line times of each role's home chat (today it skips them).
-- Build `findSilentWaits` and `silenceRound`, the adapter from mirror to `SilentWaitInput`, delivery through
-  the stall watch's route and ledger; move the test into the gate and delete `tests/acceptance/vitest.config.ts`.
+What was built, the off switch, the live result and H-SILENCE-1's label: [silence-watch-built.md](silence-watch-built.md).

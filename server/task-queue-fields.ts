@@ -1,4 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
+import type { TaskAskTimes } from "./task-queue-ask.js";
 import type {
 	UiTaskQueue,
 	UiTaskQueueChat,
@@ -68,6 +69,8 @@ export interface Task extends Omit<UiTaskQueueTask, "status"> {
 	stuckAt?: number;
 	/** queue-paused (Ops #393): pi-queue's `back`, the pause it was resumed from (see taskQueueBackOwed). */
 	back?: TaskQueueBack;
+	/** silence-watch (Ops #1059): an asking task's open question's times (task-queue-ask.ts); server-only. */
+	ask?: TaskAskTimes;
 }
 
 /** queue-paused (Ops #393): the pause a task was resumed from, while it is owed its "Back to task" note. */
@@ -451,6 +454,7 @@ export function unhold(t: Task, at: number): void {
 	if (t.status === "waiting" && t.wait && !t.wait.overAt)
 		t.wait.until += Math.max(0, at - Math.max(from, t.wait.since));
 	if (t.status === "blocked" && t.block && !t.block.poke) t.block.start = Math.max(t.block.start, at);
+	if (t.status === "asking" && t.ask) t.ask.from = Math.max(t.ask.at, at);
 	if (t.status === "working" && t.lane) t.back = { from, to: at };
 }
 

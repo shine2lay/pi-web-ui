@@ -6,8 +6,8 @@
  * limits work. On an incomplete registry read it reports nothing (the whole-list alarm of
  * work-registry-reader.ts covers that round).
  *
- * Step 1 lands the types and stub bodies (no live caller; findSilentWaits returns []). Step 2 (Ops #1059) builds
- * them and feeds them from the one registry reader, the one queue mirror and the one home-chat reader.
+ * Step 1 (Ops #1058) landed the types and the cases; step 2 (Ops #1059) builds them here and feeds them in
+ * silence-wake.ts from the one registry reader, the one queue mirror and the one home-chat reader.
  */
 
 import type { RegistryComplete, RegistryIncompleteReason, RegistryRead } from "./work-registry-reader.js";
@@ -67,9 +67,25 @@ export interface SilenceOptions {
 	sent: ReadonlyMap<string, number>;
 }
 
-/** The ledger key of one wake: one per wait (task + start) and step, so a restart never wakes twice. */
+/** The stall ledger's stretch of one wait (stall-wake.ts stretchOf of its item: kind task, rule silent). */
+export function silenceStretch(w: Pick<SilentWaitInput, "task" | "start">): string {
+	return `task:${w.task.queue}#${w.task.id}:silent:${w.start}`;
+}
+
+/** The ledger step of a wake: 1 the lead, 2 COO. */
+export const silenceStepNo = (step: SilenceStep): number => (step === "lead" ? 1 : 2);
+
+/** The ledger key of one wake (`<stretch>#<step>`, as the stall ledger keys its lines): one per wait (task +
+ *  start) and step, so a restart never wakes twice. */
 export function silenceWakeKey(w: Pick<SilentWaitInput, "task" | "start">, step: SilenceStep): string {
-	return `silence:${w.task.queue}#${w.task.id}@${w.start}:${step}`;
+	return `${silenceStretch(w)}#${silenceStepNo(step)}`;
+}
+
+const MINUTE = 60_000;
+
+/** A turn of the deciding chat in [start, now] (inclusive, as the replay counts it). */
+function spoke(times: readonly number[] | undefined, start: number, now: number): boolean {
+	return !!times?.some((t) => t >= start && t <= now);
 }
 
 /**
@@ -83,11 +99,31 @@ export function findSilentWaits(
 	now: number,
 	opts: SilenceOptions,
 ): SilentWait[] {
-	void waits;
-	void turns;
-	void now;
-	void opts;
-	return [];
+	const gap = opts.waitMinutes * MINUTE;
+	const out: SilentWait[] = [];
+	for (const w of waits) {
+		if (spoke(turns.get(w.decidingRole), w.start, now)) continue;
+		const leadAt = opts.sent.get(silenceWakeKey(w, "lead"));
+		let step: SilenceStep;
+		if (leadAt === undefined) {
+			if (now < w.start + gap || (w.nextNudgeAt !== null && w.nextNudgeAt > now)) continue;
+			step = "lead";
+		} else {
+			if (opts.sent.has(silenceWakeKey(w, "coo")) || now < leadAt + gap) continue;
+			step = "coo";
+		}
+		out.push({
+			task: w.task,
+			role: w.role,
+			kind: w.kind,
+			start: w.start,
+			decidingRole: w.decidingRole,
+			waitedMinutes: Math.floor((now - w.start) / MINUTE),
+			step,
+			to: step === "lead" ? w.decidingRole : SILENCE_COO_ROLE,
+		});
+	}
+	return out;
 }
 
 /** A round's answer: the findings of a complete read, or nothing on an incomplete one. */
@@ -105,10 +141,6 @@ export function silenceRound(
 	now: number,
 	opts: SilenceOptions,
 ): SilenceRound {
-	void read;
-	void waitsOf;
-	void turns;
-	void now;
-	void opts;
-	return { complete: true, findings: [] };
+	if (!read.complete) return { complete: false, reason: read.reason, detail: read.detail };
+	return { complete: true, findings: findSilentWaits(waitsOf(read), turns, now, opts) };
 }

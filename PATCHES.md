@@ -8168,6 +8168,26 @@ Hypothesis, build and proof: `docs/stall-watch-whole-list.md`.
 - Undo: `"mode": "dry"` or `"off"` in `~/.pi-web-ui/stall-watch.json`; or revert and `pi-web-deploy`, and
   remove agent-tools' `stall-watch` scheduled-jobs row.
 
+### Silence watch (Q-STALL-1 B+ at 60 minutes; Ops #1058 seam + cases, Ops #1059 build)
+
+**Why** (same approval): backend #218's question 19 waited from 05:34Z to 09:02Z on 2026-11-21 while the
+queue's own reminders didn't reach the backend lead. A task waiting 60 minutes on a lead whose home chat had
+no turn since, with no other nudge due, now wakes that lead once, then COO once 60 minutes later. Rule,
+hypothesis and cases: `docs/silence-watch.md`; what runs, off switch, proofs: `docs/silence-watch-built.md`.
+
+- `server/silence-watch.ts`: `findSilentWaits`, `silenceRound` (pure). `server/silence-wake.ts` (new): the
+  round inside the stall watch's (waits from the queue mirror, last turns, delivery through the stall ledger and
+  limits, off switch `~/.pi-web-ui/silence-watch.json` `{"wakes": false}`).
+- F1 `server/task-queue-ask.ts` (new) + `task-queue-apply.ts`, `task-queue-replay.ts`, `task-queue-fields.ts`:
+  the mirror keeps a question's times (server only; `task-queue.ts` keeps them off the panel).
+  F3 `server/roles-transcripts.ts`: `lastTurnAt` from assistant lines' heads.
+- `server/stall-hints.ts` (new): the stall hints moved out of `role-messages.ts`, plus the silence hints;
+  `stall-wake.ts`: item kind `task`, `sentCount` and `record` shared. `agent-service.ts`: the wiring.
+- Tests: `tests/unit/silence-watch.test.ts` (S1-S12, moved into the gate; its acceptance config and
+  `test:silence-watch` script deleted), `silence-wake.test.ts`, `roles-transcripts-last-turn.test.ts`,
+  `task-queue-ask-times.test.ts`.
+- Undo: `{"wakes": false}` in `~/.pi-web-ui/silence-watch.json` (log only, no restart); or `pi-web-deploy rollback`.
+
 ## durable-w3-cutover: @earendil-works/pi-durable SQLite WAL session engine, extension bridge, clean-env bootstrap & lossless JSONL migrator
 
 - `local` (Ops #600–#605, H-W3-CUTOVER-1; owner choices m73851, m74268, m74290, m75686, m75951, m76183, m76186). Integrates the Wave 3 `@earendil-works/pi-durable` SQLite WAL engine driver (`#601`, `server/pi-durable-session-driver.ts`), extension hook and custom-entry bridge (`#602`, `server/durable-extension-bridge.ts`), clean-environment durable bootstrap and lossless `.jsonl` → SQLite migrator (`#603`, `server/durable-env-bootstrap.ts`, `server/durable-jsonl-migrator.ts`, `scripts/bootstrap-durable-env.mjs`, `scripts/migrate-jsonl-to-durable.mjs`), and `AgentService` / `ClientSession` `DurableSessionPort` wiring (`#604`, `server/agent-service.ts`).

@@ -147,7 +147,7 @@ export function taskQueueFromEntries(
  * and queue-blocks.ts fills in its block and the refs in it and in `outside` afterwards.
  */
 function shownTask(s: State, t: Task & UiTaskQueueTask): UiTaskQueueTask {
-	const { heldFrom: _heldFrom, stuckAt: _stuckAt, back: _back, card, inShort, ...c } = t;
+	const { heldFrom: _heldFrom, stuckAt: _stuckAt, back: _back, ask: _ask, card, inShort, ...c } = t;
 	if (c.status !== "asking" || !c.askOps) delete c.askLead;
 	const open =
 		c.after && OPEN.has(c.status) ? s.tasks.filter((d) => c.after?.includes(d.id) && OPEN.has(d.status)) : [];

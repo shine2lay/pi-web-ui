@@ -5,6 +5,7 @@ import { checkPatch, normProfile, normLaunch, patchProfile } from "./queue-profi
 import { normTags, resolveInheritedTags } from "./shared/task-tags.js";
 import { insertByPriority, normPriority, repositionReadyTaskByPriority, taskPriority } from "./shared/task-priority.js";
 import type { UiTaskQueueBlock, UiTaskQueueHold, UiTaskQueueRef, UiTaskQueueWait } from "./protocol.js";
+import { askTimesOf, routedAsk } from "./task-queue-ask.js";
 import {
 	applyHold,
 	askLeadOf,
@@ -228,6 +229,7 @@ export function apply(s: State, raw: unknown): void {
 			task.choices = undefined;
 			task.detail = undefined;
 			task.askOps = undefined;
+			task.ask = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.block = undefined;
@@ -254,6 +256,7 @@ export function apply(s: State, raw: unknown): void {
 			task.choices = undefined;
 			task.detail = undefined;
 			task.askOps = undefined;
+			task.ask = undefined;
 			task.wait = undefined;
 			task.block = undefined;
 			task.mainAnswered = op.op === "resume" && typeof op.answered === "number" && op.answered > 0 ? true : undefined;
@@ -279,6 +282,7 @@ export function apply(s: State, raw: unknown): void {
 			task.card = card.card;
 			task.inShort = card.inShort;
 			task.askOps = undefined;
+			task.ask = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.block = undefined;
@@ -296,6 +300,7 @@ export function apply(s: State, raw: unknown): void {
 			task.detail = undefined;
 			task.askOps = op.to === "ops" ? true : undefined;
 			task.askLead = op.to === "ops" ? askLeadOf(op.lead) : undefined;
+			task.ask = askTimesOf({ ...op, at: num(op.ts), from: undefined });
 			const choices = normChoices(op.choices);
 			if (choices.length) task.choices = choices;
 			else delete task.choices;
@@ -321,6 +326,7 @@ export function apply(s: State, raw: unknown): void {
 			task.choices = undefined;
 			task.detail = undefined;
 			task.askOps = undefined;
+			task.ask = undefined;
 			task.mainAnswered = undefined;
 			task.wait = wait;
 			task.back = undefined;
@@ -357,6 +363,7 @@ export function apply(s: State, raw: unknown): void {
 			task.choices = undefined;
 			task.detail = undefined;
 			task.askOps = undefined;
+			task.ask = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.back = undefined;
@@ -367,6 +374,7 @@ export function apply(s: State, raw: unknown): void {
 			if (task.status === "asking") {
 				task.askOps = true;
 				task.askLead = askLeadOf(op.lead);
+				task.ask = routedAsk(task.ask, op);
 			}
 			return;
 		case "poke":
@@ -434,6 +442,7 @@ export function apply(s: State, raw: unknown): void {
 			task.choices = undefined;
 			task.detail = undefined;
 			task.askOps = undefined;
+			task.ask = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.block = undefined;
@@ -451,6 +460,7 @@ export function apply(s: State, raw: unknown): void {
 			task.choices = undefined;
 			task.detail = undefined;
 			task.askOps = undefined;
+			task.ask = undefined;
 			task.mainAnswered = undefined;
 			task.wait = undefined;
 			task.block = undefined;

@@ -14,5 +14,7 @@ plugins/*/storage
 server/identity-config.ts
 # identity-notes: a byte-identical copy of pi-identity's notes.ts (a unit test compares them), in its style
 server/identity-notes.ts
+# silence-watch: the frozen 7-day records, written compact by build-fixture.py beside them (regenerated, not hand-edited)
+tests/unit/silence-watch/replay-7d.json
 # roles-u0: the owner's Roles design template, byte-exact (whitespace is rendered; pixel proofs pin these bytes)
 web/src/roles-u0/*.html

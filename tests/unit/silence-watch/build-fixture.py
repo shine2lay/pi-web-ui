@@ -7,7 +7,7 @@ and replay_stalls.out come from one reading of the records. It writes ids, roles
 titles, no project names, no file paths, no message text (AGENTS.md rule 8). Turn times are kept only where a
 case can look at them: the deciding role's turns inside each wait.
 
-    python3 tests/acceptance/silence-watch/build-fixture.py [replay_lib dir]   # default ~/ops-checks/queue-hardening
+    python3 tests/unit/silence-watch/build-fixture.py [replay_lib dir]   # default ~/ops-checks/queue-hardening
 """
 
 import json

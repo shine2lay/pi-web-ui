@@ -732,7 +732,8 @@ describe("reading transcripts", () => {
 		expect(lineKind(JSON.stringify(user("hi", 1)).slice(0, 512))).toBe("user");
 		expect(lineKind(JSON.stringify(toolResult("ask_user_question", "a", 1)).slice(0, 512))).toBe("replyTool");
 		expect(lineKind(JSON.stringify(toolResult("bash", "a", 1)).slice(0, 512))).toBeNull();
-		expect(lineKind(JSON.stringify(assistant("a", 1)).slice(0, 512))).toBeNull();
+		// silence-watch F3 (Ops #1059): an assistant line is a turn (its time feeds TranscriptScan.lastTurnAt).
+		expect(lineKind(JSON.stringify(assistant("a", 1)).slice(0, 512))).toBe("assistant");
 	});
 
 	it("reads only plain transcripts inside the session folders: no traversal, symlinks or other files", async () => {

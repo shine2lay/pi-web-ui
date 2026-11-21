@@ -141,7 +141,7 @@ function lastLine(ledger: readonly StallLedgerLine[], stretch: string, step: num
 }
 
 /** Messages sent (distinct ids) that match. */
-function sentCount(ledger: readonly StallLedgerLine[], match: (l: StallLedgerLine) => boolean): number {
+export function sentCount(ledger: readonly StallLedgerLine[], match: (l: StallLedgerLine) => boolean): number {
 	const ids = new Set<string>();
 	for (const l of ledger) if (l.state === "sent" && match(l)) ids.add(l.id ?? `${l.stretch}#${l.step}`);
 	return ids.size;
@@ -313,7 +313,7 @@ export function stallMessageText(
 
 /** What the role message record carries about each item (role-messages.ts RoleStallInfo). */
 export interface StallItemInfo {
-	kind: "project" | "initiative";
+	kind: "project" | "initiative" | "task";
 	id: string;
 	name: string;
 	rule: UiStallRule;
@@ -520,7 +520,7 @@ export class StallWake {
 	private ledgerCache: StallLedgerLine[] | undefined;
 
 	constructor(
-		private readonly host: StallWakeHost,
+		readonly host: StallWakeHost,
 		private readonly file: string,
 		private readonly settings: () => Pick<StallSettings, "gapHours">,
 	) {}
@@ -538,7 +538,7 @@ export class StallWake {
 		return this.ledgerCache;
 	}
 
-	private record(lines: StallLedgerLine[]): void {
+	record(lines: StallLedgerLine[]): void {
 		if (!lines.length) return;
 		appendStallLedger(this.file, lines);
 		this.ledgerCache?.push(...lines);

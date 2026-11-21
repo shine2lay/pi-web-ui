@@ -6,6 +6,7 @@ import { normTags } from "./shared/task-tags.js";
 import { normPriority } from "./shared/task-priority.js";
 import type { UiTaskQueueBlock, UiTaskQueueHold, UiTaskQueueRef } from "./protocol.js";
 import { apply } from "./task-queue-apply.js";
+import { askTimesOf } from "./task-queue-ask.js";
 import {
 	askLeadOf,
 	cap,
@@ -168,6 +169,8 @@ function taskOf(raw: unknown): Task {
 	}
 	if (finite(c.stuckAt)) t.stuckAt = c.stuckAt;
 	const ask = rec(c.ask);
+	const askTimes = status === "asking" ? askTimesOf(ask) : undefined;
+	if (askTimes) t.ask = askTimes;
 	if (status === "asking" && ask?.to === "ops") {
 		t.askOps = true;
 		const lead = askLeadOf(ask.lead);

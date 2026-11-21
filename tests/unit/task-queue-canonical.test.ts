@@ -24,6 +24,7 @@ it("pi-queue's readers are loaded, so the tests below replay with pi-queue's own
 });
 
 await import("./task-queue.test.js");
+await import("./task-queue-ask-times.test.js");
 await import("./queue-autonomy.test.js");
 await import("./queue-blocks.test.js");
 await import("./queue-lead-reminders.test.js");

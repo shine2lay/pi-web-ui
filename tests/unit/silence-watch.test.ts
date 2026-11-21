@@ -1,6 +1,6 @@
 /**
- * Q-STALL-1 silence watch acceptance (Ops #1058 step 1 of 2; docs/silence-watch.md). Red until step 2 (Ops #1059)
- * builds server/silence-watch.ts; then step 2 moves this file into tests/unit and drops its acceptance config.
+ * Q-STALL-1 silence watch acceptance (Ops #1058 step 1 of 2; docs/silence-watch.md). Written red by step 1; step 2
+ * (Ops #1059) built server/silence-watch.ts and moved this file into the gate (tests/unit) unchanged otherwise.
  * Never weaken or skip a case to make it pass.
  *
  * The real cases come from the 7-day replay of ops #1054 (replay_stalls.out, X = 60, option a1): its five "real"

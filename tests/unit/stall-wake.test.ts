@@ -9,16 +9,8 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IdentityDef } from "../../server/identities.js";
 import { starterOf } from "../../server/quiet-turns.js";
-import {
-	RoleMessages,
-	STALL_DEAD_END_HINT,
-	STALL_HINT,
-	STALL_MIXED_HINT,
-	STALL_OWNER_HINT,
-	roleMessageHeader,
-	roleMessageHint,
-	type RoleMessageHost,
-} from "../../server/role-messages.js";
+import { RoleMessages, roleMessageHeader, roleMessageHint, type RoleMessageHost } from "../../server/role-messages.js";
+import { STALL_DEAD_END_HINT, STALL_HINT, STALL_MIXED_HINT, STALL_OWNER_HINT } from "../../server/stall-hints.js";
 import { statusHint } from "../../server/turn-status.js";
 import type { UiWorkPage } from "../../server/protocol.js";
 import type { StallExtra, StallFinding } from "../../server/stall-watch.js";
