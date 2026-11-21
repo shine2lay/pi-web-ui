@@ -18793,9 +18793,8 @@ export class AgentService {
 				if (inputs.registry.complete) snapshot = inputs; // Q-STALL-1: never an incomplete page
 				return silence.after(inputs); // silence-watch.md: a lead silent 60 min on a waiting task
 			},
-			// Q-STALL-1: an incomplete read pages the owner the lane watchdog's way; a complete round leaves a heartbeat.
-			alarm: (n) => this.sendQueueAlarm?.(n) ?? Promise.resolve({ ok: false, error: "no owner alarm route" }),
-			heartbeat: (b) => this.registryWatch().heartbeat(b),
+			// Q-STALL-1: the owner alarm (the lane watchdog's route, registryWatch) and the complete round's heartbeat.
+			...this.registryWatch().hooks,
 			log: (line) => console.log(line),
 		});
 		this.stallWatch.start();
@@ -18889,16 +18888,17 @@ export class AgentService {
 		this.decisionReader.start();
 	}
 
-	/** The work registry's one reader and the heartbeat writer (Q-STALL-1, H-STALL-WHOLE-2; made on first use). */
+	/** The work registry's one reader, owner alarm and heartbeat (Q-STALL-1, H-STALL-WHOLE-2/3; made on first use). */
 	private workRegistry: ReturnType<typeof registryWatchOf> | null = null;
 	private registryWatch = () =>
-		(this.workRegistry ??= registryWatchOf(this.stateStore.dataDir, () => this.workEventsFile()));
+		(this.workRegistry ??= registryWatchOf(this.stateStore.dataDir, () => this.workEventsFile(), {
+			alarm: (n) => this.sendQueueAlarm?.(n),
+		}));
 	private workFactsError: string | null = null;
 
 	/**
-	 * The whole work registry through its one reader, for dead-end and stall-watch: each task joined with what the
-	 * Roles overview's projection of its queue says (without it only the queues' details are missing). stall-watch
-	 * passes the overview it already has and its lead updates. An incomplete read: an empty "unreadable" page.
+	 * The whole work registry through its one reader (dead-end, stall-watch), each task joined with its queue's Roles
+	 * overview facts (stall-watch passes its overview and lead updates). An incomplete read: an empty "unreadable" page.
 	 */
 	async readWorkRegistry(overview?: UiRolesOverview, leadUpdates: ReadonlyMap<string, number> = new Map()) {
 		let facts: WorkQueueFacts[] = [];

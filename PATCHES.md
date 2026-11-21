@@ -8176,6 +8176,12 @@ Hypothesis, build and proof: `docs/stall-watch-whole-list.md`.
   `registryWatchOf(dataDir, file)` (one heartbeat file; `readRegistryHeartbeat` is its one reader;
   `STALL_HEARTBEAT_FILE` moved from `stall-watch.ts` to the reader). Tests:
   `tests/unit/work-registry-missing.test.ts` (a-h); AC6 now asserts the factory.
+- Ops #1065 (QA L6/O9; H-STALL-WHOLE-3 in the same doc): a complete read with 0 linked tasks where the last
+  known count (this process's last complete read, else the heartbeat) was above 0 sends one owner alarm and
+  stays complete; the alarm is awaited before the heartbeat says 0. A drop to a smaller count, 0 -> 0 and a
+  file put back after "missing" stay quiet. `server/work-registry-drop.ts` (new) holds the last known count;
+  `registryWatchOf(dataDir, file, { alarm })` gives the reader and the watch's `hooks` one alarm route
+  (`server/agent-service.ts` spreads them). Tests: `tests/unit/work-registry-emptied.test.ts` (a-i).
 
 ### Silence watch (Q-STALL-1 B+ at 60 minutes; Ops #1058 seam + cases, Ops #1059 build)
 

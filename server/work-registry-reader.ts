@@ -12,12 +12,14 @@
  *
  * H-STALL-WHOLE-2 (Ops #1064, docs/stall-watch-registry-missing.md): a missing file is complete and empty only
  * when nothing says the registry ever had tasks; a file that shrank while it was read is incomplete.
+ * H-STALL-WHOLE-3 (Ops #1065, same doc): a complete read with no tasks where the last known count was above 0
+ * tells the owner once (`RegistryDrop`), and stays complete.
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
-import type { OwnerTelegramNotice, OwnerTelegramSender } from "./owner-telegram.js";
+import type { OwnerTelegramNotice, OwnerTelegramResult, OwnerTelegramSender } from "./owner-telegram.js";
 import type { UiWorkPage } from "./protocol.js";
 import { STATE_READ_FLAGS } from "./state-file-read.js";
 import type { StallInputs } from "./stall-watch.js";
@@ -30,6 +32,7 @@ import {
 	type WorkQueueFacts,
 	type WorkReplay,
 } from "./work-page.js";
+import { RegistryDrop, type RegistryDropHooks } from "./work-registry-drop.js";
 import { StallTimesBuilder, type StallTimes } from "./work-registry-times.js";
 
 /**
@@ -100,23 +103,34 @@ const EMPTY_PAGE = (at: number, problem: UiWorkPage["problem"]): UiWorkPage => (
 /** The one reader of the registry file for the watches. A complete read is kept while the file is unchanged. */
 export class WorkRegistryReader {
 	private seen: { ino: number; mtimeMs: number; size: number; read: RegistryComplete } | undefined;
-	/** The last complete read in this process that had tasks: its time and count. */
-	private known: RegistryHeartbeat | undefined;
+	/** The last known count (this process's last complete read, else the heartbeat) and the drop-to-none alarm. */
+	private readonly drop: RegistryDrop;
 
 	/**
 	 * `lastBeat`: the last complete round's heartbeat on disk (`readRegistryHeartbeat`); undefined when there is
-	 * none, throws when it can't be read. Production passes it through `registryWatchOf`.
+	 * none, throws when it can't be read. Production passes it and the hooks through `registryWatchOf`.
 	 */
 	constructor(
 		private readonly file: () => string,
 		private readonly lastBeat: () => RegistryHeartbeat | undefined = () => undefined,
-	) {}
+		hooks: RegistryDropHooks = {},
+	) {
+		this.drop = new RegistryDrop(file, lastBeat, hooks);
+	}
 
 	/**
 	 * The whole registry, streamed (no ceiling). No file: complete and empty only when nothing says it ever had
-	 * tasks (none read in this process, the heartbeat absent or 0); otherwise incomplete, "missing".
+	 * tasks (the last complete read in this process, else the heartbeat, absent or 0); otherwise incomplete,
+	 * "missing". A complete read with no tasks after a count above 0 tells the owner first (H-STALL-WHOLE-3).
 	 */
 	async read(now = Date.now()): Promise<RegistryRead> {
+		const read = await this.readFile(now);
+		if (read.complete) await this.drop.complete(read);
+		else if (read.reason === "missing") this.drop.missing();
+		return read;
+	}
+
+	private async readFile(now: number): Promise<RegistryRead> {
 		const started = performance.now();
 		const failed = (detail: string): RegistryIncomplete => {
 			this.seen = undefined;
@@ -146,7 +160,6 @@ export class WorkRegistryReader {
 			if (read.complete) {
 				const shrank = readShrank(st.size, read.bytes, (await fh.stat()).size);
 				if (shrank) return failed(shrank);
-				if (read.tasksRead > 0) this.known = { at: now, tasksRead: read.tasksRead };
 			}
 			this.seen = read.complete ? { ino: st.ino, mtimeMs: st.mtimeMs, size: st.size, read } : undefined;
 			return read;
@@ -160,14 +173,12 @@ export class WorkRegistryReader {
 	/** Why a missing file isn't a new machine's, in plain words; undefined when nothing says it had tasks. */
 	private hadTasks(): string | undefined {
 		const where = `not found at ${this.file()}`;
-		let beat = this.known;
-		if (!beat) {
-			try {
-				beat = this.lastBeat();
-			} catch (err) {
-				const why = (err as Error)?.message || String(err);
-				return `${where}, and the heartbeat can't show it never had tasks (${why})`;
-			}
+		let beat: RegistryHeartbeat | undefined;
+		try {
+			beat = this.drop.lastKnown();
+		} catch (err) {
+			const why = (err as Error)?.message || String(err);
+			return `${where}, and the heartbeat can't show it never had tasks (${why})`;
 		}
 		if (!beat?.tasksRead) return undefined;
 		const when = new Date(beat.at).toISOString();
@@ -312,14 +323,26 @@ export function readRegistryHeartbeat(file: string): RegistryHeartbeat | undefin
 	throw new Error(`${file} isn't a heartbeat`);
 }
 
+/** The owner alarm route a watch is given; undefined when there is none yet. */
+export type RegistryAlarmRoute = (notice: OwnerTelegramNotice) => Promise<OwnerTelegramResult> | undefined;
+
 /**
- * The registry reader and the heartbeat writer production uses, over the same heartbeat file in `dataDir`, so a
- * restarted server still knows the registry had tasks (H-STALL-WHOLE-2).
+ * The registry reader, the owner alarm and the heartbeat writer production uses, over the same heartbeat file in
+ * `dataDir`, so a restarted server still knows the registry had tasks (H-STALL-WHOLE-2). `hooks` (a watch's
+ * `alarm` and `heartbeat`) and the reader's drop-to-none alarm (H-STALL-WHOLE-3) share the one `alarm` route.
  */
-export function registryWatchOf(dataDir: string, registryFile: () => string) {
+export function registryWatchOf(
+	dataDir: string,
+	registryFile: () => string,
+	route: { alarm?: RegistryAlarmRoute; log?: (line: string) => void } = {},
+) {
 	const heartbeatFile = join(dataDir, STALL_HEARTBEAT_FILE);
-	return {
-		reader: new WorkRegistryReader(registryFile, () => readRegistryHeartbeat(heartbeatFile)),
-		heartbeat: (beat: RegistryHeartbeat) => writeRegistryHeartbeat(heartbeatFile, beat),
-	};
+	const given = route.alarm;
+	const alarm: OwnerTelegramSender | undefined = given
+		? (n) => given(n) ?? Promise.resolve({ ok: false, error: "no owner alarm route" })
+		: undefined;
+	const heartbeat = (beat: RegistryHeartbeat) => writeRegistryHeartbeat(heartbeatFile, beat);
+	const lastBeat = () => readRegistryHeartbeat(heartbeatFile);
+	const hooks: RegistryWatchHooks = { alarm, heartbeat };
+	return { reader: new WorkRegistryReader(registryFile, lastBeat, { alarm, log: route.log }), heartbeat, hooks };
 }
