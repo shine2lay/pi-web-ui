@@ -67,6 +67,7 @@
 		"test": "vitest run",
 		"test:unit": "vitest run",
 		"test:tag-governance-acceptance": "vitest run tests/unit/tag-governance-acceptance.test.ts",
+		"test:silence-watch": "vitest run --config tests/acceptance/vitest.config.ts",
 		"test:smoke": "node tests/run-smoke.mjs",
 		"test:smoke:core": "node tests/run-smoke.mjs --core",
 		"check:protocol": "node scripts/check-protocol-sync.mjs",

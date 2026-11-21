@@ -199,6 +199,14 @@ export class StallWatch; // a round every everyMin minutes; hands the findings t
   owner once per condition through the lane watchdog's Telegram route; a complete round re-arms the alarm. The
   dead-end answer on such a read is "unknown". Details: [stall-watch-whole-list.md](stall-watch-whole-list.md).
 
+## Silent waits (Q-STALL-1 B+, Ops #1058/#1059)
+
+The backup for when the queue's own reminders fail: a task asking or blocked for 60 minutes whose deciding
+chat has had no turn since, with no other nudge still due, wakes that lead once, then COO once 60 minutes
+later. It shares this watch's read, wake route, ledger and limits. It reads no pi-queue timer for questions:
+their reminder is always past at 60 minutes, and the watch must not fail together with the timers it backs up.
+Rule, seam and cases: [silence-watch.md](silence-watch.md).
+
 ## The wait field in the work page
 
 pi-queue's `project.wait` / `initiative.wait` (`{id, until, why}`) and `project.resume` / `initiative.resume`
@@ -216,23 +224,23 @@ Oct 19 00:00 to Oct 20 09:00 PDT, every 10 minutes (199 steps, 2.7 s). It replay
 the queues' past facts (owner pauses, questions waiting on the owner, TL;DR lines) aren't recorded, so they
 don't count here (the live check has them).
 
-| item | lead | rule | since | first flagged | after | chain | cleared |
-|---|---|---|---|---|---|---|---|
-| project app-screens-workflow | design | empty | Oct 18 20:51 | Oct 19 00:00 | before the window | design → owner | still flagged |
-| project marketing-visuals-workflow | design | empty | Oct 18 20:51 | Oct 19 00:00 | before the window | design → owner | still flagged |
-| project logo-identity-workflow | design | empty | Oct 18 20:51 | Oct 19 00:00 | before the window | design → owner | still flagged |
-| project design-review-workflow | design | empty | Oct 18 20:51 | Oct 19 00:00 | before the window | design → owner | still flagged |
-| project user-research-walks | design | empty | Oct 18 20:51 | Oct 19 00:00 | before the window | design → owner | still flagged |
-| project message-approvals | ops | empty | Oct 19 02:04 | Oct 19 04:10 | 2 h 05 min | ops → owner | Oct 19 09:00 (a task opened 08:55) |
-| project faster-landing | ops | empty | Oct 19 07:27 | Oct 19 09:30 | 2 h 03 min | ops → owner | Oct 19 20:10 (a task opened 20:08) |
-| project team-vs-solo | architecture | empty | Oct 19 08:16 (created) | Oct 19 10:20 | 2 h 03 min | architecture → coo → owner | still flagged |
-| project owner-real-task | architecture | empty | Oct 19 08:17 (created) | Oct 19 10:20 | 2 h 03 min | architecture → coo → owner | still flagged |
-| project three-passing-projects | temper | empty | Oct 19 08:43 | Oct 19 10:50 | 2 h 07 min | temper → coo → owner | Oct 19 12:10 (tasks opened 12:04-12:05) |
-| project parallel-queue-work | ops | empty | Oct 19 09:44 | Oct 19 11:50 | 2 h 06 min | ops → owner | still flagged |
-| project owner-stop-and-notices | temper | empty | Oct 19 18:18 | Oct 19 20:20 | 2 h 01 min | temper → coo → owner | still flagged |
-| project faster-landing | ops | empty | Oct 19 20:34 | Oct 19 22:40 | 2 h 05 min | ops → owner | Oct 19 23:00 (a task opened 22:52) |
-| project faster-landing | ops | empty | Oct 19 23:32 | Oct 20 01:40 | 2 h 07 min | ops → owner | still flagged |
-| project team-page-truth | frontend | empty | Oct 20 01:03 | Oct 20 03:10 | 2 h 07 min | frontend → coo → owner | still flagged |
+| item                               | lead         | rule  | since                  | first flagged | after             | chain                      | cleared                                 |
+| ---------------------------------- | ------------ | ----- | ---------------------- | ------------- | ----------------- | -------------------------- | --------------------------------------- |
+| project app-screens-workflow       | design       | empty | Oct 18 20:51           | Oct 19 00:00  | before the window | design → owner             | still flagged                           |
+| project marketing-visuals-workflow | design       | empty | Oct 18 20:51           | Oct 19 00:00  | before the window | design → owner             | still flagged                           |
+| project logo-identity-workflow     | design       | empty | Oct 18 20:51           | Oct 19 00:00  | before the window | design → owner             | still flagged                           |
+| project design-review-workflow     | design       | empty | Oct 18 20:51           | Oct 19 00:00  | before the window | design → owner             | still flagged                           |
+| project user-research-walks        | design       | empty | Oct 18 20:51           | Oct 19 00:00  | before the window | design → owner             | still flagged                           |
+| project message-approvals          | ops          | empty | Oct 19 02:04           | Oct 19 04:10  | 2 h 05 min        | ops → owner                | Oct 19 09:00 (a task opened 08:55)      |
+| project faster-landing             | ops          | empty | Oct 19 07:27           | Oct 19 09:30  | 2 h 03 min        | ops → owner                | Oct 19 20:10 (a task opened 20:08)      |
+| project team-vs-solo               | architecture | empty | Oct 19 08:16 (created) | Oct 19 10:20  | 2 h 03 min        | architecture → coo → owner | still flagged                           |
+| project owner-real-task            | architecture | empty | Oct 19 08:17 (created) | Oct 19 10:20  | 2 h 03 min        | architecture → coo → owner | still flagged                           |
+| project three-passing-projects     | temper       | empty | Oct 19 08:43           | Oct 19 10:50  | 2 h 07 min        | temper → coo → owner       | Oct 19 12:10 (tasks opened 12:04-12:05) |
+| project parallel-queue-work        | ops          | empty | Oct 19 09:44           | Oct 19 11:50  | 2 h 06 min        | ops → owner                | still flagged                           |
+| project owner-stop-and-notices     | temper       | empty | Oct 19 18:18           | Oct 19 20:20  | 2 h 01 min        | temper → coo → owner       | still flagged                           |
+| project faster-landing             | ops          | empty | Oct 19 20:34           | Oct 19 22:40  | 2 h 05 min        | ops → owner                | Oct 19 23:00 (a task opened 22:52)      |
+| project faster-landing             | ops          | empty | Oct 19 23:32           | Oct 20 01:40  | 2 h 07 min        | ops → owner                | still flagged                           |
+| project team-page-truth            | frontend     | empty | Oct 20 01:03           | Oct 20 03:10  | 2 h 07 min        | frontend → coo → owner     | still flagged                           |
 
 No silent finding and no initiative finding: every active initiative (design-in-temper, team-in-temper-2,
 system-arch-in-temper) had an active project all along, so its projects' checks cover it. Still fine at 09:00:
@@ -276,14 +284,14 @@ temporary copy of the live data (15 roles, 48 chat files, 2,062 registry lines, 
 with the main thread's own CPU time read from `/proc/self/task/<pid>/schedstat` (other threads and processes
 left out), 10 runs per part, the page refresher held so its rounds don't mix in (p50 / p90 / max, ms):
 
-| part | main-thread CPU | longest blocking slice |
-| --- | --- | --- |
-| whole round, registry changed | 166 / 176 / 192 | 20 / 23 / 27 |
-| whole round, nothing changed | 118 / 143 / 181 | 20 / 23 / 29 |
-| Roles overview | 103 / 145 / 197 | 16 / 27 / 34 |
-| work page from that overview | 11 / 14 / 14 | 11 / 12 / 13 |
-| extra times (registry changed) | 8 / 11 / 12 | 7 / 8 / 13 |
-| kept records, when the records file changed | **230 / 266 / 325** | **234 / 272 / 353** |
+| part                                        | main-thread CPU     | longest blocking slice |
+| ------------------------------------------- | ------------------- | ---------------------- |
+| whole round, registry changed               | 166 / 176 / 192     | 20 / 23 / 27           |
+| whole round, nothing changed                | 118 / 143 / 181     | 20 / 23 / 29           |
+| Roles overview                              | 103 / 145 / 197     | 16 / 27 / 34           |
+| work page from that overview                | 11 / 14 / 14        | 11 / 12 / 13           |
+| extra times (registry changed)              | 8 / 11 / 12         | 7 / 8 / 13             |
+| kept records, when the records file changed | **230 / 266 / 325** | **234 / 272 / 353**    |
 
 ### H-STALL-COST-1 (written before the change)
 
@@ -356,12 +364,12 @@ copies (machine load average 5-9 on 20 cores):
 Measured Oct 20, 10:31-10:34, sealed, on the same copies; the machine was busier still (load average 13-17 on
 20 cores). Main-thread CPU, p50 / p90 / max ms:
 
-| round | main-thread CPU | longest slice | overview |
-| --- | --- | --- | --- |
-| as live, refresher running | 99 / 172 / 437 | 44 / 92 / 108 | reused 10 of 10 (2-14 s old) |
-| refresher held, overview seconds old | **34** / 165 / 171 | 16 / 83 / 94 | reused 10 of 10 (2-16 s old) |
-| refresher held, overview 61 s old | 238 | 30 | made its own (1 of 1) |
-| refresher held, none kept | 229 / 468 / 608 | 35 / 95 / 116 | made its own (10 of 10) |
+| round                                | main-thread CPU    | longest slice | overview                     |
+| ------------------------------------ | ------------------ | ------------- | ---------------------------- |
+| as live, refresher running           | 99 / 172 / 437     | 44 / 92 / 108 | reused 10 of 10 (2-14 s old) |
+| refresher held, overview seconds old | **34** / 165 / 171 | 16 / 83 / 94  | reused 10 of 10 (2-16 s old) |
+| refresher held, overview 61 s old    | 238                | 30            | made its own (1 of 1)        |
+| refresher held, none kept            | 229 / 468 / 608    | 35 / 95 / 116 | made its own (10 of 10)      |
 
 - The choice works: reused whenever the newest overview was 0-60 s old (20 of 20); made its own when it was
   61 s old or missing (11 of 11). Hit.
@@ -391,13 +399,13 @@ Read-only checks used `node bin/pi-web-ui.mjs stall list`, the service's `stall:
 `scripts/stall-count.mjs --at <the round's time> --json`, independently replaying the registry rather than
 calling the server's stall rules. Results:
 
-| build | round, PDT Oct 20 | wall time (`tookMs`) | flagged empty | covered initiatives | fine projects | pending / quiet / silent | independent count |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 5d3ff258 | 1, 09:40:51 | 1,007 ms | 11 | 3 | 4 | 0 / 0 / 0 | exact match |
-| 5d3ff258 | 2, 09:50:51 | 247 ms | 11 | 3 | 4 | 0 / 0 / 0 | exact match |
-| 342232a3 | 1, 11:10:39 | 345 ms | 11 | 3 | 4 | 0 / 0 / 0 | exact match |
-| 342232a3 | 2, 11:20:39 | 62 ms | 11 | 3 | 4 | 0 / 0 / 0 | exact match |
-| 342232a3 | 3, 11:30:39 | 50 ms | 11 | 3 | 4 | 0 / 0 / 0 | exact match |
+| build    | round, PDT Oct 20 | wall time (`tookMs`) | flagged empty | covered initiatives | fine projects | pending / quiet / silent | independent count |
+| -------- | ----------------- | -------------------- | ------------- | ------------------- | ------------- | ------------------------ | ----------------- |
+| 5d3ff258 | 1, 09:40:51       | 1,007 ms             | 11            | 3                   | 4             | 0 / 0 / 0                | exact match       |
+| 5d3ff258 | 2, 09:50:51       | 247 ms               | 11            | 3                   | 4             | 0 / 0 / 0                | exact match       |
+| 342232a3 | 1, 11:10:39       | 345 ms               | 11            | 3                   | 4             | 0 / 0 / 0                | exact match       |
+| 342232a3 | 2, 11:20:39       | 62 ms                | 11            | 3                   | 4             | 0 / 0 / 0                | exact match       |
+| 342232a3 | 3, 11:30:39       | 50 ms                | 11            | 3                   | 4             | 0 / 0 / 0                | exact match       |
 
 The comparisons match each empty item's id, `since` and first lead, plus pending, quiet and covered sets.
 There were no quiet items to explain in these rounds. Fixed fixtures cover the owner-pause, needs-you and
@@ -583,14 +591,14 @@ settings file set to `{"mode":"on"}`. No extra restart, queue/registry write or 
 The first on-round was **Oct 20 12:27:26.696 PDT** (`2026-10-20T19:27:26.696Z`). Read-only comparison of
 that round's exact findings, the ledger and role-message metadata established:
 
-| recipient | stalled projects / step-1 lines | messages |
-| --- | --- | --- |
-| ops | 2 | 1 |
-| design | 5 | 1 |
-| frontend | 1 | 1 |
-| temper | 1 | 1 |
-| architecture | 2 | 1 |
-| total | 11 | 5 |
+| recipient    | stalled projects / step-1 lines | messages |
+| ------------ | ------------------------------- | -------- |
+| ops          | 2                               | 1        |
+| design       | 5                               | 1        |
+| frontend     | 1                               | 1        |
+| temper       | 1                               | 1        |
+| architecture | 2                               | 1        |
+| total        | 11                              | 5        |
 
 All 11 ledger steps match their app-authored role-message records. No duplicate, cap hit or cap breach;
 no owner step yet. There were **zero quiet items** in this live cohort; their exclusion is covered by fixed
