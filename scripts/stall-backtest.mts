@@ -16,7 +16,8 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { workPageFrom } from "../server/work-page.ts";
-import { STALL_DEFAULTS, leadUpdatesOf, stallReview, stallTime, stallTimesFrom } from "../server/stall-watch.ts";
+import { STALL_DEFAULTS, leadUpdatesOf, stallReview, stallTime } from "../server/stall-watch.ts";
+import { stallTimesFrom } from "../server/work-registry-times.ts";
 
 const args = process.argv.slice(2);
 const arg = (name: string, d: string) => {

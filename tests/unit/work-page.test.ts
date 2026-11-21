@@ -12,11 +12,12 @@ import {
 	WORK_PAGE_ACTIVITY_MAX,
 	WORK_PAGE_RECORDS_MAX,
 	WORK_PAGE_TASKS_MAX,
-	WorkPageFile,
+	goneQueues,
 	workFactsFromOverview,
 	workPageFrom,
 	type WorkQueueFacts,
 } from "../../server/work-page.js";
+import { watchInputsOf, WorkRegistryReader } from "../../server/work-registry-reader.js";
 
 /** One log line at time ts (its seq too), written by `by`. */
 const L = (ts: number, e: Record<string, unknown>, by = "ops") => JSON.stringify({ v: 1, seq: ts, ts, by, ...e });
@@ -433,25 +434,30 @@ describe("workFactsFromOverview", () => {
 	});
 });
 
-describe("WorkPageFile", () => {
+describe("WorkRegistryReader (the watches' one reader, Q-STALL-1)", () => {
 	let dir = "";
 	afterEach(() => {
 		if (dir) rmSync(dir, { recursive: true, force: true });
 		dir = "";
 	});
 
-	it("reads nothing from a missing log, unreadable from a folder, too-big over its limit, and follows changes", async () => {
+	it("reads nothing from a missing log, refuses a folder, follows changes, and leaves a half-written line out", async () => {
 		dir = mkdtempSync(join(tmpdir(), "work-page-"));
 		const file = join(dir, "events.jsonl");
 		const none = { at: 5, initiatives: [], projects: [], tasks: [], activity: [] };
-		expect(await new WorkPageFile(() => file).get([], 5)).toEqual(none);
-		expect(await new WorkPageFile(() => dir).get([], 5)).toEqual({ ...none, problem: "unreadable" });
+		const pageOf = async (r: WorkRegistryReader) => watchInputsOf(await r.read(5), [], new Map(), 5).page;
+		expect(await pageOf(new WorkRegistryReader(() => file))).toEqual(none);
+		expect(await new WorkRegistryReader(() => dir).read(5)).toMatchObject({
+			complete: false,
+			reason: "read-error",
+			detail: "not a regular file",
+		});
 		writeFileSync(file, `${FIXTURE.split("\n")[0]}\n`);
-		const reader = new WorkPageFile(() => file);
-		expect((await reader.get([], 5)).initiatives.map((i) => i.id)).toEqual(["team-plan"]);
-		appendFileSync(file, `${FIXTURE.split("\n")[1]}\n`);
-		expect((await reader.get([], 5)).projects.map((p) => p.id)).toEqual(["page-data"]);
-		expect(await new WorkPageFile(() => file, 100).get([], 5)).toEqual({ ...none, problem: "too-big" });
+		const reader = new WorkRegistryReader(() => file);
+		expect((await pageOf(reader)).initiatives.map((i) => i.id)).toEqual(["team-plan"]);
+		appendFileSync(file, `${FIXTURE.split("\n")[1]}\n{"v":1,"op":"task.li`);
+		expect((await pageOf(reader)).projects.map((p) => p.id)).toEqual(["page-data"]);
+		expect(await reader.read(5)).toMatchObject({ complete: true });
 	});
 
 	it("leaves out the links whose queue file is gone, like a deleted throwaway copy's (H-INITIATIVES-PAGE-3c)", async () => {
@@ -477,7 +483,9 @@ describe("WorkPageFile", () => {
 			[...FIXTURE.split("\n").slice(0, 2), ...link(10, home, "waiting"), ...link(20, copy, "blocked")].join("\n") +
 			"\n";
 		writeFileSync(file, log);
-		const page = await new WorkPageFile(() => file).get([], 5);
+		const read = await new WorkRegistryReader(() => file).read(5);
+		if (!read.complete) throw new Error(read.detail);
+		const page = watchInputsOf(read, [], new Map(), 5, await goneQueues(read.replay)).page;
 		expect(page.tasks.map((t) => [t.queue, t.task, t.state])).toEqual([[home, 7, "waiting"]]);
 		// The pure builder doesn't look at the disk: it keeps both.
 		expect(workPageFrom(log, [], 5).tasks.map((t) => [t.queue, t.state])).toEqual([

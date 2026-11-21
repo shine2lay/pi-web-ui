@@ -1,8 +1,8 @@
 /**
- * Q-STALL-1 acceptance (Ops #1055 step 1 of 2; docs/stall-watch-whole-list.md). The stall watch reads the whole
- * work registry through its one reader (server/work-registry-reader.ts), and when it can't, it raises the owner
- * alarm in that same round instead of going quiet. Red until step 2 builds it; then step 2 moves this file into
- * tests/unit and deletes tests/acceptance/vitest.config.ts. Never weaken or skip a case to make it pass.
+ * Q-STALL-1 acceptance (written in Ops #1055 step 1, built in #1056 step 2; docs/stall-watch-whole-list.md). The
+ * stall watch reads the whole work registry through its one reader (server/work-registry-reader.ts), and when it
+ * can't, it raises the owner alarm in that same round instead of going quiet. In the land gate (tests/unit) since
+ * step 2. Never weaken or skip a case to make it pass.
  *
  * Registries are built here, line by line as the store writes them, in a temporary folder: never the live one.
  */

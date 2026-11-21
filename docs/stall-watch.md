@@ -173,25 +173,31 @@ export class StallWatch; // a round every everyMin minutes; hands the findings t
   recorded), so the same stall keeps the same `stretch` from round to round and across restarts.
 - `StallExtra` holds what the page lacks: per item, its last status or lead change, the newest registry event
   about it or its tasks, when an open task (or, for an initiative, an active project) last left it, and when a
-  wait was last resumed (`stallExtraFrom(log, leadUpdates)` makes it from the registry's text in one pass); and
-  each initiative's newest lead update.
+  wait was last resumed (`server/work-registry-times.ts`, built in the same pass as the registry read; the
+  backtest uses its `stallTimesFrom(text)`); and each initiative's newest lead update.
 
 ## The dry run
 
-- Each round reads the work page (the server's own `readWorkPage()`: the registry and the Roles overview's
-  queue facts), the registry's text for the extra times, and the progress feed's lead updates. It does not
-  depend on any open window.
-- It logs changes only:
+- Each round reads the whole registry through its one reader (`server/work-registry-reader.ts`, no task-count
+  ceiling; the server's `readWorkRegistry()` joins it with the Roles overview's queue facts), which gives the
+  page and the extra times from one pass, and the progress feed's lead updates. It does not depend on any open
+  window. A complete round logs `stall: round complete: <n> linked tasks read, <m> findings` and writes
+  `~/.pi-web-ui/stall-watch-heartbeat.json` (`at`, `tasksRead`), which agent-tools' scheduled-jobs dead man's
+  switch watches (row `stall-watch`, 30 min).
+- Otherwise it logs changes only:
   - `stall: would wake <role> about <kind> <id> (<rule> since <local time>, step 1 of N)` for a new stretch,
     then step 2, 3 … as each comes due, `gapHours` apart;
   - `stall: <id> cleared (<why>)` when a stretch ends.
 - It keeps the current findings for the control socket's `stall_list` (`pi-web-ui stall list` prints it): the
   findings and every active item's state (flagged, quiet with why, empty but not for long enough, covered by its
-  projects, or fine).
-- It sends nothing and writes nothing outside its own log lines. Its memory of what it logged is in the
+  projects, or fine); `incomplete` says why the last round couldn't read the whole registry.
+- In dry mode it sends nothing (apart from the alarm above) and writes nothing beyond its log lines and the
+  heartbeat. Its memory of what it logged is in the
   server's memory only: after a restart the current stretches are logged again once.
-- A page that can't be trusted (unreadable, or bigger than is sent) skips the round with one log line and keeps
-  the last findings.
+- A registry it can't read whole (a line that isn't JSON, a read error, a round that fails) means it isn't
+  watching: it logs `stall: registry not read whole (...)` each such round, shows no findings, and pages the
+  owner once per condition through the lane watchdog's Telegram route; a complete round re-arms the alarm. The
+  dead-end answer on such a read is "unknown". Details: [stall-watch-whole-list.md](stall-watch-whole-list.md).
 
 ## The wait field in the work page
 

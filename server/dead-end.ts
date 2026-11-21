@@ -21,6 +21,7 @@
  */
 import { resolve } from "node:path";
 import type { UiWorkPage, UiWorkPageRecord, UiWorkPageTask, UiWorkTaskState } from "./protocol.js";
+import { pageMissesTasks } from "./work-registry-reader.js";
 
 /** A wait never counts for longer than this after it was recorded (pi-queue's own cap, Ops #282). */
 const WAIT_MAX_MS = 14 * 24 * 3_600_000;
@@ -159,12 +160,16 @@ export function deadEndOf(r: UiWorkPageRecord, page: DeadEndPage, now: number): 
 /**
  * The queue host's deadEnd (queue-host.ts): the verdict for `project`, with the task pi-queue just changed (its
  * queue chat `file`, number `id`) taken at its new `state`, as the queue file may not have been read again yet.
+ * Q-STALL-1: a page the one registry reader couldn't read whole (or a capped one) answers "unknown", never a guess.
  */
 export function deadEndAnswer(
-	page: Pick<UiWorkPage, "projects"> & DeadEndPage,
+	page: Pick<UiWorkPage, "projects" | "problem"> & DeadEndPage,
 	req: { project: string; file?: string; id?: number; state?: UiWorkTaskState },
 	now: number,
-): { state: DeadEndVerdict["state"]; why: string; name: string; waysOut?: string } {
+): { state: DeadEndVerdict["state"] | "unknown"; why: string; name: string; waysOut?: string } {
+	if (pageMissesTasks(page)) {
+		return { state: "unknown", why: "the work registry couldn't be read whole", name: req.project };
+	}
 	const r = page.projects.find((p) => p.id === req.project);
 	if (!r) return { state: "quiet", why: "not in the work registry", name: req.project };
 	const file = req.file ? resolve(req.file) : undefined;

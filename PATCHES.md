@@ -8147,6 +8147,27 @@ on, backtest, cost and result: `docs/stall-watch.md`.
 - Turn it off without a deploy: `{"mode":"off"}` in `~/.pi-web-ui/stall-watch.json` (read at every round).
   Or revert this commit with `wt` and install with `pi-web-deploy`. Nothing stored changes.
 
+### Whole list, or the alarm (Q-STALL-1; Ops #1055 seam + cases, Ops #1056 build)
+
+**Why** (owner Shine 2026-11-21, Show&Tell d_x5rdobqnby, record dr-d99bc6d69ea1): from 2026-11-03 the registry
+held more than the page's 2,000-task cap, so every round was skipped with a log line and no alarm, for 18 days.
+Hypothesis, build and proof: `docs/stall-watch-whole-list.md`.
+
+- `server/work-registry-reader.ts`: the watches' one registry reader (streamed, no ceiling; complete or a typed
+  incomplete read), `watchInputsOf`, the owner alarm text, the heartbeat file. `server/work-registry-times.ts`
+  (new): the stall times, built in the same pass (moved out of `stall-watch.ts`).
+- `server/stall-watch.ts`: an incomplete read logs, shows no findings and pages the owner once per reason;
+  a complete round logs its count and writes `~/.pi-web-ui/stall-watch-heartbeat.json`. The skip path is gone.
+- `server/work-page.ts`: `replayEvent`/`replayEnd`, `goneQueues` exported, `workPageOf` limits (display caps by
+  default); `WorkPageFile` removed. `server/dead-end.ts`: "unknown" on an incomplete page.
+  `server/queue-host.ts`: the state type allows it (pi-queue says nothing unless "dead").
+- `server/agent-service.ts`: `readWorkRegistry()` replaces `readWorkPage()`; the watch's alarm is
+  `sendQueueAlarm`.
+- Tests: `tests/unit/stall-watch-whole-list.test.ts` (AC1-AC7, moved into the gate), `stall-watch.test.ts`
+  and `work-page.test.ts` adjusted; the skip-path case removed.
+- Undo: `"mode": "dry"` or `"off"` in `~/.pi-web-ui/stall-watch.json`; or revert and `pi-web-deploy`, and
+  remove agent-tools' `stall-watch` scheduled-jobs row.
+
 ## durable-w3-cutover: @earendil-works/pi-durable SQLite WAL session engine, extension bridge, clean-env bootstrap & lossless JSONL migrator
 
 - `local` (Ops #600–#605, H-W3-CUTOVER-1; owner choices m73851, m74268, m74290, m75686, m75951, m76183, m76186). Integrates the Wave 3 `@earendil-works/pi-durable` SQLite WAL engine driver (`#601`, `server/pi-durable-session-driver.ts`), extension hook and custom-entry bridge (`#602`, `server/durable-extension-bridge.ts`), clean-environment durable bootstrap and lossless `.jsonl` → SQLite migrator (`#603`, `server/durable-env-bootstrap.ts`, `server/durable-jsonl-migrator.ts`, `scripts/bootstrap-durable-env.mjs`, `scripts/migrate-jsonl-to-durable.mjs`), and `AgentService` / `ClientSession` `DurableSessionPort` wiring (`#604`, `server/agent-service.ts`).

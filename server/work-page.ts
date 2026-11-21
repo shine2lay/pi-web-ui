@@ -15,11 +15,11 @@
  * pause, and whether its question waits on the owner), taken from the Roles overview's own projection (each
  * role's home queue and open asks); what isn't found there stays absent.
  *
- * It only reads, like the Roles reader (work-records.ts, whose output is left as it is): one open and stat per
- * look, of a regular file only, and the file again only when it changed, at most WORK_LOG_MAX bytes of it.
+ * It only reads; the file itself is read by the watches' one registry reader (work-registry-reader.ts), which
+ * feeds each parsed line to replayEvent.
  */
 
-import { open, stat, type FileHandle } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { samePath } from "./identities.js";
 import type {
 	UiNormalizedTouch,
@@ -51,13 +51,13 @@ import type {
 import { doneFactsOf } from "./live-progress.js";
 import { requesterText } from "./queue-requester.js";
 import { computeTagGroups, computeTouchSystems } from "./shared/task-delivery-resolver.js";
-import { readUpTo, STATE_READ_FLAGS } from "./state-file-read.js";
-import { WORK_LOG_MAX } from "./work-records.js";
 
 /** At most this many initiatives and projects are sent (initiatives first); more says "too-big". */
 export const WORK_PAGE_RECORDS_MAX = 500;
 /** At most this many linked tasks are sent (in the order they were first linked); more says "too-big". */
 export const WORK_PAGE_TASKS_MAX = 2000;
+/** workPageOf's limit for the watches (Q-STALL-1): no cap, every record and linked task. */
+export const WORK_PAGE_WHOLE = { records: Number.POSITIVE_INFINITY, tasks: Number.POSITIVE_INFINITY };
 /** The newest this many changes are sent (newest first). */
 export const WORK_PAGE_ACTIVITY_MAX = 1000;
 
@@ -73,8 +73,6 @@ const WORK_NEED_MAX = 500;
 const WORK_ON_MAX = 20;
 const WORK_REF_MAX = 120;
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-/** The log is read in pieces of this size, so one that grows while it is read stops at the limit. */
-const READ_CHUNK = 1 << 20;
 
 type Status = UiWorkPageRecord["status"];
 const STATUSES: readonly string[] = ["active", "done", "dropped"];
@@ -156,7 +154,7 @@ export interface WorkReplay {
 	/** A change was skipped: one this reader doesn't know, or one the store's rules refuse. */
 	unknown: boolean;
 	/** The log as a whole couldn't be used. */
-	problem?: "unreadable" | "too-big";
+	problem?: "unreadable";
 }
 
 /** What a live queue says about one of its tasks, beyond the registry (the Roles overview's projection). */
@@ -488,6 +486,35 @@ const replayOf = (problem?: WorkReplay["problem"]): WorkReplay => ({
 	...(problem ? { problem } : {}),
 });
 
+/** A replay to feed the log's parsed lines to, in file order (replayEvent), then replayEnd. */
+export const newReplay = (): WorkReplay => replayOf();
+
+/** One parsed line into the replay; false when it isn't a JSON object (the store refuses such a log: so do we). */
+export function replayEvent(s: WorkReplay, e: unknown): boolean {
+	if (!isObject(e)) return false;
+	// A line of another version, or without its time or author, isn't a change this reader knows.
+	if (e.v !== 1 || typeof e.op !== "string" || !isTime(e.ts) || !isText(e.by, WORK_ID_MAX, true)) {
+		s.unknown = true;
+		return true;
+	}
+	try {
+		const line = apply(s, e as LogEvent);
+		if (line) s.activity.push(line);
+	} catch (err) {
+		if (!(err instanceof Skip)) throw err;
+		s.unknown = true;
+		return true;
+	}
+	if (s.activity.length >= WORK_PAGE_ACTIVITY_MAX * 2) s.activity.splice(0, WORK_PAGE_ACTIVITY_MAX);
+	return true;
+}
+
+/** The replay once every line is in. */
+export function replayEnd(s: WorkReplay): WorkReplay {
+	if (s.activity.length > WORK_PAGE_ACTIVITY_MAX) s.activity.splice(0, s.activity.length - WORK_PAGE_ACTIVITY_MAX);
+	return s;
+}
+
 /** The log's text, replayed. A half-written last line is left out; a line that isn't JSON makes it unreadable. */
 export function replayWork(log: string): WorkReplay {
 	const s = replayOf();
@@ -499,27 +526,11 @@ export function replayWork(log: string): WorkReplay {
 		try {
 			e = JSON.parse(line);
 		} catch {
-			// The store refuses to work with a log it can't read: so does the page.
 			return replayOf("unreadable");
 		}
-		if (!isObject(e)) return replayOf("unreadable");
-		// A line of another version, or without its time or author, isn't a change this reader knows.
-		if (e.v !== 1 || typeof e.op !== "string" || !isTime(e.ts) || !isText(e.by, WORK_ID_MAX, true)) {
-			s.unknown = true;
-			continue;
-		}
-		try {
-			const line = apply(s, e as LogEvent);
-			if (line) s.activity.push(line);
-		} catch (err) {
-			if (!(err instanceof Skip)) throw err;
-			s.unknown = true;
-			continue;
-		}
-		if (s.activity.length >= WORK_PAGE_ACTIVITY_MAX * 2) s.activity.splice(0, WORK_PAGE_ACTIVITY_MAX);
+		if (!replayEvent(s, e)) return replayOf("unreadable");
 	}
-	if (s.activity.length > WORK_PAGE_ACTIVITY_MAX) s.activity.splice(0, s.activity.length - WORK_PAGE_ACTIVITY_MAX);
-	return s;
+	return replayEnd(s);
 }
 
 function recordOut(r: Rec): UiWorkPageRecord {
@@ -600,15 +611,16 @@ export function workPageOf(
 	facts: readonly WorkQueueFacts[] = [],
 	at = Date.now(),
 	gone: ReadonlySet<string> = new Set(),
+	limit = { records: WORK_PAGE_RECORDS_MAX, tasks: WORK_PAGE_TASKS_MAX },
 ): UiWorkPage {
 	if (r.problem) return { at, initiatives: [], projects: [], tasks: [], activity: [], problem: r.problem };
 	const initiatives = [...r.initiatives.values()];
 	const projects = [...r.projects.values()];
 	const links = [...r.links.values()].filter((l) => !gone.has(l.queue));
-	// A bloated log never enlarges every look past these.
-	const tooMany = initiatives.length + projects.length > WORK_PAGE_RECORDS_MAX || links.length > WORK_PAGE_TASKS_MAX;
-	const sentInitiatives = initiatives.slice(0, WORK_PAGE_RECORDS_MAX);
-	const sentProjects = projects.slice(0, WORK_PAGE_RECORDS_MAX - sentInitiatives.length);
+	// A display page never grows past these; the watches pass WORK_PAGE_WHOLE (every record and task).
+	const tooMany = initiatives.length + projects.length > limit.records || links.length > limit.tasks;
+	const sentInitiatives = initiatives.slice(0, limit.records);
+	const sentProjects = projects.slice(0, limit.records - sentInitiatives.length);
 	const queues = new Map<string, WorkQueueFacts | undefined>();
 	const queueOf = (file: string) => {
 		if (!queues.has(file))
@@ -628,7 +640,7 @@ export function workPageOf(
 		if (f.added !== undefined) return f.added === l.added ? f : undefined;
 		return (numbers.get(`${l.queue}\u0000${l.task}`) ?? 0) > 1 ? undefined : f;
 	};
-	const sentTasks = links.slice(0, WORK_PAGE_TASKS_MAX).map((l) => taskOut(l, factsOf(l)));
+	const sentTasks = links.slice(0, limit.tasks).map((l) => taskOut(l, factsOf(l)));
 	const carry = OVERVIEW_GROUP_FACTS.get(facts);
 	const computedTasks = sentTasks
 		.filter(
@@ -784,7 +796,7 @@ export function ownerAsksFromOverview(overview: UiRolesOverview): UiWorkOwnerAsk
 
 /** The links' queue files that no longer exist, each looked up once (whether it's there, never what's in it).
  *  Only a missing file or folder counts: one it can't look up stays in. */
-async function goneQueues(r: WorkReplay): Promise<Set<string>> {
+export async function goneQueues(r: WorkReplay): Promise<Set<string>> {
 	const gone = new Set<string>();
 	const files = new Set([...r.links.values()].map((l) => l.queue));
 	await Promise.all(
@@ -798,60 +810,4 @@ async function goneQueues(r: WorkReplay): Promise<Set<string>> {
 		}),
 	);
 	return gone;
-}
-
-/** The registry for the page: the log replayed again only when it changed, joined with the queues' facts. */
-export class WorkPageFile {
-	private seen: { mtimeMs: number; size: number; replay: WorkReplay } | null = null;
-
-	constructor(
-		private readonly path: () => string,
-		private readonly maxBytes = WORK_LOG_MAX,
-	) {}
-
-	async get(facts: readonly WorkQueueFacts[] = [], at = Date.now()): Promise<UiWorkPage> {
-		const r = await this.replay();
-		return workPageOf(r, facts, at, await goneQueues(r));
-	}
-
-	private async replay(): Promise<WorkReplay> {
-		const p = this.path();
-		let fh: FileHandle;
-		try {
-			// Non-blocking, so a FIFO in the log's place can't stall the look: it is refused below.
-			fh = await open(p, STATE_READ_FLAGS);
-		} catch (err) {
-			this.seen = null;
-			// No log yet: nothing was ever recorded.
-			if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return replayOf();
-			return replayOf("unreadable");
-		}
-		try {
-			const st = await fh.stat();
-			// Only a regular file: never a FIFO, a device or a folder (a link is followed to what it names).
-			if (!st.isFile()) {
-				this.seen = null;
-				return replayOf("unreadable");
-			}
-			if (st.size > this.maxBytes) {
-				this.seen = null;
-				return replayOf("too-big");
-			}
-			if (this.seen && this.seen.mtimeMs === st.mtimeMs && this.seen.size === st.size) return this.seen.replay;
-			const bytes = await readUpTo(fh, this.maxBytes, READ_CHUNK);
-			// It grew past the limit while being read.
-			if (bytes === null) {
-				this.seen = null;
-				return replayOf("too-big");
-			}
-			const replay = replayWork(bytes.toString("utf8"));
-			this.seen = { mtimeMs: st.mtimeMs, size: st.size, replay };
-			return replay;
-		} catch {
-			this.seen = null;
-			return replayOf("unreadable");
-		} finally {
-			await fh.close().catch(() => undefined);
-		}
-	}
 }

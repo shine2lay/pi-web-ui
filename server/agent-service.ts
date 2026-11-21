@@ -441,7 +441,8 @@ import {
 	BUSY_PROMPT_REASON,
 } from "./prompt-start-guard.js";
 import { RolesOverviewReader } from "./roles-overview.js";
-import { ownerAsksFromOverview, WorkPageFile, workFactsFromOverview, type WorkQueueFacts } from "./work-page.js";
+import { goneQueues, ownerAsksFromOverview, workFactsFromOverview, type WorkQueueFacts } from "./work-page.js";
+import { watchInputsOf, WorkRegistryReader, writeRegistryHeartbeat as beat } from "./work-registry-reader.js";
 import { ROLES_CONFIG_EVERY_MS, RolesConfigHistory } from "./roles-config-history.js";
 import { makeRolesOverviewTool } from "./roles-overview-tool.js";
 import {
@@ -633,8 +634,8 @@ import {
 } from "./decision-records.js";
 import {
 	LeadUpdatesFile,
+	STALL_HEARTBEAT_FILE,
 	StallDryLog,
-	StallTimesFile,
 	StallWatch,
 	stallSettings,
 	youngEnough,
@@ -18743,7 +18744,6 @@ export class AgentService {
 
 	private stallWatch: StallWatch | undefined;
 	private stallWake: StallWake | undefined;
-	private stallTimes: StallTimesFile | undefined;
 	private stallLeadUpdates: LeadUpdatesFile | undefined;
 
 	/** pi-work-management's workDir(), as the Roles reader finds it: PI_WORK_DIR, or "work" in pi's agent folder. */
@@ -18756,7 +18756,6 @@ export class AgentService {
 
 	private startStallWatch(): void {
 		if (this.stallWatch) return;
-		this.stallTimes = new StallTimesFile(() => this.workEventsFile());
 		// H-STALL-COST-1: only the records file's new lines, not keptRecords()' whole parse.
 		this.stallLeadUpdates = new LeadUpdatesFile(() => this.decisions.file);
 		// stall-wake (Ops #284): only mode on sends; dry remains the code default. The owner can change it
@@ -18791,12 +18790,13 @@ export class AgentService {
 				// H-STALL-COST-2: the newest overview when young enough (pages-fresh makes one every 15 s), else one
 				// made now. Only the queue facts come from it; a task's state is the registry's, read now.
 				const overview = youngEnough(this.newestOverview, Date.now()) ?? (await this.readRolesOverview());
-				const page = await this.readWorkPage(overview);
-				const times = await this.stallTimes!.get();
-				const leadUpdates = await this.stallLeadUpdates!.get();
-				snapshot = { page, extra: { times, leadUpdates } };
-				return snapshot;
+				const inputs = await this.readWorkRegistry(overview, await this.stallLeadUpdates!.get());
+				if (inputs.registry.complete) snapshot = inputs; // Q-STALL-1: never an incomplete page
+				return inputs;
 			},
+			// Q-STALL-1: an incomplete read pages the owner the lane watchdog's way; a complete round leaves a heartbeat.
+			alarm: (n) => this.sendQueueAlarm?.(n) ?? Promise.resolve({ ok: false, error: "no owner alarm route" }),
+			heartbeat: (b) => beat(join(this.stateStore.dataDir, STALL_HEARTBEAT_FILE), b),
 			log: (line) => console.log(line),
 		});
 		this.stallWatch.start();
@@ -18890,17 +18890,16 @@ export class AgentService {
 		this.decisionReader.start();
 	}
 
-	/** The work registry's reader (made on first use). */
-	private workPageFile: WorkPageFile | null = null;
+	/** The work registry's one reader (Q-STALL-1, work-registry-reader.ts; made on first use). */
+	private workRegistry: WorkRegistryReader | null = null;
 	private workFactsError: string | null = null;
 
 	/**
-	 * The whole work registry (read only, see work-page.ts), for dead-end and stall-watch: each task joined with
-	 * what the Roles overview's projection of its queue says. Without that projection the registry still reads,
-	 * only the queues' details are missing. stall-watch passes the overview it already has, so a round makes it
-	 * once.
+	 * The whole work registry through its one reader, for dead-end and stall-watch: each task joined with what the
+	 * Roles overview's projection of its queue says (without it only the queues' details are missing). stall-watch
+	 * passes the overview it already has and its lead updates. An incomplete read: an empty "unreadable" page.
 	 */
-	async readWorkPage(overview?: UiRolesOverview): Promise<UiWorkPage> {
+	async readWorkRegistry(overview?: UiRolesOverview, leadUpdates: ReadonlyMap<string, number> = new Map()) {
 		let facts: WorkQueueFacts[] = [];
 		let ownerAsks: UiWorkOwnerAsk[] | undefined;
 		try {
@@ -18915,15 +18914,16 @@ export class AgentService {
 			if (error !== this.workFactsError) console.warn(`[work-page] no queue facts: ${error}`);
 			this.workFactsError = error;
 		}
-		// pi-work-management's workDir(), as the Roles reader finds it: PI_WORK_DIR, or "work" in pi's agent folder.
-		this.workPageFile ??= new WorkPageFile(() => this.workEventsFile());
-		const page = await this.workPageFile.get(facts);
+		this.workRegistry ??= new WorkRegistryReader(() => this.workEventsFile());
+		const read = await this.workRegistry.read();
+		const gone = read.complete ? await goneQueues(read.replay) : undefined;
+		const { page, ...inputs } = watchInputsOf(read, facts, leadUpdates, Date.now(), gone);
 		// initiatives-page-gaps (Ops #228): the open hand-offs that carry an initiative's id (first lines only).
 		page.handoffs = this.roleMessages.openHandoffs();
 		if (ownerAsks) page.ownerAsks = ownerAsks;
-		// stall-wake (Ops #284): existing Initiatives note slots; never stored in WorkPageFile's cached replay.
+		// stall-wake (Ops #284): existing Initiatives note slots; never stored in the reader's kept read.
 		const findings = this.stallWatch?.list().findings ?? [];
-		return withStall(page, findings, (stretch) => this.stallWake?.asked(stretch) ?? []);
+		return { ...inputs, page: withStall(page, findings, (stretch) => this.stallWake?.asked(stretch) ?? []) };
 	}
 
 	/** decision_log's view of the store and the kept records (the tool lives in each chat's ClientSession). */
@@ -19905,7 +19905,7 @@ export class AgentService {
 			leadChat: (role) => blocks.leadChat(role),
 			remindLead: (req) => blocks.remindLead(req),
 			// dead-end (Ops #483, rule 30): the stall check's own test, on a fresh read of the queues and registry.
-			deadEnd: async (req) => deadEndAnswer(await this.readWorkPage(), req, Date.now()),
+			deadEnd: async (req) => deadEndAnswer((await this.readWorkRegistry()).page, req, Date.now()),
 			previewLaunch: (request, cwd, sourceSessionId) =>
 				previewExistingQueueLaunch(request, cwd, sourceSessionId, this.clients.values()),
 			// task-chat-start (Ops #629): the role's open lane only covers opening the chat and sending its first prompt;

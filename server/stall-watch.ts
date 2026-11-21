@@ -14,11 +14,18 @@
  *   they are here.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { open, readFile, stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { deadEndOf } from "./dead-end.js";
 import type { UiStallRule, UiWorkPage, UiWorkPageRecord, UiWorkPageTask, UiWorkWait } from "./protocol.js";
 import { resolveDataDir } from "./uploads.js";
+import {
+	registryIncompleteAlarm,
+	type RegistryIncomplete,
+	type RegistryWatchHooks,
+	type RegistryWatchInputs,
+} from "./work-registry-reader.js";
+import { isOpenState, itemKey, type StallTimes } from "./work-registry-times.js";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The contract (Ops #284 builds on it: keep it exactly)
@@ -56,6 +63,8 @@ export type StallAct = (findings: StallFinding[], now: number) => void | Promise
 // ---------------------------------------------------------------------------------------------------------------
 
 export const STALL_FILE = "stall-watch.json";
+/** Q-STALL-1: written in the server's data folder after each complete round (the dead man's switch reads it). */
+export const STALL_HEARTBEAT_FILE = "stall-watch-heartbeat.json";
 export const STALL_DEFAULTS: Readonly<StallSettings> = {
 	mode: "dry",
 	emptyHours: 2,
@@ -122,20 +131,8 @@ export function stallSettings(file?: string, env: NodeJS.ProcessEnv = process.en
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// What the page lacks: times from the registry's own text, and the lead updates
+// What the page lacks: the registry's own times (work-registry-times.ts, from the reader's read), the lead updates
 // ---------------------------------------------------------------------------------------------------------------
-
-/** One item's times the page doesn't carry (ms). */
-export interface StallTimes {
-	/** Its last status or lead change. */
-	statusAt?: number;
-	/** The newest registry event about it or its tasks (a project's also count for its initiative). */
-	eventAt?: number;
-	/** An open task under it last closed or moved away; an initiative's also when an active project of it did. */
-	leftAt?: number;
-	/** Its last wait was ended early by a resume. */
-	resumedAt?: number;
-}
 
 export interface StallExtra {
 	/** By `${kind}:${id}`. */
@@ -143,12 +140,6 @@ export interface StallExtra {
 	/** Each initiative's newest lead update in the progress feed (ms). */
 	leadUpdates: ReadonlyMap<string, number>;
 }
-
-export const itemKey = (kind: "project" | "initiative", id: string) => `${kind}:${id}`;
-
-const OPEN_STATES: ReadonlySet<string> = new Set(["ready", "working", "asking", "stuck", "waiting", "blocked"]);
-/** Open: ready, working, asking, stuck, waiting or blocked; a link with no status recorded yet counts as open. */
-export const isOpenState = (state: string | undefined): boolean => state === undefined || OPEN_STATES.has(state);
 
 /** The lead updates, newest per initiative (at or before upTo). */
 export function leadUpdatesOf(
@@ -161,105 +152,6 @@ export function leadUpdatesOf(
 		if (!((out.get(u.initiative) ?? -1) >= u.at)) out.set(u.initiative, u.at);
 	}
 	return out;
-}
-
-/**
- * The extra times from the registry's text (pi-work-management's events.jsonl), in one pass. Only lines at or
- * before upTo count (the backtest). A half-written last line and lines that aren't changes are left out.
- */
-export function stallExtraFrom(
-	log: string,
-	updates: readonly { initiative: string; at: number }[] = [],
-	upTo = Number.POSITIVE_INFINITY,
-): StallExtra {
-	return { times: stallTimesFrom(log, upTo), leadUpdates: leadUpdatesOf(updates, upTo) };
-}
-
-export function stallTimesFrom(log: string, upTo = Number.POSITIVE_INFINITY): Map<string, StallTimes> {
-	const times = new Map<string, StallTimes>();
-	const bump = (key: string, field: keyof StallTimes, at: number) => {
-		let t = times.get(key);
-		if (!t) times.set(key, (t = {}));
-		if (!((t[field] ?? -1) >= at)) t[field] = at;
-	};
-	/** Each project's initiative and status as the log says now. */
-	const projects = new Map<string, { initiative: string | null; status: string }>();
-	/** Each link (queue, task, added): where it is and whether it is open. */
-	const links = new Map<string, { parent: string | undefined; open: boolean }>();
-	const parentKey = (p: unknown): string | undefined => {
-		if (!isObject(p)) return undefined;
-		if (typeof p.project === "string") return itemKey("project", p.project);
-		if (typeof p.initiative === "string") return itemKey("initiative", p.initiative);
-		return undefined;
-	};
-	/** Something happened about an item: a project's count for its initiative too. */
-	const touch = (key: string | undefined, at: number) => {
-		if (!key) return;
-		bump(key, "eventAt", at);
-		if (key.startsWith("project:")) {
-			const ini = projects.get(key.slice("project:".length))?.initiative;
-			if (ini) bump(itemKey("initiative", ini), "eventAt", at);
-		}
-	};
-	const lines = log.split("\n");
-	lines.pop();
-	for (const line of lines) {
-		if (!line.trim()) continue;
-		let e: unknown;
-		try {
-			e = JSON.parse(line);
-		} catch {
-			continue;
-		}
-		if (!isObject(e) || e.v !== 1 || typeof e.op !== "string" || !isTime(e.ts) || e.ts > upTo) continue;
-		const at = e.ts;
-		const [kind, act] = e.op.split(".");
-		if (kind === "initiative" || kind === "project") {
-			if (typeof e.id !== "string") continue;
-			const key = itemKey(kind, e.id);
-			if (kind === "project" && act === "create") {
-				projects.set(e.id, { initiative: typeof e.initiative === "string" ? e.initiative : null, status: "active" });
-			}
-			touch(key, at);
-			if (act === "change" && isObject(e.changes)) {
-				const ch = e.changes;
-				if (ch.status !== undefined || ch.lead !== undefined) bump(key, "statusAt", at);
-				const was = kind === "project" ? projects.get(e.id) : undefined;
-				if (was) {
-					const initiative =
-						ch.initiative === undefined ? was.initiative : typeof ch.initiative === "string" ? ch.initiative : null;
-					const status = typeof ch.status === "string" ? ch.status : was.status;
-					// An active project closing or moving away leaves its initiative.
-					if (was.initiative && was.status === "active" && (status !== "active" || initiative !== was.initiative)) {
-						bump(itemKey("initiative", was.initiative), "leftAt", at);
-					}
-					projects.set(e.id, { initiative, status });
-				}
-			}
-			if (act === "resume") bump(key, "resumedAt", at);
-			continue;
-		}
-		if (e.op !== "task.link" && e.op !== "task.state") continue;
-		const link = `${String(e.queue)}\u0000${String(e.task)}\u0000${String(e.added)}`;
-		const was = links.get(link);
-		if (e.op === "task.link") {
-			const parent = parentKey(e.parent);
-			const open = was ? was.open : true;
-			if (was?.parent && was.parent !== parent) {
-				touch(was.parent, at);
-				if (was.open) bump(was.parent, "leftAt", at);
-			}
-			links.set(link, { parent, open });
-			touch(parent, at);
-			continue;
-		}
-		if (!was) continue;
-		const open = isOpenState(typeof e.status === "string" ? e.status : undefined);
-		touch(was.parent, at);
-		if (was.parent && was.open && !open) bump(was.parent, "leftAt", at);
-		links.set(link, { ...was, open });
-	}
-	return times;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -540,9 +432,10 @@ export interface StallInputs {
 	extra: StallExtra;
 }
 
-export interface StallWatchOptions {
-	/** The round's inputs: the work page (with the queues' facts) and the extra times. */
-	read: () => Promise<StallInputs> | StallInputs;
+/** alarm and heartbeat (Q-STALL-1): see RegistryWatchHooks and StallWatch.tick. */
+export interface StallWatchOptions extends RegistryWatchHooks {
+	/** The round's inputs from the one registry reader (watchInputsOf): the whole page, the extra times, the read. */
+	read: () => Promise<RegistryWatchInputs> | RegistryWatchInputs;
 	/** What a round's findings go to; default: the dry run's log (StallDryLog). */
 	act?: StallAct;
 	settings?: () => StallSettings;
@@ -561,20 +454,23 @@ export interface StallList {
 	/** The last round's time (ms) and how long it took. */
 	at?: number;
 	tookMs?: number;
-	/** Why the last round was skipped, if it was. */
-	skipped?: string;
+	/** Q-STALL-1: why the last round couldn't read the whole registry (it found nothing then), if it couldn't. */
+	incomplete?: string;
 	findings: StallFinding[];
 	items: StallItem[];
 }
 
-/** One round every everyMin minutes: reads, works out the findings, hands them to act. Never sends or writes. */
+/** One round every everyMin minutes: reads, works out the findings, hands them to act. Sends only the owner alarm
+ *  (Q-STALL-1) and writes only through its hooks. */
 export class StallWatch {
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private on = false;
 	private busy = false;
 	private rounds = 0;
 	private last: { at: number; tookMs: number; review: StallReview } | undefined;
-	private skipped: string | undefined;
+	private incomplete: string | undefined;
+	/** Q-STALL-1: the conditions already alarmed since the last complete round (one alarm per condition). */
+	private readonly alarmed = new Set<string>();
 	private readonly dry: StallDryLog;
 
 	constructor(private readonly opts: StallWatchOptions) {
@@ -638,15 +534,14 @@ export class StallWatch {
 				return undefined;
 			}
 			const started = performance.now();
-			const { page, extra } = await this.opts.read();
+			const { page, extra, registry } = await this.opts.read();
 			const now = this.now();
-			if (page.problem === "unreadable" || page.problem === "too-big") {
-				const why = `the registry is ${page.problem === "too-big" ? "bigger than is read" : "unreadable"}`;
-				if (this.skipped !== why) this.log(`stall: round skipped (${why}); last findings kept`);
-				this.skipped = why;
+			if (!registry.complete) {
+				this.notWatching(registry);
 				return undefined;
 			}
-			this.skipped = undefined;
+			this.incomplete = undefined;
+			this.alarmed.clear();
 			const review = stallReview(page, extra, now, s);
 			const before = this.last?.review.findings ?? [];
 			const stretches = new Set(review.findings.map((f) => f.stretch));
@@ -655,6 +550,12 @@ export class StallWatch {
 			}
 			this.last = { at: now, tookMs: Math.round(performance.now() - started), review };
 			this.rounds++;
+			this.log(`stall: round complete: ${registry.tasksRead} linked tasks read, ${review.findings.length} findings`);
+			try {
+				this.opts.heartbeat?.({ at: now, tasksRead: registry.tasksRead });
+			} catch (err) {
+				this.log(`stall: heartbeat not written: ${(err as Error)?.message || String(err)}`);
+			}
 			try {
 				await (this.opts.act ?? this.dry.act)(review.findings, now);
 			} catch (err) {
@@ -662,11 +563,41 @@ export class StallWatch {
 			}
 			return review;
 		} catch (err) {
-			this.log(`stall: round failed: ${(err as Error)?.message || String(err)}`);
+			// A round that couldn't finish isn't watching either: the same alarm as an incomplete read.
+			const detail = `the round failed: ${(err as Error)?.message || String(err)}`;
+			this.notWatching({ complete: false, at: this.now(), reason: "read-error", detail, tasksRead: 0 });
 			return undefined;
 		} finally {
 			this.busy = false;
 		}
+	}
+
+	/**
+	 * Q-STALL-1: the round couldn't read the whole registry. It finds nothing and keeps no earlier findings as
+	 * current, logs it, and raises the owner alarm once per condition (again only after a complete round). A send
+	 * that surely didn't go out is tried again next round.
+	 */
+	private notWatching(read: RegistryIncomplete): void {
+		const key = `${read.reason}: ${read.detail}`;
+		this.last = undefined;
+		this.incomplete = key;
+		this.log(
+			`stall: registry not read whole (${key}; ${read.tasksRead} linked tasks read); no findings, not watching until fixed`,
+		);
+		if (this.alarmed.has(read.reason)) return;
+		this.alarmed.add(read.reason);
+		const notSent = (why: string) => {
+			this.alarmed.delete(read.reason);
+			this.log(`stall: owner alarm not sent: ${why}`);
+		};
+		if (!this.opts.alarm) return notSent("no owner alarm route");
+		void this.opts.alarm(registryIncompleteAlarm("stuck-work watch", read)).then(
+			(r) => {
+				if (r.ok) this.log(`stall: owner alarm sent (${read.reason})`);
+				else if (!r.maybeSent) notSent(r.error);
+			},
+			(err: unknown) => notSent(err instanceof Error ? err.message : String(err)),
+		);
 	}
 
 	/** The control socket's stall_list: the last round's findings and every active item's state. */
@@ -678,7 +609,7 @@ export class StallWatch {
 			running: this.on,
 			rounds: this.rounds,
 			...(this.last ? { at: this.last.at, tookMs: this.last.tookMs } : {}),
-			...(this.skipped ? { skipped: this.skipped } : {}),
+			...(this.incomplete ? { incomplete: this.incomplete } : {}),
 			findings: this.last?.review.findings ?? [],
 			items: this.last?.review.items ?? [],
 		};
@@ -697,30 +628,8 @@ function clearedWhy(f: StallFinding, page: UiWorkPage, review: StallReview): str
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The live inputs' extra times, read again only when the registry changed
+// The live inputs: the newest overview while young enough, and the lead updates read a little at a time
 // ---------------------------------------------------------------------------------------------------------------
-
-/** The registry's extra times (stallTimesFrom), kept while the file's size and time are unchanged. */
-export class StallTimesFile {
-	private seen: { mtimeMs: number; size: number; times: Map<string, StallTimes> } | undefined;
-
-	constructor(private readonly file: () => string) {}
-
-	async get(): Promise<Map<string, StallTimes>> {
-		const path = this.file();
-		let st: { mtimeMs: number; size: number };
-		try {
-			st = await stat(path);
-		} catch {
-			this.seen = undefined;
-			return new Map();
-		}
-		if (this.seen && this.seen.mtimeMs === st.mtimeMs && this.seen.size === st.size) return this.seen.times;
-		const times = stallTimesFrom(await readFile(path, "utf8"));
-		this.seen = { mtimeMs: st.mtimeMs, size: st.size, times };
-		return times;
-	}
-}
 
 /**
  * H-STALL-COST-2 (docs/stall-watch.md): the newest Roles overview the server made (in practice pages-fresh's,

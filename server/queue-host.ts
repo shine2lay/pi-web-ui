@@ -49,7 +49,7 @@
  *    target home a single-use ticket through its /queue command. Only both together. docs/queue-owner-relay.md.
  *  - deadEnd({project, file?, id?, state?}) (dead-end, Ops #483, AGENTS.md rule 30): whether that project of the
  *    work registry has nothing moving now, by dead-end.ts (the stall check's own test), with the task pi-queue
- *    just changed taken at its new status: {state: "dead" | "moving" | "quiet", why, name, waysOut?} or
+ *    just changed taken at its new status: {state: "dead" | "moving" | "quiet" | "unknown", why, name, waysOut?} or
  *    {problem}. Only reads. pi-queue's drop and reply results say a dead end and its three ways out.
  *
  * This file is the glue: it checks what the extension hands in and serializes the work. The chats
@@ -156,7 +156,7 @@ export interface QueueDeadEndRequest {
 }
 
 export type QueueDeadEndResult =
-	{ state: "dead" | "moving" | "quiet"; why: string; name: string; waysOut?: string } | { problem: string };
+	{ state: "dead" | "moving" | "quiet" | "unknown"; why: string; name: string; waysOut?: string } | { problem: string };
 
 const TASK_STATES: ReadonlySet<string> = new Set([
 	"ready",

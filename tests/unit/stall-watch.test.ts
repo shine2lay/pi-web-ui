@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { UiWorkPage } from "../../server/protocol.js";
 import { workPageFrom, type WorkQueueFacts, type WorkTaskFacts } from "../../server/work-page.js";
+import type { RegistryRead } from "../../server/work-registry-reader.js";
+import { stallTimesFrom } from "../../server/work-registry-times.js";
 import { DecisionRecords } from "../../server/decision-records.js";
 import { withStall } from "../../server/stall-wake.js";
 import {
@@ -19,12 +21,10 @@ import {
 	STALL_OVERVIEW_MAX_AGE_MS,
 	StallDryLog,
 	StallWatch,
-	stallExtraFrom,
 	stallFindings,
 	stallReview,
 	stallSettings,
 	stallTime,
-	stallTimesFrom,
 	stallWakeLine,
 	youngEnough,
 	type StallExtra,
@@ -119,6 +119,18 @@ class Reg {
 		return stallExtraFrom(this.text(), updates, upTo);
 	}
 }
+
+/** The extra times and lead updates over a log's text (what the reader's read gives the watch). */
+function stallExtraFrom(
+	log: string,
+	updates: readonly { initiative: string; at: number }[] = [],
+	upTo = Number.POSITIVE_INFINITY,
+): StallExtra {
+	return { times: stallTimesFrom(log, upTo), leadUpdates: leadUpdatesOf(updates, upTo) };
+}
+
+/** A complete read as the one registry reader reports it (the page and times come with it). */
+const COMPLETE = { complete: true, at: NOW, tasksRead: 0, bytes: 0, tookMs: 0 } as unknown as RegistryRead;
 
 /** Runs the rules twice, from the text up, and expects the same answer both times. */
 function twice(reg: Reg, now = NOW, s = S, updates: { initiative: string; at: number }[] = []) {
@@ -738,7 +750,7 @@ describe("stall-watch dry run", () => {
 		const got: StallFinding[][] = [];
 		const lines: string[] = [];
 		const w = new StallWatch({
-			read: () => ({ page: reg.page(now), extra: reg.extra() }),
+			read: () => ({ page: reg.page(now), extra: reg.extra(), registry: COMPLETE }),
 			act: (f) => {
 				got.push(f);
 			},
@@ -753,38 +765,37 @@ describe("stall-watch dry run", () => {
 		reg = new Reg().project(NOW - 5 * H, "p").task(NOW, 9, { project: "p" }, "working");
 		await w.tick();
 		expect(got[1]).toEqual([]);
-		expect(lines).toEqual([`stall: p cleared (1 open, last recorded ${stallTime(NOW)})`]);
+		expect(lines).toEqual([
+			"stall: round complete: 0 linked tasks read, 1 findings",
+			`stall: p cleared (1 open, last recorded ${stallTime(NOW)})`,
+			"stall: round complete: 0 linked tasks read, 0 findings",
+		]);
 		expect(w.list().items).toMatchObject([{ id: "p", state: "fine" }]);
 	});
 
-	it("StallWatch: mode off stops it; an unreadable registry skips the round and keeps the findings", async () => {
+	it("StallWatch: mode off stops it", async () => {
 		const lines: string[] = [];
 		let s: StallSettings = S;
-		let text = new Reg().project(NOW - 5 * H, "p").text();
+		const text = new Reg().project(NOW - 5 * H, "p").text();
+		const page = workPageFrom(text, [], NOW);
 		const w = new StallWatch({
-			read: () => ({ page: workPageFrom(text, [], NOW), extra: stallExtraFrom(text) }),
+			read: () => ({ page, extra: stallExtraFrom(text), registry: COMPLETE }),
 			settings: () => s,
 			now: () => NOW,
 			log: (l) => lines.push(l),
 			firstMs: 10,
 		});
 		await w.tick();
-		expect(lines).toEqual([
+		expect(lines.filter((l) => !l.startsWith("stall: round complete"))).toEqual([
 			`stall: would wake ops about project p (empty since ${stallTime(NOW - 5 * H)}, step 1 of 2)`,
 		]);
-		text = "not json at all\n{}\n";
-		const page = workPageFrom(text, [], NOW);
-		if (page.problem === "unreadable") {
-			await w.tick();
-			expect(w.list().findings.map((f) => f.id)).toEqual(["p"]);
-		}
 		s = { ...S, mode: "off" };
 		w.start();
 		await w.tick();
 		expect(w.running).toBe(false);
 		expect(lines.at(-1)).toBe("stall: off (stall-watch.json mode off); stopped");
 		const off = new StallWatch({
-			read: () => ({ page, extra: stallExtraFrom("") }),
+			read: () => ({ page, extra: stallExtraFrom(""), registry: COMPLETE }),
 			settings: () => s,
 			log: (l) => lines.push(l),
 		});

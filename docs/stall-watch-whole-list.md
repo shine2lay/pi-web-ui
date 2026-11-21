@@ -26,8 +26,8 @@ v1, record dr-d99bc6d69ea1), set A + B+ at 60 minutes + D; this is A. Contract: 
 
 ## The seam
 
-`server/work-registry-reader.ts` (types and signatures; step 1's bodies are stubs that keep today's
-behaviour, and nothing live calls them yet):
+`server/work-registry-reader.ts` (step 1 wrote the types and stub bodies; step 2, Ops #1056, built them and
+made it the watches' only reader):
 
 - `WorkRegistryReader.read(now)`: `RegistryComplete` (the replay, the extra times, `tasksRead`, bytes, time
   taken) or `RegistryIncomplete` (`reason`: unreadable-line or read-error, with a detail).
@@ -39,8 +39,8 @@ The stall watch, the dead-end answer and the later silence watch get registry ta
 
 ## Acceptance cases
 
-`tests/acceptance/stall-watch-whole-list.test.ts`, outside the land gate until step 2 builds it
-(`npm run test:stall-watch-whole-list`):
+`tests/unit/stall-watch-whole-list.test.ts`, in the land gate since step 2 (Ops #1056; while red it
+lived in an acceptance folder with its own config, outside the gate):
 
 - AC1: 3,500 links; a round completes and finds the stuck task that is link 3,400.
 - AC2: an unreadable line, then a read error: one alarm each in the same round, none repeated while it
@@ -51,3 +51,22 @@ The stall watch, the dead-end answer and the later silence watch get registry ta
 - AC6: one reader: the stall watch and dead-end take registry tasks only through the new module.
 - AC7: the reader's count equals an independent count; the real case runs on a copy with
   `scripts/registry-read.mts`.
+
+## The build (step 2, Ops #1056)
+
+- `WorkRegistryReader.read` streams the file 1 MB at a time and feeds each line to the replay
+  (`work-page.ts` `replayEvent`) and the stall times (`work-registry-times.ts` `StallTimesBuilder`) in one
+  pass; a complete read is kept while the file's inode, size and time are unchanged.
+- `watchInputsOf` builds the page with no cap (`WORK_PAGE_WHOLE`); `WORK_PAGE_TASKS_MAX` limits display only.
+- Removed: `WorkPageFile`, `StallTimesFile`, `stallExtraFrom` and the "round skipped; last findings kept"
+  path with its test.
+- Alarm: `StallWatch` gets `alarm` (the lane watchdog's owner Telegram sender, `sendQueueAlarm`) and
+  `heartbeat` (`~/.pi-web-ui/stall-watch-heartbeat.json`). One alarm per reason; a send that surely failed is
+  retried next round; a complete round re-arms.
+- Before the install, on a copy of the live data (2026-11-21 18:38 UTC): complete, 3,217 linked tasks,
+  4.4 MB, read in 63 ms; 0 findings, 0 wakes (the independent `scripts/stall-count.mjs` agrees: 0 flagged,
+  1 quiet).
+- Planted fault (a sealed HOME, a copy with a non-JSON line 1,000): one alarm in that round, none in the
+  next, dead-end "unknown"; fault removed: complete round, heartbeat written, alarm re-armed; broken again:
+  one more alarm.
+- Off switch: `"mode": "dry"` (finds, wakes nobody) or `"off"` in `~/.pi-web-ui/stall-watch.json`.
