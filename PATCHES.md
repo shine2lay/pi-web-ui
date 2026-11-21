@@ -257,7 +257,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 ## stall-dead-end: the work check finds a project with nothing moving at once and keeps waking its lead until a way out is taken
 
-- `local` (Ops #483; owner order bp-36910028, Oct 23, "Ok do both"; AGENTS.md rule 30). H-DEADEND-1, the test, quiet cases and waking: `docs/stall-watch.md` "Dead end". Work kept stopping at "dropped, no successor": the empty rule waited 2 h and both older rules counted a task blocked on a need text as open.
+- `local` (Ops #483; owner order bp-36910028, Oct 23, "Ok do both"; AGENTS.md rule 30). H-DEADEND-1, the test, quiet cases and waking: `docs/stall-watch-dead-end.md` "Dead end". Work kept stopping at "dropped, no successor": the empty rule waited 2 h and both older rules counted a task blocked on a need text as open.
 - `server/dead-end.ts` (new): the one test, `deadEndOf` / `projectDeadEnd` (active, wait not holding, at least one linked task, and nothing at work, ready to start now, waiting on a check, asking its lead, linked to another queue's open task, let go by its queue, or with the owner), `deadEndAnswer` (the queue host's answer, with pi-queue's just-changed task at its new status), `deadEndWaysOut`, `namesRecord`.
 - `server/stall-watch.ts`: rule `dead-end`, checked first for projects, stretch from the newest block/closing/link. `server/stall-wake.ts`: step 1 at once (the existing `stallNext`), its own item words with the ways out; the page shows it only while the test holds. `server/role-messages.ts`: `STALL_DEAD_END_HINT`, and a reply to such a wake is refused with the ways out. `web/src/initiatives-page/stall.ts`: "Nothing moving".
 - `server/work-page.ts`, `server/roles-overview.ts`, `server/protocol.ts`: the page's tasks carry `queueStopped` and `poked`; the page carries the Roles page's open owner asks that aren't a task's (`ownerAsks`). `server/queue-host.ts`, `server/agent-service.ts`: `deadEnd(req)` on the queue host for pi-queue (read only; checked request; a failure is a `problem`).
@@ -8084,7 +8084,7 @@ the slice rule, numbers and result: `docs/pages-fresh.md`.
 
 ## stall-wake: the work check wakes stalled work's lead, then the next lead, then the owner through COO
 
-- `local` (Ops #284, owner via COO rm-f7806412). H-STALL-WAKE-1, rules, caps, switch and verdict: `docs/stall-watch.md`.
+- `local` (Ops #284, owner via COO rm-f7806412). H-STALL-WAKE-1, rules, caps, switch and verdict: `docs/stall-watch-wake.md` and `docs/stall-watch-wake-checks.md`.
 - `server/stall-wake.ts`: due steps on #283's contract; a batch per recipient; 6 messages per recipient/local day and 20/hour overall; owner's pause holds without creating; disabled wakes skip to the next lead after the gap; 30-day historical ledger plus unresolved consumed-step checkpoints until verified end +30 days (Ops retention clarification rm-8b9b535a), and role-store crash recovery before caps. Only wakes, never registry/queue writes or model calls. `server/agent-service.ts` uses it for mode on only; code default stays dry.
 - `server/role-messages.ts`: app `requestStall`, own chain, normal after-turn delivery/retries, stall metadata, header/hints, no reply. Quiet-turn and page parsers recognise it without treating it as a morning report. Owner escalation goes only to COO.
 - `server/protocol.ts`, work-page decoration, existing Initiatives project row/card/loose-project note slots: stalled-since/asked or recorded wait. No other layout/page change. Roles' record reader recognises but ignores wait/resume events.
@@ -8129,8 +8129,9 @@ on, backtest, cost and result: `docs/stall-watch.md`.
 - Fixtures (all must-catch fire, no must-pass fires, same twice); backtest Oct 19 00:00 to Oct 20 09:00 against
   H-STALL-1 and against `stall-count.mjs` at all 199 steps (0 differences); a sealed round's cost on a copy of
   the real registry (median 10.6 ms); the land gate; live, look only: `pi-web-ui stall list` and the log's
-  `stall:` lines against `stall-count.mjs` (`docs/stall-watch.md`).
-- Follow-up (second commit; H-STALL-COST-1 and -2 in `docs/stall-watch.md`): the first cost measure had left
+  `stall:` lines against `stall-count.mjs` (`docs/stall-watch-dry-run-result.md`).
+- Follow-up (second commit; H-STALL-COST-1 and -2 in `docs/stall-watch-cost.md` and `docs/stall-watch-cost-overview.md`):
+  the first cost measure had left
   out two of the round's reads. Measured whole after the install, a round took about 400 ms of main thread
   whenever the records file had grown, which is nearly every round. That was 230-353 ms to parse the whole
   23 MB `decisions/records.jsonl` again for the lead updates, plus 100-250 ms for a Roles overview of its own.

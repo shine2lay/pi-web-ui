@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --import tsx
 /**
- * stall-watch's backtest (Ops #283, docs/stall-watch.md): replays the work registry's events every 10 minutes
+ * stall-watch's backtest (Ops #283, docs/stall-watch-backtest.md): replays the work registry's events every 10 minutes
  * over a past stretch with the stall check's own rules, and prints when each project or initiative would have
  * been flagged, for which rule, since when, and whom it would have woken, in turn. Read only.
  *

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * stall-watch's independent count (Ops #283, docs/stall-watch.md): straight from the work registry's events,
+ * stall-watch's independent count (Ops #283, docs/stall-watch-backtest.md): straight from the work registry's events,
  * without the server's code, the active projects and initiatives with no open task under them, since when, and
  * whether a wait keeps them quiet; and those with open tasks but no registry event for 24 h. The stall check's
  * `pi-web-ui stall list` must agree with it. Read only.

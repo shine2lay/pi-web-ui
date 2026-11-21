@@ -1,5 +1,5 @@
 /**
- * dead-end (Ops #483, owner order bp-36910028, AGENTS.md rule 30; docs/stall-watch.md "Dead end"): whether an
+ * dead-end (Ops #483, owner order bp-36910028, AGENTS.md rule 30; docs/stall-watch-dead-end.md "Dead end"): whether an
  * active project of the work registry has nothing moving, from the work page alone (no model). The one place
  * this is decided: the stall check's "dead-end" rule (stall-watch.ts) and pi-queue's drop and reply results
  * (the queue host's deadEnd, queue-host.ts) both ask deadEndOf.

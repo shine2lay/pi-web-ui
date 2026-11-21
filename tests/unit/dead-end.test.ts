@@ -1,5 +1,5 @@
 /**
- * dead-end (Ops #483, AGENTS.md rule 30; docs/stall-watch.md "Dead end"): the one test of whether an active
+ * dead-end (Ops #483, AGENTS.md rule 30; docs/stall-watch-dead-end.md "Dead end"): the one test of whether an active
  * project has nothing moving (server/dead-end.ts), on fixed registries whose right answers are known, each run
  * twice. The cases it must catch, the cases it must pass, the quiet ones, and the queue host's answer for
  * pi-queue's drop and reply results. Fixed fixtures only: never the live registry.

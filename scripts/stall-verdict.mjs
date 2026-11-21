@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// stall-wake (Ops #284, docs/stall-watch.md "H-STALL-WAKE-1"): the 24 h measure of the stall check's wakes, read
-// only, from the stall ledger and the work registry (no model, no writes).
+// stall-wake (Ops #284, docs/stall-watch-wake.md "H-STALL-WAKE-1"; docs/stall-watch-wake-checks.md "24 h verdict"):
+// the 24 h measure of the stall check's wakes, read only, from the stall ledger and the work registry (no model, no writes).
 //
 //   node scripts/stall-verdict.mjs [--since <ISO time or ms>] [--hours 24] [--ledger <file>] [--events <file>]
 //                                  [--store <role-messages.json>] [--gap-hours 2] [--json]

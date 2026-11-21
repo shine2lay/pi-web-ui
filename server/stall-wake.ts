@@ -1,5 +1,5 @@
 /**
- * stall-wake (Ops #284, docs/stall-watch.md "Waking the chain"): what the stall check (stall-watch.ts, Ops #283)
+ * stall-wake (Ops #284, docs/stall-watch-wake.md "Waking the chain"): what the stall check (stall-watch.ts, Ops #283)
  * does with its findings when stall-watch.json says "mode": "on". Each stalled stretch wakes its chain in turn:
  * step 1 (its lead) when the stretch is first found, each later step gapHours after the one before while the same
  * stretch is still found, and the owner's step as a message to COO's home chat, once. No model anywhere.

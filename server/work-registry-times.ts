@@ -1,5 +1,5 @@
 /**
- * work-registry-times (Ops #1056, Q-STALL-1; docs/stall-watch.md "What the page lacks"): the times the stall rules
+ * work-registry-times (Ops #1056, Q-STALL-1; docs/stall-watch-contract.md, `StallExtra` "holds what the page lacks"): the times the stall rules
  * need that the work page doesn't carry, worked out from the registry's own events (pi-work-management's
  * events.jsonl). The watches get them from the one registry reader (work-registry-reader.ts), which hands each
  * line it reads to StallTimesBuilder.event in the same pass as the replay; stallTimesFrom does the same over a

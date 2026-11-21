@@ -632,7 +632,7 @@ function clearedWhy(f: StallFinding, page: UiWorkPage, review: StallReview): str
 // ---------------------------------------------------------------------------------------------------------------
 
 /**
- * H-STALL-COST-2 (docs/stall-watch.md): the newest Roles overview the server made (in practice pages-fresh's,
+ * H-STALL-COST-2 (docs/stall-watch-cost-overview.md): the newest Roles overview the server made (in practice pages-fresh's,
  * made every 15 s whether or not a page is open) is used when it is at most this old; else the round makes its
  * own. The round takes only the queue facts from it (owner pauses, needs-you, TL;DR times, done summaries): a
  * task's state is the registry's, read each round, so an older overview can't make an item look empty.
@@ -659,7 +659,7 @@ const NEWLINE = 0x0a;
 /**
  * Each initiative's newest lead update, from the kept records (decision-records.ts:
  * <dataDir>/decisions/records.jsonl, append-only), read a little at a time (H-STALL-COST-1 in
- * docs/stall-watch.md). Parsing the whole 23 MB file again whenever it grew blocked the main thread for
+ * docs/stall-watch-cost.md). Parsing the whole 23 MB file again whenever it grew blocked the main thread for
  * 230-353 ms, nearly every round. This reader keeps its place (inode and byte offset), reads only the bytes
  * added since its last look and parses only the lines that hold "source":"update". A replaced or shrunk file,
  * or one whose byte before the kept place isn't a line end any more, is read again from the start. Same answer
