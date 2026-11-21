@@ -280,9 +280,7 @@ function cardOf(text) {
 				? "asks"
 				: /still waits for your decision/.test(what)
 					? "remind"
-					: /is parked/.test(what)
-						? "parked"
-						: "other";
+					: "other";
 	return { who: m[1], id: Number(m[2]), queue: m[3], kind, tag: m[5], title: m[6].trim() };
 }
 /** queue_reply's answer, as a category (pi-queue's own texts; the text itself is never printed). */
