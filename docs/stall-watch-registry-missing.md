@@ -59,7 +59,7 @@ approval is the same (record dr-d99bc6d69ea1; Q-STALL-1: never report from a par
   process, else the heartbeat file (`readRegistryHeartbeat`; one that can't be read shows no drop).
 - The read stays complete: findings, the dead-end answer and the heartbeat (rewritten with 0) are as
   before. The alarm is awaited inside the read, so it goes out before the heartbeat says 0; a crash in
-  between leaves it owed. A send that surely failed is tried again at the next read in this process.
+  between leaves it owed. A send that surely failed is tried again at the next read (H-STALL-WHOLE-4 below).
 - Any drop to exactly 0 counts; a smaller non-zero count doesn't. 0 -> 0, a new machine and tasks coming
   back are quiet. Two reads at once send it once.
 - One exception, so #1064's way back holds: right after a "missing" read (the owner had that alarm), a file
@@ -73,6 +73,9 @@ told once, at the drop.
 (`~/.pi/agent/work/events.jsonl` unless the work-folder setting says otherwise), even an empty one: the
 next round reads it complete and the "missing" state ends. Removing or editing the heartbeat file is not
 the way and is not needed.
+
+**A failed send (H-STALL-WHOLE-4, Ops #1068).** While the drop alarm is owed, the heartbeat keeps the old
+count, so a restart still sends it: [stall-watch-drop-owed.md](stall-watch-drop-owed.md).
 
 ## Not changed
 

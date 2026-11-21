@@ -8182,6 +8182,11 @@ Hypothesis, build and proof: `docs/stall-watch-whole-list.md`.
   file put back after "missing" stay quiet. `server/work-registry-drop.ts` (new) holds the last known count;
   `registryWatchOf(dataDir, file, { alarm })` gives the reader and the watch's `hooks` one alarm route
   (`server/agent-service.ts` spreads them). Tests: `tests/unit/work-registry-emptied.test.ts` (a-i).
+- Ops #1068 (QA L10/N1; H-STALL-WHOLE-4, `docs/stall-watch-drop-owed.md`): while the drop alarm is owed (its
+  last send surely failed), the heartbeat writer from `registryWatchOf` doesn't rewrite the heartbeat
+  (`RegistryDrop.owed`, `WorkRegistryReader.dropOwed`), so a restart still sends it; after a send it is
+  written as before. A stale heartbeat then raises the scheduled-jobs silence row too (accepted). Tests:
+  `tests/unit/work-registry-emptied.test.ts` (N1a-N1d).
 
 ### Silence watch (Q-STALL-1 B+ at 60 minutes; Ops #1058 seam + cases, Ops #1059 build)
 

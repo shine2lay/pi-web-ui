@@ -5,8 +5,10 @@
  *
  * The last known count is this process's last complete read, else the heartbeat on disk (`readRegistryHeartbeat`
  * through `registryWatchOf`). The alarm is awaited inside the read, so it goes out before the round rewrites the
- * heartbeat to 0: a crash in between leaves it owed (the heartbeat still says the old count), never lost. A send
- * that surely failed stays owed in this process and is tried at the next read. Any drop to exactly 0 counts; a
+ * heartbeat to 0: a crash in between leaves it owed (the heartbeat still says the old count), never lost.
+ * H-STALL-WHOLE-4 (Ops #1068, QA L10/N1; docs/stall-watch-drop-owed.md): a send that surely failed stays owed and is tried at the next read, and
+ * while it is owed the round doesn't rewrite the heartbeat (`owed`, `registryWatchOf`): the old count stays on
+ * disk, so a restart before a send succeeds still owes it and sends it. Any drop to exactly 0 counts; a
  * drop to a smaller count doesn't (the store compacts and projects get dropped). A file put back after the
  * "missing" alarm is the way back to healthy, not a second drop.
  */
@@ -27,6 +29,8 @@ export class RegistryDrop {
 	private afterMissing = false;
 	/** The alarm being sent, so two reads at once send it once. */
 	private telling: Promise<boolean> | undefined;
+	/** The last complete read owes the alarm (its send surely failed): the count it is owed for. */
+	private owing: RegistryHeartbeat | undefined;
 
 	constructor(
 		private readonly file: () => string,
@@ -37,6 +41,11 @@ export class RegistryDrop {
 	/** The last known count: this process's last complete read, else the heartbeat (throws when it can't be read). */
 	lastKnown(): RegistryHeartbeat | undefined {
 		return this.known ?? this.lastBeat();
+	}
+
+	/** The count the drop alarm is owed for while its last send surely failed (the heartbeat keeps it), else undefined. */
+	owed(): RegistryHeartbeat | undefined {
+		return this.owing;
 	}
 
 	/** The read was incomplete, "missing". */
@@ -54,8 +63,13 @@ export class RegistryDrop {
 			const telling = (this.telling = this.tell(last, this.hooks.alarm));
 			const sent = await telling;
 			this.telling = undefined;
-			if (!sent) return; // Owed: the last known count stays, so the next read tries again.
+			if (!sent) {
+				// Owed: the last known count stays (here and in the heartbeat), so the next read tries again.
+				this.owing = last;
+				return;
+			}
 		}
+		this.owing = undefined;
 		this.known = { at: read.at, tasksRead: read.tasksRead };
 	}
 

@@ -256,3 +256,73 @@ describe("H-STALL-WHOLE-3: a work list that drops from tasks to none", () => {
 		expect(r.alarm).toHaveBeenCalledTimes(1);
 	});
 });
+
+/**
+ * H-STALL-WHOLE-4 (Ops #1068; docs/stall-watch-drop-owed.md; QA L10, note N1): while the drop alarm is owed (its send surely failed), the heartbeat
+ * on disk keeps the last good count, so a restart before a send succeeds still owes it and sends it.
+ */
+describe("H-STALL-WHOLE-4: an owed drop alarm survives a restart", () => {
+	const down: Send = async () => ({ ok: false, error: "network down" });
+
+	/** 50 tasks read (heartbeat 50), then the file emptied in place. */
+	async function dropped(send: Send) {
+		writeFileSync(file, registry(50));
+		const r = rig(send);
+		await r.tick();
+		expect(beat()).toEqual({ at: new Date(NOW + M).toISOString(), tasksRead: 50 });
+		writeFileSync(file, "");
+		return r;
+	}
+
+	it("(N1a) drop, send fails -> heartbeat on disk keeps 50; next round fails again -> still 50", async () => {
+		const r = await dropped(down);
+		expect((await r.tick()).read).toMatchObject({ complete: true, tasksRead: 0 });
+		expect(r.alarm).toHaveBeenCalledTimes(1);
+		expect(beat(), "the last good heartbeat stays").toEqual({ at: new Date(NOW + M).toISOString(), tasksRead: 50 });
+		expect(r.lines.some((l) => /heartbeat kept at 50 linked tasks.*owed/.test(l))).toBe(true);
+		await r.tick();
+		expect(r.alarm, "tried again").toHaveBeenCalledTimes(2);
+		expect(beat().tasksRead, "still the old count").toBe(50);
+	});
+
+	it("(N1b) drop, send fails, restart, send works -> exactly 1 alarm, then heartbeat 0, then quiet", async () => {
+		const before = await dropped(down);
+		await before.tick();
+		expect(before.alarm).toHaveBeenCalledTimes(1);
+
+		const after = rig();
+		expect((await after.tick()).read).toMatchObject({ complete: true, tasksRead: 0 });
+		expect(after.alarm, "the restarted server still owes it").toHaveBeenCalledTimes(1);
+		expect(texts(after)[0]).toMatch(/from 50 linked tasks/);
+		expect(after.beatAtAlarm).toEqual([50]);
+		expect(beat().tasksRead, "sent: the heartbeat says 0").toBe(0);
+		await after.tick();
+		await after.tick();
+		expect(after.alarm, "then quiet").toHaveBeenCalledTimes(1);
+		const again = rig();
+		await again.tick();
+		expect(again.alarm, "and quiet after another restart").not.toHaveBeenCalled();
+	});
+
+	it("(N1c) drop, send fails once then works in the same process -> heartbeat 50 until the send, 0 after, no more sends", async () => {
+		const results: OwnerTelegramResult[] = [{ ok: false, error: "network down" }];
+		const r = await dropped(async () => results.shift() ?? { ok: true, messageIds: [2] });
+		await r.tick();
+		expect(beat().tasksRead, "owed").toBe(50);
+		await r.tick();
+		expect(r.alarm).toHaveBeenCalledTimes(2);
+		expect(beat().tasksRead, "sent").toBe(0);
+		await r.tick();
+		await r.tick();
+		expect(r.alarm, "no further sends").toHaveBeenCalledTimes(2);
+		expect(beat().tasksRead).toBe(0);
+	});
+
+	it("(N1d) drop, send works first time -> heartbeat 0 in that round, as before", async () => {
+		const r = await dropped(sent);
+		await r.tick();
+		expect(r.alarm).toHaveBeenCalledTimes(1);
+		expect(beat()).toEqual({ at: new Date(NOW + 2 * M).toISOString(), tasksRead: 0 });
+		expect(r.lines.filter((l) => /heartbeat kept/.test(l))).toEqual([]);
+	});
+});

@@ -123,6 +123,11 @@ export class WorkRegistryReader {
 	 * tasks (the last complete read in this process, else the heartbeat, absent or 0); otherwise incomplete,
 	 * "missing". A complete read with no tasks after a count above 0 tells the owner first (H-STALL-WHOLE-3).
 	 */
+	/** H-STALL-WHOLE-4: the count the drop alarm is still owed for (its last send surely failed), else undefined. */
+	dropOwed(): RegistryHeartbeat | undefined {
+		return this.drop.owed();
+	}
+
 	async read(now = Date.now()): Promise<RegistryRead> {
 		const read = await this.readFile(now);
 		if (read.complete) await this.drop.complete(read);
@@ -330,6 +335,8 @@ export type RegistryAlarmRoute = (notice: OwnerTelegramNotice) => Promise<OwnerT
  * The registry reader, the owner alarm and the heartbeat writer production uses, over the same heartbeat file in
  * `dataDir`, so a restarted server still knows the registry had tasks (H-STALL-WHOLE-2). `hooks` (a watch's
  * `alarm` and `heartbeat`) and the reader's drop-to-none alarm (H-STALL-WHOLE-3) share the one `alarm` route.
+ * H-STALL-WHOLE-4: while that alarm is owed the heartbeat isn't rewritten, so the last good count stays on disk
+ * (its time goes stale, and the scheduled-jobs silence row raises its own alarm: wanted, not masked).
  */
 export function registryWatchOf(
 	dataDir: string,
@@ -341,8 +348,14 @@ export function registryWatchOf(
 	const alarm: OwnerTelegramSender | undefined = given
 		? (n) => given(n) ?? Promise.resolve({ ok: false, error: "no owner alarm route" })
 		: undefined;
-	const heartbeat = (beat: RegistryHeartbeat) => writeRegistryHeartbeat(heartbeatFile, beat);
 	const lastBeat = () => readRegistryHeartbeat(heartbeatFile);
+	const reader = new WorkRegistryReader(registryFile, lastBeat, { alarm, log: route.log });
+	const heartbeat = (beat: RegistryHeartbeat) => {
+		const owed = reader.dropOwed();
+		if (!owed) return writeRegistryHeartbeat(heartbeatFile, beat);
+		const log = route.log ?? ((line: string) => console.log(line));
+		log(`stall: heartbeat kept at ${owed.tasksRead} linked tasks: the drop-to-none owner alarm is still owed`);
+	};
 	const hooks: RegistryWatchHooks = { alarm, heartbeat };
-	return { reader: new WorkRegistryReader(registryFile, lastBeat, { alarm, log: route.log }), heartbeat, hooks };
+	return { reader, heartbeat, hooks };
 }
