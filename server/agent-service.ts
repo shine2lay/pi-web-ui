@@ -442,7 +442,7 @@ import {
 } from "./prompt-start-guard.js";
 import { RolesOverviewReader } from "./roles-overview.js";
 import { goneQueues, ownerAsksFromOverview, workFactsFromOverview, type WorkQueueFacts } from "./work-page.js";
-import { watchInputsOf, WorkRegistryReader, writeRegistryHeartbeat as beat } from "./work-registry-reader.js";
+import { registryWatchOf, watchInputsOf } from "./work-registry-reader.js";
 import { ROLES_CONFIG_EVERY_MS, RolesConfigHistory } from "./roles-config-history.js";
 import { makeRolesOverviewTool } from "./roles-overview-tool.js";
 import {
@@ -634,7 +634,6 @@ import {
 } from "./decision-records.js";
 import {
 	LeadUpdatesFile,
-	STALL_HEARTBEAT_FILE,
 	StallDryLog,
 	StallWatch,
 	stallSettings,
@@ -18796,7 +18795,7 @@ export class AgentService {
 			},
 			// Q-STALL-1: an incomplete read pages the owner the lane watchdog's way; a complete round leaves a heartbeat.
 			alarm: (n) => this.sendQueueAlarm?.(n) ?? Promise.resolve({ ok: false, error: "no owner alarm route" }),
-			heartbeat: (b) => beat(join(this.stateStore.dataDir, STALL_HEARTBEAT_FILE), b),
+			heartbeat: (b) => this.registryWatch().heartbeat(b),
 			log: (line) => console.log(line),
 		});
 		this.stallWatch.start();
@@ -18890,8 +18889,10 @@ export class AgentService {
 		this.decisionReader.start();
 	}
 
-	/** The work registry's one reader (Q-STALL-1, work-registry-reader.ts; made on first use). */
-	private workRegistry: WorkRegistryReader | null = null;
+	/** The work registry's one reader and the heartbeat writer (Q-STALL-1, H-STALL-WHOLE-2; made on first use). */
+	private workRegistry: ReturnType<typeof registryWatchOf> | null = null;
+	private registryWatch = () =>
+		(this.workRegistry ??= registryWatchOf(this.stateStore.dataDir, () => this.workEventsFile()));
 	private workFactsError: string | null = null;
 
 	/**
@@ -18914,8 +18915,7 @@ export class AgentService {
 			if (error !== this.workFactsError) console.warn(`[work-page] no queue facts: ${error}`);
 			this.workFactsError = error;
 		}
-		this.workRegistry ??= new WorkRegistryReader(() => this.workEventsFile());
-		const read = await this.workRegistry.read();
+		const read = await this.registryWatch().reader.read();
 		const gone = read.complete ? await goneQueues(read.replay) : undefined;
 		const { page, ...inputs } = watchInputsOf(read, facts, leadUpdates, Date.now(), gone);
 		// initiatives-page-gaps (Ops #228): the open hand-offs that carry an initiative's id (first lines only).

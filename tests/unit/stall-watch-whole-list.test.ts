@@ -243,7 +243,9 @@ describe("AC6: one reader (rule 23)", () => {
 		expect(found(stall, second), "a second registry parser in stall-watch.ts").toBeNull();
 		expect(found(dead, /replayWork|WorkPageFile|JSON\.parse/), "a registry parser in dead-end.ts").toBeNull();
 		expect(found(service, /new StallTimesFile\(/), "agent-service.ts reads the times apart").toBeNull();
-		expect(found(service, /new WorkRegistryReader\(/), "agent-service.ts makes the reader").not.toBeNull();
+		// Ops #1064: through the one factory, so the reader knows the heartbeat file (H-STALL-WHOLE-2).
+		expect(found(service, /registryWatchOf\(/), "agent-service.ts makes the reader").not.toBeNull();
+		expect(found(service, /new WorkRegistryReader\(/), "a reader made outside the factory").toBeNull();
 	});
 });
 

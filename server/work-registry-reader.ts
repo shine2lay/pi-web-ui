@@ -9,10 +9,14 @@
  * reason. A watch that gets an incomplete read raises the owner alarm (`RegistryWatchHooks.alarm`, the lane
  * watchdog's owner Telegram route) in that same round and shows no earlier findings as current; the dead-end
  * answer on it is "unknown". `WORK_PAGE_TASKS_MAX` (work-page.ts) only limits what a display page sends.
+ *
+ * H-STALL-WHOLE-2 (Ops #1064, docs/stall-watch-registry-missing.md): a missing file is complete and empty only
+ * when nothing says the registry ever had tasks; a file that shrank while it was read is incomplete.
  */
 
-import { renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
+import { join } from "node:path";
 import type { OwnerTelegramNotice, OwnerTelegramSender } from "./owner-telegram.js";
 import type { UiWorkPage } from "./protocol.js";
 import { STATE_READ_FLAGS } from "./state-file-read.js";
@@ -28,8 +32,11 @@ import {
 } from "./work-page.js";
 import { StallTimesBuilder, type StallTimes } from "./work-registry-times.js";
 
-/** Why a read isn't complete: a line that isn't JSON, or the file couldn't be read (an error, not a file). */
-export type RegistryIncompleteReason = "unreadable-line" | "read-error";
+/**
+ * Why a read isn't complete: a line that isn't JSON; the file couldn't be read whole (an error, not a file, it
+ * shrank while read); or it is missing though the registry had tasks (or the heartbeat can't show it never did).
+ */
+export type RegistryIncompleteReason = "unreadable-line" | "read-error" | "missing";
 
 /** Every line read and replayed. */
 export interface RegistryComplete {
@@ -93,10 +100,22 @@ const EMPTY_PAGE = (at: number, problem: UiWorkPage["problem"]): UiWorkPage => (
 /** The one reader of the registry file for the watches. A complete read is kept while the file is unchanged. */
 export class WorkRegistryReader {
 	private seen: { ino: number; mtimeMs: number; size: number; read: RegistryComplete } | undefined;
+	/** The last complete read in this process that had tasks: its time and count. */
+	private known: RegistryHeartbeat | undefined;
 
-	constructor(private readonly file: () => string) {}
+	/**
+	 * `lastBeat`: the last complete round's heartbeat on disk (`readRegistryHeartbeat`); undefined when there is
+	 * none, throws when it can't be read. Production passes it through `registryWatchOf`.
+	 */
+	constructor(
+		private readonly file: () => string,
+		private readonly lastBeat: () => RegistryHeartbeat | undefined = () => undefined,
+	) {}
 
-	/** The whole registry, streamed (no ceiling). No file yet: complete and empty (nothing was ever recorded). */
+	/**
+	 * The whole registry, streamed (no ceiling). No file: complete and empty only when nothing says it ever had
+	 * tasks (none read in this process, the heartbeat absent or 0); otherwise incomplete, "missing".
+	 */
 	async read(now = Date.now()): Promise<RegistryRead> {
 		const started = performance.now();
 		const failed = (detail: string): RegistryIncomplete => {
@@ -111,6 +130,8 @@ export class WorkRegistryReader {
 			const code = (err as NodeJS.ErrnoException)?.code;
 			if (code !== "ENOENT") return failed(code ?? String(err));
 			this.seen = undefined;
+			const had = this.hadTasks();
+			if (had) return { complete: false, at: now, reason: "missing", detail: had, tasksRead: 0 };
 			const replay = replayEnd(newReplay());
 			return { complete: true, at: now, replay, times: new Map(), tasksRead: 0, bytes: 0, tookMs: 0 };
 		}
@@ -122,6 +143,11 @@ export class WorkRegistryReader {
 				return { ...kept.read, at: now, tookMs: Math.round(performance.now() - started) };
 			}
 			const read = await this.stream(fh, now, started);
+			if (read.complete) {
+				const shrank = readShrank(st.size, read.bytes, (await fh.stat()).size);
+				if (shrank) return failed(shrank);
+				if (read.tasksRead > 0) this.known = { at: now, tasksRead: read.tasksRead };
+			}
 			this.seen = read.complete ? { ino: st.ino, mtimeMs: st.mtimeMs, size: st.size, read } : undefined;
 			return read;
 		} catch (err) {
@@ -129,6 +155,23 @@ export class WorkRegistryReader {
 		} finally {
 			await fh.close().catch(() => undefined);
 		}
+	}
+
+	/** Why a missing file isn't a new machine's, in plain words; undefined when nothing says it had tasks. */
+	private hadTasks(): string | undefined {
+		const where = `not found at ${this.file()}`;
+		let beat = this.known;
+		if (!beat) {
+			try {
+				beat = this.lastBeat();
+			} catch (err) {
+				const why = (err as Error)?.message || String(err);
+				return `${where}, and the heartbeat can't show it never had tasks (${why})`;
+			}
+		}
+		if (!beat?.tasksRead) return undefined;
+		const when = new Date(beat.at).toISOString();
+		return `${where}; the last complete read (${when}) had ${beat.tasksRead} linked tasks`;
 	}
 
 	private async stream(fh: FileHandle, now: number, started: number): Promise<RegistryRead> {
@@ -168,6 +211,15 @@ export class WorkRegistryReader {
 	}
 }
 
+/**
+ * O1: whether a read missed part of the file: it read less than the size at open, or the file is now smaller
+ * than what was read (cut while read). Lines appended during the read are fine. Plain words, or undefined.
+ */
+export function readShrank(sizeAtOpen: number, bytesRead: number, sizeAfter: number): string | undefined {
+	if (bytesRead >= sizeAtOpen && sizeAfter >= bytesRead) return undefined;
+	return `the file shrank while it was read (read ${bytesRead} of ${sizeAtOpen} bytes)`;
+}
+
 /** One whole line into the replay and the times; what is wrong with it, or undefined when it's fine. */
 function lineInto(text: string, replay: WorkReplay, times: StallTimesBuilder): string | undefined {
 	if (!text.trim()) return undefined;
@@ -204,12 +256,20 @@ export const pageMissesTasks = (page: Pick<UiWorkPage, "problem">): boolean =>
 
 /** The owner's alarm for an incomplete read (Rule 26: telegram_send, never a question dialog). */
 export function registryIncompleteAlarm(watch: string, read: RegistryIncomplete): OwnerTelegramNotice {
-	const what = read.reason === "unreadable-line" ? "has a line it can't read" : "couldn't be read";
+	const what = {
+		"unreadable-line": "work registry has a line it can't read",
+		"read-error": "work registry couldn't be read",
+		missing: "work registry file is missing",
+	}[read.reason];
+	const look =
+		read.reason === "missing"
+			? "Creating the file (even empty) or fixing the work-folder setting ends this. "
+			: `Look at ~/.pi/agent/work/events.jsonl and the pi-web-ui log line "stall: registry not read whole". `;
 	return {
 		text:
-			`The ${watch} can't see all the work: the work registry ${what} (${read.detail}). ` +
+			`The ${watch} can't see all the work: the ${what} (${read.detail}). ` +
 			`It is not watching for stuck work until this is fixed, and shows no older findings as current. ` +
-			`Look at ~/.pi/agent/work/events.jsonl and the pi-web-ui log line "stall: registry not read whole". ` +
+			look +
 			"This alarm comes once; it comes again only after the watch recovers and then breaks again.",
 		from: "ops",
 		url: "/",
@@ -217,9 +277,49 @@ export function registryIncompleteAlarm(watch: string, read: RegistryIncomplete)
 	};
 }
 
+/** Q-STALL-1: written in the server's data folder after each complete round (the dead man's switch reads it). */
+export const STALL_HEARTBEAT_FILE = "stall-watch-heartbeat.json";
+
 /** The heartbeat file's text (Q-STALL-1): `at` as an ISO time, for the scheduled-jobs dead man's switch. */
 export function writeRegistryHeartbeat(file: string, beat: RegistryHeartbeat): void {
 	const text = `${JSON.stringify({ at: new Date(beat.at).toISOString(), tasksRead: beat.tasksRead })}\n`;
 	writeFileSync(`${file}.tmp`, text);
 	renameSync(`${file}.tmp`, file);
+}
+
+/**
+ * The heartbeat file read back (the one reader of what `writeRegistryHeartbeat` writes): undefined when there is
+ * no file; throws, in plain words, when it is there but isn't a heartbeat.
+ */
+export function readRegistryHeartbeat(file: string): RegistryHeartbeat | undefined {
+	let text: string;
+	try {
+		text = readFileSync(file, "utf8");
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
+		throw err;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		parsed = undefined; // Said below.
+	}
+	const beat = (parsed ?? {}) as { at?: unknown; tasksRead?: unknown };
+	const at = typeof beat.at === "string" ? Date.parse(beat.at) : NaN;
+	const n = beat.tasksRead;
+	if (Number.isFinite(at) && typeof n === "number" && Number.isInteger(n) && n >= 0) return { at, tasksRead: n };
+	throw new Error(`${file} isn't a heartbeat`);
+}
+
+/**
+ * The registry reader and the heartbeat writer production uses, over the same heartbeat file in `dataDir`, so a
+ * restarted server still knows the registry had tasks (H-STALL-WHOLE-2).
+ */
+export function registryWatchOf(dataDir: string, registryFile: () => string) {
+	const heartbeatFile = join(dataDir, STALL_HEARTBEAT_FILE);
+	return {
+		reader: new WorkRegistryReader(registryFile, () => readRegistryHeartbeat(heartbeatFile)),
+		heartbeat: (beat: RegistryHeartbeat) => writeRegistryHeartbeat(heartbeatFile, beat),
+	};
 }

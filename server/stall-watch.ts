@@ -63,8 +63,6 @@ export type StallAct = (findings: StallFinding[], now: number) => void | Promise
 // ---------------------------------------------------------------------------------------------------------------
 
 export const STALL_FILE = "stall-watch.json";
-/** Q-STALL-1: written in the server's data folder after each complete round (the dead man's switch reads it). */
-export const STALL_HEARTBEAT_FILE = "stall-watch-heartbeat.json";
 export const STALL_DEFAULTS: Readonly<StallSettings> = {
 	mode: "dry",
 	emptyHours: 2,

@@ -8168,6 +8168,14 @@ Hypothesis, build and proof: `docs/stall-watch-whole-list.md`.
   and `work-page.test.ts` adjusted; the skip-path case removed.
 - Undo: `"mode": "dry"` or `"off"` in `~/.pi-web-ui/stall-watch.json`; or revert and `pi-web-deploy`, and
   remove agent-tools' `stall-watch` scheduled-jobs row.
+- Ops #1064 (qa #218 D1, O1; `docs/stall-watch-registry-missing.md`): a missing registry file is complete and
+  empty only when nothing says it ever had tasks (no complete read with tasks in this process, and the
+  heartbeat absent or 0; a heartbeat that can't be read counts as "had tasks"); otherwise incomplete, reason
+  `missing`, one owner alarm. A read is complete only if it read at least the size at open and the size after
+  is at least what it read (appends are fine). Production makes the reader and the heartbeat writer through
+  `registryWatchOf(dataDir, file)` (one heartbeat file; `readRegistryHeartbeat` is its one reader;
+  `STALL_HEARTBEAT_FILE` moved from `stall-watch.ts` to the reader). Tests:
+  `tests/unit/work-registry-missing.test.ts` (a-h); AC6 now asserts the factory.
 
 ### Silence watch (Q-STALL-1 B+ at 60 minutes; Ops #1058 seam + cases, Ops #1059 build)
 

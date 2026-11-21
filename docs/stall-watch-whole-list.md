@@ -30,7 +30,11 @@ v1, record dr-d99bc6d69ea1), set A + B+ at 60 minutes + D; this is A. Contract: 
 made it the watches' only reader):
 
 - `WorkRegistryReader.read(now)`: `RegistryComplete` (the replay, the extra times, `tasksRead`, bytes, time
-  taken) or `RegistryIncomplete` (`reason`: unreadable-line or read-error, with a detail).
+  taken) or `RegistryIncomplete` (`reason`: unreadable-line, read-error or missing, with a detail).
+- Two later rules (Ops #1064, [stall-watch-registry-missing.md](stall-watch-registry-missing.md)): a missing
+  file is complete and empty only when nothing says the registry ever had tasks (no complete read with tasks
+  in this process, and the heartbeat absent or 0); otherwise incomplete, "missing". A read is complete only
+  if it read at least the size at open and the size after is at least what it read (appends are fine).
 - `watchInputsOf(read, facts, leadUpdates, at)`: a round's inputs, with the read itself kept on them.
 - `RegistryWatchHooks`: `alarm` (the lane watchdog's owner Telegram sender) and `heartbeat`.
 - `registryIncompleteAlarm(watch, read)`: the alarm's text.
