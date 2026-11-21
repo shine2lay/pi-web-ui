@@ -15,6 +15,7 @@
 	},
 	"include": [
 		"tests/unit/**/*.ts",
+		"tests/acceptance/**/*.ts",
 		"server/**/*.ts",
 		"web/src/skill-block.ts",
 		"web/src/components/scroll-classify.ts",
