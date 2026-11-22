@@ -20,6 +20,7 @@ import { AI_READER_POINTER, BOARD_ROUTING_RULE } from "./board-tool.js";
 import type { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { ROLE_MESSAGE_POLICY } from "./role-message-limits.js";
 import { CONFIRM_NEW_TAG_DESCRIPTION } from "./shared/task-tag-governance.js";
+import { proofCheckChatId, proofCheckOutgoing, type ProofCheckGate } from "./proof-check-messages.js";
 
 /** board (task #76): what message_role's result adds when the same text went to several roles. */
 export function sameTextHint(roles: readonly string[]): string {
@@ -37,6 +38,8 @@ export interface MessageRoleHost {
 	service(): RoleMessages | undefined;
 	/** role-message-ladder: the approval ladder (absent: native selected free-chain rule). */
 	guard?(): RoleMessageGuardHost | undefined;
+	/** Ops #1073: proof-check on QA's messages (absent: a QA chat's message is held). */
+	proofCheck?(): ProofCheckGate | undefined;
 }
 
 export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
@@ -157,10 +160,25 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 				}
 				return { content: [{ type: "text", text: out.text }], details: out.details ?? {} };
 			}
+			// Ops #1073: a QA chat's text goes out only as proof-check allows (the stamp may be appended).
+			let outgoing = p.text;
+			if (typeof outgoing === "string" && outgoing.trim()) {
+				const judged = await proofCheckOutgoing(host.proofCheck?.(), sender.role, {
+					text: outgoing,
+					surface: "message_role",
+					chat: proofCheckChatId(sender.file),
+					maxChars: ROLE_MESSAGE_TEXT_MAX,
+				});
+				if (!judged.ok) {
+					service.noteRefused(sender, p.to, p.kind, judged.error.split("\n")[0]);
+					throw new Error(judged.error);
+				}
+				outgoing = judged.text;
+			}
 			const input = {
 				to: p.to,
 				kind: p.kind,
-				text: p.text,
+				text: outgoing,
 				replyTo: p.replyTo,
 				initiative: p.initiative,
 				...(p.tags !== undefined ? { tags: p.tags } : {}),

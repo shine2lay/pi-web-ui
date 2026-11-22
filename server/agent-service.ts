@@ -393,6 +393,8 @@ import { extractTouches, formatTouchesCompact, intersectTouches } from "./conver
 import { ClaimStore, matchClaims, mergeTouchSidecar, readTouchSidecar, removeTouchSidecar } from "./claim-store.js";
 import { makeClaimFilesTool, type ClaimFilesHost } from "./claim-files-tool.js";
 import { makeMessageRoleTool, type MessageRoleHost } from "./role-message-tool.js";
+import { PROOF_CHECK_NUMBERS_FILE, ProofCheckGate } from "./proof-check-messages.js";
+import { pluginToolToDefinition } from "./plugin-tool-definition.js";
 import { makeBoardTool } from "./board-tool.js";
 import { boardTurnHook } from "./board-turn-hook.js";
 import { DecisionBatchControl } from "./decision-batches.js";
@@ -1881,54 +1883,6 @@ export function extractShotImage(
 }
 
 /**
- * 插件结构化工具 → SDK ToolDefinition。
- * execute 返回值宽容处理：{content,details} 原样收编；字符串/对象包成文本块。
- */
-function pluginToolToDefinition(tool: PluginAgentTool, callerContext?: () => PluginToolCallerContext): ToolDefinition {
-	const normalize = (
-		result: unknown,
-	): {
-		content: Array<{ type: "text"; text: string }>;
-		details?: unknown;
-	} => {
-		if (result && typeof result === "object" && Array.isArray((result as { content?: unknown }).content)) {
-			return result as {
-				content: Array<{ type: "text"; text: string }>;
-				details?: unknown;
-			};
-		}
-		const text = typeof result === "string" ? result : JSON.stringify(result ?? null, null, 2);
-		return { content: [{ type: "text", text }] };
-	};
-	return {
-		name: tool.name,
-		label: tool.label ?? tool.name,
-		description: tool.description,
-		promptSnippet: tool.promptSnippet,
-		promptGuidelines: tool.promptGuidelines,
-		parameters: (tool.parameters ?? {
-			type: "object",
-			properties: {},
-		}) as ToolDefinition["parameters"],
-		execute: async (
-			toolCallId: string,
-			params: Record<string, unknown>,
-			signal: AbortSignal | undefined,
-			onUpdate: ((partial: unknown) => void) | undefined,
-		) => {
-			const raw = await tool.execute(
-				toolCallId,
-				params as Record<string, unknown>,
-				signal,
-				onUpdate ? (partial) => onUpdate(normalize(partial) as never) : undefined,
-				callerContext?.(),
-			);
-			return normalize(raw) as never;
-		},
-	} as unknown as ToolDefinition;
-}
-
-/**
  * Cheap per-message discriminator for the serialization cache key. Persisted
  * message content never changes, so this is stable across snapshots, while
  * several same-role messages created within one millisecond (attachment
@@ -2155,6 +2109,8 @@ function quietLeadAt(conv: Conversation, idx: ChatIndex, start: number): UiQuiet
 let roleMessageService: RoleMessages | null = null;
 /** role-message-ladder: the approval ladder over message_role (AgentService sets it; null in other engines). */
 let roleGuardService: RoleMessageGuardHost | null = null;
+/** Ops #1073: proof-check on QA's messages (AgentService sets it; null: a QA chat's message is held). */
+let proofCheckGateService: ProofCheckGate | null = null;
 /** ladder-alarm: when this server's process started (ms); the approval step is set up once, at start, so when
  *  it's off it has been off since then (the Roles page says so). */
 const SERVER_STARTED_AT = Math.round(performance.timeOrigin);
@@ -5469,6 +5425,7 @@ export class ClientSession {
 		return {
 			service: () => roleMessageService ?? undefined,
 			guard: () => roleGuardService ?? undefined,
+			proofCheck: () => proofCheckGateService ?? undefined,
 			sender: (): RoleMessageSender | string => {
 				const conv = target();
 				if (!conv) return "This chat isn't open any more.";
@@ -12215,7 +12172,7 @@ export class ClientSession {
 		]);
 		return (this.pluginToolsProvider?.() ?? [])
 			.filter((t) => !off.has(t.name))
-			.map((t) => pluginToolToDefinition(t, callerContext));
+			.map((t) => pluginToolToDefinition(t, callerContext, () => proofCheckGateService ?? undefined));
 	}
 
 	/** 把插件 AI 工具同步进一个已存在的会话（新增/更新/移除；禁用工具同步移除）。
@@ -18617,6 +18574,21 @@ export class AgentService {
 		});
 		this.roleMessages.deferUntilStart();
 		roleMessageService = this.roleMessages;
+		// Ops #1073: proof-check on QA's messages; when the tool can't run, Ops's home chat gets a script notice.
+		this.proofCheck = new ProofCheckGate({
+			logFile: join(this.stateStore.dataDir, PROOF_CHECK_NUMBERS_FILE),
+			tellOps: (text) => {
+				const r = this.roleMessages.requestScriptNotice({
+					role: "ops",
+					kind: "request",
+					sender: { id: "proof-check-gate", title: "proof-check gate" },
+					text,
+				});
+				if (!r.ok) console.warn(`[proof-check] couldn't tell Ops: ${r.error}`);
+			},
+			log: (line) => console.log(line),
+		});
+		proofCheckGateService = this.proofCheck;
 		// role-message-ladder (#122): the approval ladder; it starts with startRoleMessages. Until it is ready (or if it
 		// can't start) message_role keeps the native active-policy free-chain/hourly boundaries.
 		this.roleGuard = new RoleMessageGuardHost({
@@ -18699,6 +18671,8 @@ export class AgentService {
 
 	/** role-message-ladder (#122): versioned finite approval tiers from role-message-limits.ts. */
 	private readonly roleGuard: RoleMessageGuardHost;
+	/** Ops #1073: proof-check on QA's messages (proof-check-messages.ts). */
+	private readonly proofCheck: ProofCheckGate;
 	/** index.ts: the open Owner questions changed (pushed to every window). */
 	onRoleGuardChanged: (() => void) | null = null;
 
@@ -18729,6 +18703,7 @@ export class AgentService {
 	startRoleMessages(): void {
 		void this.roleGuard.start().then(() => this.onRoleGuardChanged?.());
 		this.roleMessages.start();
+		void this.proofCheck.probe(); // Ops #1073: the start-up line says whether proof-check --message works
 		this.roleBoard.start();
 		this.startDecisionRecords();
 		this.startStallWatch();
@@ -20991,6 +20966,7 @@ export class AgentService {
 		this.stopBlankChatSweep = null;
 		this.roleMessages.stop();
 		if (roleMessageService === this.roleMessages) roleMessageService = null;
+		if (proofCheckGateService === this.proofCheck) proofCheckGateService = null;
 		this.roleGuard.stop();
 		if (roleGuardService === this.roleGuard) roleGuardService = null;
 		this.roleBoard.stop();
