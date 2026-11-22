@@ -19,6 +19,8 @@ function mockSession(ask: (q: UiQuestion[], sig: { aborted?: boolean }) => Promi
 			invoked.sig = sig;
 			return ask(questions, sig);
 		},
+		// ask-question-owners (Ops #1079): a chat with no requester records (the default owner's).
+		questionOwners: () => ({ listed: new Set<string>() }),
 	};
 }
 

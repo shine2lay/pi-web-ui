@@ -17,8 +17,8 @@ import "./patch-jiti-resolve-cache.js";
 // Logs whatever holds pi's sign-in lock (auth.json) for 60 s or more; logging only (#134).
 import "./auth-lock-trace.js";
 import { mergeRequesterTurn, requesterForAdmission, requesterOfTurn, roleRequesterInputOf } from "./queue-requester.js";
-import { answeredBy } from "./sent-by.js";
-import { chatRequester, ownTaskOf } from "./own-task.js";
+import { answeredBy, listedOwnerNames } from "./sent-by.js";
+import { chatOwnerRecords, chatRequester, ownTaskOf } from "./own-task.js";
 import { OwnerContacts, ownerInputIds, type OwnerContactOutcome } from "./owner-contacts.js";
 import type { UiOwnerContact, UiTaskRequester, UiTaskRequesterInput } from "./protocol.js";
 import { spawn } from "node:child_process";
@@ -127,12 +127,9 @@ import { CooOwnerQuestionDesk, type CardDelivery } from "./owner-question-coo.js
 import type { OwnerQuestionAsker } from "./owner-question-card.js";
 import { isCooHomeChat, makeOwnerQuestionTool } from "./owner-question-tool.js";
 import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "./owner-question-holds.js";
-import {
-	isQuestionReturned,
-	OwnerQuestionRouter,
-	questionReturnedText,
-	type QuestionReturned,
-} from "./owner-question-router.js";
+import { OwnerQuestionRouter } from "./owner-question-router.js";
+import { askQuestionsByOwner, type OwnerAskResult, type QuestionOwnerData } from "./ask-question-owners.js";
+import { askUserQuestionParameters } from "./ask-question-schema.js";
 import {
 	askShownToViewer,
 	dialogAskId,
@@ -1510,57 +1507,16 @@ export function makeAskUserQuestionTool(
 			q: UiQuestion[],
 			sig: { aborted?: boolean; toolCallId?: string },
 			conversationId?: string,
+			// ask-question-owners (Ops #1079): the owner this dialog is for, from data (never the chat's latest input).
+			owner?: { requester?: string },
 			// owner-question routing (Ops #685): COO handed the question back (not the owner's answer).
-		) => Promise<QuestionAnswer[] | QuestionReturned | null>;
+		) => Promise<OwnerAskResult>;
+		/** ask-question-owners (Ops #1079): the chat's requester records and people.json's names. */
+		questionOwners: (conversationId?: string) => QuestionOwnerData;
 	},
 	/** 本 runtime 所属会话：提问跟着对话走，快照只把当前对话的问卷推给客户端。 */
 	ownerId?: string,
 ): ToolDefinition {
-	const QuestionOptionSchema = Type.Object({
-		label: Type.String({ description: "Display label for the option (1-5 words)" }),
-		description: Type.Optional(
-			Type.String({
-				description: "One short sentence explaining the impact or tradeoff if selected.",
-			}),
-		),
-		preview: Type.Optional(
-			Type.String({
-				description:
-					"Optional preview rendered below when this option is selected (markdown or HTML — use for mockups/code/config).",
-			}),
-		),
-	});
-	const QuestionSchema = Type.Object({
-		id: Type.String({ description: "Unique identifier for this question (snake_case)" }),
-		question: Type.String({ description: "The full question text to display (markdown/HTML ok)" }),
-		detail: Type.Optional(Type.String({ description: "Optional detail/context shown under the question" })),
-		header: Type.Optional(Type.String({ description: "Optional short header for this question" })),
-		options: Type.Optional(
-			Type.Array(QuestionOptionSchema, {
-				description: "2-4 mutually exclusive choices. Put the recommended option first when there is a clear default.",
-				minItems: 2,
-				maxItems: 4,
-			}),
-		),
-		multiSelect: Type.Optional(Type.Boolean({ description: "Allow selecting multiple options (default: false)" })),
-		dependsOn: Type.Optional(
-			Type.Object({
-				questionId: Type.String({ description: "ID of the prior question this question depends on" }),
-				value: Type.Optional(
-					Type.Union([Type.String(), Type.Array(Type.String())], {
-						description:
-							"Show only when the prior answer equals this value (or is in the array). Omit to show whenever answered.",
-					}),
-				),
-			}),
-		),
-		optionsMap: Type.Optional(
-			Type.Record(Type.String(), Type.Array(QuestionOptionSchema), {
-				description:
-					"Dynamic options based on prior question's chosen value: e.g. { 'React': [opts...], 'Vue': [opts...] }",
-			}),
-		),
-	});
 	return {
 		name: "ask_user_question",
 		label: "Ask the user",
@@ -1568,21 +1524,18 @@ export function makeAskUserQuestionTool(
 			"Ask the user focused questions to clarify ambiguous requirements (clarify the task, confirm decisions, get preferences). " +
 			"Strictly ask 1 to 3 questions per call (prefer 1, max 3); provide 2 to 4 mutually exclusive options with the " +
 			"recommended option first, and explain impact/tradeoff in each option description. " +
-			"Each question renders a browser dialog with markdown/HTML rich text; options may carry a `preview`. Submit or cancel to resume.",
+			"Each question renders a browser dialog with markdown/HTML rich text; options may carry a `preview`. Submit or cancel to resume. " +
+			"Set `owner` on each question when the turn is for several owners or asks another owner.",
 		promptSnippet: "ask the user 1-3 focused questions with recommended options and tradeoffs to clarify requirements",
 		promptGuidelines: [
 			"When requirements are ambiguous, use ask_user_question to clarify instead of guessing: " +
 				"ask 1 to 3 focused questions (prefer 1, max 3), provide 2-4 mutually exclusive options with the " +
 				"recommended option first, and explain impact/tradeoff in description",
 			"A cancelled question comes back as a tool error — respect it and continue without re-asking immediately",
+			"ask_user_question: when a turn carries work for more than one owner (e.g. Shine and Wai), or you ask an owner " +
+				"other than the one the turn is for, set `owner` on every question; each owner gets his own dialog",
 		],
-		parameters: Type.Object({
-			questions: Type.Array(QuestionSchema, {
-				description: "Questions to ask the user (strictly 1 to 3 questions; prefer 1).",
-				minItems: 1,
-				maxItems: 3,
-			}),
-		}),
+		parameters: askUserQuestionParameters,
 		execute: async (_id: string, params: unknown, signal: AbortSignal | undefined): Promise<unknown> => {
 			const qs = (params as { questions: UiQuestion[] }).questions;
 			if (!Array.isArray(qs) || qs.length === 0) {
@@ -1591,33 +1544,16 @@ export function makeAskUserQuestionTool(
 			if (qs.length > 3) {
 				throw new Error("ask_user_question allows at most 3 questions per call to prevent question fatigue");
 			}
-			const answers = await clientSession.askUser(
-				qs,
-				{
-					aborted: signal?.aborted,
-					// decision-records: the answer's record is keyed by this call.
-					toolCallId: _id,
-				},
-				ownerId,
-			);
-			if (answers === null) {
-				throw new Error("User cancelled the question.");
-			}
-			// owner-question routing (Ops #685): COO handed it back; the call ends with that, never as his answer.
-			if (isQuestionReturned(answers)) {
-				return { content: [{ type: "text", text: questionReturnedText(answers.returned) }] } as never;
-			}
-			// 工具结果：把每道题的回答拼成简洁文本给模型，同时留 details 供 UI 展示。
-			const lines = answers.map((a) => {
-				const q = qs.find((q) => q.id === a.id);
-				const label = a.selected.join(", ");
-				const custom = a.custom?.trim() ? ` (wrote: ${a.custom.trim()})` : "";
-				return `${q?.header ?? q?.id ?? a.id}: ${label || "(no selection)"}${custom}`;
-			});
-			return {
-				content: [{ type: "text", text: lines.join("\n") }],
-				details: { answers },
-			} as never;
+			// ask-question-owners (Ops #1079): each question's owner from data (refused before anything is shown when
+			// unclear), one dialog per owner; the decision record is keyed by each dialog's tool call id.
+			return askQuestionsByOwner(qs, clientSession.questionOwners(ownerId), _id, (slice, toolCallId) =>
+				clientSession.askUser(
+					slice.questions,
+					{ aborted: signal?.aborted, toolCallId },
+					ownerId,
+					slice.requester ? { requester: slice.requester } : {},
+				),
+			) as never;
 		},
 	} as unknown as ToolDefinition;
 }
@@ -7636,8 +7572,15 @@ export class ClientSession {
 	}
 
 	/** owner-requester (Ops #973): a new ask's meta, with the owner its chat's turn or task is for. */
-	private static askMetaFor(conv: Conversation | undefined): AskMeta {
-		return { ...ClientSession.askMetaOf(conv), ...chatRequester(conv) };
+	/** ask-question-owners (Ops #1079): `owner` = the requester an ask_user_question dialog's owner gives (from data). */
+	private static askMetaFor(conv: Conversation | undefined, owner?: { requester?: string }): AskMeta {
+		return { ...ClientSession.askMetaOf(conv), ...(owner ?? chatRequester(conv)) };
+	}
+
+	/** ask-question-owners (Ops #1079): what a chat's ask_user_question owners are checked against. */
+	questionOwners(conversationId?: string): QuestionOwnerData {
+		const conv = this.convs.get(conversationId ?? this.activeId);
+		return { ...(conv ? chatOwnerRecords(conv) : {}), listed: listedOwnerNames() };
 	}
 
 	/** owner-question routing (Ops #685): the identity whose home chat this is (COO's own asks go straight). */
@@ -10180,9 +10123,18 @@ export class ClientSession {
 			return found ?? { session: this, convId: ownerId };
 		};
 		return {
-			askUser: (questions: UiQuestion[], sig: { aborted?: boolean; toolCallId?: string }) => {
+			askUser: (
+				questions: UiQuestion[],
+				sig: { aborted?: boolean; toolCallId?: string },
+				_c?: string,
+				owner?: { requester?: string },
+			) => {
 				const h = home();
-				return h.session.askUser(questions, sig, h.convId);
+				return h.session.askUser(questions, sig, h.convId, owner);
+			},
+			questionOwners: () => {
+				const h = home();
+				return h.session.questionOwners(h.convId);
 			},
 			pageCall: (req: PageCallRequest, sig: { aborted?: boolean }) => {
 				const h = home();
@@ -10205,7 +10157,8 @@ export class ClientSession {
 		questions: UiQuestion[],
 		sig: { aborted?: boolean; toolCallId?: string },
 		conversationId?: string,
-	): Promise<QuestionAnswer[] | QuestionReturned | null> {
+		owner?: { requester?: string },
+	): Promise<OwnerAskResult> {
 		return new Promise((resolve, reject) => {
 			if (sig?.aborted || this.disposed) {
 				reject(new Error("ask_user_question aborted"));
@@ -10229,7 +10182,7 @@ export class ClientSession {
 			this.pendingQuestions.set(id, entry);
 			const askingConv = conversationId ? this.convs.get(conversationId) : undefined;
 			const ask: Ask = {
-				...questionAsk(id, questions, ClientSession.askMetaFor(askingConv)),
+				...questionAsk(id, questions, ClientSession.askMetaFor(askingConv, owner)),
 				...(sig.toolCallId ? { toolCallId: sig.toolCallId } : {}),
 			};
 			// owner-question routing (Ops #685): where it goes (none while the switch is off: as before). Only a

@@ -3279,10 +3279,9 @@ export interface UiQuestion {
 	options?: UiQuestionOption[];
 	multiSelect?: boolean;
 	/** 级联依赖（Waterfall）：仅当指定 questionId 选中了特定值（未给 value 则表示只要已作答）时本题才展示；不满足则跳过。 */
-	dependsOn?: {
-		questionId: string;
-		value?: string | string[];
-	};
+	dependsOn?: { questionId: string; value?: string | string[] };
+	/** ask-question-owners (Ops #1079): which owner (people.json name, e.g. "Shine" / "Wai") the question is for. */
+	owner?: string;
 	/** 动态级联选项映射：根据前序依赖题的所选值动态提供候选选项列表。 */
 	optionsMap?: Record<string, UiQuestionOption[]>;
 }

@@ -190,6 +190,19 @@ export class PeopleBook {
 	}
 }
 
+let servedBook: PeopleBook | undefined;
+
+/** ask-question-owners (Ops #1079): the server's people.json, whose names an ask_user_question `owner` may give. */
+export function serveOwners(book: PeopleBook): PeopleBook {
+	servedBook = book;
+	return book;
+}
+
+/** The names the served people.json lists besides the default owner (none when nothing is served). */
+export function listedOwnerNames(): ReadonlySet<string> {
+	return servedBook?.viewerOf(undefined).listed ?? new Set<string>();
+}
+
 const answerer = new AsyncLocalStorage<string | undefined>();
 
 /** owner-requester (Ops #973): run a page socket's message (or a plugin's answer) as this person, so an owner

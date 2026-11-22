@@ -573,7 +573,10 @@ describe("owner asks with the switch on", () => {
 			"Not the owner's answer. COO handed this back as your own call: Use the default port; it is in the plan. If only the owner can give it, ask again: it goes straight to him.",
 		);
 		// The tool call itself resolves with it (no error, no answers).
-		const tool = makeAskUserQuestionTool({ askUser: async () => ({ returned: note }) });
+		const tool = makeAskUserQuestionTool({
+			askUser: async () => ({ returned: note }),
+			questionOwners: () => ({ listed: new Set<string>() }), // ask-question-owners (Ops #1079)
+		});
 		const result = (await tool.execute(
 			"call-1",
 			{ questions: QUESTIONS },

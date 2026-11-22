@@ -143,7 +143,7 @@ import { ConnEvents, MAX_RECORDS_PER_SOCKET } from "./conn-events.js";
 import { ChatOpenTracker, preciseNow } from "./chat-open-timing.js";
 import { globalLspPool } from "./lsp-tool.js";
 import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
-import { asAnswerer, PeopleBook, type SentBy } from "./sent-by.js";
+import { asAnswerer, PeopleBook, type SentBy, serveOwners } from "./sent-by.js";
 import { type OwnerViewer, roleGuardForViewer, rolesOverviewForViewer, viewerOfSocket } from "./owner-viewer.js";
 import type {
 	BgServer,
@@ -324,7 +324,7 @@ if (process.platform === "win32") {
 }
 
 const app = express();
-const peopleBook = new PeopleBook(join(DATA_DIR, "people.json")); // sent-by (Ops #972): Tailscale logins
+const peopleBook = serveOwners(new PeopleBook(join(DATA_DIR, "people.json"))); // sent-by (Ops #972), Ops #1079
 app.use(peopleBook.noteRequest);
 // Host 白名单（防 DNS rebinding，审查 #352）：无 token 部署下 HTTP 路由此前不校验 Host，恶意网页让自己的域名解析到 127.0.0.1
 // 即可打满全部 API。显式白名单走 PI_WEB_ALLOW_HOSTS（与 WS 侧同 env）；设置了 PI_WEB_TOKEN 则由 token 鉴权兜底，不再限制 Host。

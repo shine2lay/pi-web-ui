@@ -10,6 +10,7 @@
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { toolCallIdOfSlice } from "./ask-question-owners.js";
 import type { DecisionRecord } from "./decision-records.js";
 
 export const PREVIEWS_FILE = "previews.json";
@@ -74,7 +75,8 @@ export class AnswerPreviews {
 	private async lookup(rec: DecisionRecord): Promise<Previews> {
 		const path = this.chatPath(rec.file!);
 		if (!path) return null;
-		const callId = rec.ref.startsWith("ask:") ? rec.ref.slice(4) : "";
+		// ask-question-owners (Ops #1079): a per-owner dialog's ref is `ask:<call id>#<owner>`; its chat line has the call id.
+		const callId = rec.ref.startsWith("ask:") ? toolCallIdOfSlice(rec.ref.slice(4)) : "";
 		const want = rec.lines ? Number(rec.lines.split("->")[0]) : NaN;
 		const rl = createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity });
 		let n = 0;

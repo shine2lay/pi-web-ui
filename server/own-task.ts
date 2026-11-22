@@ -45,12 +45,19 @@ export interface RequesterChat {
  *  for a named owner such as Wai; `{}` for the default owner (Shine). Asks, message_role and plugin tools use it. */
 export function chatRequester(conv: RequesterChat | undefined): { requester?: string } {
 	if (!conv) return {};
-	let origin: UiTaskRequester | undefined;
-	try {
-		origin = ownTaskOf(conv.session.sessionManager.getBranch())?.origin;
-	} catch {
-		origin = undefined; // runtime being replaced
-	}
-	const person = chatPersonOf(requesterOfTurn(conv.turnRecord), origin);
+	const { turn, taskOrigin } = chatOwnerRecords(conv);
+	const person = chatPersonOf(turn, taskOrigin);
 	return person ? { requester: person } : {};
+}
+
+/** ask-question-owners (Ops #1079): a chat's server-stamped requester records, its running turn's and its own
+ *  task's, which every question's owner is checked against. */
+export function chatOwnerRecords(conv: RequesterChat): { turn?: UiTaskRequester; taskOrigin?: UiTaskRequester } {
+	let taskOrigin: UiTaskRequester | undefined;
+	try {
+		taskOrigin = ownTaskOf(conv.session.sessionManager.getBranch())?.origin;
+	} catch {
+		taskOrigin = undefined; // runtime being replaced
+	}
+	return { turn: requesterOfTurn(conv.turnRecord), taskOrigin };
 }
