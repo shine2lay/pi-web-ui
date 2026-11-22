@@ -1,10 +1,10 @@
 /**
  * Memory Explorer — the owner gate (R-OWNER-GATE-1, spec-explorer-owner.md): every explorer route asks this one gate
  * before anything else (before it parses a uri, checks a query or body, applies the setup-file lock or calls the
- * daemon; Security rm-b52897e2 L1) and answers `403 OWNER_ONLY` when it says no, so a request without a session
- * learns nothing about its input. A read needs a passkey owner session, which reads all 17 roots (R-OWNER-READ-1).
- * A write names the exact operation it is about to execute and needs the session plus its own fresh passkey assertion
- * bound to that operation (R-OWNER-WRITE-1/2). A `Host` or `Origin` whose host ends in "." never passes
+ * daemon; Security rm-b52897e2 L1) and answers `403 OWNER_ONLY` when it says no, so a refused request learns
+ * nothing about its input. A read passes the owner check with no session (R-OWNER-READ-2; owner Shine 2026-11-22,
+ * dr-c54a3286d823). A write names the exact operation it is about to execute and needs its own fresh passkey
+ * assertion bound to that operation (R-OWNER-WRITE-1/2). A `Host` or `Origin` whose host ends in "." never passes
  * (rm-638da86a). Production's gate is the passkey owner check's (owner-check.ts, wired in route-modules.ts); with
  * no owner check wired the gate is `ownerCheckMissing`, which refuses everyone (fail closed). Tests inject theirs.
  */

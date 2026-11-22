@@ -354,7 +354,7 @@ export interface OpenVikingExplorerClock {
 
 /** What the explorer routes are given (no env or fixture branch decides any of it, rule 29). */
 export interface OpenVikingExplorerOptions {
-	/** OI-1; production passes the passkey owner check's gate (owner-check.ts, R-OWNER-READ-1/R-OWNER-WRITE-1). */
+	/** OI-1; production passes the passkey owner check's gate (owner-check.ts, R-OWNER-READ-2/R-OWNER-WRITE-1). */
 	ownerGate: OpenVikingOwnerGate;
 	clock: OpenVikingExplorerClock;
 	/** Receives the hook that ends every pending delete as `not_applied_restart` when the server stops. */

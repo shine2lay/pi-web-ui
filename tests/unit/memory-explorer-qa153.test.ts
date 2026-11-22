@@ -30,46 +30,36 @@ const event = {
 	ts: "2026-11-14T00:00:00Z",
 };
 
-for (const state of ["signed-out", "checking", "signed-in"] as const) {
-	it(`${state}: owner audit is requested and shown only after an accepted owner read`, async () => {
-		const sent: string[] = [];
-		let release!: () => void;
-		const waiting = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		const fetch = vi.fn(async (url: string) => {
-			sent.push(url);
-			if (url.includes("/audit")) return new Response(JSON.stringify({ events: [event] }), { status: 200 });
-			if (url.includes("/overview"))
-				return new Response(JSON.stringify({ health_state: "healthy", observer: { checked_at: event.ts } }), {
-					status: 200,
-				});
-			if (state === "checking") await waiting;
-			if (state !== "signed-in")
-				return new Response(JSON.stringify({ error: { code: "OWNER_ONLY" } }), { status: 403 });
-			return new Response(JSON.stringify({ roots: [], recent: [], notes_total: 5, roots_partial: false }), {
+// Ops #1080 (owner Shine 2026-11-22, dr-c54a3286d823): no sign-in gates the owner's changes any more.
+it("asks for the owner's changes straight away and shows them, with no sign-in", async () => {
+	const sent: string[] = [];
+	const fetch = vi.fn(async (url: string) => {
+		sent.push(url);
+		if (url.includes("/audit")) return new Response(JSON.stringify({ events: [event] }), { status: 200 });
+		if (url.includes("/overview"))
+			return new Response(JSON.stringify({ health_state: "healthy", observer: { checked_at: event.ts } }), {
 				status: 200,
 			});
+		return new Response(JSON.stringify({ roots: [], recent: [], notes_total: 5, roots_partial: false }), {
+			status: 200,
 		});
-		const container = document.createElement("div");
-		document.body.append(container);
-		const root = createRoot(container);
-		page = {
-			container,
-			unmount() {
-				act(() => root.unmount());
-				container.remove();
-			},
-		};
-		await act(async () => root.render(createElement(MemoryExplorerPage, { active: true, fetch })));
-		await flush();
-		expect(sent.some((url) => url.includes("/audit"))).toBe(state === "signed-in");
-		expect(text(container).includes("Changes you made")).toBe(state === "signed-in");
-		expect(text(container).includes("Private note")).toBe(state === "signed-in");
-		release();
-		await flush();
 	});
-}
+	const container = document.createElement("div");
+	document.body.append(container);
+	const root = createRoot(container);
+	page = {
+		container,
+		unmount() {
+			act(() => root.unmount());
+			container.remove();
+		},
+	};
+	await act(async () => root.render(createElement(MemoryExplorerPage, { active: true, fetch })));
+	await flush();
+	expect(sent.some((url) => url.includes("/audit"))).toBe(true);
+	expect(text(container)).toContain("Changes you made");
+	expect(text(container)).toContain("Private note");
+});
 
 it("scope keeps draft words and searches those words after a previous search", async () => {
 	const api = fakeApi();

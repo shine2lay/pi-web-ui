@@ -1,49 +1,22 @@
 /**
- * The owner's access to the Memory page (spec-explorer-owner.md): who is signed in, the sign-in and
- * passkeys boxes, and the two hooks the HTTP seam calls.
+ * The owner's passkeys on the Memory page (spec-explorer-owner.md, Ops #1080): reading needs no sign-in,
+ * so this only serves changes and the header's Passkeys box.
  *
- * - `onOwnerOnly`: a read was refused for want of a session. The first one opens the sign-in; every
- *   read refused meanwhile waits on the same answer, and each is asked again once he signed in, so
- *   an ended session costs nothing: the open note and its scroll stay. "Not now" refuses them all,
- *   and later reads are refused quietly until he presses Sign in.
- * - `ownerAssertion`: one write's passkey confirm. If his session ended first, he signs in, then
- *   confirms the write.
+ * - `ownerAssertion`: one write's passkey confirm. Refused because this address has no passkey yet,
+ *   it opens "Add a passkey"; once he added one, the same write is confirmed and goes on (his draft is
+ *   never lost). Closing the box is a write not confirmed.
+ * - The Passkeys box lists this address's passkeys from the server, adds one with the Telegram code
+ *   and removes one with its own passkey confirm.
  */
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import type { OwnerPasskeyInfo, OwnerWriteOp } from "../../../server/openviking/owner-session-types.js";
-import { ExplorerApiError } from "./explorer-api.js";
+import type { OwnerPasskeyList, OwnerWriteOp } from "../../../server/openviking/owner-session-types.js";
 import { type OwnerSessionClient, OwnerSessionError } from "./owner-session.js";
 
-const KEPT_KEY = "memory-explorer-passkeys";
+export type OwnerBox = { kind: "passkeys"; opener: HTMLElement | null } | { kind: "add-for-write" };
 
-export type OwnerState = "unknown" | "signed-in" | "signed-out";
-export type OwnerBox =
-	{ kind: "sign-in"; opener: HTMLElement | null } | { kind: "passkeys"; opener: HTMLElement | null };
-
-/** The passkeys of this address as of his last sign-in in this tab (the server lists them only then). */
-export interface KnownPasskeys {
-	readonly current: string;
-	readonly list: readonly OwnerPasskeyInfo[];
-}
-
-function keptPasskeys(): KnownPasskeys | null {
-	try {
-		const kept = sessionStorage.getItem(KEPT_KEY);
-		return kept ? (JSON.parse(kept) as KnownPasskeys) : null;
-	} catch {
-		return null;
-	}
-}
-
-function keepPasskeys(known: KnownPasskeys | null): void {
-	try {
-		if (known) sessionStorage.setItem(KEPT_KEY, JSON.stringify(known));
-		else sessionStorage.removeItem(KEPT_KEY);
-	} catch {
-		/* private mode: the list shows after the next sign-in */
-	}
-}
+/** This address's passkeys: loading, loaded, or the list couldn't be read. */
+export type KnownPasskeys = { status: "loading" } | { status: "loaded"; list: OwnerPasskeyList } | { status: "failed" };
 
 interface Waiter {
 	resolve(): void;
@@ -51,58 +24,47 @@ interface Waiter {
 }
 
 export interface OwnerAccess {
-	readonly state: OwnerState;
 	readonly box: OwnerBox | null;
-	readonly passkeys: KnownPasskeys | null;
-	/** Changes when the page should load again from the start (signed in or out by hand). */
-	readonly generation: number;
-	readonly onReadAccepted: () => void;
-	readonly onOwnerOnly: () => Promise<void>;
+	readonly passkeys: KnownPasskeys;
 	readonly ownerAssertion: (op: OwnerWriteOp) => Promise<string>;
-	openSignIn(opener: HTMLElement | null): void;
 	openPasskeys(opener: HTMLElement | null): void;
-	/** Runs the passkey sign-in; on success the box closes and waiting reads go on. */
-	signIn(): Promise<void>;
+	/** Reads this address's passkeys again. */
+	loadPasskeys(): Promise<void>;
 	sendCode(): Promise<void>;
-	/** Adds a passkey with the Telegram code, then signs in with it. */
+	/** Adds a passkey with the Telegram code; a write waiting for it goes on. */
 	addPasskey(code: string): Promise<void>;
 	removePasskey(id: string): Promise<void>;
-	signOut(): Promise<void>;
-	/** "Not now" or Escape on the open box. */
+	/** Cancel, Close or Escape on the open box. */
 	closeBox(): void;
 }
 
+const NOT_CONFIRMED = () => new OwnerSessionError("CANCELLED", "No passkey was added.");
+
 export function useOwnerAccess(session: OwnerSessionClient): OwnerAccess {
-	const [state, setState] = useState<OwnerState>("unknown");
 	const [box, setBox] = useState<OwnerBox | null>(null);
-	const [passkeys, setPasskeys] = useState<KnownPasskeys | null>(keptPasskeys);
-	const [generation, setGeneration] = useState(0);
+	const [passkeys, setPasskeys] = useState<KnownPasskeys>({ status: "loading" });
 	const waiters = useRef<Waiter[]>([]);
-	const quiet = useRef(false);
 
-	const knowPasskeys = useCallback((known: KnownPasskeys | null) => {
-		keepPasskeys(known);
-		setPasskeys(known);
-	}, []);
+	const loadPasskeys = useCallback(async (): Promise<OwnerPasskeyList | null> => {
+		try {
+			const list = await session.passkeys();
+			setPasskeys({ status: "loaded", list });
+			return list;
+		} catch {
+			setPasskeys({ status: "failed" });
+			return null;
+		}
+	}, [session]);
 
-	const signedOut = useCallback(() => {
-		quiet.current = true;
-		knowPasskeys(null);
-		setState("signed-out");
-		setBox(null);
-		setGeneration((g) => g + 1);
-	}, [knowPasskeys]);
-
-	const onReadAccepted = useCallback(() => setState("signed-in"), []);
-
-	const askToSignIn = useCallback((): Promise<void> => {
-		setState("signed-out");
-		if (quiet.current) return Promise.reject(new ExplorerApiError("OWNER_ONLY", "Signed out."));
-		return new Promise<void>((resolve, reject) => {
-			if (waiters.current.length === 0) setBox({ kind: "sign-in", opener: null });
-			waiters.current.push({ resolve, reject });
-		});
-	}, []);
+	/** Opens "Add a passkey" for a waiting write; resolves once one is added, rejects when closed. */
+	const addForWrite = useCallback(
+		() =>
+			new Promise<void>((resolve, reject) => {
+				if (waiters.current.length === 0) setBox({ kind: "add-for-write" });
+				waiters.current.push({ resolve, reject });
+			}),
+		[],
+	);
 
 	const ownerAssertion = useCallback(
 		async (op: OwnerWriteOp): Promise<string> => {
@@ -110,78 +72,56 @@ export function useOwnerAccess(session: OwnerSessionClient): OwnerAccess {
 				return await session.confirmWrite(op);
 			} catch (error) {
 				if (!(error instanceof OwnerSessionError) || error.code !== "REFUSED") throw error;
-				await askToSignIn();
+				// Every refusal looks the same; only the passkey list says this address has none.
+				const list = await loadPasskeys();
+				if (!list || list.passkeys.length > 0) throw error;
+				await addForWrite();
 				return session.confirmWrite(op);
 			}
 		},
-		[session, askToSignIn],
+		[session, loadPasskeys, addForWrite],
 	);
-
-	const signIn = useCallback(async () => {
-		const opened = await session.signIn();
-		quiet.current = false;
-		knowPasskeys({ current: opened.passkey_id, list: opened.passkeys });
-		setState("signed-in");
-		setBox(null);
-		const waiting = waiters.current.splice(0);
-		// Signed in by hand with nothing waiting: load the page again from the start.
-		if (waiting.length === 0) setGeneration((g) => g + 1);
-		for (const w of waiting) w.resolve();
-	}, [session, knowPasskeys]);
 
 	const closeBox = useCallback(() => {
 		setBox(null);
-		const waiting = waiters.current.splice(0);
-		if (waiting.length === 0) return;
-		quiet.current = true;
-		setState("signed-out");
-		for (const w of waiting) w.reject(new ExplorerApiError("OWNER_ONLY", "Not signed in."));
+		for (const w of waiters.current.splice(0)) w.reject(NOT_CONFIRMED());
 	}, []);
+
+	const addPasskey = useCallback(
+		async (code: string) => {
+			await session.addPasskey(code);
+			await loadPasskeys();
+			const waiting = waiters.current.splice(0);
+			if (waiting.length === 0) return;
+			setBox(null);
+			for (const w of waiting) w.resolve();
+		},
+		[session, loadPasskeys],
+	);
 
 	return useMemo(
 		() => ({
-			state,
 			box,
 			passkeys,
-			generation,
-			onReadAccepted,
-			onOwnerOnly: askToSignIn,
 			ownerAssertion,
-			openSignIn: (opener) => setBox({ kind: "sign-in", opener }),
-			openPasskeys: (opener) => setBox({ kind: "passkeys", opener }),
-			signIn,
+			openPasskeys(opener) {
+				setPasskeys({ status: "loading" });
+				setBox({ kind: "passkeys", opener });
+				void loadPasskeys();
+			},
+			loadPasskeys: async () => {
+				await loadPasskeys();
+			},
 			sendCode: async () => {
 				await session.sendCode();
 			},
-			async addPasskey(code) {
-				await session.addPasskey(code);
-				await signIn();
-			},
+			addPasskey,
 			async removePasskey(id) {
 				await session.removePasskey(id);
-				// The server ends the session signed in with the removed passkey.
-				if (!passkeys || passkeys.current === id) signedOut();
-				else knowPasskeys({ ...passkeys, list: passkeys.list.filter((p) => p.id !== id) });
-			},
-			async signOut() {
-				await session.signOut().catch(() => undefined);
-				signedOut();
+				await loadPasskeys();
 			},
 			closeBox,
 		}),
-		[
-			state,
-			box,
-			passkeys,
-			generation,
-			onReadAccepted,
-			askToSignIn,
-			ownerAssertion,
-			signIn,
-			session,
-			signedOut,
-			knowPasskeys,
-			closeBox,
-		],
+		[box, passkeys, ownerAssertion, loadPasskeys, session, addPasskey, closeBox],
 	);
 }

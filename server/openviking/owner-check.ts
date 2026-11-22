@@ -1,17 +1,18 @@
 /**
  * Memory Explorer — the passkey owner check (OI-1, spec-explorer-owner.md; Security rm-8841fede as amended by
  * rm-3e4885d2). Its `gate` is the one owner gate's production answer (owner-gate.ts, R-OWNER-GATE-1):
- * - a read passes with a live passkey owner session (R-OWNER-READ-1);
- * - a write passes with the session, `Origin` exactly the session host's origin, `X-Owner-Write: 1`, and a fresh
- *   user-verified passkey assertion over a challenge `write/options` bound to this exact op (R-OWNER-WRITE-1/2).
+ * - a read passes with no session (R-OWNER-READ-2; owner Shine 2026-11-22, dr-c54a3286d823: anyone who reaches
+ *   pi-web-ui can ask a chat for any memory, so reads are not guarded; the gate's address check still applies);
+ * - a write passes with `Origin` exactly one host's origin, `X-Owner-Write: 1`, and a fresh user-verified assertion
+ *   from a passkey of that host over a challenge `write/options` bound to this exact op and host (R-OWNER-WRITE-1/2).
  * The challenge is used up on first use, valid or not. Anything else refuses, with reason codes in the log only
- * (never a cookie, assertion, challenge or code value). Its routes are in owner-routes.ts.
+ * (never an assertion, challenge or code value). Its routes are in owner-routes.ts.
  * Not proof of the owner (defense in depth at most): PI_WEB_TOKEN, Tailscale headers, sec-fetch-site, the client IP.
  */
 import type { Express, Request } from "express";
 import type { OwnerTelegramSender } from "../owner-telegram.js";
 import type { OpenVikingExplorerClock } from "./explorer-types.js";
-import { OwnerChallengeStore, OwnerRateLimit, type OwnerSession, OwnerSessionStore } from "./owner-ceremony-store.js";
+import { OwnerChallengeStore, OwnerRateLimit } from "./owner-ceremony-store.js";
 import { OwnerEnrollCodes } from "./owner-enroll-code.js";
 import type { OpenVikingOwnerGate } from "./owner-gate.js";
 import { OwnerPasskeyStore } from "./owner-passkey-store.js";
@@ -22,7 +23,6 @@ import {
 	OWNER_CODE_RATE_LIMIT,
 	OWNER_RATE_LIMIT,
 	OWNER_RELYING_PARTIES,
-	OWNER_SESSION_COOKIE,
 	OWNER_WRITE_HEADER,
 	type OwnerRelyingParty,
 	type OwnerWriteOp,
@@ -59,7 +59,6 @@ export interface OwnerCheck {
 export interface OwnerCheckState {
 	deps: OwnerCheckDeps;
 	passkeys: OwnerPasskeyStore;
-	sessions: OwnerSessionStore;
 	challenges: OwnerChallengeStore;
 	codes: OwnerEnrollCodes;
 	limits: OwnerRateLimit;
@@ -67,25 +66,13 @@ export interface OwnerCheckState {
 	listener: OwnerWriteListener;
 	/** The host the request's `Origin` names exactly; refuses otherwise. */
 	rpOf(req: Request): OwnerRelyingParty;
-	/** The request's live session (and it counts as activity); refuses otherwise. */
-	sessionOf(req: Request): OwnerSession;
-	/** A write's checks (R-OWNER-WRITE-1/2); refuses unless every one passes. */
-	confirmWrite(req: Request, op: OwnerWriteOp): Promise<OwnerSession>;
+	/** A write's checks (R-OWNER-WRITE-1/2); refuses unless every one passes. Answers the write's host. */
+	confirmWrite(req: Request, op: OwnerWriteOp): Promise<OwnerRelyingParty>;
 	refused(where: string, err: unknown): void;
 }
 
 const NO_LISTENER: OwnerWriteListener = { undoAsked: () => {} };
 const MAX_ASSERTION_HEADER = 16 * 1024;
-
-function cookieValue(req: Request, name: string): string | null {
-	const header = req.headers.cookie;
-	if (typeof header !== "string") return null;
-	for (const part of header.split(";")) {
-		const at = part.indexOf("=");
-		if (at !== -1 && part.slice(0, at).trim() === name) return part.slice(at + 1).trim();
-	}
-	return null;
-}
 
 function assertionOf(req: Request): { challengeId: unknown; response: unknown } {
 	const raw = req.get(OWNER_ASSERTION_HEADER);
@@ -110,7 +97,6 @@ function receivedOpMatches(req: Request, op: OwnerWriteOp): boolean {
 export function createOwnerCheck(deps: OwnerCheckDeps): OwnerCheck {
 	const listener = deps.writeListener ?? NO_LISTENER;
 	const passkeys = new OwnerPasskeyStore(deps.dataDir);
-	const sessions = new OwnerSessionStore(deps.clock);
 	const challenges = new OwnerChallengeStore(deps.clock, () => {
 		deps.log("owner-check: write confirmation expired unused");
 	});
@@ -129,64 +115,41 @@ export function createOwnerCheck(deps: OwnerCheckDeps): OwnerCheck {
 		return rp;
 	};
 
-	const sessionOf = (req: Request): OwnerSession => {
-		const session = sessions.use(cookieValue(req, OWNER_SESSION_COOKIE));
-		if (!session) throw new OwnerRefusal("no_session");
-		if (!passkeys.forRp(session.rpID).some((p) => p.id === session.passkeyId)) {
-			sessions.endForPasskey(session.rpID, session.passkeyId);
-			throw new OwnerRefusal("passkey_gone");
-		}
-		return session;
-	};
-
 	/** The named challenge is used up first, so whatever fails after that, it never works again. */
-	const confirmWrite = async (req: Request, op: OwnerWriteOp): Promise<OwnerSession> => {
+	const confirmWrite = async (req: Request, op: OwnerWriteOp): Promise<OwnerRelyingParty> => {
 		if (!limits.take("assertion")) throw new OwnerRefusal("rate_limited");
 		const { challengeId, response } = assertionOf(req);
 		const challenge = challenges.take(challengeId, "write");
 		if (!challenge) throw new OwnerRefusal("unknown_challenge");
-		const session = sessionOf(req);
-		if (rpOf(req).rpID !== session.rpID) throw new OwnerRefusal("bad_origin");
+		const rp = rpOf(req);
+		if (challenge.rp.rpID !== rp.rpID) throw new OwnerRefusal("other_host");
 		if (req.get(OWNER_WRITE_HEADER) !== "1") throw new OwnerRefusal("no_write_header");
 		if (challenges.expired(challenge)) throw new OwnerRefusal("challenge_expired");
-		if (challenge.sessionId !== session.id || challenge.rp.rpID !== session.rpID) {
-			throw new OwnerRefusal("other_session");
-		}
 		const stored = challenge.op;
 		if (!stored || !receivedOpMatches(req, op) || canonicalOwnerWriteOp(stored) !== canonicalOwnerWriteOp(op)) {
 			throw new OwnerRefusal("op_mismatch");
 		}
-		const verified = await ownerVerifiedAssertion(challenge, response, passkeys.forRp(session.rpID));
+		const verified = await ownerVerifiedAssertion(challenge, response, passkeys.forRp(rp.rpID));
 		if (!verified) throw new OwnerRefusal("assertion_failed");
-		passkeys.setCounter(session.rpID, verified.passkey.id, verified.counter);
-		return session;
+		passkeys.setCounter(rp.rpID, verified.passkey.id, verified.counter);
+		return rp;
 	};
 
 	const state: OwnerCheckState = {
 		deps,
 		passkeys,
-		sessions,
 		challenges,
 		codes,
 		limits,
 		codeLimit: new OwnerRateLimit(deps.clock, OWNER_CODE_RATE_LIMIT),
 		listener,
 		rpOf,
-		sessionOf,
 		confirmWrite,
 		refused,
 	};
 
 	const gate: OpenVikingOwnerGate = (req, access) => {
-		if (access.kind === "read") {
-			try {
-				sessionOf(req);
-				return true;
-			} catch (err) {
-				refused("read", err);
-				return false;
-			}
-		}
+		if (access.kind === "read") return true;
 		return confirmWrite(req, access.op).then(
 			() => true,
 			(err: unknown) => {

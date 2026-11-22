@@ -30,11 +30,7 @@ function SubFolders({ api, uri, current, onOpen }: TreeProps & { uri: string }) 
 	const { load } = useLoad(uri, (signal) => api.folder(uri, null, signal));
 	if (load.status === "loading") return <p className="mx-tree-note">Opening…</p>;
 	if (load.status === "failed") {
-		return (
-			<p className="mx-tree-note">
-				{load.code === "OWNER_ONLY" ? "Sign in to open this folder." : "Couldn't open this folder."}
-			</p>
-		);
+		return <p className="mx-tree-note">Couldn't open this folder.</p>;
 	}
 	const folders = load.data.items.filter((item) => item.isFolder);
 	if (folders.length === 0) return null;
@@ -119,8 +115,6 @@ export function ExplorerTree({
 						</section>
 					);
 				})
-			) : roots.status === "failed" && roots.code === "OWNER_ONLY" ? (
-				<p className="mx-tree-note">The folders open once you sign in.</p>
 			) : roots.status === "failed" ? (
 				<p className="mx-tree-note">
 					Couldn't load the folders.{" "}

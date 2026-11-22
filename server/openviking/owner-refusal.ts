@@ -3,17 +3,16 @@
  * answers the one `403 OWNER_ONLY` body (R-OWNER-REFUSE-1), so a caller cannot learn which check failed.
  */
 export type OwnerRefusalReason =
-	| "no_session"
-	| "passkey_gone"
 	| "bad_origin"
 	| "bad_address"
+	| "bad_host"
 	| "no_write_header"
 	| "rate_limited"
 	| "no_assertion"
 	| "bad_assertion_header"
 	| "unknown_challenge"
 	| "challenge_expired"
-	| "other_session"
+	| "other_host"
 	| "op_mismatch"
 	| "assertion_failed"
 	| "no_passkeys"

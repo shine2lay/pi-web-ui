@@ -1,7 +1,7 @@
 /**
- * The owner's passkey client for the Memory explorer (spec-explorer-owner.md, backend #166): sign in,
- * add a passkey with the 7-word code sent to his Telegram, confirm one write, sign out, remove a
- * passkey. Bodies are `server/openviking/owner-session-types.ts`; the browser's passkey prompt is
+ * The owner's passkey client for the Memory explorer (spec-explorer-owner.md, backend #166, Ops #1080):
+ * list this address's passkeys, add one with the 7-word code sent to his Telegram, confirm one write,
+ * remove a passkey. Reading memory needs none of it (R-OWNER-READ-2). Bodies are `server/openviking/owner-session-types.ts`; the browser's passkey prompt is
  * `@simplewebauthn/browser` unless another is passed in.
  *
  * Every refusal from the server is the same `403 OWNER_ONLY` (no oracle), so the page can only tell
@@ -18,7 +18,7 @@ import {
 	type OwnerCodeSent,
 	type OwnerEnrolled,
 	type OwnerPasskeyInfo,
-	type OwnerSessionOpened,
+	type OwnerPasskeyList,
 	type OwnerWriteOp,
 } from "../../../server/openviking/owner-session-types.js";
 import { appUrl } from "../base-url.js";
@@ -52,14 +52,14 @@ export const browserWebAuthn: OwnerWebAuthn = {
 };
 
 export interface OwnerSessionClient {
+	/** This address's passkeys (public info only). */
+	passkeys(): Promise<OwnerPasskeyList>;
 	/** Sends a single-use 7-word code to the owner's Telegram (10 minutes). */
 	sendCode(): Promise<OwnerCodeSent>;
 	/** Adds a passkey for this address with the code he typed. */
 	addPasskey(code: string): Promise<OwnerPasskeyInfo>;
-	signIn(): Promise<OwnerSessionOpened>;
 	/** One write's confirm: the `X-Owner-Assertion` value for exactly `op`. */
 	confirmWrite(op: OwnerWriteOp): Promise<string>;
-	signOut(): Promise<void>;
 	removePasskey(id: string): Promise<void>;
 }
 
@@ -117,12 +117,16 @@ export function createOwnerSession(options: OwnerSessionOptions = {}): OwnerSess
 	}
 
 	async function confirmWrite(op: OwnerWriteOp): Promise<string> {
-		const ceremony = await post<OwnerCeremonyOptions>("write/options", { op });
+		const ceremony = await call<OwnerCeremonyOptions>("write/options", {
+			body: JSON.stringify({ op }),
+			headers: { [OWNER_WRITE_HEADER]: "1" },
+		});
 		const response = await prompt(() => webauthn.authenticate(ceremony.options));
 		return assertionHeader({ challenge_id: ceremony.challenge_id, response });
 	}
 
 	return {
+		passkeys: () => call<OwnerPasskeyList>("passkeys", { method: "GET" }),
 		sendCode: () => post<OwnerCodeSent>("passkey/code", {}),
 		async addPasskey(code) {
 			const ceremony = await post<OwnerCeremonyOptions>("passkey/enroll/options", { code: code.trim() });
@@ -133,15 +137,7 @@ export function createOwnerSession(options: OwnerSessionOptions = {}): OwnerSess
 			});
 			return enrolled.passkey;
 		},
-		async signIn() {
-			const ceremony = await post<OwnerCeremonyOptions>("session/options", {});
-			const response = await prompt(() => webauthn.authenticate(ceremony.options));
-			return post<OwnerSessionOpened>("session/verify", { challenge_id: ceremony.challenge_id, response });
-		},
 		confirmWrite,
-		async signOut() {
-			await post("session/logout", {});
-		},
 		async removePasskey(id) {
 			const assertion = await confirmWrite({ method: "DELETE", passkey_id: id });
 			await call(`passkey?id=${encodeURIComponent(id)}`, {

@@ -51,7 +51,7 @@ export function treeRootRow(root: OpenVikingExplorerRoot, walk: OpenVikingTreeWa
 	return { ...base, read: true, notes, folders: items.length - notes, kinds };
 }
 
-/** `GET /api/openviking/tree/roots` (the owner gate passed: its session reads every root, R-OWNER-READ-1). */
+/** `GET /api/openviking/tree/roots` (the owner gate passed: a read sees every root, R-OWNER-READ-2). */
 export async function buildTreeRoots(http: OpenVikingDaemonHttp, nowMs: number): Promise<OpenVikingTreeRootsResponse> {
 	const checked_at = new Date(nowMs).toISOString();
 	const reachable = await isMemoryReachable(http);

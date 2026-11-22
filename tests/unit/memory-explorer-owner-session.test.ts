@@ -1,7 +1,7 @@
 /**
  * Memory explorer (design #316): the owner's passkey client on `/api/openviking/owner/*`
- * (spec-explorer-owner.md, backend #166). Sign in, add a passkey with the Telegram code, confirm one
- * write, sign out, remove a passkey. The browser's passkey prompt is passed in.
+ * (spec-explorer-owner.md, backend #166, Ops #1080). List this address's passkeys, add one with the
+ * Telegram code, confirm one write, remove a passkey; no sign-in. The browser's passkey prompt is passed in.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -12,10 +12,8 @@ import {
 	type OwnerWebAuthn,
 } from "../../web/src/memory-explorer/owner-session.js";
 
-const OPENED = {
-	expires_at: "2026-11-14T05:00:00.000Z",
-	idle_ms: 900_000,
-	passkey_id: "pk-1",
+const LISTED = {
+	rp_id: "pi.wai2shine.com",
 	passkeys: [{ id: "pk-1", rp_id: "pi.wai2shine.com", created_at: "2026-11-13T22:00:00.000Z" }],
 };
 const CEREMONY = { challenge_id: "ch-9", expires_at: "2026-11-14T01:02:00.000Z", options: { challenge: "abc" } };
@@ -45,40 +43,14 @@ const decode = (b64url: string) => {
 	return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
 };
 
-describe("sign in", () => {
-	it("asks for a challenge, runs the passkey prompt on its options, and sends the answer back", async () => {
-		const { fetch, sent } = server({
-			"POST session/options": { body: CEREMONY },
-			"POST session/verify": { body: OPENED },
-		});
-		const webauthn = prompt();
-		const opened = await createOwnerSession({ fetch, webauthn }).signIn();
-		expect(opened).toEqual(OPENED);
-		expect(webauthn.authenticate).toHaveBeenCalledWith(CEREMONY.options);
-		expect(sent.map((s) => s.url.replace(/^.*\/owner\//, ""))).toEqual(["session/options", "session/verify"]);
-		expect(bodyOf(sent[1].init)).toEqual({ challenge_id: "ch-9", response: ASSERTION });
-		expect(sent.every((s) => s.init.credentials === "same-origin")).toBe(true);
-	});
-
-	it("tells a cancelled prompt apart from a refusal", async () => {
-		const { fetch } = server({ "POST session/options": { body: CEREMONY } });
-		const webauthn = prompt();
-		webauthn.authenticate.mockRejectedValueOnce(Object.assign(new Error("closed"), { name: "NotAllowedError" }));
-		const session = createOwnerSession({ fetch, webauthn });
-		await expect(session.signIn()).rejects.toMatchObject({ code: "CANCELLED" });
-		const refused = createOwnerSession({ fetch: server({}).fetch, webauthn: prompt() });
-		await expect(refused.signIn()).rejects.toMatchObject({ code: "REFUSED" });
-		await expect(refused.signIn()).rejects.toBeInstanceOf(OwnerSessionError);
-	});
-
-	it("reads a prompt cancelled behind the passkey library's wrapper as cancelled", async () => {
-		const { fetch } = server({ "POST session/options": { body: CEREMONY } });
-		const webauthn = prompt();
-		const inner = Object.assign(new Error("denied"), { name: "NotAllowedError" });
-		webauthn.authenticate.mockRejectedValueOnce(
-			Object.assign(new Error("wrapped"), { name: "WebAuthnError", cause: inner }),
-		);
-		await expect(createOwnerSession({ fetch, webauthn }).signIn()).rejects.toMatchObject({ code: "CANCELLED" });
+describe("this address's passkeys", () => {
+	it("lists them with a GET and no body", async () => {
+		const { fetch, sent } = server({ "GET passkeys": { body: LISTED } });
+		const listed = await createOwnerSession({ fetch, webauthn: prompt() }).passkeys();
+		expect(listed).toEqual(LISTED);
+		expect(sent[0].init.method).toBe("GET");
+		expect(sent[0].init.body).toBeUndefined();
+		expect(sent[0].url).toContain("/api/openviking/owner/passkeys");
 	});
 });
 
@@ -87,13 +59,13 @@ describe("add a passkey", () => {
 		const { fetch, sent } = server({
 			"POST passkey/code": { status: 202, body: { sent: true, rp_id: "pi.wai2shine.com", expires_at: "x" } },
 			"POST passkey/enroll/options": { body: CEREMONY },
-			"POST passkey/enroll/verify": { status: 201, body: { passkey: OPENED.passkeys[0] } },
+			"POST passkey/enroll/verify": { status: 201, body: { passkey: LISTED.passkeys[0] } },
 		});
 		const webauthn = prompt();
 		const session = createOwnerSession({ fetch, webauthn });
 		await session.sendCode();
 		const added = await session.addPasskey("  apple river stone cloud lamp seven tide \n");
-		expect(added).toEqual(OPENED.passkeys[0]);
+		expect(added).toEqual(LISTED.passkeys[0]);
 		expect(bodyOf(sent[1].init)).toEqual({ code: "apple river stone cloud lamp seven tide" });
 		expect(webauthn.register).toHaveBeenCalledWith(CEREMONY.options);
 		expect(bodyOf(sent[2].init)).toEqual({ challenge_id: "ch-9", response: { id: "new-cred" } });
@@ -112,6 +84,8 @@ describe("confirm one write", () => {
 		const { fetch, sent } = server({ "POST write/options": { body: CEREMONY } });
 		const header = await createOwnerSession({ fetch, webauthn: prompt() }).confirmWrite(op);
 		expect(bodyOf(sent[0].init)).toEqual({ op });
+		expect(new Headers(sent[0].init.headers).get("X-Owner-Write")).toBe("1");
+		expect(sent[0].init.credentials).toBe("same-origin");
 		expect(header).toMatch(/^[A-Za-z0-9_-]+$/);
 		expect(decode(header)).toEqual({ challenge_id: "ch-9", response: ASSERTION });
 	});
@@ -123,16 +97,21 @@ describe("confirm one write", () => {
 		await expect(createOwnerSession({ fetch, webauthn }).confirmWrite(op)).rejects.toMatchObject({ code: "CANCELLED" });
 		const none = createOwnerSession({ fetch: server({}).fetch, webauthn: prompt() });
 		await expect(none.confirmWrite(op)).rejects.toMatchObject({ code: "REFUSED" });
+		await expect(none.confirmWrite(op)).rejects.toBeInstanceOf(OwnerSessionError);
+	});
+
+	it("reads a prompt cancelled behind the passkey library's wrapper as cancelled", async () => {
+		const { fetch } = server({ "POST write/options": { body: CEREMONY } });
+		const webauthn = prompt();
+		const inner = Object.assign(new Error("denied"), { name: "NotAllowedError" });
+		webauthn.authenticate.mockRejectedValueOnce(
+			Object.assign(new Error("wrapped"), { name: "WebAuthnError", cause: inner }),
+		);
+		await expect(createOwnerSession({ fetch, webauthn }).confirmWrite(op)).rejects.toMatchObject({ code: "CANCELLED" });
 	});
 });
 
-describe("sign out and remove a passkey", () => {
-	it("signs out", async () => {
-		const { fetch, sent } = server({ "POST session/logout": { body: { signed_out: true } } });
-		await createOwnerSession({ fetch, webauthn: prompt() }).signOut();
-		expect(sent[0].url).toContain("/api/openviking/owner/session/logout");
-	});
-
+describe("remove a passkey", () => {
 	it("removes a passkey only with its own confirm, sent as the write headers", async () => {
 		const { fetch, sent } = server({
 			"POST write/options": { body: CEREMONY },

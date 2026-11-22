@@ -4,31 +4,12 @@ import type { MemoryHealth } from "./explorer-api.js";
 import { ago, clock, countWords } from "./explorer-text.js";
 import type { Load } from "./use-load.js";
 
-export function HealthLine({
-	health,
-	signedOut = false,
-	nowMs,
-	onRetry,
-}: {
-	health: Load<MemoryHealth>;
-	signedOut?: boolean;
-	nowMs: number;
-	onRetry(): void;
-}) {
-	if (health.status === "loading" && !health.data && !signedOut) {
+export function HealthLine({ health, nowMs, onRetry }: { health: Load<MemoryHealth>; nowMs: number; onRetry(): void }) {
+	if (health.status === "loading" && !health.data) {
 		return (
 			<p className="mx-health" data-tone="wait" role="status">
 				<span className="mx-dot" aria-hidden="true" />
 				<b>Checking memory…</b>
-			</p>
-		);
-	}
-	if ((signedOut && !health.data) || (health.status === "failed" && health.code === "OWNER_ONLY")) {
-		return (
-			<p className="mx-health" data-tone="wait" role="status">
-				<span className="mx-dot" aria-hidden="true" />
-				<b>Signed out</b>
-				<span>memory opens with your passkey</span>
 			</p>
 		);
 	}
@@ -43,15 +24,6 @@ export function HealthLine({
 				<button type="button" className="mx-btn" onClick={onRetry}>
 					Try again
 				</button>
-			</p>
-		);
-	}
-	if (signedOut) {
-		return (
-			<p className="mx-health" data-tone="ok" role="status">
-				<span className="mx-dot" aria-hidden="true" />
-				<b>Memory is up</b>
-				<span> · sign in to see everything</span>
 			</p>
 		);
 	}

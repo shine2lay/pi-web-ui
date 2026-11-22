@@ -104,7 +104,7 @@ export interface SearchHit {
 
 export interface SearchAnswer {
 	readonly hits: readonly SearchHit[];
-	/** Places that couldn't be searched (didn't answer, or need the owner's sign-in); 0 = all searched. */
+	/** Places that couldn't be searched (didn't answer); 0 = all searched. */
 	readonly missedPlaces: number;
 }
 

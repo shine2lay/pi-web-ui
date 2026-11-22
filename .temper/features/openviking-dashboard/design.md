@@ -15,8 +15,8 @@ This document describes the delivered explorer; do not rebuild the superseded da
 ## First view and progressive disclosure
 
 - Header: Memory title, compact health line (up/down/checking, last save, note count, check time).
-  Owner account controls appear only after a successful session read; neither Sign out nor
-  Passkeys appears during Checking or when owner access is refused (design #317).
+  Memory opens with no sign-in (owner Shine 2026-11-22, `dr-c54a3286d823`); the header keeps one
+  Passkeys button (list, add with the Telegram code, remove). No Sign in or Sign out.
 - Find comes first: one question box, Search, “By meaning” / “Exact words”, scope selector and
   example questions. Scopes cover everything, shared notes, project documents and departments.
 - Work area starts with “Changed most recently” (12 notes). Search replaces it with results:
@@ -34,8 +34,9 @@ Edit keeps full text in a textarea. Save requires confirmation with old/new leng
 when chats receive the new text. Delete confirms the named note and location and explains the
 consequence. Both offer 10-second Undo and record the change. Folders are not deletable here.
 Setup files (`identity.md`, `soul.md`) are locked: no text disclosure or mutation controls.
-Owner-only access is enforced by the server, not merely hidden buttons. Passkey sign-in replaces
-protected content when access is refused; use the owner contract for exact ceremony details.
+Changes are owner-only, enforced by the server, not merely hidden buttons: each Save, Delete and
+Undo asks for the passkey; on an address with no passkey it opens Add a passkey, then finishes the
+change. Use the owner contract for exact ceremony details.
 
 ## Screen states
 
@@ -50,7 +51,7 @@ protected content when access is refused; use the owner contract for exact cerem
 | Save error | Keep the draft text, explain failure and offer Try again. |
 | Confirm / pending | Named edit/delete confirmation, immediate busy feedback; prevent duplicate changes. |
 | Done / undone | Saved/deleted toast and change record; Undo updates the list; failed Undo explains recovery. |
-| Owner checking / refused | No account controls during Checking; refusal shows passkey sign-in instead of notes. |
+| Owner confirm | A change asks for the passkey; no passkey on this address opens Add a passkey, then the change goes on. |
 
 ## Responsive layout and accessibility
 

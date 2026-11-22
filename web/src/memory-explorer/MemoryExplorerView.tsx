@@ -3,7 +3,8 @@
  *
  * Top to bottom: title and health line, Find, the recent list or search results (or the opened note
  * or folder), the owner's changes, then the tree of places memory keeps things (beside the work
- * area on wide screens). Every read and change goes through the one `MemoryExplorerApi` seam.
+ * area on wide screens). Every read and change goes through the one `MemoryExplorerApi` seam. It opens
+ * with no sign-in; each change asks for the owner's passkey inside the seam (Ops #1080).
  */
 
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
@@ -31,7 +32,6 @@ import { HealthLine, memoryAnswers } from "./HealthLine.js";
 import { type ChangeHost, NoteReader } from "./NoteReader.js";
 import { type AskedSearch, RecentList, SearchResults } from "./StartView.js";
 import { useLoad } from "./use-load.js";
-import type { OwnerState } from "./use-owner-access.js";
 
 const RECENT_LIMIT = 12;
 const SEARCH_LIMIT = 30;
@@ -45,22 +45,9 @@ interface Step {
 
 export interface MemoryExplorerViewProps {
 	readonly api: MemoryExplorerApi;
-	readonly ownerState?: OwnerState;
 	readonly now?: () => number;
-	/** The owner's passkey sign-in, shown in place of the notes while memory asks who is looking. */
-	readonly signIn?: ReactNode;
-	/** The owner's Sign out and Passkeys, at the end of the header. */
+	/** The owner's Passkeys button, at the end of the header. */
 	readonly account?: ReactNode;
-}
-
-function OwnerOnly({ signIn }: { signIn: ReactNode }) {
-	return (
-		<div className="mx-empty" data-owner-only>
-			<h2>Sign in to see memory</h2>
-			<p className="mx-dim">Memory holds every department's notes, so only you can open it, with your passkey.</p>
-			{signIn ?? <p className="mx-dim">Passkey sign-in isn't on this page yet.</p>}
-		</div>
-	);
 }
 
 function backLabel(previous: Place | undefined, searching: boolean): string | null {
@@ -69,17 +56,10 @@ function backLabel(previous: Place | undefined, searching: boolean): string | nu
 	return `Back to ${folderLabel(previous.uri)}`;
 }
 
-export function MemoryExplorerView({
-	api,
-	ownerState = "unknown",
-	now = Date.now,
-	signIn,
-	account,
-}: MemoryExplorerViewProps) {
+export function MemoryExplorerView({ api, now = Date.now, account }: MemoryExplorerViewProps) {
 	const health = useLoad("health", (signal) => api.health(signal));
 	const roots = useLoad("roots", (signal) => api.roots(signal));
-	const signedIn = ownerState === "signed-in";
-	const recorded = useLoad(signedIn ? "changes" : null, (signal) => api.changes(signal));
+	const recorded = useLoad("changes", (signal) => api.changes(signal));
 	const [scope, setScope] = useState<SearchScope>("all");
 	const recent = useLoad(`recent:${scope}`, (signal) => api.recent(scope, RECENT_LIMIT, signal));
 	const [query, setQuery] = useState("");
@@ -101,7 +81,7 @@ export function MemoryExplorerView({
 	const seqRef = useRef(0);
 	const nowMs = now();
 	const place = steps[steps.length - 1].place;
-	const canChange = ownerState !== "signed-out" && memoryAnswers(health.load);
+	const canChange = memoryAnswers(health.load);
 	const memoryEmpty = health.load.data?.totalNotes === 0;
 
 	const runSearch = (q: string, m: SearchMode, s: SearchScope) => {
@@ -191,11 +171,7 @@ export function MemoryExplorerView({
 	const previous = steps[steps.length - 2]?.place;
 	const label = backLabel(previous, asked !== null);
 	let work;
-	// OWNER_ONLY reads wait for the sign-in box; their loads still say loading meanwhile.
-	const ownerOnly = ownerState === "signed-out" || (roots.load.status === "failed" && roots.load.code === "OWNER_ONLY");
-	if (ownerOnly) {
-		work = <OwnerOnly signIn={signIn} />;
-	} else if (place.kind === "note") {
+	if (place.kind === "note") {
 		work = (
 			<NoteReader
 				key={place.uri}
@@ -251,7 +227,7 @@ export function MemoryExplorerView({
 						</p>
 					</div>
 					<div className="mx-head-side">
-						<HealthLine health={health.load} signedOut={ownerOnly} nowMs={nowMs} onRetry={reloadAll} />
+						<HealthLine health={health.load} nowMs={nowMs} onRetry={reloadAll} />
 						{account}
 					</div>
 				</header>
@@ -272,15 +248,15 @@ export function MemoryExplorerView({
 						<section className="mx-view" aria-label="What you're looking at" aria-live="polite">
 							{work}
 						</section>
-						{signedIn && recorded.load.status === "failed" && recorded.load.code === "OWNER_ONLY" ? (
-							<p className="mx-dim">Sign in to see your changes</p>
-						) : signedIn ? (
+						{recorded.load.status === "failed" && recorded.load.code === "OWNER_ONLY" ? (
+							<p className="mx-dim">Your earlier changes can't be shown here.</p>
+						) : (
 							<ChangesYouMade changes={mergeChanges(changes, recorded.load.data ?? [])} />
-						) : null}
+						)}
 					</div>
 					<ExplorerTree
 						api={api}
-						roots={ownerOnly ? { status: "failed", code: "OWNER_ONLY", data: null } : roots.load}
+						roots={roots.load}
 						totalNotes={health.load.data?.totalNotes ?? null}
 						onRetry={roots.reload}
 						current={place.kind === "start" ? null : place.uri}

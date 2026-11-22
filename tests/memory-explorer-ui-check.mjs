@@ -25,12 +25,12 @@ const STATES = process.argv[3]?.split(",") ?? [
 	"error",
 	"down",
 	"degraded",
-	"signed-out",
 	"results",
 	"reader",
 	"confirm",
-	"checking",
-	"signed-in",
+	"page",
+	"passkeys",
+	"add-passkey",
 ];
 
 /** The fake store's `vi.fn` wrapper is only a spy: in the browser it is the function itself. */

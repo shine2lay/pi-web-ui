@@ -1,7 +1,7 @@
 /**
  * Memory Explorer — the owner check's wire contract (OI-1, spec-explorer-owner.md; Security rm-8841fede as amended by
- * rm-3e4885d2). One WebAuthn passkey owner session for reads, one fresh user-verified passkey assertion bound to each
- * write. Every route under `/api/openviking/owner/`; every failure answers `403 OWNER_ONLY` with one body.
+ * rm-3e4885d2). No session (reads are open, owner Shine 2026-11-22, dr-c54a3286d823); one fresh user-verified passkey
+ * assertion bound to each write. Every route under `/api/openviking/owner/`; every failure answers `403 OWNER_ONLY` with one body.
  * Imported by the page (frontend #290): no runtime imports here beyond constants.
  */
 
@@ -13,20 +13,15 @@ export const OWNER_RELYING_PARTIES = [
 
 export type OwnerRelyingParty = (typeof OWNER_RELYING_PARTIES)[number];
 
-/** The session cookie: HttpOnly; Secure; SameSite=Strict; Path=/api/openviking. */
-export const OWNER_SESSION_COOKIE = "pi_owner_session";
-export const OWNER_SESSION_COOKIE_PATH = "/api/openviking";
 /** A write carries this header with the value `1` (defense in depth). */
 export const OWNER_WRITE_HEADER = "X-Owner-Write";
 /** A write carries its passkey assertion here: base64url of the JSON `OwnerAssertionHeader`. */
 export const OWNER_ASSERTION_HEADER = "X-Owner-Assertion";
 
-export const OWNER_SESSION_IDLE_MS = 15 * 60_000;
-export const OWNER_SESSION_MAX_MS = 4 * 60 * 60_000;
 /** A write challenge: 32 random bytes, single use, 60 s. */
 export const OWNER_WRITE_CHALLENGE_MS = 60_000;
 export const OWNER_CHALLENGE_BYTES = 32;
-/** Sign-in and enrollment prompts: single use, 2 min (the browser's own prompt timeout fits inside). */
+/** Enrollment prompts: single use, 2 min (the browser's own prompt timeout fits inside). */
 export const OWNER_CEREMONY_CHALLENGE_MS = 2 * 60_000;
 /** The Telegram enrollment code: single use, 10 min, memory only. */
 export const OWNER_ENROLL_CODE_MS = 10 * 60_000;
@@ -99,35 +94,21 @@ export interface OwnerEnrolled {
 	passkey: OwnerPasskeyInfo;
 }
 
-/** `POST session/options` `{}` -> `200` `OwnerCeremonyOptions` (`PublicKeyCredentialRequestOptionsJSON`). */
-export type OwnerSessionOptionsRequest = Record<string, never>;
-
-/** `POST session/verify`; `response` is WebAuthn `AuthenticationResponseJSON`. */
-export interface OwnerSessionVerifyRequest {
-	challenge_id: string;
-	response: unknown;
-}
-
-/** `POST session/verify` -> `200` and the session cookie. */
-export interface OwnerSessionOpened {
-	expires_at: string;
-	idle_ms: number;
-	passkey_id: string;
-	/** This host's passkeys (for `DELETE passkey`). */
+/** `GET passkeys` -> `200`: the request's host and its passkeys (public info only; empty = add one first). */
+export interface OwnerPasskeyList {
+	rp_id: string;
 	passkeys: OwnerPasskeyInfo[];
 }
 
-/** `POST write/options` (needs a session) -> `200` `OwnerCeremonyOptions`, the challenge bound to `op`. */
+/**
+ * `POST write/options` (with `X-Owner-Write: 1`) -> `200` `OwnerCeremonyOptions`, the challenge bound to `op` and
+ * the host (`PublicKeyCredentialRequestOptionsJSON`). A host with no passkey is refused like any failure.
+ */
 export interface OwnerWriteOptionsRequest {
 	op: OwnerWriteOp;
 }
 
-/** `POST session/logout` -> `200`; the cookie is cleared. */
-export interface OwnerSignedOut {
-	signed_out: true;
-}
-
-/** `DELETE passkey?id=` (session + its own assertion bound to `{ method: "DELETE", passkey_id }`) -> `200`. */
+/** `DELETE passkey?id=` (its own assertion bound to `{ method: "DELETE", passkey_id }`) -> `200`. */
 export interface OwnerPasskeyRemoved {
 	removed: string;
 }

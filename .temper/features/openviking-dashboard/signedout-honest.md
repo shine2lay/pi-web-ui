@@ -1,5 +1,7 @@
 # Signed-out honesty (#321)
 
+Superseded 2026-11-22 by Ops #1080 (owner Shine, `dr-c54a3286d823`): Memory has no sign-in or signed-out state any more; see [spec-explorer-owner.md](spec-explorer-owner.md). Kept as the record of #321.
+
 ## Hypothesis
 Problem: refused reads wait for sign-in, so their loads still say Checking/Loading behind the box. Public health plus refused roots is marked degraded and falsely describes a read failure.
 Change: use the existing owner access state to replace pending content with sign-in copy and distinguish signed-out health from actual signed-in failures. No server change.

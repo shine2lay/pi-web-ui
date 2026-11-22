@@ -139,9 +139,6 @@ export async function ownerHarness(
 		return { status: res.status, body, text, setCookie: res.setCookie };
 	};
 
-	/** The cookie pair (`name=value`) a session/verify set. */
-	const cookieOf = (r: OwnerReply) => (r.setCookie ?? "").split(";")[0];
-
 	const rpOf = (passkey: FakePasskey) => OWNER_RELYING_PARTIES.find((rp) => rp.rpID === passkey.rpID) ?? PI_RP;
 
 	/** passkey/code -> the code from Telegram -> enroll/options -> the authenticator -> enroll/verify. */
@@ -159,50 +156,36 @@ export async function ownerHarness(
 		return call("POST", `${OWNER}/passkey/enroll/verify`, { origin, body: { challenge_id: b.challenge_id, response } });
 	};
 
-	/** session/options -> the authenticator -> session/verify; returns the reply (cookie in `setCookie`). */
-	const signIn = async (passkey: FakePasskey, o: { userVerified?: boolean } = {}) => {
-		const origin = rpOf(passkey).origin;
-		const options = await call("POST", `${OWNER}/session/options`, { origin, body: {} });
-		if (options.status !== 200) return options;
-		const b = options.body as { challenge_id: string; options: { challenge: string } };
-		const response = passkey.assert(b.options, { origin, userVerified: o.userVerified });
-		return call("POST", `${OWNER}/session/verify`, { origin, body: { challenge_id: b.challenge_id, response } });
-	};
-
-	/** Enrolls `passkey` and signs in; the session cookie. */
+	/** Enrolls the owner's `passkey` on its host (no session exists: Ops #1080). */
 	const owned = async (passkey: FakePasskey) => {
 		const enrolled = await enroll(passkey);
 		if (enrolled.status !== 201) throw new Error(`enroll answered ${enrolled.status}`);
-		const session = await signIn(passkey);
-		if (session.status !== 200) throw new Error(`sign-in answered ${session.status}`);
-		return cookieOf(session);
 	};
 
-	/** write/options for `op` -> the authenticator -> the `X-Owner-Assertion` header value. */
-	const assertion = async (
-		passkey: FakePasskey,
-		cookie: string,
-		op: OwnerWriteOp,
-		o: { userVerified?: boolean } = {},
-	) => {
+	/** write/options for `op` (with `X-Owner-Write: 1`) -> the authenticator -> the `X-Owner-Assertion` value. */
+	const assertion = async (passkey: FakePasskey, op: OwnerWriteOp, o: { userVerified?: boolean } = {}) => {
 		const origin = rpOf(passkey).origin;
-		const options = await call("POST", `${OWNER}/write/options`, { origin, cookie, body: { op } });
+		const options = await call("POST", `${OWNER}/write/options`, {
+			origin,
+			body: { op },
+			headers: { "X-Owner-Write": "1" },
+		});
 		if (options.status !== 200) throw new Error(`write/options answered ${options.status}`);
 		const b = options.body as { challenge_id: string; options: { challenge: string } };
 		const response = passkey.assert(b.options, { origin, userVerified: o.userVerified });
 		return Buffer.from(JSON.stringify({ challenge_id: b.challenge_id, response }), "utf8").toString("base64url");
 	};
 
-	/** A write as the page sends it: session, Origin, X-Owner-Write: 1, X-Owner-Assertion. */
+	/** A write as the page sends it: Origin, X-Owner-Write: 1, X-Owner-Assertion. */
 	const write = (
 		method: string,
 		path: string,
-		c: { cookie: string; assertion?: string; rawBody?: string; origin?: string | null; ownerWrite?: string | null },
+		c: { assertion?: string; rawBody?: string; origin?: string | null; ownerWrite?: string | null } = {},
 	) => {
 		const headers: Record<string, string> = {};
 		if (c.ownerWrite !== null) headers["X-Owner-Write"] = c.ownerWrite ?? "1";
 		if (c.assertion) headers["X-Owner-Assertion"] = c.assertion;
-		return call(method, path, { cookie: c.cookie, rawBody: c.rawBody, origin: c.origin, headers });
+		return call(method, path, { rawBody: c.rawBody, origin: c.origin, headers });
 	};
 
 	return {
@@ -214,9 +197,7 @@ export async function ownerHarness(
 		responses,
 		owner,
 		call,
-		cookieOf,
 		enroll,
-		signIn,
 		owned,
 		assertion,
 		write,

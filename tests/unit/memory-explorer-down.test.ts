@@ -59,13 +59,14 @@ it("first load failure still says Couldn't load memory", async () => {
 	expect(text(page.container)).toContain("Couldn't load memory");
 });
 
-it("withheld audit shows sign-in instead of No changes", async () => {
+it("withheld audit (no owner check wired) says so instead of No changes, with no sign-in", async () => {
 	const api = fakeApi();
 	api.changes.mockImplementation(
 		createHttpExplorerApi({ fetch: async () => new Response(JSON.stringify({ owner_events: "withheld", events: [] })) })
 			.changes,
 	);
 	page = await mountExplorer(api);
-	expect(text(page.container)).toContain("Sign in to see your changes");
+	expect(text(page.container)).toContain("Your earlier changes can't be shown here.");
 	expect(text(page.container)).not.toContain("No changes");
+	expect(text(page.container)).not.toMatch(/sign in/i);
 });

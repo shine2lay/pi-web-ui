@@ -1,4 +1,4 @@
-/* The owner's sign-in, passkeys and account buttons on the Memory page (design #316). The boxes use
+/* The owner's passkeys box and Passkeys button on the Memory page (design #316, Ops #1080). The boxes use
    the confirm's look (`.mx-confirm` in `memory-explorer-reader.css`). */
 
 .mx-head-side {
@@ -17,13 +17,7 @@
 .mx-owner .mx-actions {
 	align-items: center;
 }
-.mx-owner-alt {
-	margin: 16px 0 0;
-	padding-top: 12px;
-	border-top: 1px solid var(--border-soft);
-	font-size: var(--mx-meta);
-}
-.mx-owner-alt .mx-link {
+.mx-owner .mx-dim .mx-link {
 	min-height: 32px;
 }
 .mx-owner-form label {

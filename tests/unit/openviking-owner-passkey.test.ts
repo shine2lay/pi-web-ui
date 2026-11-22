@@ -1,48 +1,35 @@
 /**
- * The owner check, reads and enrollment (OI-1; Security rm-8841fede as amended by rm-3e4885d2; spec-explorer-owner.md
- * R-OWNER-READ-1, R-OWNER-REFUSE-1). Each Security case is one test, named after it. Writes: openviking-owner-write.
+ * The owner check, enrollment and refusals (OI-1; Security rm-8841fede as amended by rm-3e4885d2; spec-explorer-owner.md
+ * R-OWNER-WRITE-1, R-OWNER-REFUSE-1). Reads are open since Ops #1080 (owner Shine 2026-11-22, dr-c54a3286d823):
+ * openviking-owner-open-reads. Writes with an assertion: openviking-owner-write.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OWNER_CODE_WORDS } from "../../server/openviking/owner-enroll-code.js";
-import {
-	OWNER_ENROLL_CODE_MS,
-	OWNER_ONLY_BODY,
-	OWNER_SESSION_IDLE_MS,
-	OWNER_SESSION_MAX_MS,
-} from "../../server/openviking/owner-session-types.js";
+import { OWNER_ENROLL_CODE_MS, OWNER_ONLY_BODY } from "../../server/openviking/owner-session-types.js";
 import { FakePasskey } from "./openviking-owner-fakes.js";
 import { expectOwnerOnly, OWNER, type OwnerHarness, ownerHarness, PI_RP, TS_RP } from "./openviking-owner-harness.js";
 
-const ROLE_ROOT = "viking://user/qa/memories";
-const ROLE_NOTE = "viking://user/qa/memories/cases/c1.md";
 const SHARED_NOTE = "viking://resources/pi-web-ui/README.md";
 const q = encodeURIComponent;
 const REFUSAL = JSON.stringify(OWNER_ONLY_BODY);
 
-/** The 7 explorer routes as the page calls them (writes without an assertion). */
-const EXPLORER_ROUTES: [string, string, unknown][] = [
-	["GET", "/api/openviking/tree/roots", undefined],
-	["GET", `/api/openviking/tree?uri=${q(ROLE_ROOT)}`, undefined],
-	["GET", `/api/openviking/note?uri=${q(ROLE_NOTE)}&level=full`, undefined],
-	["POST", "/api/openviking/search", { mode: "exact", query: "case", roots: [ROLE_ROOT] }],
+/** The 3 explorer writes as the page sends them, without an assertion. */
+const EXPLORER_WRITES: [string, string, unknown][] = [
 	["PUT", "/api/openviking/note", { uri: SHARED_NOTE, content: "x", opened_mod_time: "2026-01-01T00:00:00.000Z" }],
 	["DELETE", `/api/openviking/note?uri=${q(SHARED_NOTE)}`, undefined],
 	["POST", "/api/openviking/undo", { operation_id: "op-1-00000000" }],
 ];
 
-async function expectAllRoutesRefuse(x: OwnerHarness, call: { cookie?: string; headers?: Record<string, string> }) {
+async function expectAllWritesRefuse(x: OwnerHarness, call: { cookie?: string; headers?: Record<string, string> }) {
 	const before = x.fake.calls.length;
-	for (const [method, path, body] of EXPLORER_ROUTES) {
-		const headers = method === "GET" ? call.headers : { "X-Owner-Write": "1", ...call.headers };
+	for (const [method, path, body] of EXPLORER_WRITES) {
+		const headers = { "X-Owner-Write": "1", ...call.headers };
 		expectOwnerOnly(await x.call(method, path, { body, cookie: call.cookie, headers }));
 	}
 	expect(x.fake.calls.length).toBe(before);
 }
-
-const read = (x: OwnerHarness, cookie: string | undefined, headers?: Record<string, string>) =>
-	x.call("GET", `/api/openviking/note?uri=${q(ROLE_NOTE)}&level=full`, { cookie, headers });
 
 const harnesses: OwnerHarness[] = [];
 async function harness(): Promise<OwnerHarness> {
@@ -55,151 +42,75 @@ afterEach(async () => {
 	await Promise.all(harnesses.splice(0).map((x) => x.close()));
 });
 
-describe("owner check: reads need a passkey owner session (R-OWNER-READ-1)", () => {
-	it("no cookie -> 403 OWNER_ONLY on all 7 explorer routes, nothing reaches the store", async () => {
+describe("owner check: writes need the owner's passkey, nothing else stands in (R-OWNER-WRITE-1)", () => {
+	it("no assertion -> 403 OWNER_ONLY on all 3 explorer writes, nothing reaches the store", async () => {
 		const x = await harness();
 		await x.owned(new FakePasskey(PI_RP.rpID));
-		await expectAllRoutesRefuse(x, {});
+		await expectAllWritesRefuse(x, {});
 	});
 
-	it("a forged session cookie -> 403 on all 7 routes", async () => {
+	it("an old session cookie stands for nothing: 403 on all 3 writes", async () => {
 		const x = await harness();
 		await x.owned(new FakePasskey(PI_RP.rpID));
-		await expectAllRoutesRefuse(x, { cookie: `pi_owner_session=${Buffer.alloc(32, 7).toString("base64url")}` });
+		await expectAllWritesRefuse(x, { cookie: `pi_owner_session=${Buffer.alloc(32, 7).toString("base64url")}` });
 	});
 
-	it("with a session, role-root tree, note and search answer 200 (and tree/roots)", async () => {
+	it("Tailscale-User-Login stands for nothing: 403 on all 3 writes", async () => {
 		const x = await harness();
-		const cookie = await x.owned(new FakePasskey(PI_RP.rpID));
-		expect((await x.call("GET", "/api/openviking/tree/roots", { cookie })).status).toBe(200);
-		expect((await x.call("GET", `/api/openviking/tree?uri=${q(ROLE_ROOT)}`, { cookie })).status).toBe(200);
-		expect((await read(x, cookie)).status).toBe(200);
-		const search = await x.call("POST", "/api/openviking/search", {
-			cookie,
-			body: { mode: "exact", query: "case", roots: [ROLE_ROOT] },
-		});
-		expect(search.status).toBe(200);
-	});
-
-	it("the session cookie is HttpOnly; Secure; SameSite=Strict; Path=/api/openviking with a 256-bit random id", async () => {
-		const x = await harness();
-		const pk = new FakePasskey(PI_RP.rpID);
-		await x.enroll(pk);
-		const r = await x.signIn(pk);
-		expect(r.status).toBe(200);
-		const attrs = (r.setCookie ?? "").split(";").map((a) => a.trim());
-		expect(attrs[0]).toMatch(/^pi_owner_session=[A-Za-z0-9_-]{43}$/);
-		expect(attrs).toEqual(expect.arrayContaining(["HttpOnly", "Secure", "SameSite=Strict", "Path=/api/openviking"]));
-		expect(r.text).not.toContain(attrs[0].split("=")[1]);
-	});
-
-	it("an old session: idle 15 min -> 403", async () => {
-		const x = await harness();
-		const cookie = await x.owned(new FakePasskey(PI_RP.rpID));
-		x.clock.advance(OWNER_SESSION_IDLE_MS - 1000);
-		expect((await read(x, cookie)).status).toBe(200);
-		x.clock.advance(OWNER_SESSION_IDLE_MS + 1);
-		expectOwnerOnly(await read(x, cookie));
-	});
-
-	it("an expired session: kept busy, it still ends at 4 h -> 403", async () => {
-		const x = await harness();
-		const cookie = await x.owned(new FakePasskey(PI_RP.rpID));
-		for (let t = 0; t + 10 * 60_000 <= OWNER_SESSION_MAX_MS; t += 10 * 60_000) {
-			expect((await read(x, cookie)).status).toBe(200);
-			x.clock.advance(10 * 60_000);
-		}
-		x.clock.advance(1);
-		expectOwnerOnly(await read(x, cookie));
-	});
-
-	it("no session + Tailscale-User-Login -> 403; with a session the header changes nothing", async () => {
-		const x = await harness();
-		const cookie = await x.owned(new FakePasskey(PI_RP.rpID));
+		await x.owned(new FakePasskey(PI_RP.rpID));
 		const tailscale = { "Tailscale-User-Login": "owner@example.com", "Tailscale-User-Name": "Owner" };
-		await expectAllRoutesRefuse(x, { headers: tailscale });
-		expect((await read(x, cookie, tailscale)).status).toBe(200);
+		await expectAllWritesRefuse(x, { headers: tailscale });
 	});
 
-	it("PI_WEB_TOKEN set + no session -> 403, with the token in a header, the query or its cookie", async () => {
+	it("PI_WEB_TOKEN set: the token in a header or its cookie stands for nothing on writes", async () => {
 		vi.stubEnv("PI_WEB_TOKEN", "owner-token-123");
 		const x = await harness();
 		await x.owned(new FakePasskey(PI_RP.rpID));
-		await expectAllRoutesRefuse(x, { headers: { Authorization: "Bearer owner-token-123" } });
-		await expectAllRoutesRefuse(x, { headers: { "X-PI-Token": "owner-token-123" } });
-		await expectAllRoutesRefuse(x, { cookie: "pi_web_token=owner-token-123" });
-		expectOwnerOnly(await x.call("GET", `/api/openviking/note?uri=${q(ROLE_NOTE)}&level=full&token=owner-token-123`));
+		await expectAllWritesRefuse(x, { headers: { Authorization: "Bearer owner-token-123" } });
+		await expectAllWritesRefuse(x, { headers: { "X-PI-Token": "owner-token-123" } });
+		await expectAllWritesRefuse(x, { cookie: "pi_web_token=owner-token-123" });
 	});
 
-	it("zero passkeys -> 403 everywhere: no session opens, every explorer route refuses", async () => {
+	it("zero passkeys -> write/options refuses and every write refuses", async () => {
 		const x = await harness();
-		expectOwnerOnly(await x.call("POST", `${OWNER}/session/options`, { body: {} }));
 		expectOwnerOnly(
 			await x.call("POST", `${OWNER}/write/options`, {
 				body: { op: { method: "POST", operation_id: "op-1-00000000" } },
+				headers: { "X-Owner-Write": "1" },
 			}),
 		);
-		await expectAllRoutesRefuse(x, {});
-		await expectAllRoutesRefuse(x, { cookie: `pi_owner_session=${"A".repeat(43)}` });
+		await expectAllWritesRefuse(x, {});
 	});
 
-	it("restart -> 403: sessions live in memory only", async () => {
-		const x = await harness();
-		const cookie = await x.owned(new FakePasskey(PI_RP.rpID));
-		expect((await read(x, cookie)).status).toBe(200);
-		const y = await x.restart();
-		harnesses.push(y);
-		await expectAllRoutesRefuse(y, { cookie });
-	});
-
-	it("logout ends the session and clears the cookie", async () => {
-		const x = await harness();
-		const cookie = await x.owned(new FakePasskey(PI_RP.rpID));
-		const out = await x.call("POST", `${OWNER}/session/logout`, { cookie, body: {} });
-		expect(out.status).toBe(200);
-		expect(out.setCookie).toMatch(/^pi_owner_session=;/);
-		expectOwnerOnly(await read(x, cookie));
-	});
-
-	it("a passkey belongs to its host: no session opens on the other host, a foreign Origin is refused", async () => {
+	it("a passkey belongs to its host: write/options on the other host or a foreign Origin is refused", async () => {
 		const x = await harness();
 		await x.owned(new FakePasskey(PI_RP.rpID));
-		expectOwnerOnly(await x.call("POST", `${OWNER}/session/options`, { origin: TS_RP.origin, body: {} }));
-		expectOwnerOnly(await x.call("POST", `${OWNER}/session/options`, { origin: "https://evil.example", body: {} }));
-		expectOwnerOnly(await x.call("POST", `${OWNER}/session/options`, { origin: null, body: {} }));
-		const ts = new FakePasskey(TS_RP.rpID);
-		expect((await x.signIn(ts)).status).toBe(403);
-		expect(await x.owned(ts)).toMatch(/^pi_owner_session=/);
+		const ask = (origin: string | null) =>
+			x.call("POST", `${OWNER}/write/options`, {
+				origin,
+				body: { op: { method: "POST", operation_id: "op-1-00000000" } },
+				headers: { "X-Owner-Write": "1" },
+			});
+		expect((await ask(PI_RP.origin)).status).toBe(200);
+		expectOwnerOnly(await ask(TS_RP.origin));
+		expectOwnerOnly(await ask("https://evil.example"));
+		expectOwnerOnly(await ask(null));
+		await x.owned(new FakePasskey(TS_RP.rpID));
+		expect((await ask(TS_RP.origin)).status).toBe(200);
 	});
 
-	it("sign-in with UV=false -> 403 and no cookie", async () => {
-		const x = await harness();
-		const pk = new FakePasskey(PI_RP.rpID);
-		await x.enroll(pk);
-		const r = await x.signIn(pk, { userVerified: false });
-		expectOwnerOnly(r);
-		expect(r.setCookie).toBeNull();
-	});
-
-	it("a sign-in challenge works once", async () => {
-		const x = await harness();
-		const pk = new FakePasskey(PI_RP.rpID);
-		await x.enroll(pk);
-		const options = await x.call("POST", `${OWNER}/session/options`, { body: {} });
-		const b = options.body as { challenge_id: string; options: { challenge: string } };
-		const body = { challenge_id: b.challenge_id, response: pk.assert(b.options, { origin: PI_RP.origin }) };
-		expect((await x.call("POST", `${OWNER}/session/verify`, { body })).status).toBe(200);
-		expectOwnerOnly(await x.call("POST", `${OWNER}/session/verify`, { body }));
-	});
-
-	it("options and verify calls are rate limited to 10 a minute", async () => {
+	it("write/options is rate limited to 10 a minute", async () => {
 		const x = await harness();
 		await x.owned(new FakePasskey(PI_RP.rpID));
-		for (let i = 0; i < 9; i++)
-			expect((await x.call("POST", `${OWNER}/session/options`, { body: {} })).status).toBe(200);
-		expectOwnerOnly(await x.call("POST", `${OWNER}/session/options`, { body: {} }));
+		const ask = () =>
+			x.call("POST", `${OWNER}/write/options`, {
+				body: { op: { method: "POST", operation_id: "op-1-00000000" } },
+				headers: { "X-Owner-Write": "1" },
+			});
+		for (let i = 0; i < 10; i++) expect((await ask()).status).toBe(200);
+		expectOwnerOnly(await ask());
 		x.clock.advance(60_000);
-		expect((await x.call("POST", `${OWNER}/session/options`, { body: {} })).status).toBe(200);
+		expect((await ask()).status).toBe(200);
 	});
 });
 
@@ -312,12 +223,16 @@ describe("owner check: one refusal for every failure (R-OWNER-REFUSE-1)", () => 
 	it("identical 403 body for every failure, owner routes and explorer routes alike", async () => {
 		const x = await harness();
 		const failures = [
-			await x.call("POST", `${OWNER}/session/options`, { body: {} }),
 			await x.call("POST", `${OWNER}/passkey/enroll/options`, { body: { code: "nope" } }),
-			await x.call("POST", `${OWNER}/session/verify`, { body: { challenge_id: "x", response: {} } }),
+			await x.call("POST", `${OWNER}/passkey/enroll/verify`, { body: { challenge_id: "x", response: {} } }),
 			await x.call("POST", `${OWNER}/write/options`, { body: {} }),
+			await x.call("POST", `${OWNER}/write/options`, {
+				body: { op: { method: "POST", operation_id: "op-1-00000000" } },
+				headers: { "X-Owner-Write": "1" },
+			}),
+			await x.call("GET", `${OWNER}/passkeys`, { origin: "https://evil.example" }),
 			await x.call("DELETE", `${OWNER}/passkey?id=abc`),
-			await read(x, undefined),
+			await x.call("GET", "/api/openviking/tree/roots", { host: "pi.wai2shine.com." }),
 			await x.call("POST", "/api/openviking/undo", { body: { operation_id: "op-1-00000000" } }),
 		];
 		expect(new Set(failures.map((r) => `${r.status} ${r.text}`))).toEqual(new Set([`403 ${REFUSAL}`]));

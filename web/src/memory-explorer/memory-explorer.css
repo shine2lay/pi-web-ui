@@ -1,6 +1,6 @@
 /*
  * The Memory page's styles (design #316), in cascade order: the base (tokens, header, layout, tree)
- * first, then Find and the lists, the reader with the confirm and the toast, and the owner's sign-in.
+ * first, then Find and the lists, the reader with the confirm and the toast, and the owner's passkeys.
  * Each later file's narrow-screen rules override the base, so the base must stay first.
  */
 

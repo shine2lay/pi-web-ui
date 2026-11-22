@@ -1,8 +1,10 @@
 /**
  * Memory Explorer — the owner check's routes (OI-1, spec-explorer-owner.md), all under `/api/openviking/owner/`;
  * bodies in owner-session-types.ts. Every failure answers `403 OWNER_ONLY` with one body (R-OWNER-REFUSE-1) and logs
- * a reason code only. A `Host` or `Origin` whose host ends in "." is refused first (rm-638da86a). Enrollment needs the single-use code sent to the owner's Telegram; there is no first-come
- * enrollment. Each passkey added or removed sends the owner a Telegram notice (host and time, no secrets).
+ * a reason code only. A `Host` or `Origin` whose host ends in "." is refused first (rm-638da86a). Enrollment needs
+ * the single-use code sent to the owner's Telegram; there is no first-come enrollment. Each passkey added or removed
+ * sends the owner a Telegram notice (host and time, no secrets). There is no session (Ops #1080, owner Shine
+ * 2026-11-22, dr-c54a3286d823): `GET passkeys` lists a host's passkeys (public info only) for anyone who reaches it.
  */
 import type { Express, Request, Response } from "express";
 import type { OwnerCheckState } from "./owner-check.js";
@@ -12,32 +14,22 @@ import { OwnerRefusal } from "./owner-refusal.js";
 import {
 	OWNER_CEREMONY_CHALLENGE_MS,
 	OWNER_ONLY_BODY,
-	OWNER_SESSION_COOKIE,
-	OWNER_SESSION_COOKIE_PATH,
-	OWNER_SESSION_IDLE_MS,
-	OWNER_SESSION_MAX_MS,
+	OWNER_RELYING_PARTIES,
 	OWNER_WRITE_CHALLENGE_MS,
+	OWNER_WRITE_HEADER,
 	type OwnerCeremonyOptions,
 	type OwnerCodeSent,
 	type OwnerEnrolled,
 	type OwnerPasskeyInfo,
+	type OwnerPasskeyList,
 	type OwnerPasskeyRemoved,
 	type OwnerRelyingParty,
-	type OwnerSessionOpened,
-	type OwnerSignedOut,
 } from "./owner-session-types.js";
-import {
-	ownerCreationOptions,
-	ownerRequestOptions,
-	ownerVerifiedAssertion,
-	ownerVerifiedRegistration,
-} from "./owner-webauthn.js";
+import { ownerCreationOptions, ownerRequestOptions, ownerVerifiedRegistration } from "./owner-webauthn.js";
 import { checkedOwnerWriteOp } from "./owner-write-op.js";
 
 const BASE = "/api/openviking/owner";
-const COOKIE_ATTRS = `Path=${OWNER_SESSION_COOKIE_PATH}; HttpOnly; Secure; SameSite=Strict`;
-
-type Answer = { status: number; body: unknown; cookie?: string };
+type Answer = { status: number; body: unknown };
 
 const infoOf = (p: OwnerPasskey): OwnerPasskeyInfo => ({ id: p.id, rp_id: p.rp_id, created_at: p.created_at });
 
@@ -67,13 +59,20 @@ export function registerOwnerRoutes(app: Express, s: OwnerCheckState): void {
 		s.deps.log(`owner-check: passkey ${what} rp=${rp.rpID} notice=${ok ? "sent" : "failed"}`);
 	};
 
-	const route = (method: "post" | "delete", path: string, handler: (req: Request) => Promise<Answer>) => {
+	/** The host a request names: its `Origin` exactly when sent (rpOf), else its `Host` naming one of the hosts. */
+	const rpOfAddress = (req: Request): OwnerRelyingParty => {
+		if (req.get("origin") !== undefined) return s.rpOf(req);
+		const rp = OWNER_RELYING_PARTIES.find((r) => new URL(r.origin).host === req.headers.host);
+		if (!rp) throw new OwnerRefusal("bad_host");
+		return rp;
+	};
+
+	const route = (method: "get" | "post" | "delete", path: string, handler: (req: Request) => Promise<Answer>) => {
 		app[method](`${BASE}/${path}`, async (req: Request, res: Response) => {
 			res.setHeader("Cache-Control", "no-store");
 			try {
 				if (!ownerAddressAllowed(req)) throw new OwnerRefusal("bad_address");
 				const answer = await handler(req);
-				if (answer.cookie !== undefined) res.setHeader("Set-Cookie", answer.cookie);
 				res.status(answer.status).json(answer.body);
 			} catch (err) {
 				s.refused(path, err);
@@ -81,6 +80,12 @@ export function registerOwnerRoutes(app: Express, s: OwnerCheckState): void {
 			}
 		});
 	};
+
+	route("get", "passkeys", async (req) => {
+		const rp = rpOfAddress(req);
+		const body: OwnerPasskeyList = { rp_id: rp.rpID, passkeys: s.passkeys.forRp(rp.rpID).map(infoOf) };
+		return { status: 200, body };
+	});
 
 	route("post", "passkey/code", async (req) => {
 		const rp = s.rpOf(req);
@@ -118,41 +123,6 @@ export function registerOwnerRoutes(app: Express, s: OwnerCheckState): void {
 		return { status: 201, body };
 	});
 
-	route("post", "session/options", async (req) => {
-		limited("session/options");
-		const rp = s.rpOf(req);
-		const passkeys = s.passkeys.forRp(rp.rpID);
-		if (passkeys.length === 0) throw new OwnerRefusal("no_passkeys");
-		const challenge = s.challenges.issue("session", rp, OWNER_CEREMONY_CHALLENGE_MS);
-		const options = await ownerRequestOptions(challenge, passkeys, OWNER_CEREMONY_CHALLENGE_MS);
-		const body: OwnerCeremonyOptions = { challenge_id: challenge.id, expires_at: iso(challenge.expiresAt), options };
-		return { status: 200, body };
-	});
-
-	route("post", "session/verify", async (req) => {
-		limited("session/verify");
-		const rp = s.rpOf(req);
-		const b = bodyOf(req);
-		const challenge = s.challenges.take(b.challenge_id, "session");
-		if (!challenge || s.challenges.expired(challenge) || challenge.rp.rpID !== rp.rpID) {
-			throw new OwnerRefusal("unknown_challenge");
-		}
-		const passkeys = s.passkeys.forRp(rp.rpID);
-		const verified = await ownerVerifiedAssertion(challenge, b.response, passkeys);
-		if (!verified) throw new OwnerRefusal("assertion_failed");
-		s.passkeys.setCounter(rp.rpID, verified.passkey.id, verified.counter);
-		const session = s.sessions.open(rp.rpID, verified.passkey.id);
-		s.deps.log(`owner-check: session opened rp=${rp.rpID}`);
-		const body: OwnerSessionOpened = {
-			expires_at: iso(session.createdAt + OWNER_SESSION_MAX_MS),
-			idle_ms: OWNER_SESSION_IDLE_MS,
-			passkey_id: verified.passkey.id,
-			passkeys: passkeys.map(infoOf),
-		};
-		const maxAge = Math.floor(OWNER_SESSION_MAX_MS / 1000);
-		return { status: 200, body, cookie: `${OWNER_SESSION_COOKIE}=${session.id}; ${COOKIE_ATTRS}; Max-Age=${maxAge}` };
-	});
-
 	/** R-OWNER-UNDO-1. A refusal here (unknown op, window closed) is the undo route's to answer, so it is dropped. */
 	const undoAsked = (operationId: string, untilMs: number) => {
 		try {
@@ -165,37 +135,24 @@ export function registerOwnerRoutes(app: Express, s: OwnerCheckState): void {
 	route("post", "write/options", async (req) => {
 		limited("write/options");
 		const rp = s.rpOf(req);
-		const session = s.sessionOf(req);
-		if (session.rpID !== rp.rpID) throw new OwnerRefusal("bad_origin");
+		if (req.get(OWNER_WRITE_HEADER) !== "1") throw new OwnerRefusal("no_write_header");
 		const op = checkedOwnerWriteOp(bodyOf(req).op);
 		if (!op) throw new OwnerRefusal("bad_request");
 		const passkeys = s.passkeys.forRp(rp.rpID);
-		const challenge = s.challenges.issue("write", rp, OWNER_WRITE_CHALLENGE_MS, { sessionId: session.id, op });
+		if (passkeys.length === 0) throw new OwnerRefusal("no_passkeys");
+		const challenge = s.challenges.issue("write", rp, OWNER_WRITE_CHALLENGE_MS, op);
 		const options = await ownerRequestOptions(challenge, passkeys, OWNER_WRITE_CHALLENGE_MS);
 		if ("operation_id" in op) undoAsked(op.operation_id, challenge.expiresAt);
 		const body: OwnerCeremonyOptions = { challenge_id: challenge.id, expires_at: iso(challenge.expiresAt), options };
 		return { status: 200, body };
 	});
 
-	route("post", "session/logout", async (req) => {
-		s.rpOf(req);
-		try {
-			s.sessions.end(s.sessionOf(req).id);
-		} catch {
-			// No live session: signing out is still done.
-		}
-		const body: OwnerSignedOut = { signed_out: true };
-		return { status: 200, body, cookie: `${OWNER_SESSION_COOKIE}=; ${COOKIE_ATTRS}; Max-Age=0` };
-	});
-
 	route("delete", "passkey", async (req) => {
 		const id = typeof req.query.id === "string" ? req.query.id : "";
 		const op = checkedOwnerWriteOp({ method: "DELETE", passkey_id: id });
 		if (!op) throw new OwnerRefusal("bad_request");
-		const session = await s.confirmWrite(req, op);
-		if (!s.passkeys.remove(session.rpID, id)) throw new OwnerRefusal("bad_request");
-		s.sessions.endForPasskey(session.rpID, id);
-		const rp = s.rpOf(req);
+		const rp = await s.confirmWrite(req, op);
+		if (!s.passkeys.remove(rp.rpID, id)) throw new OwnerRefusal("bad_request");
 		await notify("removed", rp);
 		const body: OwnerPasskeyRemoved = { removed: id };
 		return { status: 200, body };

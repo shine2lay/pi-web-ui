@@ -4,9 +4,9 @@
  * `/api/openviking/{overview,tree/roots,tree,note,search,undo,audit}`.
  *
  * Health, the places and the recent list come from one `tree/roots` answer, shared for a few seconds
- * so the first screen asks the server once. Reads ride the owner's passkey session cookie; each write
- * carries `X-Owner-Write: 1` and a passkey assertion bound to that exact operation, which the page's
- * owner sign-in supplies (`ownerAssertion`, spec-explorer-owner.md); the browser adds the `Origin`.
+ * so the first screen asks the server once. Reads need no sign-in (R-OWNER-READ-2, Ops #1080); each
+ * write carries `X-Owner-Write: 1` and a passkey assertion bound to that exact operation, which the
+ * page's passkey confirm supplies (`ownerAssertion`, spec-explorer-owner.md); the browser adds the `Origin`.
  */
 
 import type { OpenVikingAuditResponse, OpenVikingOverviewResponse } from "../../../server/openviking/types.js";
@@ -75,13 +75,6 @@ export interface HttpExplorerOptions {
 	 * it every write is refused before anything is sent.
 	 */
 	readonly ownerAssertion?: (op: OwnerWriteOp) => Promise<string>;
-	/**
-	 * A read was refused because the owner isn't signed in (no session, or it ended): resolves once he
-	 * signed in, and the read is asked again once; rejects when he chose not to.
-	 */
-	readonly onOwnerOnly?: () => Promise<void>;
-	/** A successful explorer read confirms the browser's existing owner session. */
-	readonly onReadAccepted?: () => void;
 }
 
 /** Lowercase hex sha256 of the exact body bytes a write sends (the op's `body_sha256`). */
@@ -187,7 +180,7 @@ export function healthOf(
 /** The owner's changes from the change record; `owner_undo` lines are not events (G7). */
 export function changesFromAudit(answer: OpenVikingAuditResponse): ChangeRecord[] {
 	if (answer.owner_events === "withheld") {
-		throw new ExplorerApiError("OWNER_ONLY", "Sign in to see your changes");
+		throw new ExplorerApiError("OWNER_ONLY", "The owner check isn't set up, so your changes can't be shown.");
 	}
 	return answer.events.flatMap((event): ChangeRecord[] => {
 		if (event.action !== "owner_edit" && event.action !== "owner_delete") return [];
@@ -211,29 +204,20 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 	const now = options.now ?? Date.now;
 	let shared: { at: number; answer: Promise<OpenVikingTreeRootsResponse> } | null = null;
 
-	async function call<T>(path: string, init: RequestInit = {}, signInFirst = true): Promise<T> {
+	async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 		const response = await fetchImpl(appUrl(`${API}${path}`), {
 			...init,
 			headers: { accept: "application/json", ...init.headers },
 		});
-		if (response.ok) {
-			// Public overview/audit answers cannot establish an owner session.
-			if ((!init.method || init.method === "GET") && /^\/(tree|note)(\?|\/|$)/.test(path)) {
-				options.onReadAccepted?.();
-			}
-			return (await response.json()) as T;
-		}
-		const error = await refusal(response);
-		if (error.code !== "OWNER_ONLY" || !signInFirst || !options.onOwnerOnly) throw error;
-		await options.onOwnerOnly();
-		return call<T>(path, init, false);
+		if (response.ok) return (await response.json()) as T;
+		throw await refusal(response);
 	}
 	/**
 	 * One write: the owner confirms this exact operation with his passkey first (R-OWNER-WRITE-2), then
 	 * the request goes with the same bytes the confirmation was bound to.
 	 */
 	async function write<T>(path: string, op: OwnerWriteOp, body: string | undefined): Promise<T> {
-		if (!options.ownerAssertion) throw new ExplorerApiError("OWNER_ONLY", "Owner sign-in isn't set up on this page.");
+		if (!options.ownerAssertion) throw new ExplorerApiError("OWNER_ONLY", "Passkey confirm isn't set up on this page.");
 		let assertion: string;
 		try {
 			assertion = await options.ownerAssertion(op);
@@ -241,19 +225,15 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 			throw explorerErrorOf(error);
 		}
 		// The assertion is single-use: a refused write is not asked again.
-		return call<T>(
-			path,
-			{
-				method: op.method,
-				headers: {
-					"content-type": "application/json",
-					[OWNER_WRITE_HEADER]: "1",
-					[OWNER_ASSERTION_HEADER]: assertion,
-				},
-				...(body === undefined ? {} : { body }),
+		return call<T>(path, {
+			method: op.method,
+			headers: {
+				"content-type": "application/json",
+				[OWNER_WRITE_HEADER]: "1",
+				[OWNER_ASSERTION_HEADER]: assertion,
 			},
-			false,
-		);
+			...(body === undefined ? {} : { body }),
+		});
 	}
 
 	/** Not tied to one caller's signal: health, places and recent share it. */
@@ -377,18 +357,8 @@ export function createHttpExplorerApi(options: HttpExplorerOptions = {}): Memory
 		},
 		async search(request, signal): Promise<SearchAnswer> {
 			const places = request.scope === "all" ? (await roots()).map((r) => r.uri) : [request.scope];
-			let skipped = 0;
-			let answer: OpenVikingSearchResponse;
-			try {
-				answer = await searchIn(request, places, signal);
-			} catch (error) {
-				// Department notes need the owner's sign-in; search everywhere else and say what was left out.
-				if (request.scope !== "all" || !(error instanceof ExplorerApiError) || error.code !== "OWNER_ONLY") throw error;
-				const open = (await roots()).filter((r) => r.group !== "department").map((r) => r.uri);
-				skipped = places.length - open.length;
-				answer = await searchIn(request, open, signal);
-			}
-			return { hits: answer.hits.map(hitFromSearch), missedPlaces: answer.unread_count + skipped };
+			const answer = await searchIn(request, places, signal);
+			return { hits: answer.hits.map(hitFromSearch), missedPlaces: answer.unread_count };
 		},
 		async save(uri, fullText, changedAt) {
 			// Without the time it was opened at, the server can't tell whether someone saved since.

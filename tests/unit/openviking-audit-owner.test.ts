@@ -144,16 +144,16 @@ describe("/audit with the owner check passed", () => {
 });
 
 describe("/audit through the real passkey owner check", () => {
-	it("no cookie: owner_only 403 OWNER_ONLY, plain withheld; a session: included", async () => {
+	it("no cookie, no passkey: owner events included (R-OWNER-READ-2, Ops #1080); a trailing-dot Host refuses", async () => {
 		o = await ownerHarness();
-		const refused = await o.call("GET", "/api/openviking/audit?owner_only=true", { origin: null });
-		expect([refused.status, refused.text]).toEqual([403, JSON.stringify(OWNER_ONLY_BODY)]);
-		const plain = await o.call("GET", "/api/openviking/audit", { origin: null });
-		expect([plain.status, (plain.body as any).owner_events]).toEqual([200, "withheld"]);
-		const cookie = await o.owned(new FakePasskey(PI_RP.rpID));
-		const mine = await o.call("GET", "/api/openviking/audit?owner_only=true", { cookie, origin: PI_RP.origin });
+		const mine = await o.call("GET", "/api/openviking/audit?owner_only=true", { origin: null });
 		expect([mine.status, (mine.body as any).owner_events]).toEqual([200, "included"]);
-		const all = await o.call("GET", "/api/openviking/audit", { cookie, origin: PI_RP.origin });
+		await o.owned(new FakePasskey(PI_RP.rpID));
+		const all = await o.call("GET", "/api/openviking/audit", { origin: PI_RP.origin });
 		expect([all.status, (all.body as any).owner_events]).toEqual([200, "included"]);
+		const dotted = await o.call("GET", "/api/openviking/audit?owner_only=true", { host: "pi.wai2shine.com." });
+		expect([dotted.status, dotted.text]).toEqual([403, JSON.stringify(OWNER_ONLY_BODY)]);
+		const plain = await o.call("GET", "/api/openviking/audit", { host: "pi.wai2shine.com." });
+		expect([plain.status, (plain.body as any).owner_events]).toEqual([200, "withheld"]);
 	});
 });

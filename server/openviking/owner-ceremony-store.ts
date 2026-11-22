@@ -1,67 +1,15 @@
 /**
- * Memory Explorer — the owner check's in-memory state (OI-1, Security rm-8841fede point 3, rm-3e4885d2): sessions,
- * single-use challenges and the rate limits. Nothing here is ever written to disk or logged, so a restart signs the
- * owner out and drops every challenge. Times come from the explorer clock (tests pass a manual one).
+ * Memory Explorer — the owner check's in-memory state (OI-1, Security rm-8841fede point 3, rm-3e4885d2): single-use
+ * challenges and the rate limits. Nothing here is ever written to disk or logged, so a restart drops every challenge. Times come from the explorer clock (tests pass a manual one).
  */
 import { randomBytes } from "node:crypto";
 import type { OpenVikingExplorerClock } from "./explorer-types.js";
-import {
-	OWNER_CHALLENGE_BYTES,
-	OWNER_SESSION_IDLE_MS,
-	OWNER_SESSION_MAX_MS,
-	type OwnerRelyingParty,
-	type OwnerWriteOp,
-} from "./owner-session-types.js";
+import { OWNER_CHALLENGE_BYTES, type OwnerRelyingParty, type OwnerWriteOp } from "./owner-session-types.js";
 
-/** 32 random bytes, base64url: session ids, challenges, challenge ids. */
+/** 32 random bytes, base64url: challenges and challenge ids. */
 export const ownerRandomId = (): string => randomBytes(OWNER_CHALLENGE_BYTES).toString("base64url");
 
-export interface OwnerSession {
-	id: string;
-	rpID: string;
-	passkeyId: string;
-	createdAt: number;
-	lastSeenAt: number;
-}
-
-/** Owner sessions: 256-bit random ids, 15 min idle, 4 h in total. */
-export class OwnerSessionStore {
-	private readonly sessions = new Map<string, OwnerSession>();
-
-	constructor(private readonly clock: OpenVikingExplorerClock) {}
-
-	open(rpID: string, passkeyId: string): OwnerSession {
-		const now = this.clock.now();
-		const session: OwnerSession = { id: ownerRandomId(), rpID, passkeyId, createdAt: now, lastSeenAt: now };
-		this.sessions.set(session.id, session);
-		return session;
-	}
-
-	/** The live session `id` names (and it counts as activity), or null: unknown, idle too long, or too old. */
-	use(id: string | null): OwnerSession | null {
-		if (id === null) return null;
-		const session = this.sessions.get(id);
-		if (!session) return null;
-		const now = this.clock.now();
-		if (now - session.lastSeenAt > OWNER_SESSION_IDLE_MS || now - session.createdAt > OWNER_SESSION_MAX_MS) {
-			this.sessions.delete(id);
-			return null;
-		}
-		session.lastSeenAt = now;
-		return session;
-	}
-
-	end(id: string): void {
-		this.sessions.delete(id);
-	}
-
-	/** Ends every session a removed passkey opened. */
-	endForPasskey(rpID: string, passkeyId: string): void {
-		for (const [id, s] of this.sessions) if (s.rpID === rpID && s.passkeyId === passkeyId) this.sessions.delete(id);
-	}
-}
-
-export type OwnerChallengeKind = "enroll" | "session" | "write";
+export type OwnerChallengeKind = "enroll" | "write";
 
 export interface OwnerChallenge {
 	id: string;
@@ -70,8 +18,7 @@ export interface OwnerChallenge {
 	challenge: string;
 	rp: OwnerRelyingParty;
 	expiresAt: number;
-	/** `write`: the session that asked and the op the assertion is bound to. */
-	sessionId: string | null;
+	/** `write`: the op the assertion is bound to (the host is `rp`). */
 	op: OwnerWriteOp | null;
 }
 
@@ -89,7 +36,7 @@ export class OwnerChallengeStore {
 		kind: OwnerChallengeKind,
 		rp: OwnerRelyingParty,
 		lifetimeMs: number,
-		bound: { sessionId: string; op: OwnerWriteOp } | null = null,
+		op: OwnerWriteOp | null = null,
 	): OwnerChallenge {
 		const challenge: OwnerChallenge = {
 			id: ownerRandomId(),
@@ -97,8 +44,7 @@ export class OwnerChallengeStore {
 			challenge: ownerRandomId(),
 			rp,
 			expiresAt: this.clock.now() + lifetimeMs,
-			sessionId: bound?.sessionId ?? null,
-			op: bound?.op ?? null,
+			op,
 		};
 		const timer = this.clock.setTimer(lifetimeMs, () => {
 			if (this.live.get(challenge.id)?.challenge !== challenge) return;
