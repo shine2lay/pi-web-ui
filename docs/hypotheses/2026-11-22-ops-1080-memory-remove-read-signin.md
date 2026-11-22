@@ -33,4 +33,10 @@ they can reach pi they can ask for all of it anyways, no reason to guard it". Sc
 
 ## Result
 
-Filled in at land (hit/miss with the numbers).
+HIT (pre-land; live look recorded in `~/ops-checks/memory-remove-signin-1080/proof.md`).
+
+- Red before: `openviking-owner-open-reads` 15 of 20 failed, `memory-explorer-open` 6 of 6 failed on the old code.
+- Green after: both files pass; owner/explorer suites 313/313; sealed gate `TZ=UTC scripts/check.sh` 642/642 files.
+- 5 read routes answer 200 with no cookie and set none; `session/*` 404; 4 writes 403 without an op-bound
+  assertion, 200 with one; `GET owner/passkeys` keys are exactly `created_at, id, rp_id`.
+- ui-check 12 states x 320/390/1440 x light/dark pass; the page state shows notes with one Passkeys button.
