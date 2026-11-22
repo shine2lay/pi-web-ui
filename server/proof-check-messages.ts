@@ -107,7 +107,7 @@ export class ProofCheckGate {
 			this.keep(send, ms, { exit: null, status: "tool_failed", outcome: "held", why: run.why });
 			return {
 				ok: false,
-				error: `Not sent: proof-check couldn't judge this QA message (${run.why}), and a QA message waits until it can. ${told} Nothing went out; send it again once the tool works.`,
+				error: `Not sent: the tool could not run (proof-check: ${run.why}), and a QA message is held until it can. ${told} Nothing went out; send it again once the tool works, and meanwhile use the Board or the owner's chat.`,
 			};
 		}
 		const a = run.answer;

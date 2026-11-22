@@ -37,8 +37,8 @@ Board bp-52e3bfe7 item 2); QA's wiring contract rm-125f428a.
 - Exit 0 with a stamp: text + newline + stamp. For `message_role` the stamp counts inside the 4,000-character
   limit; over it, refused with "shorten it by N characters". Exit 0 without a stamp: sent unchanged.
 - Exit 1 or 2: not sent; the refusal lists the tool's findings with their next steps.
-- Can't run (missing, timeout, unreadable answer, another exit code): held (not sent; fail closed), the
-  refusal says Ops is told, and one script notice goes to Ops's home chat at most every 30 minutes (kept in
+- Can't run (missing, timeout, unreadable answer, another exit code): held (not sent; fail closed); the
+  answer says "the tool could not run" (never "refused", QA rm-848cfb08) and that Ops is told, and one script notice goes to Ops's home chat at most every 30 minutes (kept in
   memory, so a restart may send one more). At start the server logs whether `proof-check --message` works.
 - Sender-typed `proof-check:` lines are the tool's to refuse; the host never strips or rewrites them.
 

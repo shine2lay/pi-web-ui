@@ -169,6 +169,9 @@ describe("message_role from a QA chat (Ops #1073)", () => {
 		expect(r.text).toContain("MSG-PROOF-LINE");
 		expect(r.text).toContain("Add proof: <absolute path of the proof table>.");
 		expect(r.text).toContain("line 2");
+		// QA rm-848cfb08: a refusal says refused, never that the tool could not run
+		expect(r.text).toContain("refused");
+		expect(r.text).not.toContain("could not run");
 		expect(notices).toHaveLength(0);
 		expect(calls()).toHaveLength(1);
 	});
@@ -192,6 +195,9 @@ describe("message_role from a QA chat (Ops #1073)", () => {
 			expect(r.ok).toBe(false);
 			expect(r.sent).toHaveLength(0);
 			expect(r.text).toContain("Ops");
+			// QA rm-848cfb08: "the tool could not run", never "refused"
+			expect(r.text).toContain("the tool could not run");
+			expect(r.text).not.toMatch(/refused/i);
 		}
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toContain("proof-check");
@@ -225,6 +231,8 @@ describe("message_role from a QA chat (Ops #1073)", () => {
 			expect(r.ok, mode).toBe(false);
 			expect(r.sent, mode).toHaveLength(0);
 			expect(r.text, mode).toContain("Ops");
+			expect(r.text, mode).toContain("the tool could not run");
+			expect(r.text, mode).not.toMatch(/refused/i);
 			expect(notices, mode).toHaveLength(1);
 		}
 	}, 30_000);
@@ -406,6 +414,7 @@ describe("telegram_send from a QA chat (Ops #1073)", () => {
 			expect(r.ok, mode).toBe(false);
 			expect(r.got, mode).toHaveLength(0);
 			expect(r.text, mode).toContain("Not sent");
+			expect(r.text, mode).not.toContain("could not run");
 		}
 	});
 
@@ -417,6 +426,8 @@ describe("telegram_send from a QA chat (Ops #1073)", () => {
 		expect(one.got).toHaveLength(0);
 		expect(two.got).toHaveLength(0);
 		expect(one.text).toContain("Ops");
+		expect(one.text).toContain("the tool could not run");
+		expect(one.text).not.toMatch(/refused/i);
 		expect(notices).toHaveLength(1);
 	});
 
@@ -492,7 +503,8 @@ describe.skipIf(typeof REAL === "string")("the real proof-check on QA's fixtures
 		readFileSync(join(real.fixtures, "messages", file), "utf8") +
 		(append.length ? `\n${append.map((l) => l.replaceAll("@FIXTURES@", real.fixtures)).join("\n")}` : "");
 	beforeEach(() => {
-		process.env.PATH = `${real.bin}${delimiter}${empty}`;
+		// node beside the tool: the real proof-check is a `#!/usr/bin/env node` script
+		process.env.PATH = `${real.bin}${delimiter}${dirname(process.execPath)}${delimiter}${empty}`;
 	});
 
 	it("M12's two real sign-off messages are refused", async () => {
@@ -503,6 +515,15 @@ describe.skipIf(typeof REAL === "string")("the real proof-check on QA's fixtures
 			expect(r.text, file).toContain("MSG-PROOF-LINE");
 		}
 		expect(notices).toHaveLength(0);
+	});
+
+	it("a task-close style 'PASS: ...' line without a proof is refused (seam 93a1e79, leading-pass)", async () => {
+		const r = await messageRole({ to: "backend", kind: "fyi", text: msg("leading-pass.txt") });
+		expect(r.ok).toBe(false);
+		expect(r.sent).toHaveLength(0);
+		expect(r.text).toContain("MSG-PROOF-LINE");
+		const t = await telegram(msg("leading-pass.txt"), QA_CTX);
+		expect(t.got).toHaveLength(0);
 	});
 
 	it("a clean pass message goes out with the tool's stamp as its last line", async () => {
