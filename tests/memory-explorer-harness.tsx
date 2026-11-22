@@ -52,6 +52,18 @@ const READS: Record<string, unknown> = {
 		roots: [{ uri: SHARED, group: "shared", role: null, read: true, notes: 1, folders: 1, kinds: KINDS }],
 		recent: [{ uri: NOTE, root: SHARED, kind: "rule", size: 120, mod_time: AT, locked: false }],
 	},
+	"/tree": {
+		uri: SHARED,
+		root: SHARED,
+		notes: 1,
+		folders: 1,
+		counts_reason: null,
+		last_change: AT,
+		abstract: null,
+		abstract_reason: "not_ready",
+		total: 1,
+		children: [{ uri: `${SHARED}/preferences`, name: "preferences", is_folder: true, size: 0, mod_time: AT }],
+	},
 	"/audit": { panel_updated_at: AT, health_state: "healthy", stale_badge: null, events: [], owner_events: "included" },
 	"/note": {
 		uri: NOTE,
