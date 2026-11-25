@@ -128,6 +128,7 @@ import type { OwnerQuestionAsker } from "./owner-question-card.js";
 import { isCooHomeChat, makeOwnerQuestionTool } from "./owner-question-tool.js";
 import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "./owner-question-holds.js";
 import { OwnerQuestionRouter } from "./owner-question-router.js";
+import { ASK_ABORTED_ERROR, endOnAbort } from "./ask-abort.js";
 import { askQuestionsByOwner, type OwnerAskResult, type QuestionOwnerData } from "./ask-question-owners.js";
 import { askUserQuestionParameters } from "./ask-question-schema.js";
 import {
@@ -1496,16 +1497,13 @@ function makeMarkersListTool(
  * 标准 SDK 没有内建 ask_user_question，故由 pi-web-ui 以 customTool 注册（与
  * bash/edit 同机制）。DSH 引擎走 goal-rpc 的 userQuestions provider，两者互不
  * 冲突（各引擎各走各的）。
- *
- * askUser 签名带 {aborted} 快照而非完整 AbortSignal：customTool 的 execute 信号
- * 服务于整个 agent 生命周期，这里按「已中止即拒绝」的最小语义处理，避免与其它
- * 工具的取消逻辑纠缠。
+ * Stop (the run's abort signal, passed whole) ends a waiting question at once (stop-cancels-ask, Ops #1085).
  */
 export function makeAskUserQuestionTool(
 	clientSession: {
 		askUser: (
 			q: UiQuestion[],
-			sig: { aborted?: boolean; toolCallId?: string },
+			sig: { aborted?: boolean; toolCallId?: string; signal?: AbortSignal },
 			conversationId?: string,
 			// ask-question-owners (Ops #1079): the owner this dialog is for, from data (never the chat's latest input).
 			owner?: { requester?: string },
@@ -1549,7 +1547,7 @@ export function makeAskUserQuestionTool(
 			return askQuestionsByOwner(qs, clientSession.questionOwners(ownerId), _id, (slice, toolCallId) =>
 				clientSession.askUser(
 					slice.questions,
-					{ aborted: signal?.aborted, toolCallId },
+					{ signal, toolCallId },
 					ownerId,
 					slice.requester ? { requester: slice.requester } : {},
 				),
@@ -10125,7 +10123,7 @@ export class ClientSession {
 		return {
 			askUser: (
 				questions: UiQuestion[],
-				sig: { aborted?: boolean; toolCallId?: string },
+				sig: { aborted?: boolean; toolCallId?: string; signal?: AbortSignal },
 				_c?: string,
 				owner?: { requester?: string },
 			) => {
@@ -10148,20 +10146,21 @@ export class ClientSession {
 	}
 
 	/** 标准引擎模型调 ask_user_question：发 question_pending 给浏览器并阻塞等待
-	 *  question_answer。sig 为工具执行信号的当前状态（aborted → 立即 reject）。
+	 *  question_answer。sig.signal 中止（Stop）→ 立即收起并 reject（Ops #1085）。
 	 *  返回 answers（用户选中/自定义），或 null（用户取消）。
 	 *
 	 *  不设超时：等的是「人类回答」，不是挂死的工具。因此也不进工具挂死看门狗
 	 *  （见 tool_execution_start）、不算 stall 失联（见 startStallTimer）。 */
 	askUser(
 		questions: UiQuestion[],
-		sig: { aborted?: boolean; toolCallId?: string },
+		sig: { aborted?: boolean; toolCallId?: string; signal?: AbortSignal },
 		conversationId?: string,
 		owner?: { requester?: string },
 	): Promise<OwnerAskResult> {
-		return new Promise((resolve, reject) => {
-			if (sig?.aborted || this.disposed) {
-				reject(new Error("ask_user_question aborted"));
+		let stop = () => {};
+		const wait = new Promise<OwnerAskResult>((resolve, reject) => {
+			if (sig?.aborted || sig?.signal?.aborted || this.disposed) {
+				reject(new Error(ASK_ABORTED_ERROR));
 				return;
 			}
 			// 问卷开关（默认开）：关 → 不弹对话框，立即报错让模型得知已禁用。
@@ -10180,6 +10179,7 @@ export class ClientSession {
 			const file = manager?.getSessionFile();
 			if (manager && file) entry.nativeSource = { sessionId: manager.getSessionId(), file };
 			this.pendingQuestions.set(id, entry);
+			stop = () => this.retractQuestion(id, entry, "the run was stopped") && reject(new Error(ASK_ABORTED_ERROR));
 			const askingConv = conversationId ? this.convs.get(conversationId) : undefined;
 			const ask: Ask = {
 				...questionAsk(id, questions, ClientSession.askMetaFor(askingConv, owner)),
@@ -10236,15 +10236,13 @@ export class ClientSession {
 				const stillPending = this.pendingQuestions.get(id) === entry;
 				const clientCount = ClientSession.connectedClientCount();
 				if (askDeliveryOnGraceExpiry({ clientCount, stillPending }) !== "reject") return;
-				this.pendingQuestions.delete(id);
-				askHub.settle(id, { how: "gone", reason: "no browser was open" });
-				// The "?" on the chat list goes away too (as in resolveQuestion).
-				ClientSession.emitConversationsToAll();
+				this.retractQuestion(id, entry, "no browser was open"); // the chat list's "?" goes too
 				reject(new Error(ASK_USER_NO_CLIENT_ERROR));
 			}, ASK_USER_NO_CLIENT_GRACE_MS);
 			// 别让这个计时器拖住进程退出（dispose 时也会清，见 cancelPendingQuestions）。
 			entry.graceTimer.unref?.();
 		});
+		return endOnAbort(sig?.signal, () => stop(), wait);
 	}
 
 	/** 前端回答模型提问（question_answer → 恢复 askUser 的 Promise）。id 需匹配
@@ -10608,21 +10606,23 @@ export class ClientSession {
 		this.pendingQuestions.clear();
 	}
 
-	/** telegram-answers: a chat is closing: its waiting questions end as cancelled. Questions are
-	 *  process-wide, so nothing else would end them; every window closes its dialog, and whoever
-	 *  shows them elsewhere hears they are gone. */
-	private cancelChatQuestions(convId: string, why: string): void {
-		let n = 0;
-		for (const [qid, p] of this.pendingQuestions) {
-			if (p.conversationId !== convId) continue;
-			this.pendingQuestions.delete(qid);
-			if (p.graceTimer) clearTimeout(p.graceTimer);
-			p.resolve(null);
-			askHub.settle(p.askId ?? qid, { how: "gone", reason: why });
-			ClientSession.broadcastToAllClients({ type: "question_retracted", id: qid });
-			n++;
-		}
-		if (n > 0) ClientSession.emitConversationsToAll();
+	/** telegram-answers: a chat is closing (or force-reset, Ops #1085): its permission prompts and waiting questions
+	 *  end as denied / cancelled. They are process-wide, so nothing else would end them; every window closes them. */
+	private cancelChatAsks(convId: string, why: string): void {
+		this.cancelPendingApprovals(convId, why);
+		for (const [qid, p] of this.pendingQuestions)
+			if (p.conversationId === convId && this.retractQuestion(qid, p, why)) p.resolve(null);
+	}
+
+	/** A question ends unanswered: off both lists, every window closes it. False when it no longer waits. */
+	private retractQuestion(qid: string, p: PendingQuestionEntry, why: string): boolean {
+		if (this.pendingQuestions.get(qid) !== p) return false;
+		this.pendingQuestions.delete(qid);
+		if (p.graceTimer) clearTimeout(p.graceTimer);
+		askHub.settle(p.askId ?? qid, { how: "gone", reason: why });
+		ClientSession.broadcastToAllClients({ type: "question_retracted", id: qid });
+		ClientSession.emitConversationsToAll();
+		return true;
 	}
 
 	/** 关闭所有挂起审批（dispose 时清理）：以「拒绝」解析，避免等答复的
@@ -13421,6 +13421,8 @@ export class ClientSession {
 			conv.unsubscribe?.();
 			conv.unsubscribe = undefined;
 			conv.dialogs.cancelAll();
+			// stop-cancels-ask (Ops #1085): its questions and permission prompts end too; none waits on the owner for good.
+			this.cancelChatAsks(conv.id, "the run was force-stopped");
 			this.clearAllToolWatchdogs(conv);
 			conv.toolStartTimes.clear();
 			disposeEvalSession(conv.id);
@@ -14398,10 +14400,8 @@ export class ClientSession {
 		const closedRef = runningRef(conv);
 		if (closedRef) runningChats?.finish(closedRef.sessionFile);
 		conv.dialogs.cancelAll();
-		// telegram-answers: its permission prompts and questions go with it (they are process-wide now,
-		// so nothing else would end them), and whoever shows them elsewhere hears they are gone.
-		this.cancelPendingApprovals(id, "the chat was closed");
-		this.cancelChatQuestions(id, "the chat was closed");
+		// telegram-answers: its permission prompts and questions go with it; whoever shows them elsewhere hears so.
+		this.cancelChatAsks(id, "the chat was closed");
 		ClientSession.scheduleStuckReconcile();
 		this.clearAllToolWatchdogs(conv);
 		// 关对话 → 连它的 eval 内核（Python/Node 子进程 + 临时沙箱目录）一起回收：

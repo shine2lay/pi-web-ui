@@ -16,6 +16,7 @@
  * A split call's tool result has no `details.answers`: decision-records.ts backfill then makes no record mixing the
  * owners (the live per-owner records stand).
  */
+import { stoppedError } from "./ask-abort.js";
 import { isQuestionReturned, type QuestionReturned, questionReturnedText } from "./owner-question-router.js";
 import { chatPersonOf, DEFAULT_REQUESTER, requesterName } from "./owner-requester.js";
 import type { QuestionAnswer, UiQuestion, UiTaskRequester } from "./protocol.js";
@@ -212,5 +213,8 @@ export async function askQuestionsByOwner(
 		if (r.status === "fulfilled") return { slice, result: r.value };
 		return { slice, error: r.reason instanceof Error ? r.reason : new Error(String(r.reason)) };
 	});
+	// stop-cancels-ask (Ops #1085): Stop closed every owner's open dialog; the call ends as stopped.
+	const stopped = stoppedError(outcomes.map((o) => o.error));
+	if (stopped) throw stopped;
 	return splitResult(questions, outcomes);
 }
