@@ -17,7 +17,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, statSync } from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
-import type { OwnerViewer } from "./owner-requester.js";
+import { DEFAULT_REQUESTER, type OwnerViewer } from "./owner-requester.js";
 
 /** Longest name kept. */
 export const SENT_BY_NAME_MAX = 80;
@@ -152,6 +152,13 @@ export class PeopleBook {
 			: { login: sender.login, name: sender.name, owner: false };
 	}
 
+	/** The person people.json lists under this name, as a sender; undefined = none. */
+	named(name: string): SentBy | undefined {
+		this.refresh();
+		for (const [login, p] of this.people) if (p.name === name) return { login, name: p.name, owner: p.owner };
+		return undefined;
+	}
+
 	/** owner-requester (Ops #1051): who a browser connection is, for what its windows are shown. A login people.json
 	 *  lists as a person other than the default owner is that person; anything else (no login, his login, an unlisted
 	 *  login, people.json missing or broken) is the default owner. */
@@ -201,6 +208,19 @@ export function serveOwners(book: PeopleBook): PeopleBook {
 /** The names the served people.json lists besides the default owner (none when nothing is served). */
 export function listedOwnerNames(): ReadonlySet<string> {
 	return servedBook?.viewerOf(undefined).listed ?? new Set<string>();
+}
+
+/** nonblocking-ask (Ops #1088): an owner known only by name (who answered a question card, on any surface, or after a
+ *  restart) as the chat records a sender: his people.json login, else a `person:` login. */
+export function personSentBy(name: string): SentBy {
+	const clean = sentByName(name) || DEFAULT_REQUESTER;
+	return (
+		servedBook?.named(clean) ?? {
+			login: `person:${clean.toLowerCase()}`,
+			name: clean,
+			owner: clean === DEFAULT_REQUESTER,
+		}
+	);
 }
 
 const answerer = new AsyncLocalStorage<string | undefined>();

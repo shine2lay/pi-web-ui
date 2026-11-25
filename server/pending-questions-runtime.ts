@@ -37,7 +37,8 @@ import {
 	questionWakeOf,
 } from "./pending-questions-store.js";
 import type { QuestionAnswer, ServerMessage, UiQuestion } from "./protocol.js";
-import { answeredBy } from "./sent-by.js";
+import { wakeInTranscript } from "./question-wake-admission.js";
+import { answeredBy, personSentBy } from "./sent-by.js";
 
 /** What the rules need from ClientSession's statics. */
 export interface QuestionRuntimeHost {
@@ -112,14 +113,17 @@ export function settleCard(host: QuestionRuntimeHost, id: string, end: CardEnd):
 	if (!entry) return false;
 	host.shared.delete(id);
 	const { by } = answeredBy();
+	const pq = host.store();
+	// Rule 37 (Ops #1088 D2): the wake is the answerer's message (`[From: <name>]`, its sender in the transcript); kept
+	// in the record so a replay after a restart carries it too. COO's hand-back is not an owner's message.
+	const sentBy = personSentBy(by ?? pq?.store.get(entry.recordId)?.owner ?? "");
 	const summary = end.kind === "answered" ? summarizeQuestionAnswers(entry.questions, end.answers) : "";
 	const resolution: QuestionResolution =
 		end.kind === "answered"
-			? { kind: "answered", answers: end.answers, summary, from: end.from, ...(by ? { by } : {}) }
+			? { kind: "answered", answers: end.answers, summary, from: end.from, ...(by ? { by } : {}), sentBy }
 			: end.kind === "cancelled"
-				? { kind: "cancelled", from: end.from, ...(by ? { by } : {}) }
+				? { kind: "cancelled", from: end.from, ...(by ? { by } : {}), sentBy }
 				: { kind: "returned", note: end.note };
-	const pq = host.store();
 	const settled = pq?.store.settle(entry.recordId, resolution);
 	if (end.kind === "answered")
 		askHub.settle(entry.askId, {
@@ -142,15 +146,19 @@ export function settleCard(host: QuestionRuntimeHost, id: string, end: CardEnd):
 
 const deliveringNow = new Set<string>();
 
-/** Put a settled card's wake into its chat; once the chat took it, the card leaves the file. A refused delivery keeps
- *  it as delivering (replayed at the next start). */
+/** Put a settled card's wake into its chat; once it is in the chat's transcript (not just pi's in-memory queue behind
+ *  a busy turn: Ops #1088 D1), the card leaves the file. A refused or unfinished delivery keeps it as delivering
+ *  (replayed at the next start, never twice: restoreCards). */
 async function deliverWake(pq: PendingQuestionsHost, record: PendingQuestionDelivering): Promise<void> {
 	if (deliveringNow.has(record.id)) return;
 	deliveringNow.add(record.id);
 	try {
-		const out = await pq.deliver(questionWakeOf(record)).catch((err: Error) => ({ ok: false, error: err.message }));
-		if (out.ok) pq.store.admitted(record.id);
-		else console.warn(`[pending-questions] ${record.id}: the answer did not reach its chat yet: ${out.error}`);
+		const out = await pq
+			.deliver(questionWakeOf(record))
+			.catch((err: Error) => ({ ok: false as const, error: err.message }));
+		if (!out.ok) console.warn(`[pending-questions] ${record.id}: the answer did not reach its chat yet: ${out.error}`);
+		else if (!out.admitted) pq.store.admitted(record.id);
+		else void out.admitted.then(() => pq.store.admitted(record.id));
 	} finally {
 		deliveringNow.delete(record.id);
 	}
@@ -246,8 +254,10 @@ export async function restoreCards(host: QuestionRuntimeHost, hooks: RestoreHook
 	for (const rec of pq.store.delivering()) {
 		if (done.has(rec.id)) continue;
 		done.add(rec.id);
-		if (rec.sessionFile) await deliverWake(pq, rec);
-		else pq.store.admitted(rec.id);
+		// Already in its transcript (the last run stopped between writing it and the card leaving the file): 0 sends.
+		if (!rec.sessionFile || wakeInTranscript(rec.sessionFile, questionWakeOf(rec).text, rec.settledAt))
+			pq.store.admitted(rec.id);
+		else await deliverWake(pq, rec);
 	}
 }
 

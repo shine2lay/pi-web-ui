@@ -386,14 +386,17 @@ export function DshQuestionDialog({
 					</button>
 				</div>
 				<div className="dialog-nav-right">
-					<button
-						type="button"
-						className="dialog-prev"
-						disabled={currentStep === 0}
-						onClick={() => setStep(currentStep - 1)}
-					>
-						{t("previous")}
-					</button>
+					{/* One question: nothing to go back to (Ops #1088: the footer fits one row on a phone). */}
+					{total > 1 && (
+						<button
+							type="button"
+							className="dialog-prev"
+							disabled={currentStep === 0}
+							onClick={() => setStep(currentStep - 1)}
+						>
+							{t("previous")}
+						</button>
+					)}
 					<button type="button" className="dialog-submit" disabled={!answered(q.id)} onClick={onNext}>
 						{currentStep === total - 1 ? t("modelQuestionSubmit") : t("next")}
 					</button>

@@ -12075,6 +12075,42 @@ div.chead[role="button"]:focus-visible,
 	padding-top: 6px;
 	border-top: 1px solid var(--border-soft);
 }
+/* nonblocking-ask (Ops #1088, QA #243 D3): on a small phone (320x568) the chat above is already hidden and the
+   composer keeps its height, so the question gets what is left: a tighter card and a one-row footer (Later, Cancel
+   question, Submit answer) keep the first answers above the footer. */
+@media (max-width: 420px) {
+	.dialog-inline[data-dialog-kind="select"] {
+		padding: 8px 10px;
+		gap: 6px;
+	}
+	.dialog-inline[data-dialog-kind="select"] .owner-question-route {
+		margin: 0 0 2px;
+		font-size: 12px;
+		line-height: 1.35;
+	}
+	.dialog-inline[data-dialog-kind="select"] .set-section {
+		padding: 6px 8px;
+		gap: 4px;
+	}
+	.dialog-inline .dialog-nav,
+	.dialog-inline .dialog-nav-left,
+	.dialog-inline .dialog-nav-right {
+		gap: 6px;
+	}
+	.dialog-inline .dialog-nav .dialog-later,
+	.dialog-inline .dialog-nav .dialog-dismiss-inline,
+	.dialog-inline .dialog-nav .dialog-prev,
+	.dialog-inline .dialog-nav .dialog-submit {
+		padding: 6px 7px;
+		font-size: 12px;
+	}
+}
+/* A short phone screen: the collapsed goal pill steps aside while a question is open (it returns once answered). */
+@media (max-width: 640px) and (max-height: 700px) {
+	.main:has(> .dialog-inline[data-dialog-kind="select"]) > .goalbar {
+		display: none;
+	}
+}
 
 /* ---- DSH 提问对话框：富文本（markdown + html）排版收起 ---- */
 /* 问题主文字稍大、突出（不复用 .set-row-desc 的省略号/nowrap 规则） */

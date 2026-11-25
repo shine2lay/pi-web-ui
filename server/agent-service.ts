@@ -90,7 +90,8 @@ import {
 	setCardLater,
 	settleCard,
 } from "./pending-questions-runtime.js";
-import { type PendingQuestionsHost, PendingQuestionsStore } from "./pending-questions-store.js";
+import { expectWake, questionWakeHost, questionWakeOnEvent, type WakeSend } from "./question-wake-admission.js";
+import type { ChatDeliveryResult, PendingQuestionsHost } from "./pending-questions-store.js";
 export { makeAskUserQuestionTool };
 import {
 	approvalAsk,
@@ -2405,6 +2406,8 @@ interface RoleDeliveryHow {
 	sendId?: string;
 	forOwner?: RoleOwnerAnswer;
 	ownerChannel?: OwnerChannel;
+	sentBy?: SentBy; // nonblocking-ask (Ops #1088): a question's wake is its answerer's message, and ok carries
+	awaitTranscript?: boolean; // `admitted` (in the transcript)
 }
 
 /** optimistic-send: how far one prompt() got, for its final answer (see ClientSession.prompt). */
@@ -6636,7 +6639,7 @@ export class ClientSession {
 		/** telegram-coo: who sent it (default a role), the host.roles.send id, and whether it answers a
 		 *  question asked for the owner (role-replies.ts). */
 		how: RoleDeliveryHow = {},
-	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
+	): Promise<ChatDeliveryResult> {
 		await this.switchSession(file);
 		const id = this.conversationIdBySessionFile(file);
 		const conv = id ? this.convs.get(id) : undefined;
@@ -6652,7 +6655,9 @@ export class ClientSession {
 				(conv.sendsInFlight ?? 0) > 0)
 		)
 			return { ok: false, busy: true, error: "the chat is still working" };
+		const admission = how.awaitTranscript && typeof text === "string" ? expectWake(conv, text) : undefined;
 		void this.prompt(typeof text === "string" ? text : "", undefined, true, ackId, {
+			...(how.sentBy ? { sentBy: how.sentBy } : {}),
 			source: "extension",
 			...(typeof text !== "string" ? { lateText: text.compose, textCurrent: text.current } : {}),
 			cause: how.cause ?? "role",
@@ -6676,6 +6681,7 @@ export class ClientSession {
 							);
 						}),
 					]).finally(() => clearTimeout(timer));
+		if (!answer.ok) admission?.cancel();
 		if (!answer.ok)
 			return {
 				ok: false,
@@ -6684,7 +6690,7 @@ export class ClientSession {
 			};
 		// In the running list of every window, and kept open when switched away from.
 		conv.listed = true;
-		return { ok: true };
+		return admission ? { ok: true, admitted: admission.admitted } : { ok: true };
 	}
 
 	/** telegram-coo: a run starts: its record (role-replies.ts) takes the causes of the texts pi took for it. */
@@ -8519,6 +8525,7 @@ export class ClientSession {
 	 *  at most once a minute) and go on; the next snapshot brings the windows up to date. */
 	private onEvent(conv: Conversation, event: AgentSessionEvent): void {
 		ownerInputMarkOnEvent(conv, event); // owner-input-mark: never throws
+		questionWakeOnEvent(conv, event); // nonblocking-ask (Ops #1088): a question's wake reached the transcript
 		sentByOnEvent(conv, event, (m) => conv.uiMessageCache.delete(uiMessageKeyOf(conv, m as AgentMessage).cacheKey)); // sent-by
 		try {
 			this.onEventNow(conv, event);
@@ -18437,17 +18444,8 @@ export class AgentService {
 		});
 		ClientSession.ownerQuestions = this.ownerQuestions;
 		// nonblocking-ask (Ops #1087): ask_user_question's cards on disk; an answer wakes its chat as the owner's message.
-		ClientSession.pendingQuestionsHost = this.pendingQuestions = {
-			store: PendingQuestionsStore.inDataDir(this.stateStore.dataDir),
-			deliver: (wake) =>
-				wake.sessionFile
-					? this.sendRoleMessage(wake.sessionFile, wake.text, {
-							cause: wake.cause,
-							ownerChannel: wake.ownerChannel,
-							requester: wake.requester,
-						})
-					: Promise.resolve({ ok: false, error: "the asking chat has no transcript" }),
-		};
+		const sendWake: WakeSend = (file, text, how) => this.sendRoleMessage(file, text, how);
+		ClientSession.pendingQuestionsHost = this.pendingQuestions = questionWakeHost(this.stateStore.dataDir, sendWake);
 		ownerQuestionDesk?.stop();
 		this.cooDesk = new CooOwnerQuestionDesk({
 			routingOn: () => this.ownerQuestions.enabled,
@@ -19219,8 +19217,8 @@ export class AgentService {
 		/** telegram-coo: who sent it (default a role), the host.roles.send id, and whether it answers a
 		 *  question asked for the owner (role-replies.ts). */
 		how: RoleDeliveryHow = {},
-	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
-		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
+	): Promise<ChatDeliveryResult> {
+		return this.roleMessagesChain(async (): Promise<ChatDeliveryResult> => {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
 			if (this.quiesced) return { ok: false, error: "the server is restarting" };
 			if (typeof text !== "string" && this.queueChatState(file).state === "working")

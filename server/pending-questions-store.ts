@@ -21,6 +21,7 @@ import { questionReturnedText } from "./owner-question-router.js";
 import { DEFAULT_REQUESTER } from "./owner-requester.js";
 import type { QuestionAnswer, UiQuestion, UiTaskRequesterInput } from "./protocol.js";
 import type { OwnerChannel } from "./role-replies.js";
+import type { SentBy } from "./sent-by.js";
 
 export const PENDING_QUESTIONS_FILE = "pending-questions.json";
 const FILE_VERSION = 1;
@@ -52,10 +53,19 @@ export interface PendingQuestionWaiting extends NewPendingQuestion {
 	later?: boolean;
 }
 
-/** How a card ended. `from` = where (FROM_BROWSER, "telegram"), `by` = who answered when known. */
+/** How a card ended. `from` = where (FROM_BROWSER, "telegram"), `by` = who answered when known, `sentBy` = that
+ *  person as the chat records a sender (Ops #1088, rule 37: the wake is his message, `[From: <name>]`). */
 export type QuestionResolution =
-	| { kind: "answered"; answers: QuestionAnswer[]; summary: string; from: string; by?: string; decisionRef?: string }
-	| { kind: "cancelled"; from: string; by?: string }
+	| {
+			kind: "answered";
+			answers: QuestionAnswer[];
+			summary: string;
+			from: string;
+			by?: string;
+			sentBy?: SentBy;
+			decisionRef?: string;
+	  }
+	| { kind: "cancelled"; from: string; by?: string; sentBy?: SentBy }
 	| { kind: "returned"; note: string };
 
 export interface PendingQuestionDelivering extends Omit<PendingQuestionWaiting, "state"> {
@@ -280,8 +290,12 @@ function newQuestionProblem(q: unknown): string | null {
 	return null;
 }
 
+const sentByOk = (s: unknown) =>
+	s === undefined || (isObj(s) && isStr(s.login) && isStr(s.name) && typeof s.owner === "boolean");
+
 function resolutionProblem(r: unknown): string | null {
 	if (!isObj(r)) return "resolution is not an object";
+	if (r.kind !== "returned" && !sentByOk(r.sentBy)) return "sentBy is malformed";
 	if (r.kind === "answered") {
 		if (!Array.isArray(r.answers)) return "answers missing";
 		if (!r.answers.every((a) => isObj(a) && isStr(a.id) && Array.isArray(a.selected))) return "an answer is malformed";
@@ -413,14 +427,17 @@ export interface QuestionWake {
 	/** The turn's cause and owner channel: the owner's own channel, the way his typed message is marked. */
 	cause: OwnerChannel;
 	ownerChannel: OwnerChannel;
-	/** The owner's input: sent-by stamps `[From: <owner>]` and the turn is his (turnOwnersOf = [owner]). */
+	/** The owner's input: the turn is his (turnOwnersOf = [owner]). */
 	requester: Extract<UiTaskRequesterInput, { kind: "owner" }>;
+	/** Who answered or cancelled (not on COO's hand-back): the transcript's sender and the model's `[From: <name>]`. */
+	sentBy?: SentBy;
 }
 
-/** How a wake reaches its chat (Task 2: role delivery, which opens a closed chat and queues behind a busy turn). */
-export type QuestionWakeDeliver = (
-	wake: QuestionWake,
-) => Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }>;
+/** How a wake reaches its chat (Task 2: role delivery, which opens a closed chat and queues behind a busy turn).
+ *  `admitted` (Ops #1088): settles once the wake is in the chat's transcript; none = it is already. */
+export type QuestionWakeDeliver = (wake: QuestionWake) => Promise<ChatDeliveryResult>;
+/** Role delivery's answer (agent-service sendRoleMessage), which a wake goes through. */
+export type ChatDeliveryResult = { ok: true; admitted?: Promise<void> } | { ok: false; busy?: boolean; error: string };
 
 /** What ClientSession is handed (Task 2 sets it in AgentService): the store and the way wakes go in. */
 export interface PendingQuestionsHost {
@@ -452,5 +469,6 @@ export function questionWakeOf(record: PendingQuestionDelivering): QuestionWake 
 			id: wakeInputId(record.id, channel),
 			person: record.owner || DEFAULT_REQUESTER,
 		},
+		...(r.kind !== "returned" && r.sentBy ? { sentBy: r.sentBy } : {}),
 	};
 }
