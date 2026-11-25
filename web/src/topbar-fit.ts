@@ -80,7 +80,9 @@ export function fitTopbar(
 	const keptWidth = items
 		.filter((it) => keepIds.has(it.id) && it.width > 0)
 		.reduce((sum, it) => sum + it.width + gap, 0);
-	const room = Math.max(0, available - Math.max(0, reserve) - keptWidth);
+	// Each entry is charged its width + one gap, but the last one on the bar has none after it (n entries, n - 1
+	// gaps; ⋯'s reserve holds its own): hand that gap back, or WebKit at 320px folds the bell with room to spare.
+	const room = Math.max(0, available + gap - Math.max(0, reserve) - keptWidth);
 	// roles-overview: entries that fold last take their room next; if even they don't fit, everything
 	// that can fold does (they included), so a narrower bar never shows more.
 	// Several late entries keep their places in lateIds' order while they fit (the waiting-questions bell first).

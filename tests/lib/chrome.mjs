@@ -62,6 +62,22 @@ const CANDIDATES = [
 export const CHROME_PATH =
 	process.env.PI_WEB_CHROME ?? CANDIDATES.find((p) => existsSync(p)) ?? "";
 
+/** Playwright's WebKit (the newest webkit-<n>/pw_run.sh in the account's playwright cache), or null. */
+export const WEBKIT_PATH = (() => {
+	let accountHome = "";
+	try {
+		accountHome = userInfo().homedir;
+	} catch {
+		/* no passwd entry */
+	}
+	const root = process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(accountHome, ".cache", "ms-playwright");
+	if (!existsSync(root)) return null;
+	const dir = readdirSync(root)
+		.filter((d) => /^webkit-\d+$/.test(d))
+		.sort((a, b) => Number(b.slice(7)) - Number(a.slice(7)))[0];
+	return dir && existsSync(join(root, dir, "pw_run.sh")) ? join(root, dir, "pw_run.sh") : null;
+})();
+
 // The browser tests run a Chinese browser. The UI is English only (PATCHES.md, english-only), so
 // this proves a Chinese browser language still gets the English UI; it used to switch the UI to
 // Chinese. Chromium takes its language from LANGUAGE, and Playwright passes this process's

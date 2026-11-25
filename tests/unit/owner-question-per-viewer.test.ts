@@ -241,12 +241,15 @@ describe("ask_user_question", () => {
 		expect(waitingOn(w.waiHere)).toBe("Waiting on Shine");
 	});
 
-	it("either owner's answer still counts (no new lock)", async () => {
+	// QA #244 F1 (Ops #1091): on the web only a window shown the card answers it (Shine's window no longer answers
+	// Wai's); Telegram and the hub's answer are unchanged.
+	it("the web answer comes only from a window shown the card: Shine's window is refused, Wai's counts", async () => {
 		const w = windows();
 		typedBy(w.asking, WAI_SENT);
 		const answer = cards.ask(w.wai.client, QUESTIONS, w.asking.id, "call-a");
 		const [ask] = askHub.list();
-		w.shine.client.resolveQuestion(ask!.id, [{ id: "port", selected: ["8080"] }]);
+		expect(w.shine.client.resolveQuestion(ask!.id, [{ id: "port", selected: ["9090"] }])).toBe(false);
+		expect(w.wai.client.resolveQuestion(ask!.id, [{ id: "port", selected: ["8080"] }])).toBe(true);
 		await expect(answer).resolves.toEqual([{ id: "port", selected: ["8080"] }]);
 	});
 });

@@ -8,6 +8,9 @@
  *    "2"; it opens the list (2 items, nothing wider than the screen); Answer opens the form in place. Then, once:
  *    an answer from the bell leaves 1 waiting, Open chat switches to the asking chat with its question shown, and
  *    Cancel question empties the bell. @2x screenshots of each view.
+ * 4. QA #244 (Ops #1091): the fixed Answer case shows the real form (F5); WebKit at the same sizes keeps the bell on
+ *    the bar outside ⋯ (F3); with one question saved for later in chat A and chat B's live, Open chat on the saved
+ *    one shows it and Later shows chat A's saved-for-later bar, in Chromium and WebKit (F2, QA's B7).
  *
  * Usage: npm run build && scripts/sealed.sh node tests/waiting-questions-bell-ui-test.mjs [out-dir]
  */
@@ -19,9 +22,9 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { chromium } from "playwright-core";
+import { chromium, webkit } from "playwright-core";
 import WebSocket from "ws";
-import { CHROME_PATH } from "./lib/chrome.mjs";
+import { CHROME_PATH, WEBKIT_PATH } from "./lib/chrome.mjs";
 import { ownServer } from "./lib/own-server.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -70,6 +73,9 @@ async function until(fn, ms = 20000) {
 	return v;
 }
 
+/** The waiting questions' card ids by their text, as the asking windows were told (`question_pending`). */
+const asked = new Map();
+
 /** Two chats, each with one question waiting (the stand-in model asks it), each in a window of its own that stays
  *  open (a chat its last window leaves closes, and its cards with it); returns the windows, closed at the end. */
 async function askTwo(srv) {
@@ -83,6 +89,10 @@ async function askTwo(srv) {
 			ws.once("error", bad);
 		});
 		const send = (m) => ws.send(JSON.stringify(m));
+		ws.on("message", (data) => {
+			const m = JSON.parse(String(data));
+			if (m.type === "question_pending") asked.set(m.questions[0]?.question, m.id);
+		});
 		send({ type: "hello", clientId: `bell-ui-${word}`, locale: "en" });
 		await sleep(1000);
 		send({ type: "set_model", modelId: "mock/mock-model" });
@@ -95,6 +105,7 @@ async function askTwo(srv) {
 	}
 	const found = records().length;
 	if (found !== 2) throw new Error(`expected 2 waiting questions, found ${found}`);
+	await until(() => asked.size === 2, 5000);
 	return windows;
 }
 
@@ -168,6 +179,122 @@ async function measure(page) {
 	});
 }
 
+/** The bar's flow as laid out: its width, gap, each entry's width and left edge, and whether the bell is on it. */
+async function barFit(page) {
+	return page.evaluate(() => {
+		const flow = document.querySelector(".topbar .topbar-flow");
+		const kids = [...(flow?.children ?? [])].map((el) => [
+			el.className.toString().split(" ")[0],
+			el.offsetWidth,
+			Math.round(el.getBoundingClientRect().left),
+		]);
+		const more = document.querySelector(".topbar .plugin-topbar-more")?.getBoundingClientRect();
+		return {
+			flowWidth: flow?.clientWidth,
+			gap: flow ? getComputedStyle(flow).columnGap : null,
+			kids,
+			moreLeft: more ? Math.round(more.left) : null,
+			bellOnBar: !!flow?.querySelector(".bell-chip .bell-badge"),
+			scrollWidth: document.documentElement.scrollWidth,
+		};
+	});
+}
+
+/** F3: in WebKit, at every size and theme, the bell with its count is on the bar (not folded into ⋯). */
+async function webkitBar(browser, url) {
+	for (const viewport of VIEWPORTS) {
+		for (const colorScheme of ["light", "dark"]) {
+			const tag = `webkit-${viewport.width}x${viewport.height}-${colorScheme}`;
+			const page = await browser.newPage({ viewport, colorScheme, deviceScaleFactor: 2 });
+			if (colorScheme === "light")
+				await page.addInitScript(() => localStorage.setItem("pi-web-ui:theme", "flow-light"));
+			await page.goto(url);
+			await page.waitForSelector(".topbar .topbar-flow", { timeout: 20000 });
+			await until(async () => (await barFit(page)).bellOnBar, 5000);
+			await sleep(300);
+			const fit = await barFit(page);
+			const bar = await measure(page);
+			await page.screenshot({ path: join(OUT, `bar-${tag}@2x.png`) });
+			check(
+				`${tag} bell on the bar outside ⋯ with its count`,
+				fit.bellOnBar && bar.badge === "2" && bar.bell.right <= viewport.width && fit.scrollWidth <= viewport.width,
+				JSON.stringify(fit),
+			);
+			await page.close();
+		}
+	}
+}
+
+/** QA's B10 path: narrowing below 320 folds the bell into ⋯; widening back to 320 re-fits it with its real width. */
+async function narrowAndBack(browser, engine, url) {
+	const page = await browser.newPage({ viewport: VIEWPORTS[1], deviceScaleFactor: 2 });
+	await page.goto(url);
+	await until(async () => (await barFit(page)).bellOnBar, 20000);
+	for (const width of [256, 291, 320]) {
+		await page.setViewportSize({ width, height: 568 });
+		await sleep(400);
+	}
+	const fit = await barFit(page);
+	await page.screenshot({ path: join(OUT, `bar-${engine}-320-after-256@2x.png`) });
+	check(`${engine} 256 -> 291 -> 320: bell back on the bar outside ⋯`, fit.bellOnBar, JSON.stringify(fit));
+	await page.close();
+}
+
+/** F2 (QA's B7): the window's own chat B shows its live question; Open chat on chat A's saved one shows that one, and
+ *  Later folds it into chat A's saved-for-later bar (not chat B's question over it). */
+async function openChatOnSaved(browser, engine, url) {
+	const page = await browser.newPage({ viewport: VIEWPORTS[2], deviceScaleFactor: 2 });
+	const errors = [];
+	page.on("pageerror", (e) => errors.push(String(e)));
+	await page.goto(url);
+	await page.waitForSelector(".topbar .bell-chip .bell-badge", { timeout: 20000 });
+	await page.click(".topbar .bell-chip");
+	const saved = page.locator("dialog.wq-modal .wq-item", { hasText: "Release the installer" });
+	await saved.getByRole("button", { name: "Open chat" }).click();
+	const card = () =>
+		page
+			.locator(".dialog-inline")
+			.innerText({ timeout: 500 })
+			.catch(() => "");
+	const shown = await until(async () => (await card()).includes("Release the installer"), 10000);
+	await sleep(300);
+	await page.screenshot({ path: join(OUT, `open-saved-${engine}-1440x900@2x.png`) });
+	check(
+		`${engine} B7 Open chat on a saved question shows that question, not another chat's live one`,
+		!!shown && !(await page.$("dialog.wq-modal[open]")),
+		(await card()).replace(/\s+/g, " ").slice(0, 120),
+	);
+	const savedCard = page.locator(".dialog-inline", { hasText: "Release the installer" });
+	await savedCard.locator(".dialog-later").click();
+	const barText = () =>
+		page
+			.locator(".question-later-bar")
+			.evaluate((el) => el.textContent ?? "", null, { timeout: 500 })
+			.catch(() => "");
+	const bar = await until(async () => (await barText()).includes("Release the installer"), 5000);
+	await page.screenshot({ path: join(OUT, `open-saved-later-${engine}-1440x900@2x.png`) });
+	check(`${engine} B7 Later shows the asking chat's saved-for-later bar`, !!bar, (await barText()).slice(0, 120));
+	check(`${engine} B7 no page errors`, errors.length === 0, errors.join(" | "));
+	await page.close();
+}
+
+/** F5: the fixed Answer case shows the real form (its options), never the "cannot be shown safely" line. */
+async function fixedAnswerForm(browser, url) {
+	const page = await browser.newPage({ viewport: VIEWPORTS[0] });
+	await page.goto(`${url}?state=answer`);
+	const options = await until(
+		async () => (await page.$$("dialog.roles-answer[open] .roles-answer-option")).length,
+		10000,
+	);
+	const text = await page.evaluate(() => document.body.innerText);
+	check(
+		"fixed case answer shows the real Answer form",
+		options >= 2 && !text.includes("cannot be shown safely"),
+		JSON.stringify({ options, refused: text.includes("cannot be shown safely") }),
+	);
+	await page.close();
+}
+
 const srv = await ownServer({ name: "waiting-questions-bell-ui", mock: mockReply });
 const fixed = await harness();
 let chatWindows = [];
@@ -183,6 +310,7 @@ try {
 
 	const browser = await chromium.launch({ executablePath: CHROME_PATH, headless: true });
 	try {
+		await fixedAnswerForm(browser, fixed.url);
 		for (const viewport of VIEWPORTS) {
 			for (const colorScheme of ["light", "dark"]) {
 				const tag = `${viewport.width}x${viewport.height}-${colorScheme}`;
@@ -226,6 +354,27 @@ try {
 				check(`${tag} no page errors`, errors.length === 0, errors.join(" | "));
 				await page.close();
 			}
+		}
+
+		// WebKit's bar (F3); then chat A's question saved for later, chat B's live: Open chat in both engines (F2).
+		if (!WEBKIT_PATH) check("WebKit installed", false, "no webkit-*/pw_run.sh in the playwright cache");
+		const safari = WEBKIT_PATH ? await webkit.launch({ executablePath: WEBKIT_PATH, headless: true }) : null;
+		try {
+			if (safari) await webkitBar(safari, url);
+			await narrowAndBack(browser, "chromium", url);
+			if (safari) await narrowAndBack(safari, "webkit", url);
+			const releaseId = asked.get(QUESTIONS.release.question);
+			chatWindows[0].send(JSON.stringify({ type: "question_later", id: releaseId, later: true }));
+			const store = join(srv.dataDir, "pending-questions.json");
+			const tucked = await until(
+				() => (JSON.parse(readFileSync(store, "utf8")).records ?? []).some((r) => r.later === true),
+				5000,
+			);
+			check("chat A's question saved for later", !!tucked && !!releaseId, String(releaseId));
+			await openChatOnSaved(browser, "chromium", url);
+			if (safari) await openChatOnSaved(safari, "webkit", url);
+		} finally {
+			await safari?.close();
 		}
 
 		// Once, at 390x844 light: answer from the bell, Open chat, Cancel question.

@@ -58,13 +58,16 @@ const cardOf = <Q>(id: string, p: SnapshotEntry<Q>) => ({
 	...(p.conversationTitle ? { conversationTitle: p.conversationTitle } : {}),
 });
 
-/** The card a window's snapshot pops up: the first one shown to it, from any chat (a refresh brings it back). One kept
- *  for later never pops up again, over its own chat or another (Shine m104353). */
+/** The card a window's snapshot pops up: the shown chat's (`activeId`) own first, else the first one shown to it from
+ *  any chat (a refresh brings it back). One kept for later never pops up again, over its own chat or another (Shine
+ *  m104353). */
 export function pickPendingQuestionForSnapshot<Q>(
 	entries: Iterable<[string, SnapshotEntry<Q>]>,
+	activeId?: string,
 ): { id: string; questions: Q; conversationId?: string; conversationTitle?: string } | null {
-	for (const [id, p] of entries) if (!p.later) return cardOf(id, p);
-	return null;
+	const live = [...entries].filter(([, p]) => !p.later);
+	const [id, p] = live.find(([, e]) => activeId !== undefined && e.conversationId === activeId) ?? live[0] ?? [];
+	return id !== undefined && p ? cardOf(id, p) : null;
 }
 
 /** The cards kept for later that a window showing `activeId` offers in its reopen bar: that chat's own. */

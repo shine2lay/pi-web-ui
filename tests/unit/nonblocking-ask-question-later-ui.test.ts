@@ -142,4 +142,38 @@ describe("NB-7: the saved-for-later bar in its own chat", () => {
 		expect(bar(c)).toBeNull();
 		expect(c.querySelector(".question-head")?.textContent).toContain("Create the address?");
 	});
+
+	// QA #244 F2 (Ops #1091, QA's B7): chat A's question saved for later, chat B's live one shown in this window too.
+	const ELSEWHERE = { ...DNS, conversationId: "conv-b" };
+	const head = (c: HTMLElement) => c.querySelector(".question-head")?.textContent ?? "";
+
+	it("the bell's Open chat on a saved question shows that one, not another chat's live question", () => {
+		const props = { question: ELSEWHERE, savedQuestions: [PORT], waitingOn: null, activeConversationId: "conv-coo" };
+		const c = render(createElement(ChatOwnerQuestion, { ...props, focus: { id: "q-1", seq: 1 } }));
+		expect(c.querySelectorAll(".dialog-inline")).toHaveLength(1);
+		expect(head(c)).toContain("Which port?");
+		click(buttonNamed(c, "Later"));
+		expect(bar(c)?.textContent).toContain("Port"); // this chat's bar, not chat B's question over it
+		expect(open(c)).toBeNull();
+		click(buttonNamed(c, "Answer"));
+		expect(head(c)).toContain("Which port?");
+	});
+
+	it("in a chat with its own saved question, another chat's live one leaves the bar; in a chat without, it shows", () => {
+		const here = render(
+			createElement(ChatOwnerQuestion, {
+				question: ELSEWHERE,
+				savedQuestions: [PORT],
+				waitingOn: null,
+				activeConversationId: "conv-coo",
+			}),
+		);
+		expect(bar(here)).not.toBeNull();
+		expect(open(here)).toBeNull();
+		act(() => root!.unmount());
+		const bare = render(
+			createElement(ChatOwnerQuestion, { question: ELSEWHERE, waitingOn: null, activeConversationId: "conv-coo" }),
+		);
+		expect(head(bare)).toContain("Create the address?");
+	});
 });

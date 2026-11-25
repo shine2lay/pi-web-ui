@@ -10,12 +10,12 @@
  * Until #294 mounts the page, it prints "roles-by-project: not built (Frontend #294 task)" and fails.
  * Run after build: scripts/sealed.sh node tests/roles-by-project-test.mjs
  */
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import { chromium, webkit } from "playwright-core";
 import { tsImport } from "tsx/esm/api";
-import { CHROME_PATH } from "./lib/chrome.mjs";
+import { CHROME_PATH, WEBKIT_PATH as WEBKIT } from "./lib/chrome.mjs";
 import { ownServer } from "./lib/own-server.mjs";
 import { miniMaps } from "./lib/roles-mini-map.mjs";
 if (!process.env.PI_SEALED) throw new Error("Run with scripts/sealed.sh");
@@ -26,14 +26,6 @@ const data = await tsImport("./unit/roles-by-project-page-data.ts", import.meta.
 const graph = await tsImport("../server/shared/roles-by-project/graph.ts", import.meta.url);
 const home = userInfo().homedir;
 const AXE = process.env.PI_AXE_JS ?? join(home, "temper-ai/configs/design/bin/vendor/axe-4.13.0.min.js");
-const WEBKIT = (() => {
-	const root = process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(home, ".cache", "ms-playwright");
-	if (!existsSync(root)) return null;
-	const dir = readdirSync(root)
-		.filter((d) => /^webkit-\d+$/.test(d))
-		.sort((a, b) => Number(b.slice(7)) - Number(a.slice(7)))[0];
-	return dir && existsSync(join(root, dir, "pw_run.sh")) ? join(root, dir, "pw_run.sh") : null;
-})();
 const VIEW = { roles: data.LABELS.roles, ink: data.LABELS.ink };
 const FRESH = { label: "fresh-tag", title: "Fresh arrival" };
 const ASK_VIEW = {

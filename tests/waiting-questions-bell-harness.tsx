@@ -57,7 +57,7 @@ const ASKS: UiOwnerAskItem[] = [
 
 const VIEW: UiRoleAskView = {
 	id: "q-7",
-	revision: "r1",
+	revision: "a".repeat(64), // projectRoleAsk wants a 64-hex revision, else "cannot be shown safely" (QA #244 F5)
 	kind: "question",
 	title: "Which port should the preview server use?",
 	fields: [

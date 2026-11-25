@@ -173,6 +173,18 @@ export function askShownToViewer(
 	);
 }
 
+/** QA #244 F1 (Ops #1091): whether a window may answer, cancel or keep for later waiting card `cardId` (`card`): only
+ *  one it is shown (askShownToViewer); never a card no longer waiting or without its ask. */
+export function windowMayAct(
+	cardId: string,
+	card: { askId?: string; conversationId?: string } | undefined,
+	windowConversationId: string | undefined,
+	viewer: OwnerViewer,
+): boolean {
+	const ask = card ? askHub.get(card.askId ?? cardId) : undefined;
+	return ask !== undefined && askShownToViewer(ask, card?.conversationId, windowConversationId, viewer);
+}
+
 /** owner-requester (Ops #1051): a queued task stuck on another owner's answer than `viewer`'s. */
 export function taskIsOtherOwners(task: UiTaskQueueTask | undefined, viewer: OwnerViewer): boolean {
 	return task?.status === "stuck" && !askIsForViewer(requesterPersonOf(task.origin), viewer);

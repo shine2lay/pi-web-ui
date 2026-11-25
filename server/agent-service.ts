@@ -145,6 +145,7 @@ import {
 	dialogView,
 	routeOfAsk,
 	stuckCardReachedOwner,
+	windowMayAct,
 } from "./owner-question-surfaces.js";
 import { DEFAULT_VIEWER, type OwnerViewer } from "./owner-requester.js";
 import { queueForViewer } from "./owner-viewer.js";
@@ -10126,9 +10127,10 @@ export class ClientSession {
 		return ok ? { ok: true } : { ok: false, error: NOT_WAITING };
 	}
 
-	/** A waiting card answered or cancelled (question_answer, a plugin, another window): closed everywhere, its wake
-	 *  on the way into the chat. False when it no longer waits (answered elsewhere first, a page sending again). */
+	/** A waiting card answered or cancelled from this window (question_answer): closed everywhere, its wake on the way
+	 *  into the chat. False when it no longer waits, or this window isn't shown it (QA #244 F1: another owner's, held). */
 	resolveQuestion(id: string, answers: QuestionAnswer[], cancelled?: boolean, from: string = FROM_BROWSER): boolean {
+		if (!windowMayAct(id, ClientSession.sharedQuestions.get(id), this.activeId, this.viewer)) return false;
 		return ClientSession.endQuestion(id, answers, cancelled, from);
 	}
 	private static endQuestion(id: string, answers: QuestionAnswer[], cancelled = false, from: string): boolean {
@@ -10143,6 +10145,7 @@ export class ClientSession {
 	/** Keep for later (Ops #1087, Shine m104353): Later / ✕ / Esc tuck the card away in its owner's windows (still
 	 *  open everywhere; its chat shows the reopen bar), or bring it back up. False when it no longer waits. */
 	questionLater(id: string, later: boolean): boolean {
+		if (!windowMayAct(id, ClientSession.sharedQuestions.get(id), this.activeId, this.viewer)) return false;
 		ClientSession.ownerAsks.schedule(); // the bell's "Saved for later"
 		return setCardLater(ClientSession.questionRuntime, id, later);
 	}
@@ -10163,7 +10166,7 @@ export class ClientSession {
 	/** 快照侧的待答提问（UiState.pendingQuestion）：不分对话一律带上（the card a window pops up, from any chat; one kept
 	 *  for later never pops up, see ask-delivery.ts）。conversationId 随快照给前端，标注是哪条对话在问。 */
 	private pendingQuestionForSnapshot(): UiState["pendingQuestion"] {
-		const found = pickPendingQuestionForSnapshot(this.questionsShownHere());
+		const found = pickPendingQuestionForSnapshot(this.questionsShownHere(), this.activeId);
 		if (!found) return null;
 		const picked = { ...found, ...routeOfAsk(askHub.get(this.pendingQuestions.get(found.id)?.askId ?? found.id)) };
 		// 标题按对话现名取（改过名也跟上，同上游）；取不到时用提问时记下的（picked 已带）。
@@ -10197,8 +10200,7 @@ export class ClientSession {
 		return false;
 	}
 
-	/** 标准引擎的 question_answer 路由入口（index.ts 经 cs.answerQuestion?. 转发）。
-	 *  DSH 引擎的 AgentService 也实现了同名方法，此处为 ClientSession 的转发。 */
+	/** question_answer 路由入口（index.ts 经 cs.answerQuestion?. 转发；DSH 引擎的 AgentService 有同名方法）。 */
 	answerQuestion(id: string, answers: QuestionAnswer[], cancelled?: boolean): Promise<void> {
 		this.resolveQuestion(id, answers, cancelled);
 		return Promise.resolve();
@@ -20322,10 +20324,8 @@ export class AgentService {
 		cs.schedulerStore = this.schedulerStore;
 	}
 
-	/**
-	 * 跨页作答（question_answer 带 owner）：把本页提交的答案送到持有方会话。
-	 * 问卷已不在（对方刚回答/取消）则明确告知，答案不吞不丢两不沾 —— 没送出就是没送出。
-	 */
+	/** 跨页作答（question_answer 带 owner）：本页（target，须看得到这张卡，QA #244 F1）把答案送到持有方会话。
+	 *  问卷已不在（对方刚回答/取消）则明确告知，答案不吞不丢两不沾 —— 没送出就是没送出。 */
 	async answerElsewhereQuestion(
 		targetId: string,
 		ownerId: string,
@@ -20336,7 +20336,7 @@ export class AgentService {
 		const target = this.clients.get(targetId);
 		if (!target) return;
 		const source = this.clients.get(ownerId);
-		const ok = source ? source.resolveQuestion(id, answers, cancelled) : false;
+		const ok = source ? target.resolveQuestion(id, answers, cancelled) : false;
 		if (!ok) {
 			target.sendNotice({
 				type: "notice",

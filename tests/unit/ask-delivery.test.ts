@@ -54,6 +54,18 @@ describe("pickPendingQuestionForSnapshot", () => {
 		expect(pickPendingQuestionForSnapshot(entries)?.id).toBe("q-1");
 	});
 
+	// QA #244 F2 (Ops #1091): the shown chat's own live card comes before another chat's.
+	it("several: the shown chat's own first, else the first of any chat", () => {
+		const entries = new Map([
+			["q-1", { questions: q, conversationId: "conv-A" }],
+			["q-2", { questions: q, conversationId: "conv-B", later: true }],
+			["q-3", { questions: q, conversationId: "conv-B" }],
+		]);
+		expect(pickPendingQuestionForSnapshot(entries, "conv-B")?.id).toBe("q-3");
+		expect(pickPendingQuestionForSnapshot(entries, "conv-C")?.id).toBe("q-1");
+		expect(pickPendingQuestionForSnapshot(entries, undefined)?.id).toBe("q-1");
+	});
+
 	it("skips cards kept for later: they never pop up again, over their own chat or another", () => {
 		const entries = new Map([
 			["q-1", { questions: q, conversationId: "conv-A", later: true }],

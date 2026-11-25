@@ -121,6 +121,32 @@ describe("fitTopbar", () => {
 		// not even the bell fits: everything folds
 		expect(fit(50)).toEqual(["host:terminal", "host:roles", "host:questions", "host:settings"]);
 	});
+
+	// QA #244 F3 (Ops #1091): n entries on the bar have n - 1 gaps between them, not n. WebKit at 320px: the flow is
+	// 172 wide (gap 6); ☰ (44, always kept) + gap + the bell (117) = 167 fits, yet the bell was folded into ⋯.
+	it("the last entry on the bar needs no gap after it (WebKit 320px: ☰ and the bell)", () => {
+		const bar = items([
+			["host:panel", 44],
+			["host:questions", 117],
+		]);
+		const fit = (w: number) => [...fitTopbar(bar, w, 6, 0, new Set(["host:panel"]), LATE_TOPBAR_ITEM_IDS)];
+		expect(fit(172)).toEqual([]);
+		expect(fit(167)).toEqual([]);
+		expect(fit(166)).toEqual(["host:questions"]);
+		// three plain entries of 60 with gap 8: 3 × 60 + 2 × 8 = 196 is exactly enough, 195 is not
+		expect([...fitTopbar(five.slice(0, 3), 196, gap, 0)]).toEqual([]);
+		expect([...fitTopbar(five.slice(0, 3), 195, gap, 0)]).toEqual(["c"]);
+		// with ⋯ on the bar its reserve (40 + gap 8) already holds the gap before it: 196 + 48 = 244 fits all three
+		expect([...fitTopbar(five.slice(0, 3), 244, gap, 48)]).toEqual([]);
+		expect([...fitTopbar(five.slice(0, 3), 243, gap, 48)]).toEqual(["c"]);
+		// a wider bar never shows fewer
+		let shown = 0;
+		for (let w = 1; w <= 400; w++) {
+			const now = 5 - fitTopbar(five, w, gap, 48).size;
+			expect(now).toBeGreaterThanOrEqual(shown);
+			shown = now;
+		}
+	});
 });
 
 describe("手机端固定位", () => {

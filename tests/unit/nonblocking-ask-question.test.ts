@@ -281,7 +281,8 @@ describe("NB-3: an answer wakes the chat as the owner, with its decision record"
 		turn(asking, SHINE_SENT);
 		await postedNow(run("toolu_1", [PORT]));
 		const ask = askOf("port");
-		await asAnswerer("Shine", () => wai.client.answerQuestion(ask.id, [{ id: "port", selected: ["8080"] }]));
+		// Shine's own window (a window not shown it, Wai's, is refused: QA #244 F1, waiting-questions-bell-guard.test.ts)
+		await asAnswerer("Shine", () => shine.client.answerQuestion(ask.id, [{ id: "port", selected: ["8080"] }]));
 		await turns();
 		expect(retracted(shine)).toEqual([ask.id]);
 		expect(retracted(wai)).toEqual([ask.id]);
