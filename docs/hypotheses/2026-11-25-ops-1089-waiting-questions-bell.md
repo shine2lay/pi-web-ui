@@ -15,7 +15,8 @@ chats, moves the cases into the unit run and deploys.
   role or not, open or closed, kept for later), shown behind a bell on the top bar with a count; an Answer dialog
   answers in place (`owner_ask_open` / `owner_ask_answer`) through the same form checks as the Roles page; saved
   chats with a question waiting get the "?" too (`SessionSummary.hasQuestion`).
-- **Expected result + measurement:** `tests/waiting-questions-bell-acceptance.test.ts` WQ-1..WQ-6 (7 tests) red on
+- **Expected result + measurement:** `tests/unit/waiting-questions-bell.test.ts` (Task 1 kept it outside
+  `tests/unit/` with its own config; Task 2 moved it in) WQ-1..WQ-6 (7 tests) red on
   `8629275e` and green after Task 2 with no assertion weakened; `tests/unit/owner-asks-feed.test.ts` 9/9 green now.
 - **What proves it wrong:** any WQ case still red after Task 2 or weakened to pass; one owner's bell showing, opening
   or answering the other owner's ask, or an ask held for COO; a bell count that differs from the asks waiting (an
@@ -60,4 +61,17 @@ module: WQ-1..WQ-4 and the server half of WQ-6 went green; only the web-side cas
 
 ## Result
 
-Pending Task 2. Red log: `~/ops-checks/waiting-questions-bell-1089/red.log` (7 failed of 7).
+HIT (Ops #1090, pre-land; deploy and live-look receipts in `~/ops-checks/waiting-questions-bell-1090/proof.md`).
+
+- Red before (`8629275e`): `~/ops-checks/waiting-questions-bell-1089/red.log` (7 failed of 7).
+- Green after: `tests/unit/waiting-questions-bell.test.ts` 7/7; the file's diff from #1089 is import paths only (no
+  assertion removed or changed).
+- On screen (sealed `tests/waiting-questions-bell-ui-test.mjs`, real app, two waiting questions): the bell is on the
+  bar with "2" at 320, 390 and 1440 px, light and dark; the list shows both with nothing wider than the screen;
+  Answer opens the form in place; an answer leaves "1"; Open chat shows the asking chat's question; Cancel empties
+  the bell and the store. ui-check passes on the app and the list's fixed cases.
+- Deviation from the plan, on purpose: at 320 px the bar had room for one late entry, and Roles and the bell were
+  folded together (all-or-nothing). `fitTopbar` now keeps late entries in `LATE_TOPBAR_ITEM_IDS` order while they
+  fit, the bell first, so the bell stays on a small phone (new case in `tests/unit/topbar-fit.test.ts`).
+- Seen, not changed (pre-existing since #1087): a chat that closes (its last window left it and nothing keeps it
+  open) drops its waiting questions (`cancelChatAsks` -> `dropChatCards`), so they leave the bell too.

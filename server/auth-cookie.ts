@@ -4,7 +4,10 @@
  * The `Secure` attribute is set only when the request arrived over TLS.
  * Always setting it would break plaintext HTTP (loopback default); never
  * setting it leaks the token over the network on HTTPS deployments.
+ * requestTokens / cookieToken moved here from index.ts (Ops #1090), beside the decoding they use.
  */
+import type { IncomingMessage } from "node:http";
+
 type TlsProbe = {
 	socket?: unknown;
 	secure?: boolean;
@@ -43,7 +46,7 @@ export function buildPiWebTokenCookie(encodedValue: string, maxAge: number, secu
  *
  * 浏览器回来的一定是编码值，但手写 cookie / 旧客户端可能是明文（`=` 在值里
  * 合法，我们按首个 `=` 切分），所以调用方应把「原样」与「解码后」两种候选都
- * 试一遍（见 index.ts 的 requestTokens）。
+ * 试一遍（见下面的 requestTokens）。
  *
  * 不是合法百分号编码时原样返回：`decodeURIComponent` 会抛 `URIError`，
  * 而一个手写的脏 cookie 绝不该把请求打成 500。
@@ -55,4 +58,47 @@ export function decodeCookieToken(raw: string): string {
 	} catch {
 		return raw;
 	}
+}
+
+/** 从请求中提取候选 token：头 / 查询参数 / cookie（浏览器导航场景靠 cookie 续命）。 */
+export function requestTokens(req: { headers: IncomingMessage["headers"]; url?: string }): string[] {
+	const out: string[] = [];
+	const auth = req.headers.authorization;
+	if (typeof auth === "string" && auth.startsWith("Bearer ")) out.push(auth.slice(7).trim());
+	const header = req.headers["x-pi-token"];
+	if (typeof header === "string") out.push(header.trim());
+	try {
+		const q = new URL(req.url ?? "/", "http://localhost").searchParams.get("token");
+		if (q) out.push(q.trim());
+	} catch {
+		/* ignore malformed url */
+	}
+	const cookie = req.headers.cookie;
+	if (typeof cookie === "string") {
+		for (const part of cookie.split(";")) {
+			const [k, ...rest] = part.trim().split("=");
+			if (k !== "pi_web_token") continue;
+			// 我们下发的是 encodeURIComponent 后的值（issue #261），而手写 / 旧客户端的
+			// 明文 cookie 也可能出现（`=` 在值里合法，按首个 = 切分）；两种候选都进池子。
+			const raw = rest.join("=").trim();
+			if (!raw) continue;
+			out.push(raw);
+			const decoded = decodeCookieToken(raw);
+			if (decoded !== raw) out.push(decoded);
+		}
+	}
+	return out.filter(Boolean);
+}
+
+/** 请求携带的 pi_web_token cookie 的**口令值**（未带/损坏时为空串）。
+ *  已解码：下发时是 `encodeURIComponent` 过的（issue #261），所以这里拿到的是
+ *  可直接与 `AUTH_TOKEN` 比较的原文。 */
+export function cookieToken(req: { headers: IncomingMessage["headers"] }): string {
+	const cookie = req.headers.cookie;
+	if (typeof cookie !== "string") return "";
+	for (const part of cookie.split(";")) {
+		const [k, ...rest] = part.trim().split("=");
+		if (k === "pi_web_token") return decodeCookieToken(rest.join("=").trim());
+	}
+	return "";
 }

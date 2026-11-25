@@ -1,0 +1,130 @@
+/* The waiting-questions bell (Ops #1090): the top bar's bell with its count, and its list of questions. */
+
+/* The bell: plain when nothing waits; amber bell and count when something does. The count rides on .bg-task-badge
+   so the "icons only" top bar keeps it and doesn't square the chip (styles.css .topbar.no-labels). */
+.chip.bell-chip.has-asks {
+	border-color: var(--amber);
+}
+.chip.bell-chip.has-asks > svg {
+	color: var(--amber-fg);
+}
+.bg-task-badge.bell-badge {
+	background: var(--amber);
+	color: var(--on-amber);
+	font-variant-numeric: tabular-nums;
+	/* the digit sat high in the round badge at line-height 1 */
+	line-height: 17px;
+	padding-top: 1px;
+}
+
+.roles-panel.wq-modal {
+	width: min(640px, calc(100vw - 24px));
+	max-height: calc(100dvh - 24px);
+}
+.wq-body {
+	overscroll-behavior: contain;
+}
+.wq-offline {
+	margin: 8px 0;
+	color: var(--amber-fg);
+	font-size: 13px;
+}
+.wq-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	padding: 32px 8px;
+	color: var(--text-dim);
+	text-align: center;
+}
+.wq-empty svg {
+	width: 28px;
+	height: 28px;
+}
+.wq-empty p {
+	margin: 0;
+}
+.wq-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.wq-item {
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border);
+}
+.wq-item:last-child {
+	border-bottom: none;
+}
+.wq-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+	font-size: 13px;
+	color: var(--text-dim);
+}
+.wq-who {
+	min-width: 0;
+	color: var(--text);
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.wq-pill {
+	padding: 1px 8px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: nowrap;
+}
+.wq-pill.wq-saved {
+	border-color: var(--amber);
+	color: var(--amber-fg);
+}
+.wq-title {
+	margin: 6px 0 0;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.wq-summary {
+	margin: 4px 0 0;
+	color: var(--text-dim);
+	overflow-wrap: anywhere;
+}
+.wq-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 10px;
+}
+.wq-actions .wq-answer {
+	border-color: var(--accent);
+}
+.wq-actions .wq-cancel {
+	margin-left: auto;
+	color: var(--text-dim);
+}
+.wq-actions button:disabled {
+	cursor: not-allowed;
+	opacity: 0.6;
+}
+@media (max-width: 600px) {
+	.roles-panel.wq-modal {
+		width: calc(100vw - 12px);
+		max-height: calc(100dvh - 12px);
+	}
+	.wq-modal .roles-panel-head,
+	.wq-modal .roles-panel-body {
+		padding-left: 12px;
+		padding-right: 12px;
+	}
+	.wq-modal .roles-panel-close,
+	.wq-actions button {
+		min-height: 44px;
+	}
+	.wq-actions .wq-cancel {
+		margin-left: 0;
+	}
+}

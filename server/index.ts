@@ -142,7 +142,7 @@ import { initHttpProxy } from "./http-proxy.js";
 import { ConnEvents, MAX_RECORDS_PER_SOCKET } from "./conn-events.js";
 import { ChatOpenTracker, preciseNow } from "./chat-open-timing.js";
 import { globalLspPool } from "./lsp-tool.js";
-import { buildPiWebTokenCookie, decodeCookieToken, isTlsRequest } from "./auth-cookie.js";
+import { buildPiWebTokenCookie, cookieToken, isTlsRequest, requestTokens } from "./auth-cookie.js";
 import { asAnswerer, PeopleBook, type SentBy, serveOwners } from "./sent-by.js";
 import { type OwnerViewer, roleGuardForViewer, rolesOverviewForViewer, viewerOfSocket } from "./owner-viewer.js";
 import type {
@@ -343,36 +343,6 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "10mb", verify: keepOwnerWriteBody }));
 
-/** 从请求中提取候选 token：头 / 查询参数 / cookie（浏览器导航场景靠 cookie 续命）。 */
-function requestTokens(req: { headers: IncomingMessage["headers"]; url?: string }): string[] {
-	const out: string[] = [];
-	const auth = req.headers.authorization;
-	if (typeof auth === "string" && auth.startsWith("Bearer ")) out.push(auth.slice(7).trim());
-	const header = req.headers["x-pi-token"];
-	if (typeof header === "string") out.push(header.trim());
-	try {
-		const q = new URL(req.url ?? "/", "http://localhost").searchParams.get("token");
-		if (q) out.push(q.trim());
-	} catch {
-		/* ignore malformed url */
-	}
-	const cookie = req.headers.cookie;
-	if (typeof cookie === "string") {
-		for (const part of cookie.split(";")) {
-			const [k, ...rest] = part.trim().split("=");
-			if (k !== "pi_web_token") continue;
-			// 我们下发的是 encodeURIComponent 后的值（issue #261），而手写 / 旧客户端的
-			// 明文 cookie 也可能出现（`=` 在值里合法，按首个 = 切分）；两种候选都进池子。
-			const raw = rest.join("=").trim();
-			if (!raw) continue;
-			out.push(raw);
-			const decoded = decodeCookieToken(raw);
-			if (decoded !== raw) out.push(decoded);
-		}
-	}
-	return out.filter(Boolean);
-}
-
 /** 口令比较用常时时间：先哈希到定长再 timingSafeEqual（长度差异被摘要抹平），
  *  消除逐字节短路比较的时序侧信道（审查 #352：纵深防御，远程可利用性低）。 */
 function sameSecret(candidate: string): boolean {
@@ -383,19 +353,6 @@ function sameSecret(candidate: string): boolean {
 
 function tokenOk(req: Parameters<typeof requestTokens>[0]): boolean {
 	return requestTokens(req).some(sameSecret);
-}
-
-/** 请求携带的 pi_web_token cookie 的**口令值**（未带/损坏时为空串）。
- *  已解码：下发时是 `encodeURIComponent` 过的（issue #261），所以这里拿到的是
- *  可直接与 `AUTH_TOKEN` 比较的原文。 */
-function cookieToken(req: { headers: IncomingMessage["headers"] }): string {
-	const cookie = req.headers.cookie;
-	if (typeof cookie !== "string") return "";
-	for (const part of cookie.split(";")) {
-		const [k, ...rest] = part.trim().split("=");
-		if (k === "pi_web_token") return decodeCookieToken(rest.join("=").trim());
-	}
-	return "";
 }
 
 /** Express 5 命名通配 `*splat` 的取值：单段是字符串，多段是字符串数组
@@ -1381,6 +1338,9 @@ export interface DispatchSession {
 	/** Answer a model ask_user_question dialog; questionLater: keep it for later or bring it back up (Ops #1087). */
 	answerQuestion?(id: string, answers: QuestionAnswer[], cancelled?: boolean): Promise<void>;
 	questionLater?(id: string, later: boolean): boolean;
+	/** waiting-questions bell (Ops #1090): open one ask waiting on this window's owner, answer it in place. */
+	ownerAskOpen?(reqId: string, askId: string): Promise<void>;
+	ownerAskAnswer?(reqId: string, askId: string, revision: string, answers: unknown): Promise<void>;
 	/** 浏览器页面调用回包（browser_page 工具，pi 引擎专有；DSH 无页面桥，
 	 *  方法缺失时 dispatch 侧的 `?.` 直接忽略这条消息）。 */
 	resolvePageCall?(id: string, ok: boolean, result?: unknown, error?: string): void;
@@ -3991,6 +3951,12 @@ wss.on("connection", (ws, req) => {
 				break;
 			case "question_later":
 				cs.questionLater?.(msg.id, msg.later !== false);
+				break;
+			case "owner_ask_open":
+				void cs.ownerAskOpen?.(msg.reqId, msg.askId);
+				break;
+			case "owner_ask_answer":
+				void cs.ownerAskAnswer?.(msg.reqId, msg.askId, msg.revision, msg.answers);
 				break;
 			case "tool_approval_response":
 				cs.resolveToolApproval?.(msg.id, msg.decision, msg.editedParams, msg.reason, msg.scope);

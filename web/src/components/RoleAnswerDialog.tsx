@@ -9,7 +9,7 @@ import {
 	roleAnswerKindKey,
 	type RoleAnswerDrafts,
 } from "../roles-answer-model";
-import { answerRoleAsk, openRoleAsk } from "../roles-answer-state";
+import { type AskAnswerChannel, ROLES_ANSWER_CHANNEL } from "../roles-answer-state";
 import { OwnerCardBrief } from "./OwnerCardBrief";
 import { OwnerQuestionRoute } from "./OwnerQuestionRoute";
 import type { NeedsYou, NeedsYouItem, UsefulOpenTarget } from "../roles-useful-model";
@@ -36,8 +36,11 @@ export function RoleAnswerDialog({
 	initialView,
 	initialChoice,
 	onAnswered,
+	channel = ROLES_ANSWER_CHANNEL,
 }: {
 	item: NeedsYouItem;
+	/** How it opens and answers the ask: the Roles page's (default) or the waiting-questions bell's (Ops #1090). */
+	channel?: AskAnswerChannel;
 	/** The current list: the dialog closes once its ask has left it (roles-small-fixes N3). */
 	needs?: NeedsYou;
 	connected: boolean;
@@ -83,7 +86,7 @@ export function RoleAnswerDialog({
 			setDrafts(buildInitialDrafts(initialView, initialChoice));
 			move("ready");
 		} else
-			void openRoleAsk(item.answer.key).then((reply) => {
+			void channel.open(item.answer.key).then((reply) => {
 				if (!current || stageRef.current !== "loading") return;
 				const form = reply.ask ? projectRoleAsk(reply.ask) : null;
 				if (!form || form.id !== item.answer?.id) {
@@ -124,7 +127,7 @@ export function RoleAnswerDialog({
 	const send = async () => {
 		if (!connected || stageRef.current !== "ready" || !item.answer || !view || !form?.complete) return;
 		move("sending"); // synchronous guard: a second click cannot enter
-		const reply = await answerRoleAsk(item.answer.key, view.id, view.revision, form.answers);
+		const reply = await channel.answer(item.answer.key, view.id, view.revision, form.answers);
 		if (!mounted.current || !isStage("sending")) return;
 		if (reply.ok === true) {
 			move("sent");

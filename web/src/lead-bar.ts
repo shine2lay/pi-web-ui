@@ -213,16 +213,22 @@ export function buildLeadBar(input: LeadBarInput, isFolded: (key: string) => boo
 
 	// What only All chats shows: running, or waiting on an answer (subagents count only when they ask).
 	const others = { running: 0, asking: 0 };
+	const counted = new Set<string>();
 	for (const c of conversations) {
+		if (c.sessionPath && c.live !== false) counted.add(normPath(c.sessionPath));
 		if (c.id === activeConversationId) continue;
 		if (!c.isSubagent && shown(c.sessionPath)) continue;
 		if (asking(c)) others.asking += 1;
 		else if (c.isStreaming && !c.isSubagent) others.running += 1;
 	}
 	for (const w of elsewhere) {
+		if (w.sessionFile) counted.add(normPath(w.sessionFile));
 		if (shown(w.sessionFile)) continue;
 		if (w.hasQuestion) others.asking += 1;
 		else if (w.isStreaming) others.running += 1;
 	}
+	// waiting-questions bell (Ops #1090): a saved (closed) chat with a question waiting on this window's owner.
+	if (sessionFile) counted.add(normPath(sessionFile));
+	for (const [file, s] of sessionByFile) if (s.hasQuestion && !counted.has(file) && !shown(file)) others.asking += 1;
 	return { leads, openNow, others };
 }

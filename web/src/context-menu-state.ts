@@ -439,6 +439,7 @@ const GLYPHS: Record<string, string> = {
 	search: "🔍",
 	browser: "🌐",
 	layers: "🗂",
+	bell: "🔔",
 	settings: "⚙",
 	sound: "🔊",
 	globe: "🌍",

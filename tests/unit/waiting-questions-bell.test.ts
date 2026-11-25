@@ -18,21 +18,21 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ClientSession } from "../server/agent-service.js";
-import { type Ask, type AskEvent, askHub } from "../server/asks.js";
-import { answerRecord } from "../server/decision-records.js";
-import { identityRegistry } from "../server/identities.js";
-import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "../server/owner-question-holds.js";
-import { OwnerQuestionRouter } from "../server/owner-question-router.js";
-import { pluginAnswer } from "../server/owner-question-surfaces.js";
-import type { OwnerViewer } from "../server/owner-requester.js";
-import { PendingQuestionsStore, type QuestionWake } from "../server/pending-questions-store.js";
-import type { SessionSummary } from "../server/protocol.js";
-import { asAnswerer, PeopleBook, serveOwners, tailscaleSenderOf } from "../server/sent-by.js";
-import { buildLeadBar } from "../web/src/lead-bar";
-import { fitTopbar, LATE_TOPBAR_ITEM_IDS } from "../web/src/topbar-fit";
-import type { UiIdentityInfo } from "../web/src/types";
-import { BUILTIN_UI_ITEMS } from "../web/src/ui-slots";
+import { ClientSession } from "../../server/agent-service.js";
+import { type Ask, type AskEvent, askHub } from "../../server/asks.js";
+import { answerRecord } from "../../server/decision-records.js";
+import { identityRegistry } from "../../server/identities.js";
+import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "../../server/owner-question-holds.js";
+import { OwnerQuestionRouter } from "../../server/owner-question-router.js";
+import { pluginAnswer } from "../../server/owner-question-surfaces.js";
+import type { OwnerViewer } from "../../server/owner-requester.js";
+import { PendingQuestionsStore, type QuestionWake } from "../../server/pending-questions-store.js";
+import type { SessionSummary } from "../../server/protocol.js";
+import { asAnswerer, PeopleBook, serveOwners, tailscaleSenderOf } from "../../server/sent-by.js";
+import { buildLeadBar } from "../../web/src/lead-bar";
+import { fitTopbar, LATE_TOPBAR_ITEM_IDS } from "../../web/src/topbar-fit";
+import type { UiIdentityInfo } from "../../web/src/types";
+import { BUILTIN_UI_ITEMS } from "../../web/src/ui-slots";
 import {
 	asker,
 	bell,
@@ -55,7 +55,7 @@ import {
 	WAI_SENT,
 	type Win,
 	win as winOf,
-} from "./fixtures/owner-bell-windows.js";
+} from "../fixtures/owner-bell-windows.js";
 
 let dir = "";
 let dataDir = "";

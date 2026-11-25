@@ -159,6 +159,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:roles",
 			"host:openviking",
 			"host:plugins",
+			"host:questions",
 			"host:search",
 			"host:browser",
 			"host:tasks",
@@ -221,7 +222,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 	 *  塞进 uiOverflow → 菜单里能点；topbar-crowding：声音/语言/主题/版本在菜单里是一行入口，
 	 *  点开右侧抽屉，功能不少）。
 	 *  这条断言是「顶栏默认长什么样」的唯一入口 —— 想改默认口径就改这里与 BUILTIN_UI_ITEMS。 */
-	it("缺省收进「⋯」的 6 条 + 常驻的 12 条", () => {
+	it("缺省收进「⋯」的 6 条 + 常驻的 13 条", () => {
 		const slots = build([]);
 		const top = slots["topbar.primary"];
 		// topbar-crowding：后台任务与设置也缺省收进「⋯」
@@ -244,6 +245,7 @@ describe("buildUiSlots / 第 1 层：宿主默认", () => {
 			"host:roles",
 			"host:openviking",
 			"host:plugins",
+			"host:questions",
 			"host:search",
 			"host:new-chat",
 			"host:new-ephemeral-chat",

@@ -102,6 +102,7 @@ import { ToolApprovalDialog } from "./components/ToolApprovalDialog";
 // 这里只挂一份渲染（触发点在消息流里的每张工具卡）。
 import { ToolInfoDialog } from "./components/ToolInfoDialog";
 import { GlobalSearchModal } from "./components/GlobalSearchModal";
+import { WaitingQuestionsModal } from "./components/WaitingQuestionsModal";
 import { PluginModal } from "./components/PluginModal";
 import {
 	FilePreview,
@@ -121,8 +122,8 @@ import { resolveImageUrls } from "./chat-image";
 import { isRecoveryEligible } from "./recovery-policy";
 import type { ClientMessage, CommandDef, PromptAttachment, UiMessage } from "./types";
 import { useT, useI18n } from "./i18n";
-import { FiAlertCircle, FiAlertTriangle, FiChevronsLeft, FiChevronsRight, FiInfo, FiX } from "react-icons/fi";
-import type { Notice } from "./use-chat";
+import { FiChevronsLeft, FiChevronsRight, FiX } from "react-icons/fi";
+import { NoticeToast } from "./components/NoticeToast";
 import { fileToProcessedImage, isRasterImage, type ProcessedImage } from "./image-paste";
 import { randomUuid } from "./uuid";
 import { recordModelUsage } from "./model-usage";
@@ -187,35 +188,6 @@ export interface PendingAttachment {
 	key?: string;
 }
 
-/** A single notice toast. Auto-dismisses after a level-dependent delay, but
- *  hovering PAUSES the timer (stays visible as long as the pointer is over it),
- *  resuming when the pointer leaves. Clicking the toast body does NOT hide it —
- *  only the × button dismisses (and the auto timer). */
-function NoticeToast({ notice, onDismiss }: { notice: Notice; onDismiss: (id: number) => void }) {
-	const t = useT();
-	const text = notice.textEn ? notice.textEn : notice.text;
-	const [paused, setPaused] = useState(false);
-	useEffect(() => {
-		if (paused) return;
-		const t = setTimeout(() => onDismiss(notice.id), notice.level === "error" ? 12000 : 7000);
-		return () => clearTimeout(t);
-	}, [paused, notice.id, notice.level, onDismiss]);
-	const Icon = notice.level === "error" ? FiAlertCircle : notice.level === "warning" ? FiAlertTriangle : FiInfo;
-	return (
-		<div
-			className={`notice notice-${notice.level}${paused ? " paused" : ""}`}
-			role="status"
-			onMouseEnter={() => setPaused(true)}
-			onMouseLeave={() => setPaused(false)}
-		>
-			<Icon className="notice-icon" />
-			<span className="notice-text">{text}</span>
-			<button type="button" className="notice-close" title={t("close")} onClick={() => onDismiss(notice.id)}>
-				<FiX />
-			</button>
-		</div>
-	);
-}
 /** Stable empty messages array — keeps the memoized ChatInput prop comparison
  *  cheap before the first snapshot arrives. */
 const EMPTY_MESSAGES: UiMessage[] = [];
@@ -1001,6 +973,8 @@ export function App() {
 	const [bgTasksOpen, setBgTasksOpen] = useState(false);
 	// Global search panel (sessions / projects / workspace files).
 	const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+	// The waiting-questions bell's list (Ops #1090).
+	const [waitingQuestionsOpen, setWaitingQuestionsOpen] = useState(false);
 	/** 全局搜索「会话」结果点击后的跳转目标：切到该会话并定位到命中消息。
 	 *  由 MessageList 消费（消息载入即跳转+高亮），跳完后置空。 */
 	const [searchJump, setSearchJump] = useState<{
@@ -2076,6 +2050,7 @@ export function App() {
 				}}
 				onOpenBgTasks={() => setBgTasksOpen(true)}
 				onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
+				onOpenWaitingQuestions={() => setWaitingQuestionsOpen(true)}
 				sound={sound}
 				onSoundChange={setSound}
 				onSoundPreview={(kind: SoundKind) => playSound(kind, sound)}
@@ -2545,6 +2520,7 @@ export function App() {
 							question={chat.question}
 							savedQuestions={chat.state?.savedQuestions}
 							waitingOn={chat.state?.waitingOn}
+							focus={focusHere?.kind === "question" ? focusHere : null}
 							escapeEnabled={view === "chat"}
 							conversationTitle={
 								chat.conversations.find((c) => c.id === (chat.question?.conversationId || activeConvId))?.title
@@ -2777,6 +2753,13 @@ export function App() {
 						setOpenModalId(null);
 					}}
 					onClose={() => setOpenModalId(null)}
+				/>
+			)}
+			{waitingQuestionsOpen && (
+				<WaitingQuestionsModal
+					connected={chat.status === "open" && chat.ready}
+					onClose={() => setWaitingQuestionsOpen(false)}
+					onOpenChat={openFromRoles}
 				/>
 			)}
 			<GlobalSearchModal

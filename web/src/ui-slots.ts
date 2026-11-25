@@ -34,6 +34,7 @@ import type {
 	UiSlotId,
 } from "./types";
 import { PAGE_TAB_UI_ITEMS } from "./ui-slots-page-tabs";
+import { BRAND_ITEM_ID, BRAND_OLD_IDS, migrateBrandLayout } from "./ui-slots-brand";
 
 /**
  * 合并过程中的一条**诊断**（P0-1：失败不许静默）。与「静默丢弃」相对：未知 slot /
@@ -339,6 +340,19 @@ export const BUILTIN_UI_ITEMS: BuiltinUiItem[] = [
 		order: 24,
 		group: "views",
 		align: "start",
+	},
+	// waiting-questions bell (Ops #1090, Shine 2026-11-25 m104524 "Top bar maybe a notification icon ?"): every
+	// question waiting on this window's owner, from any chat, with a count. Always on the bar (no PI_WEB_TABS gate);
+	// folds into "⋯" last on a small phone (LATE_TOPBAR_ITEM_IDS).
+	{
+		id: "host:questions",
+		slot: "topbar.primary",
+		labelKey: "waitingQuestions",
+		icon: "bell",
+		kind: "action",
+		order: 39.5,
+		group: "tools",
+		align: "end",
 	},
 	// 工具组：全局搜索 / 浏览器操作 / 后台任务（后台任务的角标数由运行时给 badge）。
 	{
@@ -1428,76 +1442,6 @@ export function setPluginViewOrder(layout: UiLayoutPrefs | undefined, pluginIds:
 	const pluginSet = new Set(pluginItemIds);
 	const order = (layout?.order ?? []).filter((id) => !pluginSet.has(id));
 	return { ...layout, order: [...order, ...pluginItemIds] };
-}
-
-/** 品牌旧 id（已合并为 `host:brand`，此处仅做偏好迁移用）。 */
-export const BRAND_ITEM_ID = "host:brand";
-const BRAND_OLD_IDS: readonly string[] = ["host:brand-logo", "host:brand-name"];
-
-/**
- * 品牌二合一迁移（host:brand-logo/host:brand-name → host:brand）。
- * 服务端持久层（normalizeUiLayout）已做同口径迁移，这里再兜一层 —— 内存里的旧偏好
- * 与单测直调 buildUiSlots 时同样生效。规则：列表去重映射；align/groups 跟 logo 的值、
- * labels 跟名称的值；显式写在新 id 上的值永远赢。纯函数：不改入参。
- */
-export function migrateBrandLayout<T extends UiLayoutPrefs>(src: T): T {
-	const hasOld =
-		(src.hidden ?? []).some((id) => BRAND_OLD_IDS.includes(id)) ||
-		(src.shown ?? []).some((id) => BRAND_OLD_IDS.includes(id)) ||
-		(src.order ?? []).some((id) => BRAND_OLD_IDS.includes(id)) ||
-		BRAND_OLD_IDS.some((id) => src.align?.[id] !== undefined) ||
-		BRAND_OLD_IDS.some((id) => src.groups?.[id] !== undefined) ||
-		BRAND_OLD_IDS.some((id) => src.labels?.[id] !== undefined);
-	if (!hasOld) return src;
-	const mapList = (list: string[] | undefined): string[] | undefined => {
-		if (!list) return undefined;
-		const out: string[] = [];
-		for (const id of list) {
-			const mapped = BRAND_OLD_IDS.includes(id) ? BRAND_ITEM_ID : id;
-			if (!out.includes(mapped)) out.push(mapped);
-		}
-		return out;
-	};
-	const foldDict = (
-		dict: Record<string, string> | undefined,
-		logoFirst: boolean,
-	): Record<string, string> | undefined => {
-		if (!dict) return undefined;
-		const out: Record<string, string> = {};
-		for (const [k, v] of Object.entries(dict)) {
-			if (BRAND_OLD_IDS.includes(k)) continue;
-			out[k] = v;
-		}
-		if (out[BRAND_ITEM_ID] === undefined) {
-			const picked = logoFirst
-				? (dict[BRAND_OLD_IDS[0]!] ?? dict[BRAND_OLD_IDS[1]!])
-				: (dict[BRAND_OLD_IDS[1]!] ?? dict[BRAND_OLD_IDS[0]!]);
-			if (picked !== undefined) out[BRAND_ITEM_ID] = picked;
-		}
-		return out;
-	};
-	const foldAlign = (dict: Record<string, UiAlign> | undefined): Record<string, UiAlign> | undefined => {
-		if (!dict) return undefined;
-		const out: Record<string, UiAlign> = {};
-		for (const [k, v] of Object.entries(dict)) {
-			if (BRAND_OLD_IDS.includes(k)) continue;
-			out[k] = v;
-		}
-		if (out[BRAND_ITEM_ID] === undefined) {
-			const picked = dict[BRAND_OLD_IDS[0]!] ?? dict[BRAND_OLD_IDS[1]!];
-			if (picked !== undefined) out[BRAND_ITEM_ID] = picked;
-		}
-		return out;
-	};
-	return {
-		...src,
-		...(src.hidden ? { hidden: mapList(src.hidden) } : {}),
-		...(src.shown ? { shown: mapList(src.shown) } : {}),
-		...(src.order ? { order: mapList(src.order) } : {}),
-		...(src.groups ? { groups: foldDict(src.groups, true) } : {}),
-		...(src.labels ? { labels: foldDict(src.labels, false) } : {}),
-		...(src.align ? { align: foldAlign(src.align) } : {}),
-	};
 }
 
 /**

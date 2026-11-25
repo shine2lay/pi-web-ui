@@ -29,7 +29,6 @@ import {
 	existsSync,
 	readFileSync,
 	realpathSync,
-	renameSync,
 	rmSync,
 	statSync,
 	mkdirSync,
@@ -137,6 +136,8 @@ import type { OwnerQuestionAsker } from "./owner-question-card.js";
 import { isCooHomeChat, makeOwnerQuestionTool } from "./owner-question-tool.js";
 import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "./owner-question-holds.js";
 import { OwnerQuestionRouter } from "./owner-question-router.js";
+import { OwnerAsksPush } from "./owner-asks-push.js";
+import { atomicWriteFileSync } from "./write-whole.js";
 import type { QuestionOwnerData } from "./ask-question-owners.js";
 import {
 	askShownToViewer,
@@ -2363,31 +2364,6 @@ function previewToolResult(result: unknown): string {
 		return truncRun(JSON.stringify(result ?? null), RUN_RESULT_CAP);
 	} catch {
 		return "[unserializable result]";
-	}
-}
-
-/**
- * 转录整文件重写的原子落盘：先写同目录临时文件再 rename。转录是 append-only
- * 的唯一事实源，compaction 收尾/清理的整文件重写若中途被打断（进程被杀/断电），
- * 原地 writeFileSync 会留下截断的 JSONL；同目录 rename 是原子的，最坏情况是
- * 旧文件原样保留，绝不会出现半份转录。Windows 下目标被外部占用（阅读器/杀软
- * 锁）时 rename 可能 EPERM —— 退回原地写保住功能（旧行为），不因小概率锁失败丢更新。
- */
-function atomicWriteFileSync(file: string, data: string): void {
-	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-	try {
-		writeFileSync(tmp, data);
-		try {
-			renameSync(tmp, file);
-		} catch {
-			writeFileSync(file, data);
-		}
-	} finally {
-		try {
-			rmSync(tmp, { force: true });
-		} catch {
-			// 临时文件清不掉只能留给下次（同目录 .tmp，不影响转录本身）
-		}
 	}
 }
 
@@ -5689,6 +5665,20 @@ export class ClientSession {
 		conversationsChanged: () => ClientSession.emitConversationsToAll(),
 		snapshotsChanged: () => ClientSession.approvalsChanged(),
 	};
+	/** waiting-questions bell (Ops #1090): each window's list of the asks waiting on its owner (owner-asks-push.ts). */
+	private static readonly ownerAsks: OwnerAsksPush<ClientSession> = new OwnerAsksPush<ClientSession>({
+		hub: askHub,
+		windows: () => ClientSession.liveSessions,
+		live: (cs) => !cs.disposed && cs.sinkCount() > 0,
+		viewerOf: (cs) => cs.viewer,
+		send: (cs, msg) => cs.emitLocal(msg),
+		savedRows: (cs) => (cs.sessionsRequested ? cs.recentSessions : undefined),
+		later: (askId) => [...ClientSession.sharedQuestions].some(([q, e]) => (e.askId ?? q) === askId && !!e.later),
+		roleOf: (ask) => ClientSession.ownerQuestionAsker(ask).role,
+	});
+	static {
+		ClientSession.ownerAsks.start();
+	}
 	/** nonblocking-ask (Ops #1087): at start-up, waiting cards back everywhere; a settled one's wake replayed once. */
 	static restorePendingQuestions(): Promise<void> {
 		return restoreCards(ClientSession.questionRuntime, {
@@ -7226,6 +7216,7 @@ export class ClientSession {
 		// session-index: History and Recent chats' saved rows go out with the running chats, without
 		// waiting for the page to ask (it asks once its panel mounts; that push is the same list).
 		this.pushHistoryAtAttach();
+		ClientSession.ownerAsks.pushTo(this); // waiting-questions bell (Ops #1090)
 		// Reconnect: push the current project's running-conversation list so the
 		// left panel shows every background chat (a fresh socket never got the
 		// newChat/switch pushes).
@@ -10152,7 +10143,15 @@ export class ClientSession {
 	/** Keep for later (Ops #1087, Shine m104353): Later / ✕ / Esc tuck the card away in its owner's windows (still
 	 *  open everywhere; its chat shows the reopen bar), or bring it back up. False when it no longer waits. */
 	questionLater(id: string, later: boolean): boolean {
+		ClientSession.ownerAsks.schedule(); // the bell's "Saved for later"
 		return setCardLater(ClientSession.questionRuntime, id, later);
+	}
+	/** waiting-questions bell (Ops #1090): open one ask (-> owner_ask), answer it as this window's owner (-> result). */
+	async ownerAskOpen(reqId: string, askId: string): Promise<void> {
+		this.emitLocal(ClientSession.ownerAsks.open(this, reqId, askId));
+	}
+	async ownerAskAnswer(reqId: string, askId: string, revision: string, answers: unknown): Promise<void> {
+		this.emitLocal(await ClientSession.ownerAsks.answer(this, reqId, askId, revision, answers));
 	}
 
 	/** The open chat (any window's) whose transcript is `file`, for a card put back after a restart. */
@@ -14992,7 +14991,7 @@ export class ClientSession {
 		this.sessionsRequested = true;
 		if (lastHistoryRows && historyScope() === "all" && this.recentSessions.length === 0) {
 			this.recentSessions = lastHistoryRows;
-			this.emit({ type: "sessions", sessions: lastHistoryRows });
+			this.emit(ClientSession.ownerAsks.sessionsMessage(this, lastHistoryRows));
 		}
 		void this.pushSessions().catch(() => {});
 	}
@@ -15061,10 +15060,10 @@ export class ClientSession {
 			if (historyScope() === "all") lastHistoryRows = sorted;
 			await this.attachIdentities(sorted, () => {
 				if (gen !== this.sessionsPushGen || this.disposed) return;
-				this.emit({ type: "sessions", sessions: sorted });
+				this.emit(ClientSession.ownerAsks.sessionsMessage(this, sorted));
 				this.emitConversations();
 			});
-			this.emit({ type: "sessions", sessions: sorted });
+			this.emit(ClientSession.ownerAsks.sessionsMessage(this, sorted));
 			// 「最近对话」常驻行的来源（recent-chats 补丁）：复用这份已解析好的
 			// 列表，emitConversations() 同步取用，不再单独扫盘。
 			// queue-done-hidden: the whole list (at most 200), not a few times the limit: finished task

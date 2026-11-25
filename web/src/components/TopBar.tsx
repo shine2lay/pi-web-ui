@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
+	FiBell,
 	FiBox,
 	FiDownload,
 	FiFolder,
@@ -21,6 +22,7 @@ import {
 import { LuMessageSquareDashed } from "react-icons/lu";
 import type { ChatState, UpdateAllItem } from "../use-chat";
 import type { CommandDef } from "../types";
+import { bellBadge, bellLabel, useOwnerAsks } from "../owner-asks-state";
 import { buildUpdateCommand } from "../update-command";
 import { randomUuid } from "../uuid";
 import { Dropdown, DropdownItem } from "./Dropdown";
@@ -45,7 +47,7 @@ import { openContextMenu } from "../context-menu-state";
 import { appSend, useAppGlobals, useIsDsh, useIsManaged, useServiceInfo } from "../app-globals";
 import { PluginMenu } from "./PluginMenu";
 import { focusComposer } from "../composer-bridge";
-import { useFloatingPanel } from "../use-floating-panel";
+import { TopbarOverflowMenu, useIsMobileTopbar } from "./TopBarOverflowMenu";
 import { isDesktopShell } from "../desktop";
 import { desktopReleasesUrl, useDesktopUpdater } from "../desktop-updater";
 
@@ -68,78 +70,6 @@ const TOPBAR_DRAWER_OF: Readonly<Record<string, TopbarDrawerId>> = {
 	"host:theme": "theme",
 	"host:update": "update",
 };
-
-/**
- * 顶栏「⋯」溢出菜单（issue #162）：portal 到 document.body + `position: fixed`。
- *
- * 为什么：菜单的触发按钮坐在横滑容器里 —— 窄屏（≤768px）的 `.topbar-flow{overflow-x:auto}`
- * 会让纵向也变成裁剪（CSS Overflow 3 §3.1：只写一轴 auto，另一轴的 visible 也算 auto）。
- * 菜单往下展开（`top: 100%+6px`）正好落在被裁剪的轴上，`z-index` 再高也逃不出来。
- * 之前 `ContextMenu.tsx` 已经用同一招（portal + fixed + 实测钳制）解决过右键菜单的裁剪，
- * 这里照抄：视口坐标直接取触发按钮的 `getBoundingClientRect()`，先渲染再实测菜单尺寸后钳制。
- *
- * 行为：点外面 / Esc 关闭（与 Dropdown/ContextMenu 一致）；窗口缩放或滚动时重算锚点
- * （移动端横滑顶栏时菜单跟着走，而不是飘在原地）。
- */
-function TopbarOverflowMenu({
-	anchorRef,
-	open,
-	onClose,
-	children,
-}: {
-	anchorRef: React.RefObject<HTMLButtonElement | null>;
-	open: boolean;
-	onClose: () => void;
-	children: ReactNode;
-}) {
-	const {
-		panelRef: menuRef,
-		style,
-		measure,
-	} = useFloatingPanel({
-		open,
-		anchor: anchorRef,
-		onClose,
-	});
-
-	// 打开后、内容变化后：绘制前实测一次（layout effect，用户看不到中间态）。
-	useLayoutEffect(() => {
-		if (open) measure();
-	}, [open, children, measure]);
-
-	if (!open) return null;
-	return createPortal(
-		<div ref={menuRef} className="plugin-topbar-menu portal" role="menu" style={style}>
-			{children}
-		</div>,
-		document.body,
-	);
-}
-
-/**
- * 手机端断点（与 styles.css 的 mobile ≤768px 同口径）：matchMedia 监听，跨断点实时切换。
- * jsdom / SSR（无 matchMedia）回落 false —— 宁可全画，也不清空顶栏。
- */
-function useIsMobileTopbar(): boolean {
-	const [isMobile, setIsMobile] = useState(
-		() =>
-			typeof window !== "undefined" &&
-			typeof window.matchMedia !== "undefined" &&
-			window.matchMedia("(max-width: 768px)").matches,
-	);
-	useEffect(() => {
-		if (typeof window === "undefined" || typeof window.matchMedia === "undefined") return;
-		const mq = window.matchMedia("(max-width: 768px)");
-		const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-		if (typeof mq.addEventListener === "function") mq.addEventListener("change", onChange);
-		else mq.addListener(onChange);
-		return () => {
-			if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onChange);
-			else mq.removeListener(onChange);
-		};
-	}, []);
-	return isMobile;
-}
 
 interface TopBarProps {
 	chat: ChatState;
@@ -191,6 +121,8 @@ interface TopBarProps {
 	onOpenBgTasks: () => void;
 	/** Open the global search panel (sessions / projects / workspace files). */
 	onOpenGlobalSearch: () => void;
+	/** Open the waiting-questions list (the bell, Ops #1090). */
+	onOpenWaitingQuestions: () => void;
 	/** Sound notification settings + change handler (owned by App). */
 	sound: SoundSettings;
 	onSoundChange: (settings: SoundSettings) => void;
@@ -225,6 +157,7 @@ export function TopBar({
 	onManagePlugins,
 	onOpenBgTasks,
 	onOpenGlobalSearch,
+	onOpenWaitingQuestions,
 	sound,
 	onSoundChange,
 	onSoundPreview,
@@ -234,6 +167,7 @@ export function TopBar({
 	reloadThemes,
 }: TopBarProps) {
 	const { t } = useI18n();
+	const waitingCount = useOwnerAsks().asks.length;
 	// 「⋯」溢出菜单的开关（宿主自己的菜单，插件不碰 DOM；顺序与设置面板里看到的一致）。
 	const [topbarMenuOpen, setTopbarMenuOpen] = useState(false);
 	/* 插件面板（host:plugins 插件入口）：锚点是**点击那一刻**的矩形快照 —— 触发器常从「⋯」
@@ -302,6 +236,7 @@ export function TopBar({
 		"host:roles",
 		"host:initiatives",
 		"host:plugins",
+		"host:questions",
 		"host:search",
 		"host:browser",
 		"host:tasks",
@@ -366,6 +301,9 @@ export function TopBar({
 				onViewChange("chat");
 				appSend({ type: "new_chat", ephemeral: true });
 				focusComposer();
+				return true;
+			case "host:questions":
+				onOpenWaitingQuestions();
 				return true;
 			case "host:search":
 				onOpenGlobalSearch();
@@ -1067,6 +1005,25 @@ export function TopBar({
 			>
 				<FiBox aria-hidden />
 				<span className="chip-sub">{t("pluginMenuTitle")}</span>
+			</button>
+		),
+		// waiting-questions bell (Ops #1090): always on the bar (never gated by the chat's tabs); amber with a count
+		// while questions wait on this window's owner.
+		"host:questions": (
+			<button
+				type="button"
+				className={`chip bell-chip${waitingCount > 0 ? " has-asks" : ""}`}
+				data-tip={bellLabel(t, waitingCount)}
+				aria-label={bellLabel(t, waitingCount)}
+				onClick={onOpenWaitingQuestions}
+			>
+				<FiBell aria-hidden />
+				<span className="chip-sub">{t("waitingQuestions")}</span>
+				{bellBadge(waitingCount) && (
+					<span className="bg-task-badge bell-badge" aria-hidden="true">
+						{bellBadge(waitingCount)}
+					</span>
+				)}
 			</button>
 		),
 		"host:search": (

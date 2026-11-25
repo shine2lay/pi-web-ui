@@ -1,6 +1,6 @@
 // owner-bell-windows: the harness of the waiting-questions bell acceptance cases (Ops #1089): fake chats and
 // browser windows of one owner's login on the real ClientSession, the real ask_user_question tool and its bridge.
-// No server, model or socket. tests/waiting-questions-bell-acceptance.test.ts
+// No server, model or socket. tests/unit/waiting-questions-bell.test.ts
 import { join } from "node:path";
 import { expect } from "vitest";
 import { ClientSession, makeAskUserQuestionTool } from "../../server/agent-service.js";

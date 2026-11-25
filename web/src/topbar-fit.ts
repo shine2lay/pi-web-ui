@@ -33,9 +33,11 @@ export const MOBILE_ASIDE_TOPBAR_IDS: ReadonlySet<string> = new Set(["host:files
 /**
  * roles-overview: entries that fold into "\u22ef" last (after every other entry that can fold): the Roles
  * tab, whose badge says how many things wait on the owner, stays on the bar after Terminal and Git
- * have folded. Only when even it doesn't fit does it fold too (with everything else).
+ * have folded. Only when even it doesn't fit does it fold too (with everything else). The waiting-questions
+ * bell (Ops #1090) likewise: its count is the owner's own questions, so it outlasts Search, Tasks and Settings.
+ * In this set's order: the first one keeps its place longest (on a 320px phone with room for one, the bell).
  */
-export const LATE_TOPBAR_ITEM_IDS: ReadonlySet<string> = new Set(["host:roles"]);
+export const LATE_TOPBAR_ITEM_IDS: ReadonlySet<string> = new Set(["host:questions", "host:roles"]);
 
 /**
  * 溢出菜单排序（折叠前后顺序一致的不变量）：先按对齐段（左→中→右），
@@ -81,10 +83,17 @@ export function fitTopbar(
 	const room = Math.max(0, available - Math.max(0, reserve) - keptWidth);
 	// roles-overview: entries that fold last take their room next; if even they don't fit, everything
 	// that can fold does (they included), so a narrower bar never shows more.
-	const late = items.filter((it) => lateIds.has(it.id) && !keepIds.has(it.id) && it.width > 0);
-	const lateWidth = late.reduce((sum, it) => sum + it.width + gap, 0);
-	if (late.length > 0 && lateWidth > room) {
-		for (const it of items) if (it.width > 0 && !keepIds.has(it.id)) drop.add(it.id);
+	// Several late entries keep their places in lateIds' order while they fit (the waiting-questions bell first).
+	const late = [...lateIds].flatMap((id) => items.filter((it) => it.id === id && !keepIds.has(id) && it.width > 0));
+	const lateKept = new Set<string>();
+	let lateWidth = 0;
+	for (const it of late) {
+		if (lateWidth + it.width + gap > room) break;
+		lateWidth += it.width + gap;
+		lateKept.add(it.id);
+	}
+	if (lateKept.size < late.length) {
+		for (const it of items) if (it.width > 0 && !keepIds.has(it.id) && !lateKept.has(it.id)) drop.add(it.id);
 		return drop;
 	}
 	const budget = room - lateWidth;

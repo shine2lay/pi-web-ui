@@ -115,6 +115,8 @@ const originalDisplayRows = (infos: SessionInfo[]): SessionSummary[] =>
 		modified: s.modified.getTime(),
 		source: "web",
 		cwd: s.cwd,
+		// waiting-questions bell (Ops #1090): every row says whether a question waits on the window's owner (none here)
+		hasQuestion: false,
 	}));
 
 // Old-source negative controls and paired timing are separately source-bound in task #159's harness.

@@ -104,6 +104,23 @@ describe("fitTopbar", () => {
 		// without late ids the old rule holds: the tail folds first
 		expect([...fitTopbar(bar, 300, gap, 0, keep)]).toEqual(["host:roles"]);
 	});
+
+	// waiting-questions bell (Ops #1090): with room for one late entry only (a 320px phone), the bell keeps it.
+	it("waiting-questions bell: with Roles on the bar too, the bell is the last to fold", () => {
+		const bar = items([
+			["host:terminal", 60],
+			["host:roles", 60],
+			["host:questions", 60],
+			["host:settings", 60],
+		]);
+		const fit = (w: number) => [...fitTopbar(bar, w, gap, 0, new Set(), LATE_TOPBAR_ITEM_IDS)];
+		expect(fit(272)).toEqual([]);
+		expect(fit(136)).toEqual(["host:terminal", "host:settings"]);
+		// room for one: Roles folds with the rest, the bell stays
+		expect(fit(100)).toEqual(["host:terminal", "host:roles", "host:settings"]);
+		// not even the bell fits: everything folds
+		expect(fit(50)).toEqual(["host:terminal", "host:roles", "host:questions", "host:settings"]);
+	});
 });
 
 describe("手机端固定位", () => {

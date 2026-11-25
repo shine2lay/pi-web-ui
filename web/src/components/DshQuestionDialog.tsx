@@ -70,14 +70,23 @@ export function ChatOwnerQuestion({
 	question,
 	savedQuestions,
 	waitingOn,
+	focus,
 	...rest
 }: Omit<DshQuestionDialogProps, "question" | "onLater" | "onSent"> & {
 	question: DshQuestionDialogProps["question"] | null | undefined;
 	/** Keep for later (Ops #1087): this chat's questions kept for later, offered in a one-line bar. */
 	savedQuestions?: DshQuestionDialogProps["question"][] | null;
 	waitingOn: string | null | undefined;
+	/** The bell's Open chat (Ops #1090): expand this kept-for-later question (`seq` = one request). */
+	focus?: { id: string; seq: number } | null;
 }) {
 	const [openId, setOpenId] = useState<string | null>(null);
+	const focusSeq = focus?.seq;
+	const focusId = focus?.id;
+	const savedIds = (savedQuestions ?? []).map((q) => q.id).join("\n");
+	useEffect(() => {
+		if (focusSeq !== undefined && focusId && savedIds.split("\n").includes(focusId)) setOpenId(focusId);
+	}, [focusSeq, focusId, savedIds]);
 	/** Answered or cancelled here: no longer offered while the snapshot catches up. */
 	const [sentIds, setSentIds] = useState<readonly string[]>([]);
 	if (question) return <DshQuestionDialog question={question} {...rest} />;

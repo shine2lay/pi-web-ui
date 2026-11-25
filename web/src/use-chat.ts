@@ -111,6 +111,8 @@ import {
 } from "./roles-state";
 import { graceLeft, graceView, liveVisibleAt, pageView, subscribePageLive, viewFresh } from "./page-live";
 import { disconnectRoleAnswers, receiveRoleAnswer } from "./roles-answer-state";
+import { disconnectOwnerAsks, receiveOwnerAsks } from "./owner-asks-state";
+import { makeTerminalBridge, type TerminalWriter } from "./terminal-bridge";
 import { emitPluginData } from "./plugin-loader";
 import { ingestPluginLogsData } from "./plugin-logs";
 import { resolveCatalogSyncResult } from "./plugin-host";
@@ -743,7 +745,6 @@ type Action =
 	| { type: "host_metrics"; metrics: UiHostMetrics };
 
 const MAX_LIVE_OUTPUT = 200_000;
-const MAX_TERM_BUFFER = 200_000;
 /** Marker for truncated live output (was "…[前 N 字符已省略]…" / "…[N chars omitted above]…").
  *  ToolCallBlock maps it through the liveOutputOmitted i18n key so only one language shows. */
 const LIVE_OMIT_MARK = "LIVE_OMIT";
@@ -768,77 +769,6 @@ const DEFAULT_GOAL: GoalStatus = {
 		status: "",
 	},
 };
-
-/**
- * Bridges terminal output from the socket to live xterm instances. Output for
- * a terminal whose component isn't mounted yet (or that this tab doesn't know
- * about) is buffered (capped) so nothing is lost during mount/reconnect.
- */
-interface TerminalWriter {
-	write: (data: string) => void;
-	dispose: () => void;
-}
-
-function makeTerminalBridge() {
-	/** Multiple writers may subscribe to the same (conversation, terminal) pair —
-	 *  e.g. the SCM panel's hidden query terminal parses output through its own
-	 *  writer while a (hidden) xterm instance may also be registered for it.
-	 *  A Set keeps them all: later registrations no longer shadow earlier ones. */
-	const writers = new Map<string, Set<TerminalWriter>>();
-	const buffers = new Map<string, string>();
-	const key = (conversationId: string, terminalId: string) => `${conversationId}:${terminalId}`;
-	return {
-		write(conversationId: string, terminalId: string, data: string): void {
-			const writerKey = key(conversationId, terminalId);
-			const set = writers.get(writerKey);
-			if (set && set.size > 0) {
-				for (const w of set) {
-					try {
-						w.write(data);
-					} catch {
-						// best effort
-					}
-				}
-				return;
-			}
-			const prev = buffers.get(writerKey) ?? "";
-			const next = prev.length + data.length > MAX_TERM_BUFFER ? data : prev + data;
-			buffers.set(writerKey, next);
-		},
-		/** Register a writer (xterm instance / output parser); flushes buffered
-		 *  output to the new subscriber. Returns an unregister fn. */
-		register(conversationId: string, terminalId: string, writer: TerminalWriter): () => void {
-			const writerKey = key(conversationId, terminalId);
-			let set = writers.get(writerKey);
-			if (!set) {
-				set = new Set();
-				writers.set(writerKey, set);
-			}
-			set.add(writer);
-			const buffered = buffers.get(writerKey);
-			if (buffered) {
-				try {
-					writer.write(buffered);
-				} catch {
-					// best effort
-				}
-				buffers.delete(writerKey);
-			}
-			return () => {
-				const s = writers.get(writerKey);
-				if (s) {
-					s.delete(writer);
-					if (s.size === 0) writers.delete(writerKey);
-				}
-				buffers.delete(writerKey);
-			};
-		},
-		clear(): void {
-			writers.clear();
-			buffers.clear();
-		},
-	};
-}
 
 function pruneLiveOutputs(
 	live: Map<string, { toolName: string; text: string }>,
@@ -2529,7 +2459,13 @@ export function useChat() {
 					break;
 				case "roles_ask":
 				case "roles_ask_result":
+				case "owner_ask":
+				case "owner_ask_result":
 					receiveRoleAnswer(msg);
+					break;
+				case "owner_asks":
+					// waiting-questions bell (Ops #1090): this window's owner's waiting questions (owner-asks-state.ts).
+					receiveOwnerAsks(msg);
 					break;
 				case "board_result":
 					// board: the answer to the Board view's post or close (roles-state.ts).
@@ -2906,6 +2842,7 @@ export function useChat() {
 			// shadow the live one and drop its incoming messages.
 			if (wsRef.current && wsRef.current !== ws) return;
 			disconnectRoleAnswers();
+			disconnectOwnerAsks();
 			setFilesReady(false);
 			dispatch({ type: "status", status: "closed" });
 			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();
@@ -2968,6 +2905,7 @@ export function useChat() {
 			}
 			// What onclose would have done for this socket.
 			disconnectRoleAnswers();
+			disconnectOwnerAsks();
 			failHeldSends("The connection dropped before it was sent.");
 			bridgeRef.current.clear();
 			if (hadOpenRef.current && !catchUpRef.current) catchUpRef.current = Date.now();

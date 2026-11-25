@@ -28,7 +28,8 @@ import {
 	type LeadTask,
 	type OpenNow,
 } from "../lead-bar";
-import { LS_QUEUE_FOLDED, parseQueueFolds, queueFoldKey, toggledQueueFolds } from "../queue-folds";
+import { queueFoldKey } from "../queue-folds";
+import { useCollapsed, useQueueFolds } from "./left-panel-folds";
 import { queueStatusView, shownQueueStatus } from "../queue-chat-status";
 // 宿主 UI 扩展点（issue #146）：会话行的右键菜单走「slot 条目」这一条通道。
 import { CONV_IDENTITY_ENTRY_ID, LP_IDENTITY_ENTRY_ID, LP_SECTION_ENTRY_IDS, type UiSlotEntry } from "../ui-slots";
@@ -131,48 +132,6 @@ const LS_COLLAPSE_SESSIONS = "pi-web-ui:lp-collapse-sessions";
 const LS_COLLAPSE_LIMITS = "pi-web-ui:lp-collapse-limits";
 /** lead-bar: no task chats outside the list (one array, so the leads view's memo holds). */
 const NO_TASKS: ConversationSummary[] = [];
-
-function useCollapsed(key: string, defaultCollapsed = false): [boolean, () => void] {
-	const [collapsed, setCollapsed] = useState(() => {
-		try {
-			const v = localStorage.getItem(key);
-			if (v === "1") return true;
-			if (v === "0") return false;
-		} catch {}
-		return defaultCollapsed;
-	});
-	const toggle = useCallback(() => {
-		setCollapsed((prev) => {
-			const next = !prev;
-			try {
-				localStorage.setItem(key, next ? "1" : "0");
-			} catch {}
-			return next;
-		});
-	}, [key]);
-	return [collapsed, toggle];
-}
-
-/** queue-grouping: the queue chats whose task chats are folded away (queue-folds.ts), kept in localStorage. */
-function useQueueFolds(): [ReadonlySet<string>, (key: string) => void] {
-	const [folds, setFolds] = useState<ReadonlySet<string>>(() => {
-		try {
-			return parseQueueFolds(localStorage.getItem(LS_QUEUE_FOLDED));
-		} catch {
-			return new Set();
-		}
-	});
-	const toggle = useCallback((key: string) => {
-		setFolds((prev) => {
-			const next = toggledQueueFolds(prev, key);
-			try {
-				localStorage.setItem(LS_QUEUE_FOLDED, JSON.stringify(next));
-			} catch {}
-			return new Set(next);
-		});
-	}, []);
-	return [folds, toggle];
-}
 
 /* VSCode 风格可拖拽分割：展开区的 flex-grow 权重持久化，折叠区不占空间 */
 const LS_LP_SIZES = "pi-web-ui:lp-sizes";
@@ -1152,6 +1111,13 @@ export const LeftPanel = memo(function LeftPanel({
 			</span>
 		);
 	};
+	/** waiting-questions bell (Ops #1090): a saved (closed) chat with a question waiting on this window's owner. */
+	const savedQuestionMark = (s?: SessionSummary): React.ReactNode =>
+		s?.hasQuestion ? (
+			<span className="question-badge" title={t("waitingQuestionBadge")}>
+				?
+			</span>
+		) : null;
 	const renderIdleLead = (entry: LeadEntry, session?: SessionSummary, row?: ConversationSummary): React.ReactNode => {
 		const opening = isSwitchTargetRow(pendingSwitch, { path: entry.homeChat });
 		const title = session ? displayName(session) : (row?.title ?? entry.identity.title);
@@ -1198,6 +1164,7 @@ export const LeftPanel = memo(function LeftPanel({
 							/>
 						) : (
 							<span className="session-title">
+								{savedQuestionMark(session)}
 								{showIdentityTags && <IdentityTag identity={entry.identity} />}
 								{leadFoldCount(entry)}
 								{title}
@@ -1464,6 +1431,7 @@ export const LeftPanel = memo(function LeftPanel({
 														/>
 													) : (
 														<span className="session-title">
+															{savedQuestionMark(s)}
 															{showIdentityTags && s.identity && <IdentityTag identity={s.identity} />}
 															{displayName(s)}
 														</span>

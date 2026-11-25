@@ -367,7 +367,7 @@ export const en = {
 	taskQueueStatusPausedByYou: "Paused by you: nothing starts, pokes or asks until you resume the queue.",
 	queuePausedNoteLabel: "Kept for after the pause",
 	...queueAnswerEn, // the Queue tab's answer card (hints, errors, retry), i18n-queue-answer.ts
-	...questionLaterEn, // Keep for later: the question dialog's Later / Cancel question and its chat's bar
+	...questionLaterEn, // Keep for later (question dialog, its chat's bar) and the top bar's questions bell (#1090)
 	...effortLevelEn, // the composer's department effort level button, i18n-effort-level.ts
 	taskQueueStatusLane: "Running · #{id} is working in its own chat",
 	taskQueueStatusLanes: "Running · {n} tasks working in their own chats",

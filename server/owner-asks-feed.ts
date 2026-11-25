@@ -6,8 +6,8 @@
 // or not, open or closed, kept for later), newest first, in plain words; and the bell's open / answer, through the
 // same form checks as the Roles page (roles-asks.ts askViewOf + answersFromPage, reused, never copied).
 // Never another owner's ask nor one held for COO (owner-window.ts askHiddenFrom): refused as "no longer waiting", so a
-// window can't tell another owner's ask from a gone one. ClientSession pushes `owner_asks` and serves
-// owner_ask_open / owner_ask_answer with these (Task 2). docs/hypotheses/2026-11-25-ops-1089-waiting-questions-bell.md
+// window can't tell another owner's ask from a gone one. owner-asks-push.ts pushes `owner_asks` and serves
+// owner_ask_open / owner_ask_answer with these for ClientSession (Ops #1090). docs/hypotheses/2026-11-25-ops-1089-waiting-questions-bell.md
 // ---------------------------------------------------------------------------
 
 import { resolve } from "node:path";
@@ -22,8 +22,8 @@ import { asAnswerer } from "./sent-by.js";
 export interface OwnerAskLookup {
 	/** Kept for later on its card (pending-questions store, ClientSession.questionLater). */
 	later(ask: Ask): boolean;
-	/** The department whose home chat or queued task chat `sessionFile` is. */
-	roleOf(sessionFile: string): { id: string; title: string } | undefined;
+	/** The department whose home chat or queued task chat `sessionFile` (the ask's, `ask`) is. */
+	roleOf(sessionFile: string, ask: Ask): { id: string; title: string } | undefined;
 }
 
 /** The bell refuses an answer to an ask that changed since it was opened (wording, choices, a restart). */
@@ -65,7 +65,7 @@ function newestFirst(a: UiOwnerAskItem, b: UiOwnerAskItem): number {
 /** One ask as the bell lists it. */
 function itemOf(ask: Ask, lookup: OwnerAskLookup): UiOwnerAskItem {
 	const view = askViewOf(ask);
-	const role = ask.sessionFile ? lookup.roleOf(ask.sessionFile) : undefined;
+	const role = ask.sessionFile ? lookup.roleOf(ask.sessionFile, ask) : undefined;
 	const summary = plainLine(ask.fields[0]?.text);
 	const conversationTitle = plainLine(ask.conversationTitle);
 	return {
