@@ -1496,6 +1496,7 @@ export type ClientCommand =
 	| { type: "clear_default_thinking" }
 	| { type: "set_thinking"; level: string }
 	| import("./effort-level-protocol.js").EffortLevelClientMessage
+	| import("./owner-question-protocol.js").OwnerAskClientCommand
 	/** fast-mode: turn the chat's "⚡ Fast" on/off (ChatGPT fast-mode models; pi chats only). */
 	| { type: "set_fast_mode"; mode: ChatSpeed; conversationId: string }
 	| { type: "set_cwd"; path: string }
@@ -2038,8 +2039,7 @@ export type ClientCommand =
 	| { type: "board_close"; id: string; note?: string; reqId?: string }
 	/** roles-answer: the Roles page opens a Needs-you item's ask (answered with roles_ask). key = its UiRoleAsk.key. */
 	| { type: "roles_ask_open"; reqId: string; key: string }
-	/** roles-answer: the owner's answer from the Roles page (answered with roles_ask_result). askId = the ask he
-	 *  opened under that key; a changed ask is refused. */
+	/** roles-answer: the Roles page's answer (-> roles_ask_result); askId = the ask opened under key; changed: refused. */
 	| {
 			type: "roles_ask_answer";
 			reqId: string;
@@ -2114,7 +2114,7 @@ export type ClientCommand =
 // Server -> Client
 // ---------------------------------------------------------------------------
 
-export interface SessionSummary {
+export interface SessionSummary extends UiSessionQuestionMark {
 	path: string;
 	name?: string;
 	/** Automatic History display prefix (<=300 Unicode scalars plus ellipsis), not indexed/model text.
@@ -3167,11 +3167,10 @@ export interface UiRoleBoardOrder {
 	via?: string;
 }
 
-/** roles-overview (UiRolesOverview) and the roles-by-project board types live in roles-board-protocol.ts. */
+/** Live in roles-board-protocol.ts: roles-overview, roles-by-project; owner-question-protocol.ts: route, bell. */
 export type * from "./roles-board-protocol.js";
-/** Owner-question route and waiting line (Ops #685, #973, #1051) live in owner-question-protocol.ts. */
 export type * from "./owner-question-protocol.js";
-import type { UiOwnerQuestionRoute, UiOwnerWaitingOn } from "./owner-question-protocol.js";
+import type { UiOwnerQuestionRoute, UiOwnerWaitingOn, UiSessionQuestionMark } from "./owner-question-protocol.js";
 
 /** ladder-alarm: the approval step's state as the Roles page shows it. */
 export interface UiMessageApprovals {
@@ -4693,6 +4692,7 @@ export interface UiSettingsState {
 export type ServerMessage =
 	| CommandDispositionMsg
 	| import("./effort-level-protocol.js").EffortLevelServerMessage
+	| import("./owner-question-protocol.js").OwnerAskServerMessage
 	| { type: "session_initialized"; connectionGeneration: string }
 	/** reconnect-trace: runtime capture flag only; separate from heartbeat/connection health. */
 	| { type: "conn_trace_config"; on: boolean }
