@@ -2521,7 +2521,6 @@ export function App() {
 							savedQuestions={chat.state?.savedQuestions}
 							waitingOn={chat.state?.waitingOn}
 							focus={focusHere?.kind === "question" ? focusHere : null}
-							activeConversationId={activeConvId || undefined}
 							escapeEnabled={view === "chat"}
 							conversationTitle={
 								chat.conversations.find((c) => c.id === (chat.question?.conversationId || activeConvId))?.title

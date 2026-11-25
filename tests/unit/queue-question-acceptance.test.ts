@@ -1,6 +1,7 @@
 /** Actual generic dialog resolution -> native metadata -> final coordinator/SDK dispatch fence. */
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ClientSession } from "../../server/agent-service.js";
 import type { QuestionAnswer } from "../../server/protocol.js";
 import { UNBOUND_OWNER_ACCEPTANCE } from "../../server/queue-question-acceptance.js";
 import { NativeQuestionWrite } from "../../server/queue-question-durability.js";
@@ -184,7 +185,10 @@ describe("unbound owner acceptance preserves the answer and fences recall", () =
 			questions: [],
 			nativeSource: { sessionId: f.binding.workerId, file: f.binding.worker },
 		});
-		expect(answer()).toBe(true);
+		// The synthetic worker card has no ask in the hub, so a window may not answer it (QA #244 F1, Ops #1091): settle
+		// it below the window check, where the unbound-answer observer runs.
+		const settle = (ClientSession as unknown as { endQuestion: (...a: unknown[]) => boolean }).endQuestion;
+		expect(settle.call(ClientSession, id, answers, false, "browser")).toBe(true);
 		expect(metadata(f.parent)).toEqual([]);
 		expect(metadata(f.worker)).toEqual([]);
 		expect((await f.recall()).status).toBe("committed");

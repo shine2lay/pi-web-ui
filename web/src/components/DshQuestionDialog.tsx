@@ -71,7 +71,6 @@ export function ChatOwnerQuestion({
 	savedQuestions,
 	waitingOn,
 	focus,
-	activeConversationId,
 	...rest
 }: Omit<DshQuestionDialogProps, "question" | "onLater" | "onSent"> & {
 	question: DshQuestionDialogProps["question"] | null | undefined;
@@ -80,8 +79,6 @@ export function ChatOwnerQuestion({
 	waitingOn: string | null | undefined;
 	/** The bell's Open chat (Ops #1090): expand this kept-for-later question (`seq` = one request). */
 	focus?: { id: string; seq: number } | null;
-	/** The chat this window shows: another chat's live question doesn't cover this one's saved-for-later bar. */
-	activeConversationId?: string;
 }) {
 	const [openId, setOpenId] = useState<string | null>(null);
 	const focusSeq = focus?.seq;
@@ -95,11 +92,10 @@ export function ChatOwnerQuestion({
 	const saved = (savedQuestions ?? []).filter((q) => !sentIds.includes(q.id));
 	const opened = openId ? saved.find((q) => q.id === openId) : undefined;
 	// QA #244 F2 (Ops #1091): a saved question opened here (the bell's Open chat, the bar's Answer) comes first, and
-	// another chat's live question never covers this chat's bar.
-	const elsewhere =
-		!!question?.conversationId && !!activeConversationId && question.conversationId !== activeConversationId;
-	if (question && !opened && !(elsewhere && saved.length > 0))
-		return <DshQuestionDialog question={question} {...rest} />;
+	// another chat's live question never covers this chat's bar (saved ones are all the shown chat's own).
+	const here = saved[0]?.conversationId;
+	const elsewhere = !!question?.conversationId && !!here && question.conversationId !== here;
+	if (question && !opened && !elsewhere) return <DshQuestionDialog question={question} {...rest} />;
 	if (opened)
 		return (
 			<DshQuestionDialog
