@@ -49,7 +49,7 @@ import {
 	prependOlderExchanges,
 } from "./message-window";
 import { applyReuse, cachedWindow, ChatCache, windowKey } from "./chat-cache";
-import { resolvePendingQuestion, type QuestionSource } from "./pending-question";
+import { questionAfterSend, resolvePendingQuestion, type QuestionSource } from "./pending-question";
 import {
 	sameSwitchTarget,
 	settleOnSnapshot,
@@ -672,6 +672,7 @@ type Action =
 			type: "question";
 			question: UiPendingQuestion | null;
 	  }
+	| { type: "question_sent"; msg: ClientMessage } // answered / cancelled / kept for later here (questionAfterSend)
 	| {
 			type: "tool_approval";
 			approval: UiToolApproval | null;
@@ -1185,6 +1186,8 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return { ...state, dialog: action.dialog };
 		case "question":
 			return { ...state, question: action.question };
+		case "question_sent":
+			return { ...state, question: questionAfterSend(state.question, action.msg) };
 		case "commands":
 			return {
 				...state,
@@ -1886,21 +1889,16 @@ export function useChat() {
 				}
 				ws.send(JSON.stringify(out));
 				if ("open" in out && out.open) chatOpenTimer.requested();
-				// 提交/取消模型提问后立即收起对话框：服务端只 resolve 模型侧 Promise，
-				// 不会发任何回执清除前端面板（否则会出现“回答后不消失、取消无效”）。
-				// 模型再次 ask_user_question 时会重新 question_pending，面板自动回来。
-				if (msg.type === "question_answer") {
-					if (!msg.owner) {
-						// 记住这个 id：快照恢复时跳过它（回答消息与快照在途时会交错，服务端
-						// 删除 pending 之前生成的快照仍带着这张问卷）。
-						answeredQuestionsRef.current.add(msg.id);
-						if (answeredQuestionsRef.current.size > 64) {
-							const oldest = answeredQuestionsRef.current.values().next().value;
-							if (oldest !== undefined) answeredQuestionsRef.current.delete(oldest);
-						}
-						questionSourceRef.current = "live";
-						dispatch({ type: "question", question: null });
+				// Answering, cancelling or keeping it for later (Ops #1087) closes the panel at once (no receipt comes back),
+				// and a snapshot made before the server dropped or marked the question must not bring it back.
+				if ((msg.type === "question_answer" && !msg.owner) || (msg.type === "question_later" && msg.later !== false)) {
+					answeredQuestionsRef.current.add(msg.id);
+					if (answeredQuestionsRef.current.size > 64) {
+						const oldest = answeredQuestionsRef.current.values().next().value;
+						if (oldest !== undefined) answeredQuestionsRef.current.delete(oldest);
 					}
+					questionSourceRef.current = "live";
+					dispatch({ type: "question_sent", msg });
 				}
 				return true;
 			}

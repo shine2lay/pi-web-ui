@@ -47,6 +47,9 @@ export interface NewPendingQuestion {
 export interface PendingQuestionWaiting extends NewPendingQuestion {
 	state: "waiting";
 	contentHash: string;
+	/** Kept for later (Shine m104353): the owner tucked the card away; it stays open everywhere but no longer pops
+	 *  up over a chat. Not part of what it asks (contentHash). */
+	later?: boolean;
 }
 
 /** How a card ended. `from` = where (FROM_BROWSER, "telegram"), `by` = who answered when known. */
@@ -182,6 +185,17 @@ export class PendingQuestionsStore {
 		return { ok: true, record };
 	}
 
+	/** Keep a waiting card for later, or bring it back (`later` false). False when no waiting card has this id. */
+	setLater(id: string, later: boolean): boolean {
+		const records = this.load();
+		const kept = records.get(id);
+		if (kept?.state !== "waiting") return false;
+		if ((kept.later === true) === later) return true;
+		const { later: _was, ...rest } = kept;
+		this.save(new Map(records).set(id, later ? { ...rest, later: true } : rest));
+		return true;
+	}
+
 	/** The chat admitted the card's wake: it is done and leaves the list. False when it isn't being delivered. */
 	admitted(id: string): boolean {
 		const records = this.load();
@@ -299,6 +313,7 @@ function parseFile(file: string, text: string): Map<string, PendingQuestionRecor
 		const bad =
 			newQuestionProblem(r) ??
 			(isObj(r) && isStr(r.contentHash) ? null : "contentHash missing") ??
+			(isObj(r) && (r.later === undefined || typeof r.later === "boolean") ? null : "later is not true/false") ??
 			(isObj(r) && r.state === "waiting"
 				? null
 				: isObj(r) && r.state === "delivering"
@@ -323,7 +338,7 @@ export interface PostedQuestionCard {
 	questions: UiQuestion[];
 }
 
-/** The tool result handed back to the model (ask-question-owners.ts AskToolResult's shape). */
+/** The tool result handed back to the model: what was posted, never answers. */
 export interface PostedQuestionsResult {
 	content: { type: "text"; text: string }[];
 	details: { posted: { owner: string; toolCallId: string; questionIds: string[] }[] };

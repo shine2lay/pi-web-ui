@@ -1,13 +1,14 @@
 // 跨页作答 remote-answer（零 token）：另一页上等答复的问卷，本页不切过去直接回答。
 //
 // 假模型（question-bridge 同款）：第 1 回合固定回 ask_user_question 工具调用，
-// 第 2 回合把工具结果回显成 assistant 文本。
+// 第 2 回合把工具结果回显成 assistant 文本；问卷不阻塞（Ops #1087），答案作为新的用户消息
+// 唤醒对话，假模型把它回显成 WOKE:<文本>。
 //
 // 验证（server-owned-chats 口径，ops #870 改写；删掉的上游断言及原因见 PATCHES.md
 // server-owned-chats「上游冒烟按新口径改写」）：
 //   1. A 提问挂起时，已打开的 B 页实时在**自己的列表**里看到 A 那条
 //      （同 convId、带 hasQuestion/questionId），并收到同一张问卷（本页弹框）；
-//   2. B 在本页提交 → A 的 run 继续（回显含答案），A 页问卷收起（question_retracted），
+//   2. B 在本页提交 → 答案唤醒 A 那条对话（回显含答案），A 页问卷收起（question_retracted），
 //      B 页列表角标消失；
 //   3. 对话原地不动：A 仍在那条上，B 所在的对话不变；
 //   4. 两页各在各的对话上时，A 新开并提问的对话也实时进 B 的列表，B 不切过去就能作答。
@@ -81,6 +82,14 @@ const mock = createServer(async (req, res) => {
 	const payload = JSON.parse(body || "{}");
 	const messages = Array.isArray(payload.messages) ? payload.messages : [];
 	const toolMsg = [...messages].reverse().find((m) => m.role === "tool");
+	const last = messages[messages.length - 1];
+	if (toolMsg && last?.role === "user") {
+		const text = Array.isArray(last.content)
+			? last.content.map((p) => p.text ?? "").join("")
+			: String(last.content ?? "");
+		sse(res, [delta(payload.model, { content: `WOKE:${text}` }), delta(payload.model, {}, "stop")]);
+		return;
+	}
 	if (toolMsg) {
 		sse(res, [
 			delta(payload.model, { content: `ANSWERED:${String(toolMsg.content ?? "")}` }),
@@ -264,16 +273,15 @@ try {
 	const convB = clientB.state.conversationId;
 	check("没有另一处只读列表（对话归服务端）", clientB.elsewhere.length === 0, JSON.stringify(clientB.elsewhere));
 
-	// A 提问挂起（run 阻塞在等人类回答）→ 已打开的 B 页必须实时在自己的列表里看到 `?`。
+	// A 提问挂起（问卷贴出后本轮即结束，Ops #1087）→ 已打开的 B 页必须实时在自己的列表里看到 `?`。
 	// 回归：问卷挂起/解决不改变流式集合，签名不变就不推，别的页面永远看不到。
 	clientA.send({ type: "prompt", text: "先问我几个问题" });
 	const pendingA = await clientA.waitForType("question_pending", () => true, 40000);
 	check("A 问卷挂起", pendingA.questions?.length === 2, `id=${pendingA.id}`);
-	await clientA.waitForState((s) => s.isStreaming === true, 15000);
 	const convA = clientA.state.conversationId;
 	let row = null;
 	await until(() => {
-		row = clientB.conversations.find((c) => c.id === convA && c.isStreaming && c.hasQuestion);
+		row = clientB.conversations.find((c) => c.id === convA && c.hasQuestion);
 		return !!row;
 	});
 	check("已打开的 B 页实时在列表里看到 A 那条的问卷标记", !!row, `hasQuestion=${row?.hasQuestion}`);
@@ -293,10 +301,7 @@ try {
 	});
 	check(
 		"A 的模型收到 B 的答案并继续",
-		await until(
-			() => assistantText(clientA).includes("ANSWERED:") && assistantText(clientA).includes("别动图标"),
-			30000,
-		),
+		await until(() => assistantText(clientA).includes("WOKE:") && assistantText(clientA).includes("别动图标"), 30000),
 		assistantText(clientA).slice(-160),
 	);
 	check(
@@ -331,7 +336,7 @@ try {
 	const convA2 = clientA.state.conversationId;
 	let row2 = null;
 	await until(() => {
-		row2 = clientB.conversations.find((c) => c.id === convA2 && c.isStreaming && c.hasQuestion);
+		row2 = clientB.conversations.find((c) => c.id === convA2 && c.hasQuestion);
 		return !!row2;
 	});
 	check(

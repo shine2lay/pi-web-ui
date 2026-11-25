@@ -7,6 +7,7 @@ import { vi } from "vitest";
 import { AgentService, ClientSession } from "../../server/agent-service.js";
 import { askHub } from "../../server/asks.js";
 import type { PendingQuestionEntry } from "../../server/ask-delivery.js";
+import { PendingQuestionsStore } from "../../server/pending-questions-store.js";
 import type { QuestionAnswer, ServerMessage } from "../../server/protocol.js";
 import { loadIdentities } from "../../server/identities.js";
 import { loadSettings } from "../../server/identity-config.js";
@@ -104,7 +105,22 @@ export function nativeOwnerDialog(
 	const conversations = vi.spyOn(statics, "emitConversationsToAll").mockImplementation(() => {});
 	const broadcasts = vi.spyOn(statics, "broadcastToAllClients").mockImplementation(() => {});
 	const connected = vi.spyOn(statics, "connectedClientCount").mockReturnValue(1);
-	const pending = new Map<string, PendingQuestionEntry>();
+	const pending = (ClientSession as unknown as { sharedQuestions: Map<string, PendingQuestionEntry> }).sharedQuestions;
+	// nonblocking-ask (Ops #1087): the card is kept in a temporary pending-questions.json; `resolved` sees what its
+	// wake carries into the chat (the answers, or null for a cancel), synchronously as the card settles.
+	const storeDir = mkdtempSync(join(tmpdir(), "question-commit-cards-"));
+	const store = PendingQuestionsStore.inDataDir(storeDir);
+	const resolved = vi.fn<(value: QuestionAnswer[] | null) => void>();
+	const priorHost = ClientSession.pendingQuestionsHost;
+	ClientSession.pendingQuestionsHost = {
+		store,
+		deliver: async (wake) => {
+			const rec = store.get(wake.id);
+			const r = rec?.state === "delivering" ? rec.resolution : undefined;
+			resolved(r?.kind === "answered" ? r.answers : null);
+			return { ok: true };
+		},
+	};
 	const client: ClientSession = Object.create(ClientSession.prototype);
 	const conv = {
 		id: "synthetic-generic-dialog",
@@ -113,13 +129,13 @@ export function nativeOwnerDialog(
 		cwd: session.sessionManager.getCwd(),
 	};
 	Object.defineProperties(client, {
-		pendingQuestions: { value: pending },
 		convs: { value: new Map([[conv.id, conv]]) },
 		activeId: { value: conv.id },
 		settingsSvc: { value: { current: {} } },
 		disposed: { value: false },
 	});
-	const result = client.askUser(
+	const before = new Set(pending.keys());
+	client.postQuestion(
 		[
 			{
 				id: "generic-choice",
@@ -127,29 +143,25 @@ export function nativeOwnerDialog(
 				options: [{ label: "Keep the choice" }, { label: "Pick another" }],
 			},
 		],
-		{},
+		"toolu_synthetic_generic",
 		conv.id,
+		{ owner: "Shine" },
 	);
-	const id = [...pending.keys()][0];
+	const id = [...pending.keys()].find((k) => !before.has(k));
 	if (!id) throw new Error("The actual native dialog was not registered");
-	const entry = pending.get(id)!;
-	const complete = entry.resolve;
-	const resolved = vi.fn<(value: QuestionAnswer[] | null) => void>();
-	entry.resolve = (value) => {
-		resolved(value);
-		complete(value);
-	};
 	return {
 		client,
 		id,
 		pending,
 		resolved,
-		result,
 		answer: (answers: QuestionAnswer[], cancelled = false) => client.resolveQuestion(id, answers, cancelled),
 		close: () => {
 			if (pending.has(id)) client.resolveQuestion(id, [], true);
+			pending.delete(id);
 			askHub.settle(id, { how: "gone", reason: "synthetic cleanup" });
 			ClientSession.observeUnboundOwnerAnswer = prior;
+			ClientSession.pendingQuestionsHost = priorHost;
+			rmSync(storeDir, { recursive: true, force: true });
 			conversations.mockRestore();
 			broadcasts.mockRestore();
 			connected.mockRestore();

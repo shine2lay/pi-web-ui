@@ -40,9 +40,10 @@ const QUESTION = {
 	questions: [{ id: "c1", question: "Which one?", options: [{ label: "A" }, { label: "B" }] }],
 };
 const EXTENSION_ASK = { id: 7, kind: "confirm" as const, title: "Approve the plan?", args: ["Run it?"] };
-/** What Escape sends for each ask in the chat view, as it always has. */
+/** What Escape sends for each ask in the chat view. The model's question is kept for later (Ops #1087, Shine m104353),
+ *  never cancelled. */
 const CANCEL: Record<Ask, object> = {
-	"the model's question": { type: "question_answer", id: "q-wait", answers: [], cancelled: true },
+	"the model's question": { type: "question_later", id: "q-wait", later: true },
 	"an extension's ask": { type: "dialog_response", id: 7, value: null },
 };
 const ASKS = Object.keys(CANCEL) as Ask[];

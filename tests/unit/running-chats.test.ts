@@ -41,14 +41,13 @@ describe("the note", () => {
 		expect(carryOnNote(new Date(AT), "x", "y").startsWith(CARRY_ON_PREFIX)).toBe(true);
 	});
 
-	it("describes the step: writing, a command, another tool, a question, several at once", () => {
+	it("describes the step: writing, a command, another tool, a posted question, several at once", () => {
 		expect(describeStep([])).toBe("writing a reply");
 		expect(describeStep([{ id: "1", name: "bash", detail: "npm test" }])).toBe("running the bash command `npm test`");
 		expect(describeStep([{ id: "1", name: "read", detail: "/x/y.ts" }])).toBe("running the read tool (/x/y.ts)");
 		expect(describeStep([{ id: "1", name: "web_search" }])).toBe("running the web_search tool");
-		expect(describeStep([{ id: "1", name: "ask_user_question" }])).toBe(
-			"asking the user a question (ask_user_question) (they hadn't answered yet, so ask it again)",
-		);
+		// Ops #1087: the question already waits on disk; never "ask it again" (it would post a second card).
+		expect(describeStep([{ id: "1", name: "ask_user_question" }])).toBe("running the ask_user_question tool");
 		expect(
 			describeStep([
 				{ id: "1", name: "bash", detail: "sleep 5" },

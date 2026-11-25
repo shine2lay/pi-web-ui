@@ -104,18 +104,7 @@ interface Routed {
 	turnKey?: object;
 }
 
-/** What ask_user_question gets back when COO hands its question back (its tool result says so). */
-export interface QuestionReturned {
-	returned: string;
-}
-
-export function isQuestionReturned(v: unknown): v is QuestionReturned {
-	return (
-		!!v && typeof v === "object" && !Array.isArray(v) && typeof (v as { returned?: unknown }).returned === "string"
-	);
-}
-
-/** The tool result of a question COO handed back: never the owner's answer. */
+/** What the asking chat is told when COO hands its question back (Ops #1087: its wake): never the owner's answer. */
 export function questionReturnedText(note: string): string {
 	const n = note.trim();
 	const end = /[.!?…]$/.test(n) ? "" : ".";

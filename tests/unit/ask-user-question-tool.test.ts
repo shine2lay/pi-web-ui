@@ -1,23 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { makeAskUserQuestionTool, shouldPopQuestion } from "../../server/agent-service.js";
-import type { QuestionAnswer, UiQuestion } from "../../server/protocol.js";
+import { makeAskUserQuestionTool } from "../../server/agent-service.js";
+import type { UiQuestion } from "../../server/protocol.js";
 
 /**
  * 标准 pi 引擎的 ask_user_question customTool 单测（零 token / 零会话）。
- * 只验证工具本体的行为：schema 参数存在、execute 桥到 clientSession.askUser、
- * 用户取消 → 抛「用户取消了提问」、无问题 → 报错。浏览器渲染部分由
- * dsh-question-dialog.test.ts（前端）覆盖，服务端透传由协议类型保证。
+ * 只验证工具本体的行为：schema 参数存在、execute 把卡片交给 clientSession.postQuestion 并立即返回
+ * (nonblocking-ask, Ops #1087: no answers in the result; they arrive later as a new message)、无问题 → 报错。
+ * 浏览器渲染部分由 dsh-question-dialog.test.ts（前端）覆盖，服务端透传由协议类型保证。
  */
 
-/** 构造一个最小 clientSession mock，记录收到的提问并返回预设结果。 */
-function mockSession(ask: (q: UiQuestion[], sig: { aborted?: boolean }) => Promise<QuestionAnswer[] | null>) {
-	const invoked = { questions: [] as UiQuestion[], sig: {} as { aborted?: boolean } };
+/** 构造一个最小 clientSession mock，记录收到的卡片。 */
+function mockSession(post: (q: UiQuestion[]) => void = () => {}) {
+	const invoked = { questions: [] as UiQuestion[], toolCallId: "" };
 	return {
 		invoked,
-		askUser: (questions: UiQuestion[], sig: { aborted?: boolean }) => {
+		postQuestion: (questions: UiQuestion[], toolCallId: string) => {
 			invoked.questions = questions;
-			invoked.sig = sig;
-			return ask(questions, sig);
+			invoked.toolCallId = toolCallId;
+			post(questions);
 		},
 		// ask-question-owners (Ops #1079): a chat with no requester records (the default owner's).
 		questionOwners: () => ({ listed: new Set<string>() }),
@@ -35,7 +35,7 @@ const QUESTIONS: UiQuestion[] = [
 
 describe("makeAskUserQuestionTool", () => {
 	it("工具定义里带 schema 参数（questions 必填）", () => {
-		const tool = makeAskUserQuestionTool(mockSession(async () => []));
+		const tool = makeAskUserQuestionTool(mockSession());
 		expect(tool.name).toBe("ask_user_question");
 		// TypeBox schema 的 JSON 序列化应包含 questions 字段。
 		const parsed = JSON.parse(JSON.stringify(tool.parameters));
@@ -43,32 +43,35 @@ describe("makeAskUserQuestionTool", () => {
 		expect(parsed.required).toContain("questions");
 	});
 
-	it("execute 调用 clientSession.askUser，把 selected/custom 拼成文本返回", async () => {
-		const session = mockSession(async () => [{ id: "q1", selected: ["A"], custom: "extra" }]);
+	it("execute posts the card under its tool call id and returns at once, without answers", async () => {
+		const session = mockSession();
 		const tool = makeAskUserQuestionTool(session);
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const ctx = {} as any;
 		const result = (await tool.execute("t1", { questions: QUESTIONS }, undefined, undefined, ctx)) as {
 			content: { type: string; text: string }[];
+			details: Record<string, unknown>;
 		};
 
 		expect(session.invoked.questions).toHaveLength(1);
 		expect(session.invoked.questions[0].id).toBe("q1");
-		expect(result.content[0].text).toContain("q1: A (wrote: extra)");
+		expect(session.invoked.toolCallId).toBe("t1");
+		expect(result.content[0].text).toContain("non-blocking");
+		expect(result.details).not.toHaveProperty("answers");
 	});
 
-	it("用户取消（askUser 返回 null）→ 抛「用户取消了提问」", async () => {
-		const session = mockSession(async () => null);
+	it("questionnaires turned off: the call fails and nothing is posted", async () => {
+		const session = mockSession(() => {
+			throw new Error("Questionnaires are turned off; turn them back on in Settings");
+		});
 		const tool = makeAskUserQuestionTool(session);
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const ctx = {} as any;
-		await expect(tool.execute("t2", { questions: QUESTIONS }, undefined, undefined, ctx)).rejects.toThrow(
-			"User cancelled the question",
-		);
+		await expect(tool.execute("t2", { questions: QUESTIONS }, undefined, undefined, ctx)).rejects.toThrow("turned off");
 	});
 
 	it("无问题 → 报错", async () => {
-		const session = mockSession(async () => []);
+		const session = mockSession();
 		const tool = makeAskUserQuestionTool(session);
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const ctx = {} as any;
@@ -78,7 +81,7 @@ describe("makeAskUserQuestionTool", () => {
 	});
 
 	it("提问超过 3 个问题 → 报错阻断（防提问发散与问卷轰炸）", async () => {
-		const session = mockSession(async () => []);
+		const session = mockSession();
 		const tool = makeAskUserQuestionTool(session);
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const ctx = {} as any;
@@ -94,24 +97,11 @@ describe("makeAskUserQuestionTool", () => {
 	});
 
 	it("包含收敛型澄清提问 promptGuidelines 与推荐置顶约束", () => {
-		const tool = makeAskUserQuestionTool(mockSession(async () => []));
+		const tool = makeAskUserQuestionTool(mockSession());
 		const guidelines = (tool.promptGuidelines as string[]).join("\n");
 		expect(guidelines).toContain("1 to 3 focused questions");
+		expect(guidelines).toContain("does not wait");
 		expect(guidelines).toContain("recommended option first");
 		expect(guidelines).toContain("impact/tradeoff");
-	});
-});
-
-describe("shouldPopQuestion", () => {
-	it("未指定会话（全局问卷）一律放行", () => {
-		expect(shouldPopQuestion(undefined, "conv-1")).toBe(true);
-	});
-
-	it("匹配当前激活会话时放行", () => {
-		expect(shouldPopQuestion("conv-1", "conv-1")).toBe(true);
-	});
-
-	it("属于后台会话时不向当前激活会话弹窗", () => {
-		expect(shouldPopQuestion("conv-2", "conv-1")).toBe(false);
 	});
 });

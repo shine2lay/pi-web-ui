@@ -1,8 +1,9 @@
 // stop-cancels-ask (Ops #1085; Shine 2026-11-24 m104239: "why cant i stop coo lead's chat, it seems to be stuck for
-// the past 13 hours"): Stop ends a waiting ask_user_question at once, and a force-reset leaves no question or
-// permission prompt behind. The tool runs through the real ClientSession.askUser, the real list of asks and the real
-// per-owner split (#1079), in windows of Shine's and Wai's logins. No server, model or socket; temporary folders only.
-import { getEventListeners } from "node:events";
+// the past 13 hours"). nonblocking-ask (Ops #1087, dr-36efc6499afe) removed the wait itself: the call returns as it
+// posts, so Stop has nothing to end and the question keeps waiting for its owner; a force-reset still leaves no
+// question or permission prompt behind, with no wake. The tool runs through the real ClientSession.postQuestion, the
+// real list of asks and the real per-owner split (#1079), in windows of Shine's and Wai's logins. No server, model or
+// socket; temporary folders only.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,8 +19,6 @@ import { PeopleBook, type SentBy, serveOwners, tailscaleSenderOf } from "../../s
 const WAI_SENT: SentBy = { login: "sayswai@gmail.com", name: "Wai", owner: false };
 const SHINE_SENT: SentBy = { login: "aungshine@gmail.com", name: "Shine", owner: true };
 const PORT: UiQuestion = { id: "port", question: "Which port?", options: [{ label: "8080" }, { label: "9090" }] };
-const DNS: UiQuestion = { id: "dns", question: "Create the address?", options: [{ label: "Yes" }, { label: "No" }] };
-const ABORTED = "ask_user_question aborted";
 
 interface FakeChat {
 	id: string;
@@ -136,7 +135,7 @@ function setup() {
 	const wai = win(convs, viewers.wai);
 	const tool = makeAskUserQuestionTool(
 		{
-			askUser: (q, sig, conversationId, owner) => shine.client.askUser(q, sig, conversationId, owner),
+			postQuestion: (q, id, conversationId, owner) => shine.client.postQuestion(q, id, conversationId, owner),
 			questionOwners: (conversationId) => shine.client.questionOwners(conversationId),
 		},
 		asking.id,
@@ -149,99 +148,49 @@ function setup() {
 	return { asking, shine, wai, run, stop };
 }
 
-/** How the call stands one timer turn later: Stop must not wait for anything (no hard-abort timer, no force-reset). */
-const outcomeNow = (p: Promise<unknown>) =>
-	Promise.race([
-		p.then(
-			() => "answered",
-			(e: Error) => e.message,
-		),
-		new Promise((r) => setTimeout(() => r("still waiting"), 0)),
-	]);
 const askOf = (questionId: string): Ask => askHub.list().find((a) => a.fields.some((f) => f.id === questionId))!;
 const retracted = (w: Win) => w.sent.flatMap((m) => (m.type === "question_retracted" ? [m.id] : []));
-const abortListeners = (s: AbortSignal) => getEventListeners(s, "abort").length;
 
-describe("Stop while ask_user_question waits", () => {
-	it("one owner: the call fails at once, the question leaves every list and every window closes it", async () => {
+describe("Stop after ask_user_question posted (nonblocking-ask, Ops #1087)", () => {
+	it("the call returned as it posted: nothing waits on Stop, and the question keeps waiting for its owner", async () => {
 		const { asking, shine, wai, run, stop } = setup();
 		typedBy(asking, SHINE_SENT);
-		const result = run([PORT]);
+		const result = await run([PORT]);
+		expect(result.content[0]!.text).toContain("non-blocking");
 		const ask = askOf("port");
+		stop.abort();
 		expect(statics.sharedQuestions.size).toBe(1);
-		stop.abort();
-		expect(await outcomeNow(result)).toBe(ABORTED);
-		expect(statics.sharedQuestions.size).toBe(0);
-		expect(askHub.list()).toEqual([]);
-		expect(gone).toEqual([{ id: ask.id, reason: "the run was stopped" }]);
-		expect(retracted(shine)).toEqual([ask.id]);
-		expect(retracted(wai)).toEqual([ask.id]);
-		expect(call<boolean>(shine.client, "isWaitingOnUser", asking.id)).toBe(false);
-		expect(abortListeners(stop.signal)).toBe(0);
-	});
-
-	it("Shine and Wai: Shine answered, Wai's dialog still open: the call fails and Wai's dialog closes", async () => {
-		const { asking, shine, wai, run, stop } = setup();
-		typedBy(asking, SHINE_SENT, WAI_SENT);
-		const result = run([
-			{ ...PORT, owner: "Shine" },
-			{ ...DNS, owner: "Wai" },
-		]);
-		const [forShine, forWai] = [askOf("port"), askOf("dns")];
-		shine.client.resolveQuestion(forShine.id, [{ id: "port", selected: ["8080"] }]);
-		stop.abort();
-		expect(await outcomeNow(result)).toBe(ABORTED);
-		expect(statics.sharedQuestions.size).toBe(0);
-		expect(askHub.list()).toEqual([]);
-		expect(gone).toEqual([{ id: forWai.id, reason: "the run was stopped" }]);
-		expect(retracted(wai)).toEqual([forShine.id, forWai.id]);
-		expect(abortListeners(stop.signal)).toBe(0);
-	});
-
-	it("Shine and Wai, both still open: both dialogs close and the call fails", async () => {
-		const { asking, shine, run, stop } = setup();
-		typedBy(asking, SHINE_SENT, WAI_SENT);
-		const result = run([
-			{ ...PORT, owner: "Shine" },
-			{ ...DNS, owner: "Wai" },
-		]);
-		const ids = [askOf("port").id, askOf("dns").id];
-		stop.abort();
-		expect(await outcomeNow(result)).toBe(ABORTED);
-		expect(statics.sharedQuestions.size).toBe(0);
-		expect(askHub.list()).toEqual([]);
-		expect(gone.map((g) => g.id).sort()).toEqual([...ids].sort());
-		expect(retracted(shine).sort()).toEqual([...ids].sort());
-		expect(abortListeners(stop.signal)).toBe(0);
-	});
-
-	it("an answer before any Stop works as before and leaves no abort listener behind", async () => {
-		const { asking, shine, run, stop } = setup();
-		typedBy(asking, SHINE_SENT);
-		const result = run([PORT]);
-		expect(abortListeners(stop.signal)).toBe(1);
-		shine.client.resolveQuestion(askOf("port").id, [{ id: "port", selected: ["9090"] }]);
-		expect((await result).content[0]!.text).toBe("port: 9090");
-		expect(abortListeners(stop.signal)).toBe(0);
-		stop.abort(); // a later Stop finds nothing to end
+		expect(askHub.list().map((a) => a.id)).toEqual([ask.id]);
 		expect(gone).toEqual([]);
+		expect(retracted(shine)).toEqual([]);
+		expect(retracted(wai)).toEqual([]);
+		// The chat is not stuck on it: its turn ended, so it is not "waiting on the owner" for the stall watch.
+		expect(call<boolean>(shine.client, "isWaitingOnUser", asking.id)).toBe(false);
 	});
 
-	it("a cancel in the browser still ends the call as cancelled, with no abort listener left", async () => {
-		const { asking, shine, run, stop } = setup();
-		typedBy(asking, SHINE_SENT);
-		const result = run([PORT]);
-		shine.client.resolveQuestion(askOf("port").id, [], true);
-		await expect(result).rejects.toThrow("User cancelled the question.");
-		expect(abortListeners(stop.signal)).toBe(0);
+	it("Shine and Wai: one card each, both still open after Stop", async () => {
+		const { asking, run, stop } = setup();
+		typedBy(asking, SHINE_SENT, WAI_SENT);
+		await run([
+			{ ...PORT, owner: "Shine" },
+			{ id: "dns", question: "Create the address?", options: [{ label: "Yes" }, { label: "No" }], owner: "Wai" },
+		]);
+		stop.abort();
+		expect(
+			askHub
+				.list()
+				.map((a) => a.requester ?? "Shine")
+				.sort(),
+		).toEqual(["Shine", "Wai"]);
+		expect(gone).toEqual([]);
 	});
 });
 
-describe("force-reset of a chat waiting on a question", () => {
+describe("force-reset of a chat with a waiting question", () => {
 	it("cancels its questions and permission prompts: 0 left waiting on the owner", async () => {
 		const { asking, shine, run } = setup();
 		typedBy(asking, SHINE_SENT);
-		const result = run([PORT]);
+		await run([PORT]);
 		const ask = askOf("port");
 		let denied = false;
 		statics.sharedApprovals.set("ap-1", {
@@ -252,7 +201,6 @@ describe("force-reset of a chat waiting on a question", () => {
 		});
 		expect(call<boolean>(shine.client, "isWaitingOnUser", asking.id)).toBe(true);
 		await call<Promise<void>>(shine.client, "forceResetConversation", asking, "test: the run did not stop");
-		expect(await outcomeNow(result)).toBe("User cancelled the question.");
 		expect([...statics.sharedQuestions.values()].filter((q) => q.conversationId === asking.id)).toEqual([]);
 		expect(statics.sharedApprovals.size).toBe(0);
 		expect(denied).toBe(true);

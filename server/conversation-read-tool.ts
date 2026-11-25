@@ -34,6 +34,7 @@ import {
 	unionTouchLists,
 } from "./conversation-touches.js";
 import type { ClaimView } from "./claim-store.js";
+import { askHub } from "./asks.js";
 
 /** 运行中对话的列表行（ClientSession.convs 的轻量视图）。 */
 export interface ConversationListEntry {
@@ -377,10 +378,6 @@ export interface ConversationSummary {
 	lastTool?: { name: string; hint: string };
 	/** 最后一条 assistant 消息的纯文本（文本块拼接），没有则 undefined。 */
 	lastAssistant?: string;
-	/** 是否在等用户回答问卷：最后一次 ask_user_question 调用之后没有同名
-	 *  toolResult（pi 引擎问卷走工具调用，可从转录推断；DSH 问卷不走工具，
-	 *  推断不出 —— 见 status 文案里的诚实说明，只报能确定的）。 */
-	waitingQuestion: boolean;
 }
 
 /** action=status 的摘要器（纯函数）：只读转录，不碰 host。 */
@@ -388,8 +385,6 @@ export function summarizeConversation(messages: TranscriptInputMessage[]): Conve
 	const list = Array.isArray(messages) ? messages : [];
 	let lastTool: ConversationSummary["lastTool"];
 	let lastAssistant: ConversationSummary["lastAssistant"];
-	let lastAskIdx = -1;
-	let lastAskResultIdx = -1;
 	for (let i = 0; i < list.length; i++) {
 		const m = list[i];
 		if (!m || typeof m !== "object") continue;
@@ -400,13 +395,11 @@ export function summarizeConversation(messages: TranscriptInputMessage[]): Conve
 				for (const c of m.toolCalls) {
 					if (c && typeof c.name === "string") {
 						lastTool = { name: c.name, hint: toolHint(c.args) };
-						if (c.name === "ask_user_question") lastAskIdx = i;
 					}
 				}
 			} else {
 				for (const c of calls) {
 					lastTool = { name: c.name, hint: toolHint(c.args) };
-					if (c.name === "ask_user_question") lastAskIdx = i;
 				}
 			}
 			if (Array.isArray(m.content)) {
@@ -421,11 +414,9 @@ export function summarizeConversation(messages: TranscriptInputMessage[]): Conve
 			if (joined) lastAssistant = joined;
 		} else if (m.role === "bashExecution" && typeof m.command === "string") {
 			lastTool = { name: "bash", hint: toolHint({ command: m.command }) };
-		} else if (m.role === "toolResult" && m.toolName === "ask_user_question") {
-			lastAskResultIdx = i;
 		}
 	}
-	return { lastTool, lastAssistant, waitingQuestion: lastAskIdx >= 0 && lastAskResultIdx < lastAskIdx };
+	return { lastTool, lastAssistant };
 }
 
 /** read 的附加说明行：query 命中位置 + chat 视图裁剪说明（纯函数）。 */
@@ -821,11 +812,12 @@ export function makeConversationReadTool(
 					touched.length > 0
 						? `Recently touched: ${formatTouchesCompact(touched, { maxItems: 5 })}.`
 						: `No files touched recently.`;
-				// 等问卷只能从转录推断（ask_user_question 调了没回）；DSH 问卷不走
-				// 工具调用，推断不出 —— 文案写“转录显示”，不夸大。
-				const waitLine = sum.waitingQuestion
-					? `\n${`⚠ The transcript shows it waiting for a question answer (answer first).`}`
-					: "";
+				// ask_user_question returns as it posts (Ops #1087), so the transcript can't tell whether its question still
+				// waits: the list of asks can (the chat's own questions, open or kept for later).
+				const waitingQuestion = askHub
+					.list()
+					.some((a) => a.kind === "question" && (id ? a.conversationId === id : a.sessionFile === path));
+				const waitLine = waitingQuestion ? `\n⚠ It has a question waiting for the owner's answer.` : "";
 				// 认领只在有的时候占一行（没有就不提，省 token）。
 				const claimLine =
 					statusClaims.length > 0 ? `\n- ${`Claims: ${formatClaimLines(statusClaims, 3, "inline").join("; ")}.`}` : "";
@@ -836,7 +828,7 @@ export function makeConversationReadTool(
 					lastAssistant: sum.lastAssistant ? truncateCounted(sum.lastAssistant, 200) : undefined,
 					touched: touched.slice(0, 5),
 					claims: statusClaims.map((c) => ({ path: c.path, ownerTitle: c.ownerTitle })),
-					waitingQuestion: sum.waitingQuestion,
+					waitingQuestion,
 				});
 			}
 			return text(`Invalid action: ${p.action} (must be "list", "read", "files" or "status").`);

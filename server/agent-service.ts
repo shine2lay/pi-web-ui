@@ -76,21 +76,29 @@ import {
 	type SweepChat,
 } from "./chat-slots.js";
 import { displayPreview } from "./display-preview.js";
-import {
-	ASK_USER_NO_CLIENT_ERROR,
-	ASK_USER_NO_CLIENT_GRACE_MS,
-	askDeliveryOnAsk,
-	askDeliveryOnGraceExpiry,
-	pickPendingQuestionForSnapshot,
-	questionPendingMessage,
-	shouldCancelOnClientDispose,
-} from "./ask-delivery.js";
+import { pickPendingQuestionForSnapshot, questionPendingMessage, savedQuestionsOf } from "./ask-delivery.js";
 import type { PendingQuestionEntry } from "./ask-delivery.js";
+import {
+	type CardEnd,
+	type CardOwner,
+	bindRestoredCards,
+	dropChatCards,
+	makeAskUserQuestionTool,
+	postCard,
+	type QuestionRuntimeHost,
+	restoreCards,
+	setCardLater,
+	settleCard,
+} from "./pending-questions-runtime.js";
+import { type PendingQuestionsHost, PendingQuestionsStore } from "./pending-questions-store.js";
+export { makeAskUserQuestionTool };
 import {
 	approvalAsk,
 	approvalFrom,
 	type Ask,
+	type AskAnswerFn,
 	type AskEvent,
+	type AskFieldAnswer,
 	askHub,
 	type AskMeta,
 	dialogAnswersOf,
@@ -128,9 +136,7 @@ import type { OwnerQuestionAsker } from "./owner-question-card.js";
 import { isCooHomeChat, makeOwnerQuestionTool } from "./owner-question-tool.js";
 import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "./owner-question-holds.js";
 import { OwnerQuestionRouter } from "./owner-question-router.js";
-import { ASK_ABORTED_ERROR, endOnAbort } from "./ask-abort.js";
-import { askQuestionsByOwner, type OwnerAskResult, type QuestionOwnerData } from "./ask-question-owners.js";
-import { askUserQuestionParameters } from "./ask-question-schema.js";
+import type { QuestionOwnerData } from "./ask-question-owners.js";
 import {
 	askShownToViewer,
 	dialogAskId,
@@ -512,6 +518,7 @@ import type {
 	UiRoleAskView,
 	UiServiceInfo,
 	UiState,
+	UiPendingQuestion,
 	UiSubagentTemplate,
 	UiTldrLine,
 	UiTaskQueue,
@@ -1487,78 +1494,6 @@ function makeMarkersListTool(
 			} as never;
 		},
 	} as unknown as ToolDefinition;
-}
-
-/**
- * 标准 pi 引擎的 ask_user_question 工具：模型调用时把问题桥到浏览器（复用 DSH
- * 引擎的 question_pending/question_answer 协议，前端 DshQuestionDialog 富渲染），
- * 阻塞 agent 循环直到用户在浏览器回答或取消。
- *
- * 标准 SDK 没有内建 ask_user_question，故由 pi-web-ui 以 customTool 注册（与
- * bash/edit 同机制）。DSH 引擎走 goal-rpc 的 userQuestions provider，两者互不
- * 冲突（各引擎各走各的）。
- * Stop (the run's abort signal, passed whole) ends a waiting question at once (stop-cancels-ask, Ops #1085).
- */
-export function makeAskUserQuestionTool(
-	clientSession: {
-		askUser: (
-			q: UiQuestion[],
-			sig: { aborted?: boolean; toolCallId?: string; signal?: AbortSignal },
-			conversationId?: string,
-			// ask-question-owners (Ops #1079): the owner this dialog is for, from data (never the chat's latest input).
-			owner?: { requester?: string },
-			// owner-question routing (Ops #685): COO handed the question back (not the owner's answer).
-		) => Promise<OwnerAskResult>;
-		/** ask-question-owners (Ops #1079): the chat's requester records and people.json's names. */
-		questionOwners: (conversationId?: string) => QuestionOwnerData;
-	},
-	/** 本 runtime 所属会话：提问跟着对话走，快照只把当前对话的问卷推给客户端。 */
-	ownerId?: string,
-): ToolDefinition {
-	return {
-		name: "ask_user_question",
-		label: "Ask the user",
-		description:
-			"Ask the user focused questions to clarify ambiguous requirements (clarify the task, confirm decisions, get preferences). " +
-			"Strictly ask 1 to 3 questions per call (prefer 1, max 3); provide 2 to 4 mutually exclusive options with the " +
-			"recommended option first, and explain impact/tradeoff in each option description. " +
-			"Each question renders a browser dialog with markdown/HTML rich text; options may carry a `preview`. Submit or cancel to resume. " +
-			"Set `owner` on each question when the turn is for several owners or asks another owner.",
-		promptSnippet: "ask the user 1-3 focused questions with recommended options and tradeoffs to clarify requirements",
-		promptGuidelines: [
-			"When requirements are ambiguous, use ask_user_question to clarify instead of guessing: " +
-				"ask 1 to 3 focused questions (prefer 1, max 3), provide 2-4 mutually exclusive options with the " +
-				"recommended option first, and explain impact/tradeoff in description",
-			"A cancelled question comes back as a tool error — respect it and continue without re-asking immediately",
-			"ask_user_question: when a turn carries work for more than one owner (e.g. Shine and Wai), or you ask an owner " +
-				"other than the one the turn is for, set `owner` on every question; each owner gets his own dialog",
-		],
-		parameters: askUserQuestionParameters,
-		execute: async (_id: string, params: unknown, signal: AbortSignal | undefined): Promise<unknown> => {
-			const qs = (params as { questions: UiQuestion[] }).questions;
-			if (!Array.isArray(qs) || qs.length === 0) {
-				throw new Error("ask_user_question requires at least one question");
-			}
-			if (qs.length > 3) {
-				throw new Error("ask_user_question allows at most 3 questions per call to prevent question fatigue");
-			}
-			// ask-question-owners (Ops #1079): each question's owner from data (refused before anything is shown when
-			// unclear), one dialog per owner; the decision record is keyed by each dialog's tool call id.
-			return askQuestionsByOwner(qs, clientSession.questionOwners(ownerId), _id, (slice, toolCallId) =>
-				clientSession.askUser(
-					slice.questions,
-					{ signal, toolCallId },
-					ownerId,
-					slice.requester ? { requester: slice.requester } : {},
-				),
-			) as never;
-		},
-	} as unknown as ToolDefinition;
-}
-
-/** 判定是否应当即时向前端推送问卷弹窗（只推给当前前台会话，未指定会话按全局放行）。 */
-export function shouldPopQuestion(conversationId: string | undefined, activeId: string): boolean {
-	return conversationId === undefined || conversationId === activeId;
 }
 
 // ---------------------------------------------------------------------------
@@ -5728,14 +5663,12 @@ export class ClientSession {
 
 	// -----------------------------------------------------------------------
 	// 用户提问桥（标准 pi 引擎的 ask_user_question customTool）：与 DSH 引擎的
-	// question_pending/question_answer 同协议。模型调 ask_user_question 工具 →
-	// 本桥发 question_pending 给浏览器 → 等 question_answer → resolve/reject
-	// 工具结果（agent 循环阻塞）。一次只展示一个提问（agent 阻塞在工具执行）。
+	// question_pending/question_answer 同协议。nonblocking-ask (Ops #1087): the tool posts and returns; the
+	// answer wakes the chat later (pending-questions-runtime.ts).
 	// -----------------------------------------------------------------------
 	/** 序号也必须共享：注册表共享之后，两个客户端各自生成 `q-1` 会撞键。 */
 	private static questionSeq = 0;
-	/** 待答提问（id → 载荷 + resolve）。一次正常只有一个（agent 阻塞在工具执行）；
-	 *  conversationId 记录谁问的：看门狗豁免、快照恢复都靠它。
+	/** 待答提问（id → 载荷）；conversationId 记录谁问的：快照恢复靠它。
 	 *
 	 *  **进程共享**（与 sharedConvs 同构）：server-owned-chats 把对话归给了服务端，
 	 *  问卷同理 —— 它属于**对话**而不是某个客户端。所以每台在线设备都能看到、
@@ -5743,6 +5676,23 @@ export class ClientSession {
 	private static readonly sharedQuestions = new Map<string, PendingQuestionEntry>();
 	private get pendingQuestions(): Map<string, PendingQuestionEntry> {
 		return ClientSession.sharedQuestions;
+	}
+	/** nonblocking-ask (Ops #1087): the durable list and the way wakes go in (AgentService sets it). */
+	static pendingQuestionsHost: PendingQuestionsHost | null = null;
+	private static readonly questionRuntime: QuestionRuntimeHost = {
+		shared: ClientSession.sharedQuestions,
+		store: () => ClientSession.pendingQuestionsHost,
+		broadcast: (msg, ask) => ClientSession.broadcastToAllClients(msg, ask),
+		conversationsChanged: () => ClientSession.emitConversationsToAll(),
+		snapshotsChanged: () => ClientSession.approvalsChanged(),
+	};
+	/** nonblocking-ask (Ops #1087): at start-up, waiting cards back everywhere; a settled one's wake replayed once. */
+	static restorePendingQuestions(): Promise<void> {
+		return restoreCards(ClientSession.questionRuntime, {
+			nextId: () => `q-${++ClientSession.questionSeq}`,
+			conversationIdOf: (file) => ClientSession.conversationIdOfFile(file),
+			onAnswer: (id) => (answers, from) => ClientSession.answerCard(id, answers, from),
+		});
 	}
 
 	/** 待审批高危工具调用（Human-in-the-Loop: Edit & Run）。
@@ -7600,11 +7550,8 @@ export class ClientSession {
 			const qid = ClientSession.questionIdOfAsk(ask.id);
 			const entry = qid ? ClientSession.sharedQuestions.get(qid) : undefined;
 			if (qid && entry && ev.type === "returned") {
-				ClientSession.sharedQuestions.delete(qid);
-				if (entry.graceTimer) clearTimeout(entry.graceTimer);
-				entry.returned?.(ev.note);
-				ClientSession.broadcastToAllClients({ type: "question_retracted", id: qid });
-			} else if (qid && entry && askDeliveryOnAsk(ClientSession.connectedClientCount()) === "emit") {
+				settleCard(ClientSession.questionRuntime, qid, { kind: "returned", note: ev.note });
+			} else if (qid && entry && !entry.later) {
 				ClientSession.broadcastToAllClients({ ...questionPendingMessage(qid, entry), ...routeOfAsk(ask) }, ask);
 			}
 		} else if (ask.kind === "approval" && ev.type === "released") {
@@ -9655,6 +9602,7 @@ export class ClientSession {
 			rewinding: conv.rewinding ?? null,
 			tooBig: conv.tooBig ?? null,
 			pendingQuestion: this.pendingQuestionForSnapshot(),
+			savedQuestions: this.savedQuestionsForSnapshot(),
 			pendingApproval: this.pendingApprovalForSnapshot(),
 			waitingOn: this.waitingOnHere(),
 			subagentHandoffs: this.subagentHandoffs.length > 0 ? [...this.subagentHandoffs] : undefined,
@@ -10121,14 +10069,9 @@ export class ClientSession {
 			return found ?? { session: this, convId: ownerId };
 		};
 		return {
-			askUser: (
-				questions: UiQuestion[],
-				sig: { aborted?: boolean; toolCallId?: string; signal?: AbortSignal },
-				_c?: string,
-				owner?: { requester?: string },
-			) => {
+			postQuestion: (questions: UiQuestion[], toolCallId: string, _c: string | undefined, owner: CardOwner) => {
 				const h = home();
-				return h.session.askUser(questions, sig, h.convId, owner);
+				h.session.postQuestion(questions, toolCallId, h.convId, owner);
 			},
 			questionOwners: () => {
 				const h = home();
@@ -10145,160 +10088,93 @@ export class ClientSession {
 		};
 	}
 
-	/** 标准引擎模型调 ask_user_question：发 question_pending 给浏览器并阻塞等待
-	 *  question_answer。sig.signal 中止（Stop）→ 立即收起并 reject（Ops #1085）。
-	 *  返回 answers（用户选中/自定义），或 null（用户取消）。
-	 *
-	 *  不设超时：等的是「人类回答」，不是挂死的工具。因此也不进工具挂死看门狗
-	 *  （见 tool_execution_start）、不算 stall 失联（见 startStallTimer）。 */
-	askUser(
+	/** nonblocking-ask (Ops #1087): the model's ask_user_question posts one owner's card and returns; the answer wakes
+	 *  the chat later (pending-questions-runtime.ts). Questionnaires turned off: refused, nothing shown. */
+	postQuestion(
 		questions: UiQuestion[],
-		sig: { aborted?: boolean; toolCallId?: string; signal?: AbortSignal },
-		conversationId?: string,
-		owner?: { requester?: string },
-	): Promise<OwnerAskResult> {
-		let stop = () => {};
-		const wait = new Promise<OwnerAskResult>((resolve, reject) => {
-			if (sig?.aborted || sig?.signal?.aborted || this.disposed) {
-				reject(new Error(ASK_ABORTED_ERROR));
-				return;
-			}
-			// 问卷开关（默认开）：关 → 不弹对话框，立即报错让模型得知已禁用。
-			// 与统一工具门控双保险：工具 tab 里单独关掉 ask_user_question 也一样拒收。
-			if (
-				this.settingsSvc.current.questionnaireEnabled === false ||
-				(this.settingsSvc.current.disabledAgentTools ?? []).includes(ASK_USER_QUESTION_TOOL_NAME)
-			) {
-				reject(new Error("Questionnaires are turned off; turn them back on in Settings"));
-				return;
-			}
-			const id = `q-${++ClientSession.questionSeq}`;
-			const conversationTitle = conversationId ? this.convs.get(conversationId)?.title : undefined;
-			const entry: PendingQuestionEntry = { resolve, questions, conversationId, conversationTitle, askId: id };
-			const manager = this.convs.get(conversationId ?? this.activeId)?.session.sessionManager;
-			const file = manager?.getSessionFile();
-			if (manager && file) entry.nativeSource = { sessionId: manager.getSessionId(), file };
-			this.pendingQuestions.set(id, entry);
-			stop = () => this.retractQuestion(id, entry, "the run was stopped") && reject(new Error(ASK_ABORTED_ERROR));
-			const askingConv = conversationId ? this.convs.get(conversationId) : undefined;
-			const ask: Ask = {
-				...questionAsk(id, questions, ClientSession.askMetaFor(askingConv, owner)),
-				...(sig.toolCallId ? { toolCallId: sig.toolCallId } : {}),
-			};
-			// owner-question routing (Ops #685): where it goes (none while the switch is off: as before). Only a
-			// question with its own chat is routed: a held one still shows on that chat's page.
-			const route = askingConv
-				? ClientSession.ownerQuestions?.routeAskIn(ask, askingConv, () => ClientSession.homeRoleOf(ask.sessionFile))
-				: undefined;
-			if (route?.to === "coo") entry.returned = (note) => resolve({ returned: note });
-			// telegram-answers: also in the list of asks, so a plugin (Telegram) can show and answer it.
-			askHub.add(
-				ask,
-				(answers, from) => {
-					const qid = ClientSession.questionIdOfAsk(id);
-					const current = qid ? this.pendingQuestions.get(qid) : undefined;
-					if (!qid || !current) return { ok: false, error: NOT_WAITING };
-					const ok = this.resolveQuestion(qid, questionAnswersFrom(current.questions, answers), false, from);
-					return ok ? { ok: true } : { ok: false, error: NOT_WAITING };
-				},
-				route,
-			);
-			// owner-question routing: held for COO, it shows only on the asking chat's own page (its
-			// snapshot): no pop-up elsewhere, no Telegram, no no-page timer, until COO or the safety net
-			// lets it through (ClientSession.ownerAskRouted).
-			if (isAskHeld(askHub.get(id))) {
-				ClientSession.approvalsChanged();
-				return;
-			}
-			// 运行列表的「?」角标靠 conversations 推送（问卷登记/解决不经过快照通道）。
-			ClientSession.emitConversationsToAll();
-			// ask-question-delivery：不走上游的 shouldPopQuestion（只推给正开着该对话的页面）。
-			// 别的对话在问也照样弹，对话框标出是哪条对话在问 —— 问卷阻塞整个 agent 循环，
-			// 比起角标更不能漏看（用户 2026-09-23 的选择）。
-			// 没有任何页面连着时不能直接 emit —— emit 会静默丢弃，而 askUser 不设
-			// 超时，这轮就永远回不来了（问卷「不弹」的根因）。判定见 ask-delivery.ts。
-			if (askDeliveryOnAsk(ClientSession.connectedClientCount()) === "emit") {
-				// multi-device：广播给**所有**在线设备，而不只是发起提问的那一台——
-				// 在笔记本上被问、走到台式机上回答。conversationTitle 让正在看别
-				// 的对话的那台知道这是谁在问。
-				// owner-question routing (Ops #685): with which way it came; owner-requester (#1051): its owner's windows only.
-				const ask = askHub.get(id);
-				ClientSession.broadcastToAllClients({ ...questionPendingMessage(id, entry), ...routeOfAsk(ask) }, ask);
-				return;
-			}
-			// 刷新/重连的空窗：等一会儿。期间页面回来了 → 快照把对话框补出来
-			// （pendingQuestionForSnapshot 不再按对话过滤），不必补发即时消息。
-			// telegram-answers: while a plugin (Telegram) shows asks, it waits for an answer from there
-			// or from a page that comes back, instead of being refused because no page is open.
-			if (askHub.listening) return;
-			entry.graceTimer = setTimeout(() => {
-				if (askHub.listening) return;
-				const stillPending = this.pendingQuestions.get(id) === entry;
-				const clientCount = ClientSession.connectedClientCount();
-				if (askDeliveryOnGraceExpiry({ clientCount, stillPending }) !== "reject") return;
-				this.retractQuestion(id, entry, "no browser was open"); // the chat list's "?" goes too
-				reject(new Error(ASK_USER_NO_CLIENT_ERROR));
-			}, ASK_USER_NO_CLIENT_GRACE_MS);
-			// 别让这个计时器拖住进程退出（dispose 时也会清，见 cancelPendingQuestions）。
-			entry.graceTimer.unref?.();
-		});
-		return endOnAbort(sig?.signal, () => stop(), wait);
+		toolCallId: string,
+		conversationId: string | undefined,
+		owner: CardOwner,
+	): void {
+		const { questionnaireEnabled, disabledAgentTools } = this.settingsSvc.current;
+		if (questionnaireEnabled === false || (disabledAgentTools ?? []).includes(ASK_USER_QUESTION_TOOL_NAME))
+			throw new Error("Questionnaires are turned off; turn them back on in Settings");
+		const id = `q-${++ClientSession.questionSeq}`;
+		const askingConv = conversationId ? this.convs.get(conversationId) : undefined;
+		const title = askingConv?.title;
+		const entry: PendingQuestionEntry = { questions, askId: id, recordId: toolCallId, conversationId };
+		if (title) entry.conversationTitle = title;
+		const manager = this.convs.get(conversationId ?? this.activeId)?.session.sessionManager;
+		const file = manager?.getSessionFile();
+		if (manager && file) entry.nativeSource = { sessionId: manager.getSessionId(), file };
+		const requester = owner.requester ? { requester: owner.requester } : {};
+		const ask: Ask = { ...questionAsk(id, questions, ClientSession.askMetaFor(askingConv, requester)), toolCallId };
+		if (ask.sessionFile) entry.sessionFile = ask.sessionFile;
+		// owner-question routing (Ops #685): where it goes (none while the switch is off). Only a question with its own
+		// chat is routed: a held one still shows on that chat's page.
+		const route = askingConv
+			? ClientSession.ownerQuestions?.routeAskIn(ask, askingConv, () => ClientSession.homeRoleOf(ask.sessionFile))
+			: undefined;
+		const onAnswer: AskAnswerFn = (answers, from) => ClientSession.answerCard(id, answers, from);
+		postCard(ClientSession.questionRuntime, { entry, ask, owner: owner.owner, route }, onAnswer);
 	}
 
-	/** 前端回答模型提问（question_answer → 恢复 askUser 的 Promise）。id 需匹配
-	 *  pendingQuestions 中键；未匹配（对方刚回答/取消、页面刷新重发）静默忽略。
-	 *  成功 resolve 后同步推 question_retracted + conversations：本页 live 对话框
-	 *  靠前者收起（跨页作答时源页就靠它），别处的「?」角标靠后者即时消失。
-	 *  ask-question-delivery：两者都推给**所有**在线设备（问卷进程共享，每台都可能开着）。
-	 *  返回是否真的恢复了一个挂起提问（跨页作答的送达回执用）。 */
+	/** telegram-answers: a card answered from the list of asks (Telegram, a plugin, the Roles page). */
+	private static answerCard(askId: string, answers: AskFieldAnswer[], from: string): AskResult {
+		const qid = ClientSession.questionIdOfAsk(askId);
+		const current = qid ? ClientSession.sharedQuestions.get(qid) : undefined;
+		if (!qid || !current) return { ok: false, error: NOT_WAITING };
+		const ok = ClientSession.endQuestion(qid, questionAnswersFrom(current.questions, answers), false, from);
+		return ok ? { ok: true } : { ok: false, error: NOT_WAITING };
+	}
+
+	/** A waiting card answered or cancelled (question_answer, a plugin, another window): closed everywhere, its wake
+	 *  on the way into the chat. False when it no longer waits (answered elsewhere first, a page sending again). */
 	resolveQuestion(id: string, answers: QuestionAnswer[], cancelled?: boolean, from: string = FROM_BROWSER): boolean {
-		const pending = this.pendingQuestions.get(id);
+		return ClientSession.endQuestion(id, answers, cancelled, from);
+	}
+	private static endQuestion(id: string, answers: QuestionAnswer[], cancelled = false, from: string): boolean {
+		const pending = ClientSession.sharedQuestions.get(id);
 		if (!pending) return false;
 		// This observer logs/poisons persistence failures instead of discarding the owner's answer.
 		if (!cancelled) ClientSession.observeUnboundOwnerAnswer?.(pending.nativeSource);
-		this.pendingQuestions.delete(id);
-		if (pending.graceTimer) clearTimeout(pending.graceTimer);
-		pending.resolve(cancelled ? null : answers);
-		// telegram-answers: whoever shows it elsewhere learns the answer and where it came from.
-		if (pending.askId) {
-			if (cancelled) askHub.settle(pending.askId, { how: "gone", reason: `cancelled in the ${from}` });
-			else
-				askHub.settle(pending.askId, {
-					how: "answered",
-					summary: summarizeQuestionAnswers(pending.questions, answers),
-					from,
-					answers: answers.map((a) => ({
-						id: a.id,
-						selected: a.selected ?? [],
-						...(a.custom ? { text: a.custom } : {}),
-					})),
-				});
-		}
-		// multi-device：别的设备上还开着同一张问卷 —— 广播收起，第一个答的生效。
-		// 前端只收「正好是这个 id」的那张，紧接着弹出的下一张不会被误关。
-		ClientSession.broadcastToAllClients({ type: "question_retracted", id });
-		// 同上：角标消失也要即时推送（否则要等到 run 结束别处才知道问完了）。
-		ClientSession.emitConversationsToAll();
-		return true;
+		const end: CardEnd = cancelled ? { kind: "cancelled", from } : { kind: "answered", answers, from };
+		return settleCard(ClientSession.questionRuntime, id, end);
 	}
 
-	/** 快照侧的待答提问（UiState.pendingQuestion）：**不分对话一律带上**——问卷
-	 *  的唯一入口就是对话框，按 activeId 过滤会让「提问时没人在线」的问卷只在用户
-	 *  恰好回到那条对话时才复活，否则永远丢失而服务端还阻塞着（见 ask-delivery.ts）。
-	 *  conversationId 随快照一起给前端，用于标注这张问卷属于哪条对话。 */
+	/** Keep for later (Ops #1087, Shine m104353): Later / ✕ / Esc tuck the card away in its owner's windows (still
+	 *  open everywhere; its chat shows the reopen bar), or bring it back up. False when it no longer waits. */
+	questionLater(id: string, later: boolean): boolean {
+		return setCardLater(ClientSession.questionRuntime, id, later);
+	}
+
+	/** The open chat (any window's) whose transcript is `file`, for a card put back after a restart. */
+	private static conversationIdOfFile(file: string): string | undefined {
+		for (const cs of ClientSession.liveSessions)
+			for (const c of cs.convs.values()) if (ClientSession.askMetaOf(c).sessionFile === file) return c.id;
+		return undefined;
+	}
+	/** 快照侧的待答提问（UiState.pendingQuestion）：不分对话一律带上（the card a window pops up, from any chat; one kept
+	 *  for later never pops up, see ask-delivery.ts）。conversationId 随快照给前端，标注是哪条对话在问。 */
 	private pendingQuestionForSnapshot(): UiState["pendingQuestion"] {
-		// owner-question routing (Ops #685): one held for COO shows only in its own chat's window, with its line.
-		const askOf = (id: string) => askHub.get(this.pendingQuestions.get(id)?.askId ?? id);
-		const shown = [...this.pendingQuestions].filter(([id, p]) =>
-			askShownToViewer(askOf(id), p.conversationId, this.activeId, this.viewer),
-		);
-		const found = pickPendingQuestionForSnapshot(shown);
+		const found = pickPendingQuestionForSnapshot(this.questionsShownHere());
 		if (!found) return null;
-		const picked = { ...found, ...routeOfAsk(askOf(found.id)) };
+		const picked = { ...found, ...routeOfAsk(askHub.get(this.pendingQuestions.get(found.id)?.askId ?? found.id)) };
 		// 标题按对话现名取（改过名也跟上，同上游）；取不到时用提问时记下的（picked 已带）。
 		// 不回落到「本客户端当前对话」：问卷进程共享，那会给别的设备标错来源。
 		const liveTitle = picked.conversationId !== undefined ? this.convs.get(picked.conversationId)?.title : undefined;
 		return liveTitle ? { ...picked, conversationTitle: liveTitle } : picked;
+	}
+	/** owner-question routing (Ops #685): one held for COO shows only in its own chat's window, with its line. */
+	private questionsShownHere(): [string, PendingQuestionEntry][] {
+		bindRestoredCards(ClientSession.questionRuntime, (f) => ClientSession.conversationIdOfFile(f));
+		return [...this.pendingQuestions].filter(([id, p]) =>
+			askShownToViewer(askHub.get(p.askId ?? id), p.conversationId, this.activeId, this.viewer),
+		);
+	}
+	/** Keep for later (Ops #1087): the shown chat's own cards kept for later, for its reopen bar. */
+	private savedQuestionsForSnapshot(): UiPendingQuestion[] {
+		return savedQuestionsOf(this.questionsShownHere(), this.activeId);
 	}
 
 	/** owner-requester (Ops #1051): "Waiting on <name>" when the chat shown waits on another owner's answer. */
@@ -10307,11 +10183,8 @@ export class ClientSession {
 		return ownerWindow.waitingOnLineFor({ conversationId: this.activeId, questions, approvals, dialog }, this.viewer);
 	}
 
-	/** 对话是否阻塞在等用户回答上（用于 stall 失联判定豁免）。 */
+	/** 对话是否阻塞在等用户审批上（用于 stall 失联判定豁免）。A waiting question no longer holds a turn (Ops #1087). */
 	private isWaitingOnUser(conversationId: string): boolean {
-		for (const p of this.pendingQuestions.values()) {
-			if (p.conversationId === undefined || p.conversationId === conversationId) return true;
-		}
 		for (const a of this.pendingApprovals.values()) {
 			if (a.conversationId === undefined || a.conversationId === conversationId) return true;
 		}
@@ -10327,7 +10200,9 @@ export class ClientSession {
 
 	/** 取某对话的等答复问卷简要信息（用于会话列表与横幅展示）。 */
 	private getPendingQuestionForConv(convId: string): { id: string; title?: string } | undefined {
+		bindRestoredCards(ClientSession.questionRuntime, (f) => ClientSession.conversationIdOfFile(f));
 		for (const [id, p] of this.pendingQuestions) {
+			if (p.conversationId === undefined && p.sessionFile) continue; // put back, its chat not open yet
 			// owner-question routing (Ops #685): one held for COO is no "?" and no Needs you (its page shows it); nor
 			// another owner's (owner-requester, Ops #1051).
 			if (ownerWindow.askHiddenFrom(askHub.get(p.askId ?? id), this.viewer)) continue;
@@ -10589,40 +10464,15 @@ export class ClientSession {
 		};
 	}
 
-	/** 关闭所有挂起提问（dispose 时清理）：以「取消」解析，避免模型挂死。
-	 *
-	 *  multi-device：问卷属于对话不属于客户端，所以只有「除我之外一台都不剩」时
-	 *  才真取消；否则留给还连着的设备去答。不这么做的话，client-per-load 之后
-	 *  每次刷新都会 dispose 一个旧会话，等于每次刷新都把自己的问卷打掉。 */
-	cancelPendingQuestions(): void {
-		// telegram-answers: a plugin (Telegram) that shows asks counts as a device that can still answer.
-		const left = ClientSession.connectedClientCount(this) + (askHub.listening ? 1 : 0);
-		if (shouldCancelOnClientDispose({ connectedClientsLeft: left }) === "keep") return;
-		for (const [qid, p] of this.pendingQuestions) {
-			if (p.graceTimer) clearTimeout(p.graceTimer);
-			p.resolve(null);
-			askHub.settle(p.askId ?? qid, { how: "gone", reason: "no browser is open any more" });
-		}
-		this.pendingQuestions.clear();
-	}
+	/** A window closing (dispose) ends none of the waiting cards (nonblocking-ask, Ops #1087): they belong to their
+	 *  chats, wait on disk and stay on Telegram and the Roles page; the next window's snapshot shows them again. */
+	cancelPendingQuestions(): void {}
 
-	/** telegram-answers: a chat is closing (or force-reset, Ops #1085): its permission prompts and waiting questions
-	 *  end as denied / cancelled. They are process-wide, so nothing else would end them; every window closes them. */
+	/** telegram-answers: a chat is closing (or force-reset, Ops #1085): its permission prompts end as denied, its
+	 *  waiting cards end with no wake (off disk too). They are process-wide, so nothing else would end them. */
 	private cancelChatAsks(convId: string, why: string): void {
 		this.cancelPendingApprovals(convId, why);
-		for (const [qid, p] of this.pendingQuestions)
-			if (p.conversationId === convId && this.retractQuestion(qid, p, why)) p.resolve(null);
-	}
-
-	/** A question ends unanswered: off both lists, every window closes it. False when it no longer waits. */
-	private retractQuestion(qid: string, p: PendingQuestionEntry, why: string): boolean {
-		if (this.pendingQuestions.get(qid) !== p) return false;
-		this.pendingQuestions.delete(qid);
-		if (p.graceTimer) clearTimeout(p.graceTimer);
-		askHub.settle(p.askId ?? qid, { how: "gone", reason: why });
-		ClientSession.broadcastToAllClients({ type: "question_retracted", id: qid });
-		ClientSession.emitConversationsToAll();
-		return true;
+		dropChatCards(ClientSession.questionRuntime, convId, why);
 	}
 
 	/** 关闭所有挂起审批（dispose 时清理）：以「拒绝」解析，避免等答复的
@@ -18586,6 +18436,18 @@ export class AgentService {
 			holds: () => new OwnerQuestionHolds(join(this.stateStore.dataDir, OWNER_QUESTION_HOLDS_FILE)),
 		});
 		ClientSession.ownerQuestions = this.ownerQuestions;
+		// nonblocking-ask (Ops #1087): ask_user_question's cards on disk; an answer wakes its chat as the owner's message.
+		ClientSession.pendingQuestionsHost = this.pendingQuestions = {
+			store: PendingQuestionsStore.inDataDir(this.stateStore.dataDir),
+			deliver: (wake) =>
+				wake.sessionFile
+					? this.sendRoleMessage(wake.sessionFile, wake.text, {
+							cause: wake.cause,
+							ownerChannel: wake.ownerChannel,
+							requester: wake.requester,
+						})
+					: Promise.resolve({ ok: false, error: "the asking chat has no transcript" }),
+		};
 		ownerQuestionDesk?.stop();
 		this.cooDesk = new CooOwnerQuestionDesk({
 			routingOn: () => this.ownerQuestions.enabled,
@@ -18611,6 +18473,7 @@ export class AgentService {
 	private readonly ownerQuestions: OwnerQuestionRouter;
 	private readonly cooDesk: CooOwnerQuestionDesk;
 	private stopOwnerAskRouted: (() => void) | null = null;
+	private pendingQuestions: PendingQuestionsHost | null = null;
 
 	// -----------------------------------------------------------------------
 	// role-messages: role chats message each other (role-messages.ts)
@@ -20605,9 +20468,20 @@ export class AgentService {
 	/**
 	 * Startup, before the server takes connections: read the list of chats the last process left
 	 * working, plan the carry-on, and start the new live list with the chats being carried on.
-	 * Windows wait (attach gate, at most 30 s) until carryOnAfterRestart() has reopened them.
+	 * Windows wait (attach gate, at most 30 s) until carryOnAfterRestart() has reopened them. Then (nonblocking-ask,
+	 * Ops #1087) ask_user_question's waiting cards come back everywhere and a settled card's wake is replayed once.
 	 */
 	prepareCarryOn(): void {
+		try {
+			this.planCarryOn();
+		} finally {
+			void ClientSession.restorePendingQuestions().catch((err: Error) => {
+				console.error(`[pending-questions] couldn't put the waiting questions back: ${err.message}`);
+			});
+		}
+	}
+
+	private planCarryOn(): void {
 		const dataDir = this.stateStore.dataDir;
 		const file = join(dataDir, RUNNING_CHATS_FILE);
 		const now = Date.now();
@@ -20935,6 +20809,7 @@ export class AgentService {
 		if (ownerQuestionDesk === this.cooDesk) ownerQuestionDesk = null;
 		this.ownerQuestions.dispose();
 		if (ClientSession.ownerQuestions === this.ownerQuestions) ClientSession.ownerQuestions = null;
+		if (ClientSession.pendingQuestionsHost === this.pendingQuestions) ClientSession.pendingQuestionsHost = null;
 		this.participants.dispose();
 		ClientSession.participantRetained = undefined;
 		this.uninstallQueueHost?.();

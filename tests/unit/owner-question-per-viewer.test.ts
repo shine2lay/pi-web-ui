@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClientSession } from "../../server/agent-service.js";
 import { type AskEvent, askHub, dialogAsk } from "../../server/asks.js";
+import { questionCards } from "../fixtures/question-cards.js";
 import { noteOwnerInput } from "../../server/owner-input-time.js";
 import { pluginAsks, pluginSeesAskEvent } from "../../server/owner-question-surfaces.js";
 import { askIsForViewer, DEFAULT_VIEWER, type OwnerViewer } from "../../server/owner-requester.js";
@@ -93,7 +94,10 @@ beforeEach(() => {
 		wai: book.viewerOf(login("sayswai@gmail.com")),
 		none: book.viewerOf(undefined),
 	};
+	cards = questionCards();
+	cleanups.push(() => cards.close());
 });
+let cards: ReturnType<typeof questionCards>;
 afterEach(() => {
 	for (const undo of cleanups.splice(0).reverse()) undo();
 	for (const id of [...statics.sharedQuestions.keys()]) statics.sharedQuestions.delete(id);
@@ -205,7 +209,7 @@ describe("ask_user_question", () => {
 	it("Wai's question: dialog, snapshot and chat-list mark only in Wai's window; Shine's says 'Waiting on Wai'", () => {
 		const w = windows();
 		typedBy(w.asking, WAI_SENT);
-		void w.wai.client.askUser(QUESTIONS, { toolCallId: "call-w" }, w.asking.id);
+		void cards.ask(w.wai.client, QUESTIONS, w.asking.id, "call-w");
 		expect(questionSurfaces(w.wai, w.asking.id)).toEqual(GOT);
 		expect(questionSurfaces(w.shine, w.asking.id)).toEqual(NOTHING);
 		expect(questionSurfaces(w.none, w.asking.id)).toEqual(NOTHING);
@@ -219,7 +223,7 @@ describe("ask_user_question", () => {
 	it("Shine's question: everywhere but Wai's window; Wai's page says 'Waiting on Shine'", () => {
 		const w = windows();
 		typedBy(w.asking, SHINE_SENT);
-		void w.shine.client.askUser(QUESTIONS, { toolCallId: "call-s" }, w.asking.id);
+		void cards.ask(w.shine.client, QUESTIONS, w.asking.id, "call-s");
 		expect(questionSurfaces(w.shine, w.asking.id)).toEqual(GOT);
 		expect(questionSurfaces(w.none, w.asking.id)).toEqual(GOT);
 		expect(questionSurfaces(w.wai, w.asking.id)).toEqual(NOTHING);
@@ -229,7 +233,7 @@ describe("ask_user_question", () => {
 
 	it("an old question with no requester is Shine's: not in Wai's window", () => {
 		const w = windows();
-		void w.shine.client.askUser(QUESTIONS, { toolCallId: "call-o" }, w.asking.id);
+		void cards.ask(w.shine.client, QUESTIONS, w.asking.id, "call-o");
 		const [ask] = askHub.list();
 		expect(ask?.requester).toBeUndefined();
 		expect(questionSurfaces(w.shine, w.asking.id)).toEqual(GOT);
@@ -240,7 +244,7 @@ describe("ask_user_question", () => {
 	it("either owner's answer still counts (no new lock)", async () => {
 		const w = windows();
 		typedBy(w.asking, WAI_SENT);
-		const answer = w.wai.client.askUser(QUESTIONS, { toolCallId: "call-a" }, w.asking.id);
+		const answer = cards.ask(w.wai.client, QUESTIONS, w.asking.id, "call-a");
 		const [ask] = askHub.list();
 		w.shine.client.resolveQuestion(ask!.id, [{ id: "port", selected: ["8080"] }]);
 		await expect(answer).resolves.toEqual([{ id: "port", selected: ["8080"] }]);
@@ -411,10 +415,10 @@ describe("Telegram is unchanged", () => {
 	it("Wai's asks never reach plugins; Shine's and old ones do", () => {
 		const w = windows();
 		typedBy(w.asking, WAI_SENT);
-		void w.wai.client.askUser(QUESTIONS, { toolCallId: "call-t1" }, w.asking.id);
+		void cards.ask(w.wai.client, QUESTIONS, w.asking.id, "call-t1");
 		const waiAsk = askHub.list()[0]!;
 		const other = chat("other");
-		void w.shine.client.askUser(QUESTIONS, { toolCallId: "call-t2" }, other.id);
+		void cards.ask(w.shine.client, QUESTIONS, other.id, "call-t2");
 		const ids = pluginAsks().map((a) => a.id);
 		expect(ids).not.toContain(waiAsk.id);
 		expect(ids).toHaveLength(1);

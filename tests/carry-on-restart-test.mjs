@@ -5,7 +5,8 @@
  *   STOP   stopped by the user before the restart            → must get nothing
  *   REPLY  writing a long reply when the server goes down
  *   CMD    running a bash command (`sleep 60`)
- *   ASK    waiting for the user's answer (ask_user_question)
+ *   ASK    posted a question (ask_user_question, which no longer waits: Ops #1087) and writes on; its question
+ *          waits on disk through every restart and is never asked again
  *   QUEUE  working on pi-queue task #1 of 2 (the real pi-queue, PI_QUEUE_PKG, default ~/projects/pi-queue)
  * Each busy chat, told to carry on, keeps working (the mock makes it busy again), so the next
  * restart cuts it off again.
@@ -127,6 +128,8 @@ const mock = createServer(async (req, res) => {
 		/\[Queue\] Task #(\d+)/.exec([...users].reverse().find((t) => t.includes("[Queue] Task #")) ?? "")?.[1] ?? 0,
 	);
 
+	// The question is posted (the call returned at once): write on, so the chat is busy at the restart.
+	if (last?.role === "tool" && first.startsWith("ASK")) return slow("writing after asking");
 	if (last?.role === "tool") {
 		// A tool finished: say so and end the turn.
 		return say(`tool done (${first.slice(0, 9)})`);
@@ -138,7 +141,7 @@ const mock = createServer(async (req, res) => {
 		// Told to carry on: pick the step back up (and stay busy for the next restart).
 		if (first.startsWith("REPLY")) return slow("still writing");
 		if (first.startsWith("CMD")) return call("bash", { command: "sleep 60" });
-		if (first.startsWith("ASK")) return ask();
+		if (first.startsWith("ASK")) return slow("still writing after asking");
 		if (first.startsWith("QUEUE")) {
 			if (queueTask === 1) return call("queue_done", { summary: "Task one is finished after the restart." });
 			return slow(`queue task ${queueTask}`);
@@ -316,6 +319,15 @@ const runningList = () => {
 	}
 };
 const runningEntry = (file) => runningList()?.chats?.find((c) => c.sessionFile === file);
+// The ASK chat's question, waiting on disk (pending-questions.json, Ops #1087): one card, never asked again.
+const waitingCards = () => {
+	try {
+		const { records } = JSON.parse(readFileSync(join(dataDir, "pending-questions.json"), "utf8"));
+		return records.filter((r) => r.state === "waiting");
+	} catch {
+		return [];
+	}
+};
 /** The server's carry-on log lines, one per restart that cut off a working chat. */
 const carryLines = () => fullLog.split("\n").filter((l) => l.includes("[carry-on] restarted"));
 const countOf = (text, part) => (text ?? "").split(part).length - 1;
@@ -439,11 +451,11 @@ try {
 		const ok =
 			Object.values(busy).every((c) => files.has(c.file)) &&
 			runningEntry(cmd.file)?.tools?.some((t) => t.name === "bash" && t.detail === "sleep 60") &&
-			runningEntry(askc.file)?.tools?.some((t) => t.name === "ask_user_question");
+			waitingCards().length === 1;
 		return ok ? l : null;
 	}, 30000);
 	check(
-		"the live list has the 4 busy chats, with the command and the question as their steps",
+		"the live list has the 4 busy chats, with the command as its step, and the question waits on disk",
 		Boolean(listed),
 		JSON.stringify(runningList()),
 	);
@@ -498,9 +510,11 @@ try {
 		n1.cmd,
 	);
 	check(
-		"ASK: cut off asking, told to ask again",
-		n1.ask.includes("asking the user a question (ask_user_question)") && n1.ask.includes("ask it again"),
-		n1.ask,
+		"ASK: cut off writing after its question, never told to ask again; the question still waits",
+		n1.ask.includes("in the middle of writing a reply;") &&
+			!n1.ask.includes("ask it again") &&
+			waitingCards().length === 1,
+		JSON.stringify({ note: n1.ask, waiting: waitingCards().length }),
 	);
 	check("QUEUE: cut off writing its task's reply", n1.queue.includes("in the middle of writing a reply;"), n1.queue);
 	const w1 = await Client.connect(`carry-window-${randomBytes(3).toString("hex")}`);
@@ -528,7 +542,6 @@ try {
 			runningEntry(cmd.file)?.cutoffs === 1 &&
 			runningEntry(cmd.file)?.tools?.some((t) => t.name === "bash") &&
 			runningEntry(askc.file)?.cutoffs === 1 &&
-			runningEntry(askc.file)?.tools?.some((t) => t.name === "ask_user_question") &&
 			runningEntry(queue.file)?.cutoffs === 0 &&
 			!runningEntry(queue.file)?.awaiting;
 		return ok ? l : null;
@@ -587,7 +600,7 @@ try {
 			runningEntry(askc.file)?.cutoffs === 2 &&
 			runningEntry(queue.file)?.cutoffs === 1 &&
 			runningEntry(cmd.file)?.tools?.some((t) => t.name === "bash") &&
-			runningEntry(askc.file)?.tools?.some((t) => t.name === "ask_user_question"),
+			waitingCards().length === 1,
 		30000,
 	);
 	check("working again, cut off twice in a row (the queue chat once)", Boolean(counted), JSON.stringify(runningList()));

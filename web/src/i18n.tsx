@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, type ReactN
 import { effortLevelEn } from "./i18n-effort-level";
 import { pageTabsEn } from "./i18n-page-tabs";
 import { queueAnswerEn } from "./i18n-queue-answer";
+import { questionLaterEn } from "./i18n-question-later";
 
 /** Locale code. pi-web-ui speaks English only, so it is always "en". */
 export type Locale = string;
@@ -366,6 +367,7 @@ export const en = {
 	taskQueueStatusPausedByYou: "Paused by you: nothing starts, pokes or asks until you resume the queue.",
 	queuePausedNoteLabel: "Kept for after the pause",
 	...queueAnswerEn, // the Queue tab's answer card (hints, errors, retry), i18n-queue-answer.ts
+	...questionLaterEn, // Keep for later: the question dialog's Later / Cancel question and its chat's bar
 	...effortLevelEn, // the composer's department effort level button, i18n-effort-level.ts
 	taskQueueStatusLane: "Running · #{id} is working in its own chat",
 	taskQueueStatusLanes: "Running · {n} tasks working in their own chats",
@@ -748,16 +750,13 @@ export const en = {
 
 	/* dialog */
 	pluginRequest: "Plugin request",
-	modelQuestion: "Model question",
 	modelQuestionCustom: "Custom answer (optional)",
-	modelQuestionSubmit: "Submit answer",
 	next: "Next",
 	previous: "Previous",
 	questionStep: "Q {cur} / {total}",
 	optionPreview: "Option preview",
 	questionTimeout: "⏳ {s}s left — auto-cancels on timeout",
 	questionTimeoutExpired: "Question timed out, resuming conversation…",
-	questionNoneAvailable: "No answerable questions under the current conditions",
 	modelNoVision: "Current model {name} doesn't support images — switch to DeepSeek V4 Flash Vision (exp)",
 	dshSkillsNote: "DSH uses runtime-built-in skills (dsh-skill); toggling is not supported in settings yet",
 	dshExtensionsNote:

@@ -2543,10 +2543,10 @@ export function App() {
 						)}
 						<ChatOwnerQuestion
 							question={chat.question}
+							savedQuestions={chat.state?.savedQuestions}
 							waitingOn={chat.state?.waitingOn}
 							escapeEnabled={view === "chat"}
 							conversationTitle={
-								chat.question?.conversationTitle ||
 								chat.conversations.find((c) => c.id === (chat.question?.conversationId || activeConvId))?.title
 							}
 						/>

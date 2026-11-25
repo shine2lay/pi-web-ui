@@ -163,10 +163,7 @@ export function toolDetail(name: string, args: unknown): string | undefined {
 	return undefined;
 }
 
-const ASK_TOOL = "ask_user_question";
-
 function describeTool(t: RunningTool): string {
-	if (t.name === ASK_TOOL) return "asking the user a question (ask_user_question)";
 	if (t.name === "bash") return t.detail ? `the bash command \`${t.detail}\`` : "a bash command";
 	return t.detail ? `the ${t.name} tool (${t.detail})` : `the ${t.name} tool`;
 }
@@ -174,15 +171,12 @@ function describeTool(t: RunningTool): string {
 /** What the chat was doing, to finish "You were in the middle of …". */
 export function describeStep(tools: readonly RunningTool[]): string {
 	if (tools.length === 0) return "writing a reply";
-	const ask = tools.some((t) => t.name === ASK_TOOL);
-	const askHint = " (they hadn't answered yet, so ask it again)";
-	if (tools.length === 1) {
-		const t = tools[0];
-		return t.name === ASK_TOOL ? `${describeTool(t)}${askHint}` : `running ${describeTool(t)}`;
-	}
+	// ask_user_question returns as it posts (Ops #1087): its question waits on disk through a restart, so it is never
+	// "asked again"; it reads as any other tool.
+	if (tools.length === 1) return `running ${describeTool(tools[0])}`;
 	const parts = tools.slice(0, 4).map(describeTool);
 	const more = tools.length > 4 ? ` and ${tools.length - 4} more` : "";
-	return `running ${tools.length} tools at once: ${parts.join("; ")}${more}${ask ? askHint : ""}`;
+	return `running ${tools.length} tools at once: ${parts.join("; ")}${more}`;
 }
 
 function hhmm(d: Date): string {

@@ -4,8 +4,10 @@
  *
  *   1. prompt the agent to call ask_user_question
  *   2. the .dialog-inline panel must appear above the input (styling + options)
- *   3. clicking an option resolves the tool, panel closes, agent continues
- *   4. a second round is dismissed with Escape -> tool resolves as declined
+ *   3. the call returns as it posts (non-blocking, Ops #1087); clicking an option closes the panel and the answer
+ *      wakes the chat as a new message
+ *   4. a second round is kept for later with Escape (nothing cancelled): the one-line bar shows, the chat stays
+ *      usable, Answer reopens it, and an explicit Cancel question tells the chat it was cancelled
  *
  * The agent is the stand-in model (tests/lib/mock-model.mjs), so no real model is called: it
  * answers "1+1" and "继续吗" prompts with the ask_user_question call a real model would make, and a
@@ -20,7 +22,10 @@ const srv = await ownServer({
 	name: "questionnaire-test",
 	mock: ({ lastUser, toolResult, sideRequest }) => {
 		if (sideRequest) return "问卷测试";
-		if (toolResult) return "收到你的回答。";
+		if (toolResult) return "问题已发出。";
+		// The answer (or a cancel) wakes the chat as a new message (Ops #1087).
+		if (lastUser.startsWith("Cancelled prompt")) return "知道你取消了。";
+		if (lastUser.includes("answered your question")) return "收到你的回答。";
 		if (lastUser.includes("1+1")) {
 			return {
 				tool: "ask_user_question",
@@ -188,24 +193,32 @@ async function main() {
 	check("panel sits above the input box", !!panelBox && !!inputBox && panelBox.y + panelBox.height <= inputBox.y + 2);
 	check("message list stays visible while asking", !!listBox && listBox.height > 0);
 
-	// Click the first option -> tool resolves, panel closes, agent continues.
+	// Non-blocking: the call already returned and the turn ended while the panel still waits for the answer.
+	check("tool completed as it posted (non-blocking)", await waitToolDone(page, { nth: 1, want: "Done" }));
+	check("agent idle while the question waits", await waitIdle(page));
+	check("panel still waits", (await page.locator(".dialog-inline").count()) === 1);
+	// Click the first option -> panel closes, the answer wakes the chat.
 	await page.locator(".dialog-inline .question-option").first().click();
 	await page.waitForSelector(".dialog-inline", {
 		state: "detached",
 		timeout: 10_000,
 	});
 	check("panel closes after answering", true);
-	check("tool completed after answer", await waitToolDone(page, { nth: 1, want: "Done" }));
+	const userGot = (re) =>
+		srv.mock.requests.some((r) =>
+			(r.messages ?? []).some((m) => m.role === "user" && re.test(JSON.stringify(m.content ?? ""))),
+		);
+	let answered = false;
+	for (let i = 0; i < 40 && !answered; i++) {
+		answered = userGot(/answered your question[\s\S]*等于 2/);
+		if (!answered) await sleep(500);
+	}
+	check("the answer woke the chat as a new message with the chosen answer", answered);
 	check("agent idle after round 1", await waitIdle(page));
-	// The agent continued: the model got the answer back as the tool result.
-	const answered = srv.mock.requests.some((r) =>
-		(r.messages ?? []).some((m) => m.role === "tool" && JSON.stringify(m.content ?? "").includes("等于 2")),
-	);
-	check("the model got the chosen answer back", answered);
 	console.log("round 1 done\n");
 
-	// -- Round 2: dismiss with Escape ----------------------------------------
-	console.log("round 2: dismissing with Escape…");
+	// -- Round 2: keep it for later with Escape, reopen it, cancel it ----------
+	console.log("round 2: keeping it for later with Escape…");
 	await sendPrompt(
 		page,
 		"请再次调用 ask_user_question 工具问我一个问题（不要用文字回复，必须调用工具）：「测试问题：继续吗？」给出两个选项：「继续」和「停下」。调用后等待我的回答，不要做其他事。",
@@ -222,14 +235,31 @@ async function main() {
 		timeout: 10_000,
 	});
 	check("panel closes on Escape", true);
-	// A cancelled question comes back to the model as a tool error ("User cancelled the question.",
-	// server/agent-service.ts), so the finished call shows the error status, and the model hears why.
-	check("tool completed after cancel", await waitToolDone(page, { nth: 2, want: "Error" }));
-	const cancelSeen = srv.mock.requests.some((r) =>
-		(r.messages ?? []).some(
-			(m) => m.role === "tool" && JSON.stringify(m.content ?? "").includes("cancelled the question"),
-		),
-	);
+	// Escape keeps it for later (Shine m104353): nothing is cancelled, the chat's one-line bar offers it.
+	const bar = page.locator(".question-later-bar");
+	await bar.waitFor({ state: "visible", timeout: 10_000 });
+	check("the saved-for-later bar shows its question", ((await bar.textContent()) ?? "").includes("继续吗"));
+	check("tool completed as it posted", await waitToolDone(page, { nth: 2, want: "Done" }));
+	await sleep(1000);
+	check("Escape cancelled nothing", !userGot(/Cancelled prompt/));
+	// The chat stays usable while the question is kept for later.
+	const before = srv.mock.requests.length;
+	await sendPrompt(page, "先聊点别的");
+	check("the chat stays usable", (await waitIdle(page)) && srv.mock.requests.length > before);
+	check("the bar stays until it is answered", await bar.isVisible());
+	// Answer reopens it right there; an explicit Cancel question cancels it.
+	await page.locator(".question-later-bar .question-later-answer").click();
+	await page.waitForSelector(".dialog-inline", { state: "visible", timeout: 10_000 });
+	check("Answer reopens the question in the chat", true);
+	await page.locator(".dialog-inline .dialog-dismiss-inline").click();
+	await page.waitForSelector(".dialog-inline", { state: "detached", timeout: 10_000 });
+	await bar.waitFor({ state: "detached", timeout: 10_000 }).catch(() => {});
+	check("Cancel question closes it and the bar", (await bar.count()) === 0);
+	let cancelSeen = false;
+	for (let i = 0; i < 40 && !cancelSeen; i++) {
+		cancelSeen = userGot(/Cancelled prompt/);
+		if (!cancelSeen) await sleep(500);
+	}
 	check("the model heard the question was cancelled", cancelSeen);
 	console.log("round 2 done\n");
 

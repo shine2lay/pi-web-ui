@@ -19,8 +19,10 @@
  *     choices; its question goes to the queue's chat first (queue-main-chat), which passes it on
  *     as it is ("Task #1 needs you"); both are answered on Telegram; the answer goes into the
  *     task's chat and the task finishes;
- *  5. no browser open at all: a question outlives the 30 s no-browser wait and, like the permission
+ *  5. no browser open at all: a question outlives the old 30 s no-browser wait and, like the permission
  *     prompt after it, is answered on Telegram;
+ *  nonblocking-ask (Ops #1087): ask_user_question posts its card and returns at once; the answer reaches the chat
+ *  later as a new message (the mock model records it from there);
  *  6. the bot token is in no file the server wrote.
  *
  * Usage: npm run build && scripts/sealed.sh node tests/telegram-answers-test.mjs
@@ -52,7 +54,10 @@ const TYPE_ANSWER = "\u270F\uFE0F Type an answer";
 /** The line over a question's listed choices, and the one over the footer. */
 const CHOICES_LINE = `\u2500\u2500 CHOICES ${"\u2500".repeat(8)}`;
 const RULE = "\u2500".repeat(18);
-const NO_BROWSER_GRACE_MS = 30_000; // server/ask-delivery.ts ASK_USER_NO_CLIENT_GRACE_MS
+/** owner-question routing (Ops #685): "Came through COO; COO added nothing (it reached you after ...)". */
+const COO_ROUTE_LINE = /^<i>Came through COO\b[^\n]*<\/i>$/;
+// The 30 s no-browser wait that used to end a question before Ops #1087 (nonblocking-ask): a question must outlive it.
+const NO_BROWSER_GRACE_MS = 30_000;
 
 // standalone: true: a new task says where it belongs (pi-queue's work registry refuses one that doesn't, before any dialog).
 const PLAN = {
@@ -279,6 +284,8 @@ const oneLineFinal = (msg, title, end, what = null) => {
 const seen = {};
 /** User messages the mock had no script for: should stay empty. */
 const unexpected = [];
+/** nonblocking-ask (Ops #1087): which script step each posted question's header belongs to, for its answer's wake. */
+const askedBy = new Map();
 async function modelReply({ payload, sideRequest }) {
 	if (sideRequest) return "Telegram test chat";
 	const history = Array.isArray(payload.messages) ? payload.messages : [];
@@ -299,8 +306,17 @@ async function modelReply({ payload, sideRequest }) {
 		.map(textOf);
 	const step = results.length;
 	let m;
+	// An answer's wake: `<Owner> answered your question "<header>" ...` (or its cancel).
+	if ((m = /(?:answered|cancelled) your question "([^"]+)"/i.exec(userText)) && askedBy.has(m[1])) {
+		// Kept (not deleted): a wake that lands in a running turn (a follow-up) is seen by its later model calls too.
+		const key = askedBy.get(m[1]);
+		seen[key] = userText;
+		return `ANSWERED ${key}`;
+	}
 	if ((m = /^TG-ASK (\d+)/.exec(userText))) {
-		if (step === 0)
+		if (step === 1) return `POSTED ${m[1]}`;
+		if (step === 0) {
+			askedBy.set("Colour", `ask ${m[1]}`);
 			return {
 				tool: "ask_user_question",
 				args: {
@@ -314,8 +330,8 @@ async function modelReply({ payload, sideRequest }) {
 					],
 				},
 			};
-		seen[`ask ${m[1]}`] = results[0];
-		return `ANSWERED ${m[1]}`;
+		}
+		return `ASKED ${m[1]}`;
 	}
 	if ((m = /^TG-RUN (\d+)/.exec(userText))) {
 		// The output differs from the command's text: it shows only if the command ran.
@@ -343,7 +359,16 @@ async function modelReply({ payload, sideRequest }) {
 		if (step === 0) return { tool: "bash", args: { command: "rm -rf ./tg-task-gone && echo TG-RAN-$((200+1))" } };
 		if (step === 1) {
 			seen.taskRun = results[0];
-			return { tool: "queue_stuck", args: { question: STUCK_QUESTION, choices: CHOICES } };
+			// pi-queue renamed queue_stuck to ask_lead (its brief needs progress + recommendation in a task's chat).
+			return {
+				tool: "ask_lead",
+				args: {
+					question: STUCK_QUESTION,
+					choices: CHOICES,
+					progress: "Ran the command.",
+					recommendation: "Settings: it matches the page title.",
+				},
+			};
 		}
 		seen.stuck = results[1];
 		return "TG-TASK-ASKED";
@@ -359,6 +384,7 @@ async function modelReply({ payload, sideRequest }) {
 		if (step === 0) {
 			// Ask only once the browser has gone.
 			await sleep(1500);
+			askedBy.set("Size", "quietAsk");
 			return {
 				tool: "ask_user_question",
 				args: {
@@ -369,7 +395,7 @@ async function modelReply({ payload, sideRequest }) {
 			};
 		}
 		if (step === 1) {
-			seen.quietAsk = results[0];
+			// Posted, not answered: carry on with work that doesn't need the answer.
 			return { tool: "bash", args: { command: "rm -rf ./tg-quiet-gone && echo TG-RAN-$((300+1))" } };
 		}
 		seen.quietRun = results[1];
@@ -517,7 +543,8 @@ try {
 		same(labels(m1), ["1 \u00B7 Red", "2 \u00B7 Blue", TYPE_ANSWER]) && numberedRight(m1),
 		labels(m1).join(" | "),
 	);
-	const [m1Head, ...m1Parts] = m1.text.split("\n\n");
+	// owner-question routing (Ops #685): a card COO let through bare carries its route line under the head.
+	const [m1Head, ...m1Parts] = m1.text.split("\n\n").filter((part) => !COO_ROUTE_LINE.test(part));
 	check(
 		"it opens with the question's header and the chat it's from (on one line when it fits a phone's)",
 		/^\u2753 <b>Colour<\/b>(?: \u00B7 |\n)<i>from [^<\n]+<\/i>$/.test(m1Head) && !/Chat: |Folder: /.test(m1.text),
@@ -715,7 +742,9 @@ try {
 	);
 	check(
 		"... under 'Task #1 needs you' and the task's title, with no chat line, and its question in bold",
-		m8.text.startsWith(`\u{1F4CC} <b>Task #1 needs you</b>\n<i>${PLAN.title}</i>\n\n<b>${STUCK_QUESTION}</b>`) &&
+		// After the head: the route line (Ops #685) and the owner context block may come before the question.
+		m8.text.startsWith(`\u{1F4CC} <b>Task #1 needs you</b>\n<i>${PLAN.title}</i>\n\n`) &&
+			m8.text.includes(`\n\n<b>${STUCK_QUESTION}</b>\n`) &&
 			!m8.text.includes("Chat: "),
 		m8.text,
 	);

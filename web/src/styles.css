@@ -3436,6 +3436,66 @@ button.rolemsg-fold:focus-visible {
 	font-size: 12px;
 	text-align: center;
 }
+/* Keep for later (Ops #1087): the asking chat's one-line bar for its questions kept for later, above the input. */
+.question-later-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	/* Same column as the dialog it opens and the composer (see .dialog-inline). */
+	margin: 0 var(--chat-inset) 6px;
+	padding: 4px 4px 4px 10px;
+	min-width: 0;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev);
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.question-later-icon {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: var(--amber-fg);
+	color: var(--bg);
+	font-size: 11px;
+	font-weight: 600;
+}
+.question-later-text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.question-later-count {
+	flex: none;
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+.question-later-next,
+.question-later-answer {
+	flex: none;
+	padding: 3px 10px;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	background: none;
+	color: var(--text);
+	cursor: pointer;
+	font-size: 12px;
+}
+.question-later-answer {
+	border-color: var(--accent);
+	color: var(--accent-text);
+	font-weight: 600;
+}
+.question-later-next:hover,
+.question-later-answer:hover {
+	background: var(--bg-elev2);
+}
 /* task-question decisions (rule 21): the whole package a question for the owner came with: open, readable,
    scrolling on its own (keyboard-focusable) so a long one doesn't push the answer off a phone screen. */
 .task-queue-question-detail {
@@ -11913,14 +11973,32 @@ div.chead[role="button"]:focus-visible,
 /* DSH 向导式问题导航：取消居左，上一步/下一步居右 */
 .dialog-nav {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
 }
+.dialog-nav-left,
 .dialog-nav-right {
 	display: flex;
 	align-items: center;
 	gap: 8px;
+}
+.dialog-nav-right {
+	margin-left: auto;
+}
+/* Keep for later (Ops #1087): Later tucks the question away (nothing cancelled); Cancel question stays quieter. */
+.dialog-later {
+	padding: 6px 12px;
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	background: none;
+	color: var(--text);
+	cursor: pointer;
+	font-size: 13px;
+}
+.dialog-later:hover {
+	background: var(--bg-elev);
 }
 .dialog-prev {
 	padding: 6px 12px;

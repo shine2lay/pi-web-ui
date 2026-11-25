@@ -179,7 +179,8 @@ describe("unbound owner acceptance preserves the answer and fences recall", () =
 			from: { file: f.binding.queue, title: "Synthetic parent" },
 		});
 		pending.set(id, {
-			resolve: resolved,
+			askId: id,
+			recordId: "toolu_synthetic_worker",
 			questions: [],
 			nativeSource: { sessionId: f.binding.workerId, file: f.binding.worker },
 		});

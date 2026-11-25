@@ -1,16 +1,16 @@
 // 另一页打开正在等答复的对话（零 token）：对话归服务端（server-owned-chats），B 页直接在
 // 自己的列表里打开 A 页那条，接着答卷、继续跑。原为上游「过户」take_over_conversation 冒烟。
 //
-// 假模型（question-bridge 同款）：第 1 回合回 ask_user_question 工具调用，第 2 回合
-// （B 答卷之后）**再回一次** ask_user_question，第 3 回合回 browser_page，第 4 回合把
-// 全部工具结果回显成 assistant 文本。
+// 假模型（question-bridge 同款）。问卷不阻塞（Ops #1087）：第 1 轮回 ask_user_question，贴出即结束；
+// B 答卷后答案作为新消息唤醒对话，这一轮**再回一次** ask_user_question，再回 browser_page，最后把
+// 唤醒消息和工具结果回显成 assistant 文本（ANSWERED:）。
 //
 // 验证（server-owned-chats 口径，ops #870 改写；原上游「过户」口径的哪些断言删了、为什么，见
 // PATCHES.md server-owned-chats「上游冒烟按新口径改写」）：
-//   1. A 提问挂起（question_pending + streaming）时，B（全新 clientId，A 还在线）在**自己的**
+//   1. A 提问挂起（question_pending；贴出后本轮已结束）时，B（全新 clientId，A 还在线）在**自己的**
 //      对话列表里看到 A 那条（同一个 convId、在跑、带 hasQuestion），只此一行，没有另一处只读行；
 //   2. B 打开它（switch_conversation）→ 看到历史、快照里就有那张问卷；
-//   3. B 回答 → A 页对话框收起（question_retracted），工具结果回到模型，run 继续；
+//   3. B 回答 → A 页对话框收起（question_retracted），答案唤醒对话，模型继续；
 //   4. **B 打开之后新提出的问卷/页面调用**：问卷进 B 的快照；page_request 只送 B（最新接入的
 //      正在看这条对话的在线浏览器，conversation-home），不漂到 A；
 //   5. A 没丢任何东西：仍在同一条对话上、列表里仍有它、看得到 B 答完后的回答。
@@ -83,7 +83,12 @@ const mock = createServer(async (req, res) => {
 	for await (const chunk of req) body += chunk;
 	const payload = JSON.parse(body || "{}");
 	const messages = Array.isArray(payload.messages) ? payload.messages : [];
-	const toolMsgs = messages.filter((m) => m.role === "tool");
+	const textOf = (m) =>
+		Array.isArray(m.content) ? m.content.map((p) => p.text ?? "").join("") : String(m.content ?? "");
+	// Which turn: the first (no answer yet), the first answer's wake, or later; tool results counted within it.
+	const wakes = messages.filter((m) => m.role === "user" && /answered your question/.test(textOf(m)));
+	const lastUser = messages.map((m) => m.role).lastIndexOf("user");
+	const toolMsgs = messages.slice(lastUser + 1).filter((m) => m.role === "tool");
 	const askCall = (payload, callId) => [
 		delta(payload.model, {
 			tool_calls: [
@@ -110,30 +115,31 @@ const mock = createServer(async (req, res) => {
 		}),
 		delta(payload.model, {}, "tool_calls"),
 	];
-	if (toolMsgs.length === 0) {
-		if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
-			sse(res, [delta(payload.model, { content: "ok" }), delta(payload.model, {}, "stop")]);
-			return;
-		}
-		sse(res, askCall(payload, "call_ask_1"));
+	if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
+		sse(res, [delta(payload.model, { content: "ok" }), delta(payload.model, {}, "stop")]);
 		return;
 	}
-	// 过户之后提出的第二张问卷（回归：必须送到新持有方）。
-	if (toolMsgs.length === 1) {
+	const say = (text) => sse(res, [delta(payload.model, { content: text }), delta(payload.model, {}, "stop")]);
+	if (wakes.length === 0) {
+		if (toolMsgs.length === 0) sse(res, askCall(payload, "call_ask_1"));
+		else say("POSTED");
+		return;
+	}
+	if (wakes.length > 1) {
+		say(`WOKE:${textOf(wakes.at(-1))}`);
+		return;
+	}
+	// 打开之后提出的第二张问卷（回归：必须送到新持有方）。
+	if (toolMsgs.length === 0) {
 		sse(res, askCall(payload, "call_ask_2"));
 		return;
 	}
-	// 再过一轮：过户之后调 browser_page（同一根因，page_request 也必须送到新持有方）。
-	if (toolMsgs.length === 2) {
+	// 再调 browser_page（同一根因，page_request 也必须送到新持有方）。
+	if (toolMsgs.length === 1) {
 		sse(res, pageCall(payload));
 		return;
 	}
-	sse(res, [
-		delta(payload.model, {
-			content: `ANSWERED:${toolMsgs.map((m) => String(m.content ?? "")).join(" | ")}`,
-		}),
-		delta(payload.model, {}, "stop"),
-	]);
+	say(`ANSWERED:${[textOf(wakes[0]), ...toolMsgs.map(textOf)].join(" | ")}`);
 });
 await new Promise((resolve) => mock.listen(MOCK_PORT, "127.0.0.1", resolve));
 
@@ -279,12 +285,12 @@ try {
 		return c;
 	};
 
-	// A：提问挂起（run 阻塞在等人类回答，streaming 中）。
+	// A：提问挂起（贴出后本轮即结束，Ops #1087）。
 	clientA = await openClient("takeover-A");
 	clientA.send({ type: "prompt", text: "先问我几个问题" });
 	const pendingA = await clientA.waitForType("question_pending", () => true, 40000);
 	check("A 问卷挂起", pendingA.questions?.length === 2, `id=${pendingA.id}`);
-	await clientA.waitForState((s) => s.isStreaming === true, 15000);
+	await clientA.waitForState((s) => s.isStreaming === false && s.pendingQuestion?.id === pendingA.id, 15000);
 	const convA = clientA.state.conversationId;
 	// 运行列表给等问卷的对话挂「?」角标（自有行；elsewhere 行同信息已在下面断言）。
 	const rowAq = await waitRow(clientA, (c) => c.id === convA && c.hasQuestion === true, "A row hasQuestion");
@@ -313,8 +319,8 @@ try {
 		clientB.send({ type: "new_chat" });
 		await clientB.waitForState((s) => s.conversationId !== convA, 15000);
 	}
-	const row = await waitRow(clientB, (c) => c.id === convA && c.isStreaming === true, "A's chat in B's list");
-	check("B 的列表里有 A 正在跑的对话（同一 convId）", row?.id === convA, `id=${row?.id}`);
+	const row = await waitRow(clientB, (c) => c.id === convA && c.hasQuestion === true, "A's chat in B's list");
+	check("B 的列表里有 A 等答复的对话（同一 convId）", row?.id === convA, `id=${row?.id}`);
 	check("B 的列表行标出等答复问卷", row?.hasQuestion === true, `hasQuestion=${row?.hasQuestion}`);
 	check(
 		"只此一行，没有另一处只读副本",
@@ -333,7 +339,7 @@ try {
 	await clientB.waitForState((s) => s.pendingQuestion?.id === pendingA.id, 15000);
 	check("B 快照里就有那张问卷（同题目）", clientB.state.pendingQuestion?.questions?.[0]?.id === "scope");
 
-	// B 回答问卷 → A 页对话框收起，工具结果回到模型，run 继续。
+	// B 回答问卷 → A 页对话框收起，答案唤醒对话，模型继续。
 	clientB.send({
 		type: "question_answer",
 		id: pendingA.id,

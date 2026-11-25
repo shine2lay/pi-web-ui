@@ -14,7 +14,16 @@
  *     question_pending/question_answer 驱动，一张在途的旧快照不该把它闪掉。
  */
 
-import type { UiPendingQuestion } from "./types";
+import type { ClientMessage, UiPendingQuestion } from "./types";
+
+/** The open pop-up after this window sent `msg`: answering or cancelling here closes it; keeping the shown question
+ *  for later (Ops #1087, Shine m104353) hides it at once (the other windows get question_retracted); anything else
+ *  leaves it. */
+export function questionAfterSend<Q extends { id: string }>(current: Q | null, msg: ClientMessage): Q | null {
+	if (msg.type === "question_answer" && !msg.owner) return null;
+	if (msg.type === "question_later" && msg.later !== false && current?.id === msg.id) return null;
+	return current;
+}
 
 /** 面板来源：live = 即时通道（question_pending）弹出；snapshot = 由快照恢复。 */
 export type QuestionSource = "live" | "snapshot";

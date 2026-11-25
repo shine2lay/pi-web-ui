@@ -19,8 +19,8 @@ departments. Rule 18 Task 1 of 2: the seam, the durable store and the failing-fi
   chat as a new message from the card's owner (`[From: <owner>]`, turn owners `[owner]`); the card leaves the file
   only once the chat admitted it. A restart puts `waiting` cards back on every surface and replays `delivering`
   ones once.
-- **Expected result + measurement:** `tests/nonblocking-ask-question-acceptance.test.ts` (run with its own config,
-  `tests/nonblocking-ask-question-acceptance.config.ts`) NB-1..NB-6, 10 tests, red on `6cece0d5` and green after
+- **Expected result + measurement:** the acceptance suite (now `tests/unit/nonblocking-ask-question.test.ts`; at
+  first run with its own config, both moved by Task 2) NB-1..NB-6, 10 tests, red on `6cece0d5` and green after
   Task 2; `tests/unit/pending-questions-store.test.ts` 13/13 green now.
 - **What proves it wrong:** any NB case still red after Task 2 or weakened to pass; a live COO turn still running
   while a card waits; a card lost or answered twice across a `pi-web-deploy` restart; an answer that reaches the
@@ -63,3 +63,10 @@ and decision records hold today; only the store, wake and restore assertions fai
 ## Result
 
 Pending Task 2. Red log: `~/ops-checks/nonblocking-ask-question-1086/red-6cece0d5.log` (10 failed of 10).
+
+**HIT (Ops #1087, Task 2), before the live install.** The cases moved into the unit run
+(NB-1..NB-6 unchanged; their own config deleted, the unit run picks them up) with NB-7 added for Keep for later
+(Shine m104353), red first (`~/ops-checks/nonblocking-ask-question-1087/`): NB-1..NB-7 green, plus the dialog/bar
+tests and the migrated question unit and sealed browser suites (`question-bridge`, `telegram-answers`, `takeover`,
+`remote-answer`, `questionnaire`, `roles-answer`, `carry-on-restart`). The live half (COO's chat free while a card
+waits; a card kept across the `pi-web-deploy` restart) is recorded in Ops #1087's proof file, next to its red log.

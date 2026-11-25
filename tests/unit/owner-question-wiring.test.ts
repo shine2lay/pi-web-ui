@@ -7,7 +7,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeAskUserQuestionTool } from "../../server/agent-service.js";
 import {
 	AskHub,
 	approvalAsk,
@@ -29,7 +28,6 @@ import {
 import {
 	OwnerQuestionRouter,
 	SAFETY_NET_SWEEP_MS,
-	isQuestionReturned,
 	questionReturnedText,
 	type OwnerAskFacts,
 } from "../../server/owner-question-router.js";
@@ -559,7 +557,7 @@ describe("owner asks with the switch on", () => {
 		expect(after.ask(card("stuck-1c", 12), {}, { key: "k12", sig: "s12" })).toMatchObject({ releasedBy: "safety-net" });
 	});
 
-	it("COO hands a question back: the tool call gets the return text, and asking again goes straight to him", async () => {
+	it("COO hands a question back: the chat's wake carries the return text, and asking again goes straight to him", () => {
 		const w = world();
 		const design = chat("design-home");
 		roleStarts(design);
@@ -572,23 +570,8 @@ describe("owner asks with the switch on", () => {
 		expect(text).toBe(
 			"Not the owner's answer. COO handed this back as your own call: Use the default port; it is in the plan. If only the owner can give it, ask again: it goes straight to him.",
 		);
-		// The tool call itself resolves with it (no error, no answers).
-		const tool = makeAskUserQuestionTool({
-			askUser: async () => ({ returned: note }),
-			questionOwners: () => ({ listed: new Set<string>() }), // ask-question-owners (Ops #1079)
-		});
-		const result = (await tool.execute(
-			"call-1",
-			{ questions: QUESTIONS },
-			undefined,
-			undefined,
-			undefined as never,
-		)) as {
-			content: Array<{ type: string; text: string }>;
-		};
-		expect(result.content).toEqual([{ type: "text", text }]);
-		expect(isQuestionReturned({ returned: note })).toBe(true);
-		expect(isQuestionReturned([])).toBe(false);
+		// nonblocking-ask (Ops #1087): the tool call ended when it posted; the asking chat gets this text as its wake
+		// (tests/unit/nonblocking-ask-question.test.ts NB-5).
 		// Asked again in the same turn: straight to him, with no line.
 		expect(w.ask(question("q-11", design), factsOf(design, "design"))).toEqual({
 			to: "direct",

@@ -812,6 +812,8 @@ export interface UiState {
 	 *  null / 缺省 = 没有待答提问。
 	 */
 	pendingQuestion?: UiPendingQuestion | null;
+	/** Keep for later (Ops #1087): the shown chat's questions this viewer kept for later (its one-line reopen bar). */
+	savedQuestions?: UiPendingQuestion[];
 	/** 待用户审批的高危工具调用（Edit & Run 人机协同）。当前对话有待审批时携带，切会话/刷新恢复。 */
 	pendingApproval?: UiToolApproval | null;
 	waitingOn?: string | null; // Ops #1051: "Waiting on Wai" (the other owner's ask, not shown here); null = none
@@ -1920,6 +1922,8 @@ export type ClientCommand =
 			cancelled?: boolean;
 			owner?: string;
 	  }
+	/** Keep for later (Ops #1087): tucked away in its owner's windows, not cancelled; `later: false` brings it back. */
+	| { type: "question_later"; id: string; later?: boolean }
 	/** 用户对高危工具调用的审批答复（tool_approval_pending 回复）。
 	 *  decision: "approve" 放行原参数；"deny" 拒绝执行；"edit" 修改参数并放行（Edit & Run）。
 	 *  scope（仅 approve 有效，缺省 = 单次）："category" = 顺带记住本对话的该同类档位；
@@ -5370,12 +5374,8 @@ export type ServerMessage =
 	  }
 	/** DSH 权限预设选项表 + 新会话默认（DSH only；attach/启动/默认变化后推）。 */
 	| { type: "dsh_permission"; options: DshPermissionOption[]; defaultPreset: string }
-	/** The model asked the user (ask_user_question tool) — both engines
-	 *  (DSH via goal-rpc userQuestions provider, standard pi via the
-	 *  pi-web-ui ask_user_question customTool) forward here. The frontend
-	 *  shows a dialog and answers via question_answer. Pushed to the active
-	 *  conversation; background conversations carry the question in their snapshot
-	 *  when switched to. */
+	/** The model asked (ask_user_question; DSH via goal-rpc, pi via pending-questions-runtime.ts): every window of its
+	 *  owner shows the dialog, answers with question_answer or keeps it for later with question_later (Ops #1087). */
 	| {
 			type: "question_pending";
 			id: string;

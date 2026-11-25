@@ -156,6 +156,7 @@ import type {
 	PromptAttachment,
 	FilePreviewMetadata,
 	ServerMessage,
+	QuestionAnswer,
 	UiRoleGuardQuestion,
 	UiRoleMessageRow,
 	UiRolesOverview,
@@ -1377,12 +1378,9 @@ export interface DispatchSession {
 	/** DSH engine only: 权限预设热切换/新会话默认（三档）。 */
 	setPermissionPreset?(preset: string): Promise<void>;
 	setDefaultPermissionPreset?(preset: string): Promise<void>;
-	/** DSH engine only: answer a model ask_user_question dialog. */
-	answerQuestion?(
-		id: string,
-		answers: { id: string; selected: string[]; custom?: string }[],
-		cancelled?: boolean,
-	): Promise<void>;
+	/** Answer a model ask_user_question dialog; questionLater: keep it for later or bring it back up (Ops #1087). */
+	answerQuestion?(id: string, answers: QuestionAnswer[], cancelled?: boolean): Promise<void>;
+	questionLater?(id: string, later: boolean): boolean;
 	/** 浏览器页面调用回包（browser_page 工具，pi 引擎专有；DSH 无页面桥，
 	 *  方法缺失时 dispatch 侧的 `?.` 直接忽略这条消息）。 */
 	resolvePageCall?(id: string, ok: boolean, result?: unknown, error?: string): void;
@@ -1545,7 +1543,7 @@ export interface EngineService {
 		targetId: string,
 		ownerId: string,
 		id: string,
-		answers: { id: string; selected: string[]; custom?: string }[],
+		answers: QuestionAnswer[],
 		cancelled?: boolean,
 	): Promise<void>;
 	onQuit?: (() => boolean) | undefined;
@@ -3985,12 +3983,14 @@ wss.on("connection", (ws, req) => {
 							type: "notice",
 							level: "error",
 							text: "Cross-page answering is not supported by the current engine; use the pi engine.",
-							textEn: "Cross-page answering is not supported by the current engine; use the pi engine.",
 						});
 					}
 				} else {
 					void cs.answerQuestion?.(msg.id, msg.answers, msg.cancelled);
 				}
+				break;
+			case "question_later":
+				cs.questionLater?.(msg.id, msg.later !== false);
 				break;
 			case "tool_approval_response":
 				cs.resolveToolApproval?.(msg.id, msg.decision, msg.editedParams, msg.reason, msg.scope);

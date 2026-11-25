@@ -7,12 +7,12 @@
 //   1. 模型调 ask_user_question → question_pending（id + questions 透传）
 //   2. 快照携带 pendingQuestion（UiState）→ 重连/刷新能恢复对话框
 //      （第二个同 clientId 的连接 = 刷新页面；它的首帧快照必须带回问卷）
-//   3. 【本测试的核心】问卷豁免工具挂死看门狗：PI_WEB_TOOL_TIMEOUT_MS=2000，
-//      问卷挂着不答 5s 后仍然没有「工具执行超过…已自动终止」通知、run 还活着
-//      （改动前：2s 到点 abort 整轮对话）
+//   3. 问卷不阻塞（Ops #1087, nonblocking-ask）：工具贴出问卷立即返回、本轮结束
+//      （isStreaming=false），问卷照样挂着；PI_WEB_TOOL_TIMEOUT_MS=2000 下
+//      5s 后也没有「工具执行超过…已自动终止」通知
 //   4. 问卷挂着不算「失联」：PI_WEB_STALL_NOTIFY_MS=2000，等待超过一个 stall
 //      检查周期（30s 定时器）也不会收到「无任何响应…可能已失联」警告
-//   5. 回答 → 工具结果回到模型（回显文本含所选 label 与自定义文本），
+//   5. 回答 → 答案作为新消息唤醒对话（假模型回显 WOKE: + 所选 label 与自定义文本），
 //      快照的 pendingQuestion 清空
 //
 // 用法: npm run build && node tests/question-bridge-test.mjs
@@ -69,7 +69,8 @@ const check = (name, ok, extra = "") => {
 
 // ---------------------------------------------------------------------------
 // 假模型：第 1 回合（无 tool 消息）回 ask_user_question 工具调用；
-// 第 2 回合（messages 里已有 role=tool）把工具结果回显成 assistant 文本。
+// 第 2 回合（messages 里已有 role=tool）把工具结果回显成 assistant 文本；
+// 之后答案作为用户消息到来（最后一条是 user）→ 回显成 WOKE:<文本>。
 // ---------------------------------------------------------------------------
 const sse = (res, chunks) => {
 	res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
@@ -106,6 +107,16 @@ const mock = createServer(async (req, res) => {
 	const payload = JSON.parse(body || "{}");
 	const messages = Array.isArray(payload.messages) ? payload.messages : [];
 	const toolMsg = [...messages].reverse().find((m) => m.role === "tool");
+	const last = messages[messages.length - 1];
+
+	// 答案唤醒：问卷贴出后，答案作为新的用户消息到来。
+	if (toolMsg && last?.role === "user") {
+		const text = Array.isArray(last.content)
+			? last.content.map((p) => p.text ?? "").join("")
+			: String(last.content ?? "");
+		sse(res, [delta(payload.model, { content: `WOKE:${text}` }), delta(payload.model, {}, "stop")]);
+		return;
+	}
 
 	// 第二回合：模型看到工具结果 → 回显它（便于断言答案真的回到了模型）。
 	if (toolMsg) {
@@ -294,7 +305,7 @@ try {
 		reloadSnapshot.state.pendingQuestion?.id ?? "none",
 	);
 
-	// —— 核心：挂着不答，超过 PI_WEB_TOOL_TIMEOUT_MS 也不能被看门狗剁掉 ——
+	// —— 不阻塞：贴出问卷后本轮结束，问卷照样挂着；看门狗无事可剁 ——
 	const waitStarted = Date.now();
 	await sleep(TOOL_TIMEOUT_MS + 3000);
 	const aborted = [...a.seen("notice"), ...b.seen("notice")].filter((m) =>
@@ -305,10 +316,13 @@ try {
 		aborted.length === 0,
 		aborted.map((m) => m.text).join("; ") || "无通知",
 	);
-	const midState = await a.waitForState((s) => s.pendingQuestion?.id === pending.id, 5000);
+	const midState = await a.waitForState(
+		(s) => s.pendingQuestion?.id === pending.id && s.isStreaming === false && textOf(s.messages).includes("ANSWERED:"),
+		10000,
+	);
 	check(
-		"等待期间 run 仍在跑（isStreaming 未中断）",
-		midState.isStreaming === true,
+		"贴出问卷后本轮已结束、问卷仍挂着（non-blocking）",
+		midState.isStreaming === false && textOf(midState.messages).includes("non-blocking"),
 		`isStreaming=${midState.isStreaming}`,
 	);
 
@@ -324,7 +338,7 @@ try {
 		stallNotices.map((m) => m.text).join("; ") || "无通知",
 	);
 
-	// —— 回答 → 工具结果回到模型 → pendingQuestion 清空 ——
+	// —— 回答 → 答案作为新消息唤醒对话 → pendingQuestion 清空 ——
 	a.send({
 		type: "question_answer",
 		id: pending.id,
@@ -334,15 +348,14 @@ try {
 		],
 	});
 	const done = await a.waitForState(
-		// 等到第二回合（模型看到工具结果）真的落盘：仅看 isStreaming=false 会在
-		// 「工具结束→下一次请求」的空隙提前返回。
-		(s) => s.pendingQuestion == null && textOf(s.messages).includes("ANSWERED:"),
+		// 等到唤醒回合（模型看到答案消息）真的落盘。
+		(s) => s.pendingQuestion == null && textOf(s.messages).includes("WOKE:"),
 		30000,
 	);
 	check("回答后 pendingQuestion 从快照清空", done.pendingQuestion == null);
-	const echoed = textOf(done.messages);
+	const echoed = textOf(done.messages).slice(textOf(done.messages).indexOf("WOKE:"));
 	check(
-		"模型收到答案（工具结果回显含所选 label 与自定义文本）",
+		"模型收到答案（唤醒消息回显含所选 label 与自定义文本）",
 		echoed.includes("最小可用") && echoed.includes("别动图标"),
 		echoed || JSON.stringify(done.messages.slice(-2)),
 	);

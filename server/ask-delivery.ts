@@ -1,49 +1,32 @@
 /**
- * ask_user_question 的投递判定 —— 纯函数，有单测。
+ * ask_user_question's waiting cards as the windows see them — pure functions, unit-tested.
  *
- * 背景（这两条合起来就是「问卷不弹」的根因）：
- *  1. `askUser` **故意不设超时**——等的是人，不是挂死的工具（见 agent-service.ts
- *     的注释）。所以它永远不会自己回来。
- *  2. `emit` 在 `sinks` 为空（没有任何页面连着）时是**静默丢弃**的。
- *  两者相遇 = `question_pending` 没人收到、对话框不出现、这轮 agent 永远阻塞。
- *  同文件里的 `pageCall` 早就有 `sinks.size === 0` 的守卫，`askUser` 漏了。
- *
- * multi-device（本轮）：问卷属于**对话**，不属于某个客户端。注册表是进程共享的，
- * `question_pending` 广播给**所有连着的客户端**（不管它在看哪条对话），任何一台都能
- * 回答，第一个答的生效、其余的收到 `question_retracted` 自动关掉。于是「在笔记本上被
- * 问、走到台式机上回答」是成立的。下面的 clientCount 一律指**全进程**的在线客户端数，
- * 不再是某个 ClientSession 自己的 sinks。
- *
- * 但不能一看见「当前没连页面」就立刻报错：刷新页面 / WS 重连有个几秒的空窗，
- * 那种情况下用户马上就回来了，报错反而把好好的提问打掉。所以给一个宽限期：
- *  - 提问时有页面连着 → 立即走即时通道（原行为不变）；
- *  - 没有 → 先挂着、等 `ASK_USER_NO_CLIENT_GRACE_MS`：
- *      · 期间有页面接上 → 快照会把对话框补出来（见 pickPendingQuestionForSnapshot），
- *        不需要补发即时消息；
- *      · 到点还是没有 → 拒掉，让模型知道「没人在线」，可以改用正文提问而不是干等。
+ * multi-device: a card belongs to its chat, not to a window. The list is process-wide; `question_pending` goes to
+ * every connected window of its owner (whichever chat it shows), any of them may answer, the first answer wins and
+ * the others get `question_retracted`. nonblocking-ask (Ops #1087): the tool no longer waits, so a card with no window
+ * open just waits on disk (pending-questions-store.ts) and comes back with the next window's snapshot or on Telegram.
  */
 
-import type { QuestionAnswer, ServerMessage, UiQuestion } from "./protocol.js";
+import type { ServerMessage, UiPendingQuestion, UiQuestion } from "./protocol.js";
 import type { QuestionAcceptanceSource } from "./queue-question-acceptance.js";
 
-/** 一张待答问卷的服务端状态。 */
+/** One waiting card's live state (pending-questions-runtime.ts). */
 export interface PendingQuestionEntry {
-	resolve: (value: QuestionAnswer[] | null) => void;
 	questions: UiQuestion[];
-	/** 发起提问的对话（不一定是用户当前在看的那条）。 */
+	/** The chat that asks (not necessarily the one a window shows). */
 	conversationId?: string;
-	/** 发起提问的对话标题 —— 别的设备可能正在看别的对话，要能看出这是谁在问。 */
+	/** Its title when asked: a window showing another chat must see who asks. */
 	conversationTitle?: string;
-	/** 「没页面连着」时的宽限计时器；答完/取消/dispose 都要清掉。 */
-	graceTimer?: ReturnType<typeof setTimeout>;
-	/** telegram-answers: its id in the list of asks (server/asks.ts). It stays the same when a
-	 *  takeover gives the question a new id, so whoever shows it elsewhere keeps one message. */
-	askId?: string;
+	/** Its id in the list of asks (server/asks.ts); the same as its question id. */
+	askId: string;
+	/** Its key in pending-questions.json: the tool call id (per owner for a split call). */
+	recordId: string;
+	/** The asking chat's transcript: a card put back after a restart finds its chat by it. */
+	sessionFile?: string;
 	/** Native source at presentation; not a queue/question binding or answer authority. */
 	nativeSource?: QuestionAcceptanceSource;
-	/** owner-question routing (Ops #685): COO handed the question back with this note; the call ends
-	 *  with it (owner-question-router.ts questionReturnedText), never as the owner's answer. */
-	returned?: (note: string) => void;
+	/** Kept for later (Shine m104353): it pops up nowhere, its chat shows the reopen bar. */
+	later?: boolean;
 }
 
 /** The message every window gets for a waiting question, named after the chat that asks. */
@@ -60,55 +43,36 @@ export function questionPendingMessage(
 	};
 }
 
-/** 没有页面连着时，等待页面回来的宽限期（毫秒）。刷新/重连通常 1-3 秒。 */
-export const ASK_USER_NO_CLIENT_GRACE_MS = 30_000;
-
-/** 宽限期满仍无人在线时给模型的错误（与 pageCall 的无页面错误同一口径）。 */
+/** What the model was told before Ops #1087 when no page was open. Never the outcome now (NB-4 checks it isn't):
+ *  a card with no window open waits on disk and reaches Telegram. */
 export const ASK_USER_NO_CLIENT_ERROR =
 	"No pi-web-ui page is connected, so the user cannot be asked (no browser connected). " +
 	"Write the question to the user directly in your reply; do not call ask_user_question again.";
 
-/** 提问那一刻：有页面就即时推（广播给所有在线客户端），没有就先挂着等。
- *  clientCount = 全进程在线客户端数。 */
-export function askDeliveryOnAsk(clientCount: number): "emit" | "grace" {
-	return clientCount > 0 ? "emit" : "grace";
-}
+type SnapshotEntry<Q> = { questions: Q; conversationId?: string; conversationTitle?: string; later?: boolean };
 
-/** 某个客户端 dispose 了，它名下的问卷该不该一起取消？
- *
- *  以前问卷是「本客户端自己的东西」，dispose 就连带取消 —— multi-device 之后这是
- *  错的：关掉笔记本那一页，不该把台式机还能回答的问卷打掉（而 client-per-load 之后
- *  每次刷新都会 dispose 一个旧会话，等于每次刷新都打掉自己的问卷）。
- *  只有「一台都不剩」时才取消，否则留给还连着的设备。 */
-export function shouldCancelOnClientDispose(args: { connectedClientsLeft: number }): "cancel" | "keep" {
-	return args.connectedClientsLeft > 0 ? "keep" : "cancel";
-}
+const cardOf = <Q>(id: string, p: SnapshotEntry<Q>) => ({
+	id,
+	questions: p.questions,
+	...(p.conversationId ? { conversationId: p.conversationId } : {}),
+	...(p.conversationTitle ? { conversationTitle: p.conversationTitle } : {}),
+});
 
-/** 宽限期到点：只有「仍在等待 且 依旧没有任何页面」才拒。
- *  - 已被回答/取消（stillPending=false）→ 什么都不做，别去动别人的 promise；
- *  - 期间有页面接上 → 交给快照恢复，保持挂起。 */
-export function askDeliveryOnGraceExpiry(args: { clientCount: number; stillPending: boolean }): "reject" | "keep" {
-	if (!args.stillPending) return "keep";
-	return args.clientCount > 0 ? "keep" : "reject";
-}
-
-/** 快照要带上的待答提问。
- *
- *  以前这里按 `conversationId === activeId` 过滤，只肯把「当前对话」的提问放进
- *  快照——于是「提问时没人在线」的问卷只有在用户**恰好回到那条对话**时才会重新
- *  出现；打开别的对话 → 快照里是 null → 对话框永远不回来，而服务端还阻塞着。
- *  对话框是问卷的唯一入口，侧栏没有任何「这条对话在等你回答」的提示，所以丢了
- *  就是真丢了。改为：不分对话一律带上，由 `conversationId` 告诉前端它属于谁。 */
+/** The card a window's snapshot pops up: the first one shown to it, from any chat (a refresh brings it back). One kept
+ *  for later never pops up again, over its own chat or another (Shine m104353). */
 export function pickPendingQuestionForSnapshot<Q>(
-	entries: Iterable<[string, { questions: Q; conversationId?: string; conversationTitle?: string }]>,
+	entries: Iterable<[string, SnapshotEntry<Q>]>,
 ): { id: string; questions: Q; conversationId?: string; conversationTitle?: string } | null {
-	for (const [id, p] of entries) {
-		return {
-			id,
-			questions: p.questions,
-			...(p.conversationId ? { conversationId: p.conversationId } : {}),
-			...(p.conversationTitle ? { conversationTitle: p.conversationTitle } : {}),
-		};
-	}
+	for (const [id, p] of entries) if (!p.later) return cardOf(id, p);
 	return null;
+}
+
+/** The cards kept for later that a window showing `activeId` offers in its reopen bar: that chat's own. */
+export function savedQuestionsOf(
+	entries: Iterable<[string, SnapshotEntry<UiQuestion[]>]>,
+	activeId: string | undefined,
+): UiPendingQuestion[] {
+	const saved: UiPendingQuestion[] = [];
+	for (const [id, p] of entries) if (p.later && p.conversationId === activeId) saved.push(cardOf(id, p));
+	return saved;
 }

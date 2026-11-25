@@ -2,8 +2,8 @@
 // acceptance cases NB-1..NB-6, written before the build. RED on the synchronous ask_user_question (6cece0d5); Task 2
 // wires ClientSession to server/pending-questions-store.ts, moves this file into tests/unit/ and makes it GREEN
 // without weakening an assertion. The tool runs through the real bridge (bridgeTarget), ClientSession.askUser, list of
-// asks, per-owner split (#1079) and COO router (#685), in windows of Shine's and Wai's logins. Its own config
-// (tests/nonblocking-ask-question-acceptance.config.ts) keeps it out of the land gate until then.
+// asks, per-owner split (#1079) and COO router (#685), in windows of Shine's and Wai's logins. Until Task 2 its own
+// config kept it out of the land gate; Task 2 (Ops #1087) moved it here and added NB-7 (keep for later).
 // The seam Task 2 adds to ClientSession: `static pendingQuestionsHost` (set by AgentService: the store in its data
 // folder + delivery through sendRoleMessage) and `static restorePendingQuestions()` (at start-up).
 // No server, model or socket; temporary folders only. "At once" = within a few event-loop turns, no timer: no
@@ -12,26 +12,26 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ClientSession, makeAskUserQuestionTool } from "../server/agent-service.js";
-import { ASK_USER_NO_CLIENT_ERROR } from "../server/ask-delivery.js";
-import { sliceToolCallId, turnOwnersOf } from "../server/ask-question-owners.js";
-import { type Ask, type AskEvent, askHub } from "../server/asks.js";
-import { answerRecord } from "../server/decision-records.js";
-import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "../server/owner-question-holds.js";
-import { OwnerQuestionRouter, questionReturnedText } from "../server/owner-question-router.js";
-import { pluginAnswer } from "../server/owner-question-surfaces.js";
-import type { OwnerViewer } from "../server/owner-requester.js";
+import { ClientSession, makeAskUserQuestionTool } from "../../server/agent-service.js";
+import { ASK_USER_NO_CLIENT_ERROR } from "../../server/ask-delivery.js";
+import { sliceToolCallId, turnOwnersOf } from "../../server/ask-question-owners.js";
+import { type Ask, type AskEvent, askHub } from "../../server/asks.js";
+import { answerRecord } from "../../server/decision-records.js";
+import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "../../server/owner-question-holds.js";
+import { OwnerQuestionRouter, questionReturnedText } from "../../server/owner-question-router.js";
+import { pluginAnswer } from "../../server/owner-question-surfaces.js";
+import type { OwnerViewer } from "../../server/owner-requester.js";
 import {
 	PENDING_QUESTIONS_FILE,
 	type PendingQuestionsHost,
 	PendingQuestionsStore,
 	type QuestionWake,
 	questionWakeOf,
-} from "../server/pending-questions-store.js";
-import type { ServerMessage, UiQuestion } from "../server/protocol.js";
-import { requesterForAdmission } from "../server/queue-requester.js";
-import { collectRoleInput, newTurnRecord, type RoleTurnRecord } from "../server/role-replies.js";
-import { asAnswerer, PeopleBook, type SentBy, serveOwners, tailscaleSenderOf } from "../server/sent-by.js";
+} from "../../server/pending-questions-store.js";
+import type { ServerMessage, UiQuestion } from "../../server/protocol.js";
+import { requesterForAdmission } from "../../server/queue-requester.js";
+import { collectRoleInput, newTurnRecord, type RoleTurnRecord } from "../../server/role-replies.js";
+import { asAnswerer, PeopleBook, type SentBy, serveOwners, tailscaleSenderOf } from "../../server/sent-by.js";
 
 const WAI_SENT: SentBy = { login: "sayswai@gmail.com", name: "Wai", owner: false };
 const SHINE_SENT: SentBy = { login: "aungshine@gmail.com", name: "Shine", owner: true };
@@ -150,12 +150,12 @@ function turn(c: FakeChat, ...senders: SentBy[]): void {
 	}
 }
 
-function win(convs: Map<string, FakeChat>, viewer: OwnerViewer, open = true): Win {
+function win(convs: Map<string, FakeChat>, viewer: OwnerViewer, open = true, activeId = "conv-elsewhere"): Win {
 	const sent: ServerMessage[] = [];
 	const client: ClientSession = Object.create(ClientSession.prototype);
 	Object.defineProperties(client, {
 		convs: { value: convs },
-		activeId: { value: "conv-elsewhere" },
+		activeId: { value: activeId },
 		conv: { get: () => undefined },
 		disposed: { value: false },
 		settingsSvc: { value: { current: { questionnaireEnabled: true, disabledAgentTools: [] }, push: () => {} } },
@@ -485,5 +485,88 @@ describe("NB-6: one call for Shine and Wai posts two cards that end on their own
 		expect([...statics.sharedQuestions.keys()]).toEqual([waiAsk.id]);
 		expect(kept()).toEqual([[forWai, "waiting", "Wai"]]);
 		expect(JSON.parse(readFileSync(storeFile(), "utf8")).records).toHaveLength(1);
+	});
+});
+
+// NB-7 (Ops #1087, Shine m104353: "lets make it so questions can be kept for later"). Written failing-first in Task 2:
+// Later / ✕ / Esc send question_later (the dialog side: tests/unit/nonblocking-ask-question-later-ui.test.ts).
+type SnapshotCard = { id: string } | null;
+const popUp = (w: Win) => call<SnapshotCard>(w.client, "pendingQuestionForSnapshot");
+const savedBar = (w: Win) => call<{ id: string }[]>(w.client, "savedQuestionsForSnapshot").map((q) => q.id);
+const laterOf = () =>
+	storeNow()
+		.waiting()
+		.map((r) => [r.id, r.later === true]);
+
+describe("NB-7: a question kept for later", () => {
+	it("Later tucks it away in every window of its owner, keeps it open everywhere, cancels and wakes nothing", async () => {
+		const { asking, shine, wai, run } = setup();
+		const shineTab2 = win(new Map([[asking.id, asking]]), viewers.shine, true, asking.id); // a second tab, on the chat
+		turn(asking, SHINE_SENT);
+		await postedNow(run("toolu_1", [PORT]));
+		const ask = askOf("port");
+		expect(popUp(shine)?.id).toBe(ask.id); // before: it pops up over another chat
+		shine.client.questionLater(ask.id, true);
+		await turns();
+		expect(retracted(shine)).toEqual([ask.id]);
+		expect(retracted(shineTab2)).toEqual([ask.id]);
+		expect(wai.sent.filter((m) => "id" in m && m.id === ask.id)).toEqual([]); // Shine's card: Wai's windows untouched
+		expect(laterOf()).toEqual([["toolu_1", true]]);
+		expect(askHub.list().map((a) => a.id)).toEqual([ask.id]); // Roles page, Telegram
+		expect([...statics.sharedQuestions.keys()]).toEqual([ask.id]); // the chat list's "?"
+		expect(call<{ id: string } | null>(shine.client, "getPendingQuestionForConv", asking.id)?.id).toBe(ask.id);
+		expect(events.filter((e) => e.type !== "appeared")).toEqual([]);
+		expect(wakes).toEqual([]);
+		// It no longer pops up over any chat; only its own chat offers the reopen bar.
+		expect(popUp(shine)).toBeNull();
+		expect(popUp(shineTab2)).toBeNull();
+		expect(savedBar(shineTab2)).toEqual([ask.id]);
+		expect(savedBar(shine)).toEqual([]);
+	});
+
+	it("stays kept for later across a restart, and is answered later from its chat's bar", async () => {
+		const { asking, shine, run } = setup();
+		turn(asking, SHINE_SENT);
+		await postedNow(run("toolu_1", [PORT]));
+		shine.client.questionLater(askOf("port").id, true);
+		// The new process: empty list of asks and map, the same data folder.
+		for (const a of askHub.list()) askHub.settle(a.id, { how: "gone", reason: "process ended" });
+		statics.sharedQuestions.clear();
+		wire();
+		const fresh = win(new Map([[asking.id, asking]]), viewers.shine, true, asking.id);
+		await statics.restorePendingQuestions!();
+		const restored = askOf("port");
+		expect(laterOf()).toEqual([["toolu_1", true]]);
+		expect(ofType(fresh, "question_pending")).toEqual([]); // no pop-up after the restart
+		expect(popUp(fresh)).toBeNull();
+		expect(savedBar(fresh)).toEqual([restored.id]);
+		// Reopened from the bar and answered: the chat wakes with Shine's answer and the card is gone.
+		await asAnswerer("Shine", () => fresh.client.answerQuestion(restored.id, [{ id: "port", selected: ["8080"] }]));
+		await turns();
+		expect(wakes).toHaveLength(1);
+		expect(wakes[0]!.text).toContain("- Which port?: 8080");
+		expect(wakes[0]!.requester.person).toBe("Shine");
+		expect(kept()).toEqual([]);
+		expect(savedBar(fresh)).toEqual([]);
+	});
+
+	it("brought back up, it pops up again; only an explicit Cancel question cancels it", async () => {
+		const { asking, shine, run } = setup();
+		turn(asking, SHINE_SENT);
+		await postedNow(run("toolu_1", [PORT]));
+		const ask = askOf("port");
+		shine.client.questionLater(ask.id, true);
+		shine.client.questionLater(ask.id, false);
+		expect(ofType(shine, "question_pending").map((m) => m.id)).toEqual([ask.id, ask.id]);
+		expect(laterOf()).toEqual([["toolu_1", false]]);
+		expect(popUp(shine)?.id).toBe(ask.id);
+		shine.client.questionLater(ask.id, true);
+		await shine.client.answerQuestion(ask.id, [], true); // "Cancel question"
+		await turns();
+		expect(wakes).toHaveLength(1);
+		expect(wakes[0]!.text).toContain('Cancelled prompt "Which port?"');
+		expect(kept()).toEqual([]);
+		expect(askHub.list()).toEqual([]);
+		expect(shine.client.questionLater(ask.id, true)).toBe(false); // gone: nothing to keep
 	});
 });

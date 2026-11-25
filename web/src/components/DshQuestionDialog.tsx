@@ -6,6 +6,7 @@ import { hoverCapable } from "../tip-position";
 import { HoverDetail } from "./HoverDetail";
 import { Markdown } from "./Markdown";
 import { OwnerQuestionRoute } from "./OwnerQuestionRoute";
+import { QuestionLaterBar } from "./QuestionLaterBar";
 
 interface QuestionItem {
 	id: string;
@@ -43,6 +44,10 @@ interface DshQuestionDialogProps {
 	 * order stays.
 	 */
 	escapeEnabled?: boolean;
+	/** Opened from its chat's saved-for-later bar (Ops #1087): Later / ✕ / Esc fold it back into the bar (it is kept
+	 *  for later already, nothing is sent); `onSent` once it was answered or cancelled. */
+	onLater?: () => void;
+	onSent?: () => void;
 }
 
 /**
@@ -50,8 +55,9 @@ interface DshQuestionDialogProps {
  * 向导式：每次只显示一道题。
  *  - 单选：点选项即选中并自动进入下一题；最后一题点选项直接提交。
  *  - 多选/自由文本：勾选或输入后用「下一步/提交」推进，「上一步」可回头修改。
- *  - ✗ / Esc / 底部「取消」→ 取消提问；提交与取消都会立即收起本面板
- *    （use-chat 在发出 question_answer 后置空 question）。
+ *  - Later / ✕ / Esc → keep it for later (question_later, Ops #1087): nothing is cancelled, it stops popping up and
+ *    its chat's one-line bar reopens it; only the footer's explicit "Cancel question" cancels it. Every way out
+ *    closes this panel at once (use-chat clears question after question_answer / question_later).
  * 选中带 `preview` 的选项时在下方预览其 markdown/HTML 内容。
  * 复用 .dialog-inline 样式（非模态，对话保持可见）。
  *
@@ -62,13 +68,34 @@ interface DshQuestionDialogProps {
  *  only the server's passive "Waiting on <name>" line (his question isn't sent to this window). */
 export function ChatOwnerQuestion({
 	question,
+	savedQuestions,
 	waitingOn,
 	...rest
-}: Omit<DshQuestionDialogProps, "question"> & {
+}: Omit<DshQuestionDialogProps, "question" | "onLater" | "onSent"> & {
 	question: DshQuestionDialogProps["question"] | null | undefined;
+	/** Keep for later (Ops #1087): this chat's questions kept for later, offered in a one-line bar. */
+	savedQuestions?: DshQuestionDialogProps["question"][] | null;
 	waitingOn: string | null | undefined;
 }) {
+	const [openId, setOpenId] = useState<string | null>(null);
+	/** Answered or cancelled here: no longer offered while the snapshot catches up. */
+	const [sentIds, setSentIds] = useState<readonly string[]>([]);
 	if (question) return <DshQuestionDialog question={question} {...rest} />;
+	const saved = (savedQuestions ?? []).filter((q) => !sentIds.includes(q.id));
+	const opened = openId ? saved.find((q) => q.id === openId) : undefined;
+	if (opened)
+		return (
+			<DshQuestionDialog
+				question={opened}
+				{...rest}
+				onLater={() => setOpenId(null)}
+				onSent={() => {
+					setOpenId(null);
+					setSentIds((ids) => [...ids, opened.id]);
+				}}
+			/>
+		);
+	if (saved.length > 0) return <QuestionLaterBar saved={saved} onAnswer={setOpenId} />;
 	return waitingOn ? (
 		<div className="chat-waiting-on" role="status">
 			{waitingOn}
@@ -76,7 +103,13 @@ export function ChatOwnerQuestion({
 	) : null;
 }
 
-export function DshQuestionDialog({ question, conversationTitle, escapeEnabled = true }: DshQuestionDialogProps) {
+export function DshQuestionDialog({
+	question,
+	conversationTitle,
+	escapeEnabled = true,
+	onLater,
+	onSent,
+}: DshQuestionDialogProps) {
 	const t = useT();
 	const convTitle = question.conversationTitle || conversationTitle;
 	const [selections, setSelections] = useState<Record<string, string[]>>({});
@@ -128,16 +161,22 @@ export function DshQuestionDialog({ question, conversationTitle, escapeEnabled =
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [question.id, question.deadline]);
 
-	/** 取消提问：✕ / Esc / 底部「取消」与自动取消共用同一出口。 */
+	/** 取消提问：the footer's explicit "Cancel question" only. */
 	const cancel = () => {
 		appSend({ type: "question_answer", id: question.id, answers: [], cancelled: true });
+		onSent?.();
+	};
+	/** Keep for later: Later / ✕ / Esc (Ops #1087). Every window of this owner tucks it away; nothing is cancelled. */
+	const later = () => {
+		if (onLater) onLater();
+		else appSend({ type: "question_later", id: question.id, later: true });
 	};
 
 	// 审查 #12：Esc 改走 shortcut-stack 分层栈（与 Modal 同一调度）——
 	// 多层弹窗叠开时内层优先消费，不再裸 document 监听抢 Esc。
 	useEscapeKey(() => {
 		if (!escapeEnabled) return false;
-		cancel();
+		later();
 	});
 
 	const isQuestionVisible = (qq: QuestionItem, sel: Record<string, string[]>): boolean => {
@@ -179,7 +218,7 @@ export function DshQuestionDialog({ question, conversationTitle, escapeEnabled =
 							{convTitle}
 						</span>
 					)}
-					<button type="button" className="dialog-dismiss" title={t("cancel")} onClick={cancel}>
+					<button type="button" className="dialog-dismiss" title={t("questionLaterTip")} onClick={later}>
 						✕
 					</button>
 				</div>
@@ -211,6 +250,7 @@ export function DshQuestionDialog({ question, conversationTitle, escapeEnabled =
 			return { id: qq.id, selected, ...(custom ? { custom } : {}) };
 		});
 		appSend({ type: "question_answer", id: question.id, answers });
+		onSent?.();
 	};
 
 	const toggleOption = (qid: string, label: string) => {
@@ -274,7 +314,13 @@ export function DshQuestionDialog({ question, conversationTitle, escapeEnabled =
 						{remainSec > 0 ? t("questionTimeout", { s: remainSec }) : t("questionTimeoutExpired")}
 					</span>
 				)}
-				<button type="button" className="dialog-dismiss" title={t("cancel")} onClick={cancel}>
+				<button
+					type="button"
+					className="dialog-dismiss"
+					title={t("questionLaterTip")}
+					aria-label={t("questionLater")}
+					onClick={later}
+				>
 					✕
 				</button>
 			</div>
@@ -331,9 +377,14 @@ export function DshQuestionDialog({ question, conversationTitle, escapeEnabled =
 				/>
 			</div>
 			<div className="dialog-nav">
-				<button type="button" className="dialog-dismiss-inline" onClick={cancel}>
-					{t("cancel")}
-				</button>
+				<div className="dialog-nav-left">
+					<button type="button" className="dialog-later" title={t("questionLaterTip")} onClick={later}>
+						{t("questionLater")}
+					</button>
+					<button type="button" className="dialog-dismiss-inline" title={t("questionCancelTip")} onClick={cancel}>
+						{t("questionCancel")}
+					</button>
+				</div>
 				<div className="dialog-nav-right">
 					<button
 						type="button"

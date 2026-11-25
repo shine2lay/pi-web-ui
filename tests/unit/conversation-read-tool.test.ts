@@ -3,6 +3,7 @@
  * 纯函数零 token；工具 execute 经 defineTool 走 SDK 类型，仅测纯函数部分。
  */
 import { describe, expect, it } from "vitest";
+import { askHub, questionAsk } from "../../server/asks.js";
 import {
 	filterHistory,
 	filterRunning,
@@ -223,21 +224,6 @@ describe("summarizeConversation", () => {
 		]);
 		expect(sum.lastTool).toEqual({ name: "edit", hint: "a.ts" });
 		expect(sum.lastAssistant).toBe("搞定");
-		expect(sum.waitingQuestion).toBe(false);
-	});
-	it("问卷调了没回 → waiting；回了 → 不等", () => {
-		const asked: TranscriptInputMessage[] = [
-			{
-				role: "assistant",
-				content: [{ type: "toolCall", name: "ask_user_question", arguments: {} }],
-				toolCalls: [{ name: "ask_user_question", args: {} }],
-			},
-		];
-		expect(summarizeConversation(asked).waitingQuestion).toBe(true);
-		expect(
-			summarizeConversation([...asked, { role: "toolResult", toolName: "ask_user_question", content: "a" }])
-				.waitingQuestion,
-		).toBe(false);
 	});
 	it("bashExecution 算最后工具；空转录全 undefined", () => {
 		const sum = summarizeConversation([{ role: "bashExecution", command: "rm x", output: "" }]);
@@ -245,7 +231,6 @@ describe("summarizeConversation", () => {
 		const empty = summarizeConversation([]);
 		expect(empty.lastTool).toBeUndefined();
 		expect(empty.lastAssistant).toBeUndefined();
-		expect(empty.waitingQuestion).toBe(false);
 	});
 });
 
@@ -305,6 +290,27 @@ describe("files/status 认领与 sidecar 接线（execute 级）", () => {
 			content: { type: string; text: string }[];
 		};
 		expect(r2.content[0].text).not.toContain("Claims");
+	});
+	// Ops #1087: ask_user_question returns as it posts, so its result is in the transcript at once; whether the
+	// question still waits comes from the list of asks (open or kept for later), not the transcript.
+	it("status says a question waits while the list of asks holds the chat's question", async () => {
+		const tool = makeConversationReadTool(host, () => "zh");
+		const status = async () =>
+			(await tool.execute("t", { action: "status", id: "c1" }, undefined, undefined, ctx)) as {
+				content: { type: string; text: string }[];
+				details: { waitingQuestion: boolean };
+			};
+		expect((await status()).details.waitingQuestion).toBe(false);
+		const ask = questionAsk("q-read-1", [{ id: "pick", question: "A or B?" }], { conversationId: "c1" });
+		askHub.add(ask, () => ({ ok: true }));
+		try {
+			const r = await status();
+			expect(r.details.waitingQuestion).toBe(true);
+			expect(r.content[0].text).toContain("question waiting for the owner's answer");
+		} finally {
+			askHub.settle(ask.id, { how: "gone", reason: "test" });
+		}
+		expect((await status()).details.waitingQuestion).toBe(false);
 	});
 });
 

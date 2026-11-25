@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClientSession } from "../../server/agent-service.js";
 import { askHub } from "../../server/asks.js";
+import { questionCards } from "../fixtures/question-cards.js";
 import { noteOwnerInput } from "../../server/owner-input-time.js";
 import {
 	HOLD_SAFETY_NET_MS,
@@ -102,7 +103,10 @@ beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "owner-question-client-"));
 	on = true;
 	startRouter();
+	cards = questionCards();
+	cleanups.push(() => cards.close());
 });
+let cards: ReturnType<typeof questionCards>;
 afterEach(() => {
 	for (const undo of cleanups.splice(0).reverse()) undo();
 	for (const id of [...statics.sharedQuestions.keys()]) statics.sharedQuestions.delete(id);
@@ -235,7 +239,7 @@ describe("ClientSession with the switch on", () => {
 	it("ask_user_question from a turn the owner is chatting in: every window gets it at once, with its line", async () => {
 		const { asking, mine, other } = twoWindows();
 		ownerWrites(asking, T0 - MIN);
-		const answer = mine.client.askUser(QUESTIONS, { toolCallId: "call-1" }, asking.id);
+		const answer = cards.ask(mine.client, QUESTIONS, asking.id, "call-1");
 		const line = { line: "You were chatting here (you wrote 1 minute ago)" };
 		for (const w of [mine, other]) {
 			expect(ofType(w, "question_pending")).toMatchObject([{ conversationId: asking.id, route: line }]);
@@ -251,7 +255,7 @@ describe("ClientSession with the switch on", () => {
 	it("a question a role's turn raised waits for COO: only its own chat's page shows it, until COO lets it through", async () => {
 		const { asking, mine, other } = twoWindows();
 		roleStarts(asking);
-		const answer = mine.client.askUser(QUESTIONS, { toolCallId: "call-2" }, asking.id);
+		const answer = cards.ask(mine.client, QUESTIONS, asking.id, "call-2");
 		const [id] = heldIds();
 		expect(id).toBeDefined();
 		// Held: no pop-up in any window, no "?" in the chat list (Needs you, the lead bar), not in the list of asks.
@@ -278,7 +282,7 @@ describe("ClientSession with the switch on", () => {
 	it("answering a held question on its own page settles it", async () => {
 		const { asking, mine } = twoWindows();
 		roleStarts(asking);
-		const answer = mine.client.askUser(QUESTIONS, {}, asking.id);
+		const answer = cards.ask(mine.client, QUESTIONS, asking.id);
 		const id = snapshotQuestion(mine)!.id;
 		mine.client.resolveQuestion(id, [{ id: "port", selected: ["8080"] }]);
 		await expect(answer).resolves.toEqual([{ id: "port", selected: ["8080"] }]);
@@ -289,13 +293,13 @@ describe("ClientSession with the switch on", () => {
 	it("COO hands it back: the call returns COO's note, the pop-up closes, and asking again goes straight to him", async () => {
 		const { asking, mine, other } = twoWindows();
 		roleStarts(asking);
-		const first = mine.client.askUser(QUESTIONS, {}, asking.id);
+		const first = cards.ask(mine.client, QUESTIONS, asking.id);
 		const [id] = heldIds();
 		expect(router.returnToAsker(id!, "Use the port the plan names")).toEqual({ ok: true });
 		await expect(first).resolves.toEqual({ returned: "Use the port the plan names" });
 		expect(ofType(mine, "question_retracted")).toEqual([{ type: "question_retracted", id }]);
 		expect(snapshotQuestion(mine)).toBeNull();
-		const again = mine.client.askUser(QUESTIONS, {}, asking.id);
+		const again = cards.ask(mine.client, QUESTIONS, asking.id);
 		const [pending] = ofType(other, "question_pending");
 		expect(pending).toBeDefined();
 		// asked again: shown as before, no line (Ops #684's table); only whose it is (owner-requester, Ops #973)
@@ -385,7 +389,7 @@ describe("ClientSession with the switch on", () => {
 	it("a chat's own needs-you line about its held question waits with it; the chat list is redrawn as it's held and answered", async () => {
 		const { asking, mine, other } = twoWindows();
 		roleStarts(asking);
-		const answer = mine.client.askUser(QUESTIONS, { toolCallId: "call-6" }, asking.id);
+		const answer = cards.ask(mine.client, QUESTIONS, asking.id, "call-6");
 		const [held] = askHub.heldList();
 		expect(other.listed()).toBe(1);
 		// The chat writes its needs-you line just before it asks, or a moment after (the ask hub's clock is the real one).
@@ -455,7 +459,7 @@ describe("ClientSession with the switch off", () => {
 		on = false;
 		const { asking, mine, other } = twoWindows();
 		roleStarts(asking);
-		const answer = mine.client.askUser(QUESTIONS, { toolCallId: "call-3" }, asking.id);
+		const answer = cards.ask(mine.client, QUESTIONS, asking.id, "call-3");
 		const decision = mine.client.askApproval("call-4", "bash", { command: "ls" }, "lists", "lists", asking.id);
 		const [question] = ofType(other, "question_pending");
 		const [approval] = ofType(other, "tool_approval_pending");

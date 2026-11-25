@@ -143,8 +143,14 @@ export default function (pi) {
 const srv = await ownServer({
 	name: "roles-answer",
 	prepare: seed,
-	mock: ({ sideRequest, toolResult }) => {
+	mock: ({ sideRequest, toolResult, lastUser }) => {
 		if (sideRequest) return "Fixture";
+		// ask_user_question returns as it posts (Ops #1087): the posting is no answer; the answer wakes the chat.
+		if (toolResult?.content.includes("without waiting (non-blocking)")) return "Fixture question posted.";
+		if (!toolResult && /answered your question/.test(lastUser ?? "")) {
+			completed++;
+			return "Fixture operation finished.";
+		}
 		if (toolResult) {
 			completed++;
 			return "Fixture operation finished.";

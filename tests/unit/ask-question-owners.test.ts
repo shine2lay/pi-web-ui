@@ -1,6 +1,8 @@
 // ask-question-owners (Ops #1079; Wai 2026-11-22 via Backend rm-8b704195, decision dr-1452e9e255d8): each
 // ask_user_question question goes to its own owner, from data; one dialog never carries two owners' questions.
-// The tool runs through the real ClientSession.askUser, the real list of asks, the real per-viewer rule, the plugin
+// nonblocking-ask (Ops #1087): the call posts one card per owner and returns at once; each owner's answer reaches the
+// chat later as its own wake (no combined result).
+// The tool runs through the real ClientSession.postQuestion, the real list of asks, the real per-viewer rule, the plugin
 // (Telegram) filter and a real decision store, in windows of Shine's and Wai's logins. No server, model or socket;
 // temporary folders only.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -8,12 +10,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClientSession, makeAskUserQuestionTool } from "../../server/agent-service.js";
-import { askQuestionsByOwner, toolCallIdOfSlice } from "../../server/ask-question-owners.js";
+import { toolCallIdOfSlice } from "../../server/ask-question-owners.js";
 import { type Ask, askHub } from "../../server/asks.js";
 import { answerRecord, DecisionRecords } from "../../server/decision-records.js";
 import { pluginAsks } from "../../server/owner-question-surfaces.js";
 import { askIsForViewer, type OwnerViewer } from "../../server/owner-requester.js";
-import type { QuestionAnswer, ServerMessage, UiQuestion, UiTaskRequester } from "../../server/protocol.js";
+import { PendingQuestionsStore, type QuestionWake } from "../../server/pending-questions-store.js";
+import type { QuestionAnswer, ServerMessage, UiQuestion } from "../../server/protocol.js";
 import { requesterForAdmission } from "../../server/queue-requester.js";
 import { collectRoleInput, newTurnRecord, type RoleTurnRecord } from "../../server/role-replies.js";
 import { PeopleBook, type SentBy, serveOwners, tailscaleSenderOf } from "../../server/sent-by.js";
@@ -57,6 +60,7 @@ let dir = "";
 let seq = 0;
 let viewers: { shine: OwnerViewer; wai: OwnerViewer };
 let records: DecisionRecords;
+let wakes: QuestionWake[] = [];
 const cleanups: Array<() => void> = [];
 
 beforeEach(() => {
@@ -72,6 +76,18 @@ beforeEach(() => {
 	viewers = { shine: book.viewerOf(login("aungshine@gmail.com")), wai: book.viewerOf(login("sayswai@gmail.com")) };
 	// As AgentService.startDecisionRecords keeps an owner's answer.
 	records = new DecisionRecords(join(dir, "decisions"));
+	wakes = [];
+	const store = PendingQuestionsStore.inDataDir(join(dir, "data"));
+	ClientSession.pendingQuestionsHost = {
+		store,
+		deliver: async (wake) => {
+			wakes.push(wake);
+			return { ok: true };
+		},
+	};
+	cleanups.push(() => {
+		ClientSession.pendingQuestionsHost = null;
+	});
 	cleanups.push(
 		askHub.on((ev) => {
 			if (ev.type === "answered") records.append(answerRecord(ev.ask, ev, Date.now())!);
@@ -136,7 +152,7 @@ function setup() {
 	const wai = win(convs, viewers.wai);
 	const tool = makeAskUserQuestionTool(
 		{
-			askUser: (q, sig, conversationId, owner) => shine.client.askUser(q, sig, conversationId, owner),
+			postQuestion: (q, id, conversationId, owner) => shine.client.postQuestion(q, id, conversationId, owner),
 			questionOwners: (conversationId) => shine.client.questionOwners(conversationId),
 		},
 		asking.id,
@@ -157,13 +173,16 @@ const answer = (w: Win, ask: Ask, answers: QuestionAnswer[], cancelled = false) 
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 describe("a call with questions for Shine and Wai", () => {
-	it("becomes one dialog each: Shine's to his windows and Telegram, Wai's to Wai's window only, two records", async () => {
+	it("becomes one card each: Shine's to his windows and Telegram, Wai's to Wai's window only, two records", async () => {
 		const { asking, shine, wai, run } = setup();
 		typedBy(asking, SHINE_SENT, WAI_SENT);
-		const result = run([
+		const out = await run([
 			{ ...ROLLCALL, owner: "Shine" },
 			{ ...WATCH, owner: "Wai" },
 		]);
+		// Posted, not answered: the call returned at once with no answers (decision-records backfill has none to mix).
+		expect(out.content[0]!.text).toContain("non-blocking");
+		expect(out.details).not.toHaveProperty("answers");
 		const asks = askHub.list();
 		expect(asks).toHaveLength(2);
 		const forShine = askOf("rollcall_trim");
@@ -181,11 +200,14 @@ describe("a call with questions for Shine and Wai", () => {
 		expect(pluginAsks().map((a) => a.id)).toEqual([forShine.id]);
 		answer(wai, forWai, [{ id: "watch_dns", selected: [], custom: "Use the Mac's IP" }]);
 		answer(shine, forShine, [{ id: "rollcall_trim", selected: ["Not now"] }]);
-		const out = await result;
-		expect(out.content[0]!.text).toBe(
-			"[For Shine] Shine: RollCall cleanup: Not now\n[For Wai] Wai: watch web address: (no selection) (wrote: Use the Mac's IP)",
-		);
 		await settle();
+		// Each owner's answer wakes the chat as his own message.
+		expect(wakes.map((w) => [w.id, w.requester.person])).toEqual([
+			["toolu_1#Wai", "Wai"],
+			["toolu_1#Shine", "Shine"],
+		]);
+		expect(wakes[0]!.text).toContain("Use the Mac's IP");
+		expect(wakes[1]!.text).toContain("Not now");
 		const kept = records.list().filter((r) => r.source === "answer");
 		expect(kept).toHaveLength(2);
 		const byQuestion = (id: string) => kept.find((r) => r.questions?.some((q) => q.id === id))!;
@@ -197,33 +219,20 @@ describe("a call with questions for Shine and Wai", () => {
 		expect(kept.map((r) => toolCallIdOfSlice(r.ref.slice(4)))).toEqual(["toolu_1", "toolu_1"]);
 	});
 
-	it("one owner cancels: the other's answer stands and is recorded", async () => {
+	it("one owner cancels: the other's answer stands and is recorded; each wake says what its owner did", async () => {
 		const { asking, shine, wai, run } = setup();
 		typedBy(asking, SHINE_SENT, WAI_SENT);
-		const result = run([
+		await run([
 			{ ...ROLLCALL, owner: "Shine" },
 			{ ...WATCH, owner: "Wai" },
 		]);
 		answer(shine, askOf("rollcall_trim"), [], true);
 		answer(wai, askOf("watch_dns"), [{ id: "watch_dns", selected: ["Not yet"] }]);
-		const out = await result;
-		expect(out.content[0]!.text).toBe(
-			"[For Shine] Shine: RollCall cleanup: (cancelled; Shine's dialog was closed)\n[For Wai] Wai: watch web address: Not yet",
-		);
 		await settle();
+		expect(wakes.map((w) => w.requester.person)).toEqual(["Shine", "Wai"]);
+		expect(wakes[0]!.text).toMatch(/^Cancelled prompt/);
+		expect(wakes[1]!.text).toContain("Not yet");
 		expect(records.list().filter((r) => r.source === "answer")).toMatchObject([{ requester: "Wai" }]);
-	});
-
-	it("both cancel: the call is cancelled, as one dialog's cancel always was", async () => {
-		const { asking, shine, wai, run } = setup();
-		typedBy(asking, SHINE_SENT, WAI_SENT);
-		const result = run([
-			{ ...ROLLCALL, owner: "Shine" },
-			{ ...WATCH, owner: "Wai" },
-		]);
-		answer(shine, askOf("rollcall_trim"), [], true);
-		answer(wai, askOf("watch_dns"), [], true);
-		await expect(result).rejects.toThrow("User cancelled the question.");
 	});
 });
 
@@ -271,20 +280,23 @@ describe("one owner", () => {
 	it('a Wai turn asking { owner: "Shine" }: For Shine, to Shine and Telegram, not Wai', async () => {
 		const { asking, shine, wai, run } = setup();
 		typedBy(asking, WAI_SENT);
-		const result = run([{ ...PORT, owner: "Shine" }]);
+		await run([{ ...PORT, owner: "Shine" }]);
 		const ask = askOf("port");
 		expect(ask.requester).toBeUndefined();
 		expect(pending(shine)).toEqual([["port"]]);
 		expect(pending(wai)).toEqual([]);
 		expect(pluginAsks().map((a) => a.id)).toEqual([ask.id]);
 		answer(shine, ask, [{ id: "port", selected: ["8080"] }]);
-		await expect(result).resolves.toMatchObject({ content: [{ text: "port: 8080" }] });
+		await settle();
+		expect(wakes).toHaveLength(1);
+		expect(wakes[0]!.requester.person).toBe("Shine");
+		expect(wakes[0]!.text).toContain("8080");
 	});
 
 	it("an untagged question in a Wai turn is Wai's (one ask, the tool call id unchanged)", async () => {
 		const { asking, shine, wai, run } = setup();
 		typedBy(asking, WAI_SENT);
-		const result = run([WATCH], "toolu_9");
+		await run([WATCH], "toolu_9");
 		const ask = askOf("watch_dns");
 		expect(ask.requester).toBe("Wai");
 		expect(ask.toolCallId).toBe("toolu_9");
@@ -292,44 +304,8 @@ describe("one owner", () => {
 		expect(pending(shine)).toEqual([]);
 		expect(pluginAsks()).toEqual([]);
 		answer(wai, ask, [{ id: "watch_dns", selected: ["Not yet"] }]);
-		await expect(result).resolves.toMatchObject({ content: [{ text: "Wai: watch web address: Not yet" }] });
-	});
-});
-
-describe("COO hands one owner's dialog back", () => {
-	it("the call returns the other owner's answers and COO's note for the handed-back one", async () => {
-		const origin: UiTaskRequester = {
-			v: 1,
-			inputs: [
-				{ kind: "owner", channel: "browser", id: "ri-11111111" },
-				{ kind: "owner", channel: "browser", id: "ri-22222222", person: "Wai" },
-			],
-		};
-		const asked: Array<{ owner: string; id: string; ids: string[] }> = [];
-		const out = await askQuestionsByOwner(
-			[
-				{ ...ROLLCALL, owner: "Shine" },
-				{ ...WATCH, owner: "Wai" },
-			],
-			{ taskOrigin: origin, listed: new Set(["Wai"]) },
-			"toolu_c",
-			async (slice, id) => {
-				asked.push({ owner: slice.owner, id, ids: slice.questions.map((q) => q.id) });
-				return slice.owner === "Shine"
-					? { returned: "Ask Shine in his own chat" }
-					: [{ id: "watch_dns", selected: ["Not yet"] }];
-			},
-		);
-		expect(asked).toEqual([
-			{ owner: "Shine", id: "toolu_c#Shine", ids: ["rollcall_trim"] },
-			{ owner: "Wai", id: "toolu_c#Wai", ids: ["watch_dns"] },
-		]);
-		const text = out.content[0]!.text;
-		expect(text).toContain("[For Shine] Shine: RollCall cleanup: (handed back by COO, see below)");
-		expect(text).toContain("[For Wai] Wai: watch web address: Not yet");
-		expect(text).toContain("For Shine: ");
-		expect(text).toContain("Ask Shine in his own chat");
-		// No combined `answers`: decision-records backfill makes no record mixing the two owners.
-		expect(out.details).not.toHaveProperty("answers");
+		await settle();
+		expect(wakes.map((w) => [w.id, w.requester.person])).toEqual([["toolu_9", "Wai"]]);
+		expect(wakes[0]!.text).toContain("Not yet");
 	});
 });
