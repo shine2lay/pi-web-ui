@@ -52,13 +52,13 @@ import type {
 	GuardVerifiedDecisionV2,
 } from "./role-message-guard-contract-v2.js";
 import { guardDigest, guardOperationKey, guardStateIsValid, guardTransactionId } from "./role-message-guard-store.js";
+import { roleMessagesHourlyCapFor } from "./role-message-hourly-limit.js";
 import {
 	guardBindingBoundsValid,
 	guardDecisionRevisionValid,
 	guardRequestRevisionValid,
 	guardPolicyFor,
 	guardPolicyIsValid,
-	roleMessagesHourlyExempt,
 } from "./role-message-limits.js";
 const contractCommit = "04fe491fb3afc3b42462ad782b2099c7971c7008";
 const contractSha256 = "79a5a1e1a704ecfbb36a70fc1b210ee6e27575013843122cf202a84592b4c7af";
@@ -806,15 +806,11 @@ export class RoleMessageGuardCore implements GuardCoordinatorAny {
 						if (fault || fresh.value.time.nowMs < now || !equal(fresh.value.causal, command.snapshot.causal))
 							outcome = blocked(fault ?? "clock_untrusted");
 						else if (
-							!roleMessagesHourlyExempt(fresh.value.actor.role) &&
 							state.usage.filter(
 								(u) =>
 									u.origin === command.identity.actor.role &&
 									now - u.committedAt < this.options.policy.ordinary.rollingWindowMs,
-							).length >=
-								(state.mode === "rollback_depth_6"
-									? this.options.policy.rollback.acceptedPerOrigin
-									: this.options.policy.ordinary.acceptedPerOrigin)
+							).length >= roleMessagesHourlyCapFor(fresh.value.actor.role, this.options.policy, now, state.mode)
 						)
 							outcome = blocked("ordinary_hourly");
 						else {

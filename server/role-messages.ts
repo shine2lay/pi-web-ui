@@ -61,6 +61,7 @@ import { ownTaskOf } from "./own-task.js";
 import { ownerChannelOf, type OwnerChannel, type RoleOwnerAnswer, OWNER_IDS_MAX } from "./role-replies.js";
 import { CARRY_ON_PREFIX } from "./running-chats.js";
 import { guardPolicyIsValid, ROLE_MESSAGE_POLICY, roleMessagesHourlyExempt } from "./role-message-limits.js";
+import { roleMessagesHourlyRefusal } from "./role-message-hourly-limit.js";
 import type { GuardPolicy } from "./role-message-guard-contract-v2.js";
 import { readQueueEntries } from "./queue-entries-tail.js";
 import { statusHint } from "./turn-status.js";
@@ -1704,13 +1705,8 @@ export class RoleMessages {
 			};
 		}
 		const now = this.now();
-		const lastHour = this.hourlyCount(sender.role, now);
-		if (!roleMessagesHourlyExempt(sender.role) && lastHour >= this.policy.ordinary.acceptedPerOrigin) {
-			return {
-				ok: false,
-				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${this.policy.ordinary.acceptedPerOrigin}). Ask the owner before sending more.`,
-			};
-		}
+		const refused = roleMessagesHourlyRefusal(sender.role, this.hourlyCount(sender.role, now), this.policy, now);
+		if (refused) return { ok: false, error: refused };
 		const record = this.recordOf(
 			sender,
 			prepared.draft,

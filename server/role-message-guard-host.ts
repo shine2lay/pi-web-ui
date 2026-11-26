@@ -96,9 +96,9 @@ import {
 } from "./role-message-guard-core.js";
 import { GuardFileLock } from "./role-message-guard-lock.js";
 import { guardDigest, GuardFileStore, guardJournalRefusal } from "./role-message-guard-store.js";
+import { roleMessagesHourlyRefusal } from "./role-message-hourly-limit.js";
 import {
 	ROLE_MESSAGE_GIVE_UP_MS,
-	roleMessagesHourlyExempt,
 	type RoleMessageDraft,
 	type RoleMessageGuardTag,
 	type RoleMessageRecord,
@@ -2138,13 +2138,8 @@ export class RoleMessageGuardHost {
 		if (!prepared.ok) return { ...prepared, reason: "invalid_input" };
 		const actor = this.senderActor(sender);
 		if (!actor) return rm.send(sender, input);
-		const lastHour = rm.hourlyCount(sender.role);
-		if (!roleMessagesHourlyExempt(actor.role) && lastHour >= this.policy.ordinary.acceptedPerOrigin)
-			return {
-				ok: false,
-				error: `Not sent: ${sender.role} has sent ${lastHour} role messages in the last hour (the limit is ${this.policy.ordinary.acceptedPerOrigin}). Ask the owner before sending more.`,
-				reason: "ordinary_hourly",
-			};
+		const refused = roleMessagesHourlyRefusal(actor.role, rm.hourlyCount(sender.role), this.policy, this.now());
+		if (refused) return { ok: false, error: refused, reason: "ordinary_hourly" };
 		const state = await this.state_();
 		// Ops #257 (B1, N2): approvals turned off during the read (another server took the lock, another call failed).
 		if (this.offNow())
