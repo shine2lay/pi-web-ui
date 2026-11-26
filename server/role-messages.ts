@@ -65,6 +65,8 @@ import { roleMessagesHourlyRefusal } from "./role-message-hourly-limit.js";
 import type { GuardPolicy } from "./role-message-guard-contract-v2.js";
 import { readQueueEntries } from "./queue-entries-tail.js";
 import { statusHint } from "./turn-status.js";
+import { noRouteError, specialistRowOf, specialistStamp } from "./specialist-messages.js";
+import type { SpecialistFrom, SpecialistSender } from "./specialist-messages.js";
 import { checkCiAlert, ciAlertHint, ciAlertKey, ciAlertText, ciAlertTitle, type CiAlert } from "./ci-alert.js";
 import {
 	checkScriptNotice,
@@ -166,7 +168,7 @@ export interface RoleMessageRecord {
 	at: number;
 	/** Stamped by the server: the sending chat's role, the role's title, which chat ("home chat",
 	 *  "Queue #N", or chat "<title>") and its transcript. */
-	from: { role: string; title: string; chat: string; file: string };
+	from: { role: string; title: string; chat: string; file: string } & SpecialistFrom;
 	to: { role: string; title: string };
 	kind: RoleMessageKind;
 	/** kind reply: the message it answers. */
@@ -374,7 +376,7 @@ export interface RoleMessageHost extends tagRules.TagGovernanceHost {
 }
 
 /** The sending chat, as the server knows it. */
-export interface RoleMessageSender {
+export interface RoleMessageSender extends SpecialistSender {
 	role: string;
 	title: string;
 	/** Its transcript. */
@@ -1261,6 +1263,7 @@ export class RoleMessages {
 				id: m.id,
 				at: m.at,
 				from: m.from.role,
+				...specialistRowOf(m.from), // department-specialists: the owner's list only
 				fromChat: m.from.chat,
 				to: m.to.role,
 				...(m.targetChat ? { toChat: m.targetChat } : {}),
@@ -1707,14 +1710,8 @@ export class RoleMessages {
 		const now = this.now();
 		const refused = roleMessagesHourlyRefusal(sender.role, this.hourlyCount(sender.role, now), this.policy, now);
 		if (refused) return { ok: false, error: refused };
-		const record = this.recordOf(
-			sender,
-			prepared.draft,
-			newRoleMessageId((id) => !!this.byId(id)),
-			now,
-			chain,
-		);
-		return this.admit(record);
+		const id = newRoleMessageId((x) => !!this.byId(x));
+		return this.admit(this.recordOf(sender, prepared.draft, id, now, chain));
 	}
 
 	/** role-message-ladder: the native record for a checked draft (no store change). */
@@ -1730,7 +1727,13 @@ export class RoleMessages {
 		return {
 			id,
 			at,
-			from: { role: sender.role, title: sender.title, chat: sender.chat, file: sender.file },
+			from: {
+				role: sender.role,
+				title: sender.title,
+				chat: sender.chat,
+				file: sender.file,
+				...specialistStamp(sender),
+			},
 			to: { role: draft.to.role, title: draft.to.title },
 			kind,
 			...(replyTo ? { replyTo } : {}),
@@ -1837,10 +1840,7 @@ export class RoleMessages {
 		const roles = this.host.roles();
 		const toId = typeof input.to === "string" ? input.to.trim().toLowerCase() : "";
 		const to = roles.find((r) => r.id === toId);
-		if (!to) {
-			const ids = roles.map((r) => r.id).join(", ");
-			return { ok: false, error: `There's no role "${toId || String(input.to ?? "")}". Roles: ${ids || "none"}.` };
-		}
+		if (!to) return { ok: false, error: noRouteError(roles.map((r) => r.id)) }; // R-SPEC-PRIV-1: one text for all
 		const initiativeCheck = checkInitiative(input.initiative);
 		if (!initiativeCheck.ok) return { ok: false, error: initiativeCheck.error };
 		const tagsCheck = tagRules.governMessageTags(this.host, input);

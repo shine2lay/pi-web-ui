@@ -2,6 +2,7 @@ import { deepFreeze } from "./deep-freeze.js";
 import { piQueueReaders } from "./pi-queue-readers.js";
 import { requesterOf } from "./queue-requester.js";
 import { checkPatch, normProfile, normLaunch, patchProfile } from "./queue-profile.js";
+import { applySpecialistOp, launchSpecialistField } from "./task-queue-specialist.js";
 import { normTags, resolveInheritedTags } from "./shared/task-tags.js";
 import { insertByPriority, normPriority, repositionReadyTaskByPriority, taskPriority } from "./shared/task-priority.js";
 import type { UiTaskQueueBlock, UiTaskQueueHold, UiTaskQueueRef, UiTaskQueueWait } from "./protocol.js";
@@ -138,6 +139,7 @@ export function apply(s: State, raw: unknown): void {
 		if (touches) task.touches = touches;
 		const after = normAfter(op.after, op.id);
 		if (after?.length) task.after = after;
+		applySpecialistOp(task, op); // department-specialists (Ops #1101): the task's specialist, for its chip
 		if (op.op === "add") task.profile = normProfile(op.profile);
 		if (op.op === "add") {
 			const outside = outsideOf(op.outside, undefined);
@@ -171,6 +173,7 @@ export function apply(s: State, raw: unknown): void {
 				if (tags?.length) task.tags = tags;
 				else delete task.tags;
 			}
+			applySpecialistOp(task, op); // a slug sets it, null clears it, nothing else changes it
 			const touches = normTouches(op.touches);
 			if (touches) task.touches = touches;
 			const after = normAfter(op.after, task.id);
@@ -203,7 +206,7 @@ export function apply(s: State, raw: unknown): void {
 			if (!task.lane || !task.launch || task.launchPrepared) return;
 			const launch = normLaunch(op.launch);
 			if (launch) {
-				task.launch = launch;
+				task.launch = { ...launchSpecialistField(task.launch), ...launch }; // keeps the start's specialist snapshot
 				task.launchPrepared = true;
 			}
 			return;

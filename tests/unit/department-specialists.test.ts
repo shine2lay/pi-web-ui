@@ -3,9 +3,8 @@
 // tests/lib/department-specialists-cases.ts) and asserted at pi-web-ui's real host code: the identity entry reader
 // (identities.ts), the `/identity` writers (agent-service.ts), the role message store (role-messages.ts), the queue
 // row and the chat header. Groups: C-ENTRY, C-BIND, C-MSG, C-CHIP, C-PARITY, C-NOSPEC.
-// Task 1 keeps this file outside tests/unit with its own config (red until Task 2):
-//   TZ=UTC scripts/sealed.sh npx vitest run --config tests/department-specialists-acceptance.config.ts
-// Task 2 builds the seams, moves this file into tests/unit/ and may not delete or weaken any assertion.
+// Task 1 (Ops #1097) wrote it red outside the gate; Task 2 (Ops #1101) built the seams and moved it here, into the
+// land gate, with no assertion deleted or weakened (only the import paths changed with the move).
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,7 +21,7 @@ import {
 	loadIdentities,
 	type IdentityDef,
 	type IdentityEntryLike,
-} from "../server/identities.js";
+} from "../../server/identities.js";
 import {
 	RoleMessages,
 	roleMessageHeader,
@@ -30,13 +29,13 @@ import {
 	type RoleMessageHost,
 	type RoleMessageRecord,
 	type RoleMessageSender,
-} from "../server/role-messages.js";
+} from "../../server/role-messages.js";
 import {
 	E_SPEC_BINDING_CONFLICT,
 	identityCommandRefusal,
 	identityOfEntry,
 	specialistBindingOnBranch,
-} from "../server/specialist-entry.js";
+} from "../../server/specialist-entry.js";
 import {
 	NO_ROUTE,
 	noRouteError,
@@ -45,24 +44,24 @@ import {
 	type SpecialistFrom,
 	type SpecialistRow,
 	type SpecialistSender,
-} from "../server/specialist-messages.js";
-import { IdentityTag } from "../web/src/components/IdentityTag.js";
-import { renderTaskQueueRow } from "../web/src/components/TaskQueueRow.js";
-import { LanguageProvider } from "../web/src/i18n.js";
+} from "../../server/specialist-messages.js";
+import { IdentityTag } from "../../web/src/components/IdentityTag.js";
+import { renderTaskQueueRow } from "../../web/src/components/TaskQueueRow.js";
+import { LanguageProvider } from "../../web/src/i18n.js";
 import {
 	specialistChip,
 	type ChipViewer,
 	type SpecialistChatIdentity,
 	type SpecialistTaskFields,
-} from "../web/src/specialist-chip.js";
-import type { UiChatIdentity, UiTaskQueue, UiTaskQueueTask } from "../web/src/types.js";
+} from "../../web/src/specialist-chip.js";
+import type { UiChatIdentity, UiTaskQueue, UiTaskQueueTask } from "../../web/src/types.js";
 import {
 	caseById,
 	parityFiles,
 	piWebUiCases,
 	REPO_ROOT,
 	type SpecialistCase,
-} from "./lib/department-specialists-cases.js";
+} from "../lib/department-specialists-cases.js";
 
 /** The 15 departments (department-specialists index, "Canonical departments"). */
 const ROLES = [

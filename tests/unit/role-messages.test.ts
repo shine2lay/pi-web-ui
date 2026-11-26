@@ -173,7 +173,8 @@ describe("message_role checks", () => {
 		});
 		expect(s.send(from, { to: "nobody", kind: "fyi", text: "x" })).toMatchObject({
 			ok: false,
-			error: 'There\'s no role "nobody". Roles: alpha, beta, gamma.',
+			// department-specialists R-SPEC-PRIV-1 (Ops #1101): one fixed text that never names the asked-for target
+			error: "E_NO_ROUTE: no such role. Roles: alpha, beta, gamma.",
 		});
 		expect(s.send(from, { to: "gamma", kind: "fyi", text: "x" })).toMatchObject({
 			ok: false,

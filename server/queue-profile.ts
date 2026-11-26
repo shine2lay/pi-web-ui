@@ -2,6 +2,7 @@
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import { speedSupported } from "./fast-mode.js";
+import { launchSpecialistField } from "./task-queue-specialist.js";
 import type { UiTaskProfile, UiProfilePatch, UiTaskLaunch, ChatSpeed } from "./protocol.js";
 
 export const PROFILE_FIELDS = ["model", "thinking", "speed"] as const;
@@ -54,7 +55,7 @@ export function normLaunch(raw: unknown): UiTaskLaunch | undefined {
 	if (!l.from || typeof l.from !== "object") return undefined;
 	const from: UiTaskLaunch["from"] = { model: "app", thinking: "app", speed: "app" };
 	for (const f of PROFILE_FIELDS) if (l.from[f] === "task" || l.from[f] === "queue") from[f] = l.from[f];
-	return { ...normProfile(l), from };
+	return { ...normProfile(l), from, ...launchSpecialistField(raw) }; // department-specialists: slug + title only
 }
 export function resolveLaunch(
 	defaults?: UiTaskProfile,

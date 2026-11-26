@@ -3787,6 +3787,41 @@ html[data-theme="light"] .task-priority-p3 {
 	font-size: 11px;
 	line-height: 16px;
 }
+/* department-specialists (Ops #1101): the one chip naming a task's specialist (row + task chat header), as quiet as
+   the lane tag: no colour of its own (§4.4). */
+.specialist-chip {
+	/* the containing block of its screen-reader text, so a cut-short chip's clip holds that text in too */
+	position: relative;
+	flex-shrink: 1;
+	min-width: 0;
+	max-width: 14em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 0 5px;
+	border: 1px solid var(--border);
+	border-radius: 3px;
+	color: var(--text-dim);
+	font-size: 11px;
+	line-height: 16px;
+}
+/* Text for screen readers only (first user: the specialist chip's "(specialist)"). */
+.visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	border: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+.identity-tag-btn .specialist-chip {
+	max-width: 10em;
+	border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+	line-height: 14px;
+}
 .task-queue-touches,
 .task-queue-after {
 	margin-top: 1px;

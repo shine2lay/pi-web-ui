@@ -1,4 +1,5 @@
-// department-specialists (Ops #1097): the shared cases (Architecture #591), read by case id. The copy in
+// department-specialists (Ops #1097): the shared cases (Architecture #591, re-pinned to #593's final file by Ops #1101),
+// read by case id. The copy in
 // tests/fixtures is byte-for-byte Architecture's file, pinned here by sha256: an edited or re-copied file fails at
 // load, before any case runs. Re-pinning is a reviewed change (Architecture publishes the new sha).
 import { createHash } from "node:crypto";
@@ -6,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const CASES_SHA256 = "5c473f3349186111ac99cf6930618f2020007b1374f6719c280345146c4213d6";
+export const CASES_SHA256 = "451222c92285c83e53aec0bb3b3db3d2c6086e5729a720533624c31805e70b89";
 export const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CASES_FILE = join(REPO_ROOT, "tests", "fixtures", "department-specialists.cases.json");
 

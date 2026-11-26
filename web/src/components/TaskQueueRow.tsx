@@ -8,6 +8,7 @@ import { useT } from "../i18n";
 import { Markdown } from "./Markdown";
 import { lineTime } from "./TldrPanel";
 import { TaskPriorityBadge, taskPriority } from "./TaskPriorityBadge";
+import { SpecialistChip } from "./SpecialistChip";
 import {
 	AfterLine,
 	answerBinding,
@@ -119,6 +120,7 @@ export function renderTaskQueueRow({
 					<span className="task-queue-title-text">{task.plan.title}</span>
 				</button>
 				<TaskPriorityBadge priority={prio} />
+				<SpecialistChip task={task} />
 				{!over && laneNo.has(task.id) && (
 					<span className="task-queue-lane" data-lane={laneNo.get(task.id)}>
 						{t("taskQueueLane", { n: laneNo.get(task.id) ?? "" })}

@@ -434,8 +434,8 @@ export interface UiTaskQueueTask extends UiOwnerWaitingOn {
 	/** queue-blocked: tasks in other queues it comes after ("temper #38"); `over` once its queue recorded them done or removed. */
 	outside?: UiTaskQueueRef[];
 	profile?: UiTaskProfile;
-	/** Frozen dispatch choices, completed with app-selected values before the first request. */
-	launch?: UiTaskLaunch;
+	specialist?: string; // department-specialists (Ops #1101): pi-queue's specialist slug, for the one chip
+	launch?: UiTaskLaunch & import("./task-queue-specialist.js").SpecialistLaunchWire; // frozen dispatch choices
 	problem?: string;
 	/** stuck：agent 要用户回答的问题。 */
 	question?: string;

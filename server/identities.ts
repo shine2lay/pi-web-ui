@@ -34,6 +34,7 @@ import type { IdentityFileName, IdentitySaveError, UiChatIdentity, UiIdentityInf
 // for the owner are read, checked and saved with pi-identity's own rules (identity-config.ts, identity-roles.ts).
 import { focusOf, loadSettings, parseRoleConfig, PROMPT_MAX, roleCaps, type Settings } from "./identity-config.js";
 import { rulesCap } from "./identity-notes.js";
+import { identityOfEntry, specialistBindingOnBranch } from "./specialist-entry.js";
 import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 import {
 	ABOUT_MAX,
@@ -409,20 +410,13 @@ export function isIdentityData(data: unknown): data is { id: string | null; via:
 
 /** 一条会话条目若是 identity 条目，返回它的 id（null = 清掉）；不是就 undefined。 */
 export function identityIdOfEntry(entry: IdentityEntryLike): string | null | undefined {
-	if (entry.type !== "custom" || entry.customType !== IDENTITY_ENTRY_TYPE || !isIdentityData(entry.data)) {
-		return undefined;
-	}
-	return entry.data.id;
+	const read = identityOfEntry(entry); // department-specialists §4.1: a bad `specialist` = no usable identity
+	return read === "unusable" ? null : read?.id;
 }
 
 /** 一条分支上最后一条 identity 条目的 id（null = 清掉了；undefined = 从没写过）。 */
 export function identityIdOnBranch(entries: Iterable<IdentityEntryLike>): string | null | undefined {
-	let found: string | null | undefined;
-	for (const e of entries) {
-		const id = identityIdOfEntry(e);
-		if (id !== undefined) found = id;
-	}
-	return found;
+	return specialistBindingOnBranch(entries)?.binding.id; // the last entry, unless a specialist binding stuck (§4.1)
 }
 
 /** 这个会话文件是哪个身份的家对话。 */

@@ -626,6 +626,7 @@ import {
 import { defaultSessionDirPath, sessionIndex } from "./session-index.js";
 import { ParticipantLifecycle, type ParticipantTarget, type ParticipantLease } from "./participant-lifecycle.js";
 import { homeChatOf, identityIdOnBranch } from "./identities.js";
+import { identityCommandRefusal, withSpecialist } from "./specialist-entry.js";
 import {
 	answerRecord,
 	backfill,
@@ -3840,6 +3841,8 @@ function createDurableRuntimeWrapper(
 			if (trimmed.startsWith("/identity ")) {
 				const arg = trimmed.slice("/identity ".length).trim();
 				const nextId = arg === "none" || !arg ? null : arg;
+				const refusal = identityCommandRefusal(branchEntries); // department-specialists §4.1: binding sticks
+				if (refusal) throw new Error(refusal.message);
 				const entry = appendEntry({
 					type: "custom",
 					customType: "identity",
@@ -5279,7 +5282,7 @@ export class ClientSession {
 				const conv = target();
 				if (!conv) return "This chat isn't open any more.";
 				if (conv.isSubagent) return "A helper chat (subagent) can't message roles; the chat that started it can.";
-				const identity = this.identityOf(conv);
+				const identity = withSpecialist(this.identityOf(conv), conv); // + its specialist (department-specialists)
 				if (!identity) return "Only a chat with a role can message other roles, and this chat has none.";
 				let file: string | undefined;
 				let own: ReturnType<typeof ownTaskOf>;
@@ -5299,6 +5302,7 @@ export class ClientSession {
 					...chatRequester(conv), // owner-requester (Ops #973): the owner this turn or task is for
 					role: identity.id,
 					title: identity.title,
+					...(identity.specialist ? { specialist: identity.specialist.slug } : {}), // server-stamped, §4.2
 					file,
 					chat: chatLabel({ taskId: own?.id, isHome, title: conv.title }),
 					handling: roleMessageService?.handlingDepth(file, lastUserText) ?? 0,
@@ -9295,7 +9299,7 @@ export class ClientSession {
 		} catch {
 			return undefined;
 		}
-		return this.identityOf(conv) ?? null;
+		return withSpecialist(this.identityOf(conv), conv) ?? null; // the header's tag carries its specialist's chip
 	}
 
 	private queueProfileViews = new WeakMap<UiTaskQueue, { key: string; view: UiTaskQueue }>();
@@ -9975,15 +9979,10 @@ export class ClientSession {
 		}
 		if (!conv) return;
 		const session = conv.session;
-		if (!session.extensionRunner?.getCommand?.("identity")) {
-			this.emit({
-				type: "notice",
-				level: "warning",
-				text: "This chat can't take an identity: the pi-identity extension isn't loaded in it.",
-				textEn: "This chat can't take an identity: the pi-identity extension isn't loaded in it.",
-			});
-			return;
-		}
+		const notLoaded = "This chat can't take an identity: the pi-identity extension isn't loaded in it.";
+		const refusal = identityCommandRefusal(session.sessionManager?.getBranch?.() ?? [])?.message; // specialist binding
+		const why = session.extensionRunner?.getCommand?.("identity") ? refusal : notLoaded;
+		if (why) return this.emit({ type: "notice", level: "warning", text: why, textEn: why });
 		try {
 			await session.prompt(line);
 		} catch (err) {

@@ -2,6 +2,7 @@ import { deepFreeze } from "./deep-freeze.js";
 import { piQueueReaders } from "./pi-queue-readers.js";
 import { requesterOf } from "./queue-requester.js";
 import { normProfile, normLaunch } from "./queue-profile.js";
+import { applySpecialistOp } from "./task-queue-specialist.js";
 import { normTags } from "./shared/task-tags.js";
 import { normPriority } from "./shared/task-priority.js";
 import type { UiTaskQueueBlock, UiTaskQueueHold, UiTaskQueueRef } from "./protocol.js";
@@ -150,6 +151,7 @@ function taskOf(raw: unknown): Task {
 	if (after?.length) t.after = after;
 	const profile = normProfile(c.profile);
 	if (profile) t.profile = profile;
+	applySpecialistOp(t, { specialist: c.specialist }); // department-specialists (Ops #1101)
 	const launch = normLaunch(c.launch);
 	if (launch) t.launch = launch;
 	if (c.launchPrepared === true) t.launchPrepared = true;
