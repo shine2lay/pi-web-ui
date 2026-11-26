@@ -6,7 +6,8 @@ Delete each item outright; no wrapper, re-export or "legacy" flag survives to ke
 
 Status 2026-11-16: carried out by frontend #294 (written against mine e6f73258, landed as 869a08dc). The
 whole-file deletions below no longer exist on purpose; only those blocks carry doc-check's `paths-historical`
-marker, so every kept or changed file in this spec is still path-checked.
+marker. Three formerly kept files were removed later; their revision-qualified paths point to the original
+source snapshot, not today's checkout. Other kept or changed paths are still checked.
 
 ## Production code to delete (Frontend, in the build task)
 
@@ -25,7 +26,7 @@ Changed in kept files:
 - `PagePanes.tsx` lazy-imports the new view instead of `RolesExactView`, same props
   (`active`, `dialogs`, `onOpen`, `onAbout`).
 - The `rolesDesignAssets()` entry in `web/vite.config.ts`.
-- `web/src/tasks-roles-v8/role-bento-surface.ts`: `renderRolesBentoView` and `renderSvgDonut` (the old "Roles &
+- `e6f732584b4992560e45487db2785e06eb3c3d07:web/src/tasks-roles-v8/role-bento-surface.ts`: `renderRolesBentoView` and `renderSvgDonut` (the old "Roles &
   Queues" tab). `renderWhyModal` stays in that file (the Initiatives prototype uses it). In `surface.ts`: the
   `#tab-roles` button, `?page=roles`, the `"roles"` page patch and the bento branch; `filters.ts` `page` becomes
   `"initiatives"` only. `index.ts` re-exports only what remains.
@@ -50,10 +51,10 @@ Server: everything; the overview gains fields, nothing is removed.
 - Cases only: `tests/unit/roles-answer-actions.test.ts`'s "the Roles surface and the native dialog use the
   current-action policy" describe (it renders `createExactRolesView`; the first describe, on the kept
   `roles-answer-actions.ts`, stays); `tests/unit/roles-instructions.test.ts`'s "roles-instructions display" describe (it uses the
-  deleted `instructionsOf`; the server reader cases stay); in `tests/unit/tasks-roles-v8-live-wiring.test.ts` the two `RolesExactView` cases (mount, and
+  deleted `instructionsOf`; the server reader cases stay); in `e6f732584b4992560e45487db2785e06eb3c3d07:tests/unit/tasks-roles-v8-live-wiring.test.ts` the two `RolesExactView` cases (mount, and
   inline answer through `roles_ask_open`/`roles_ask_answer`); in `tests/unit/task-priority.test.ts` the
   `RolesExactView` half of the badge case; in `tests/unit/usage-accounting-roles-wiring.test.ts` the cases that
-  mount the exact view or call `updateRolesUsageDOM`/`acknowledgeRenderedRolesUsage`; in `tests/tasks-roles-v8.test.ts`
+  mount the exact view or call `updateRolesUsageDOM`/`acknowledgeRenderedRolesUsage`; in `e6f732584b4992560e45487db2785e06eb3c3d07:tests/tasks-roles-v8.test.ts`
   the `#tab-roles` click case.
 - Changed, not deleted: `tests/unit/roles-useful.test.ts`'s `PagePanes` wiring assertion names the new view.
 - Release smoke (`tests/release-smoke/`) references none of these: 0 selectors break.
