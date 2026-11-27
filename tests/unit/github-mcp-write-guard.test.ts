@@ -10,7 +10,7 @@ import {
 import { McpBridge } from "../../server/mcp-bridge.js";
 
 // External canonical implementation; no duplicated ownership rules in this suite.
-const canonicalUrl = "file:///home/shinelay/projects/agent-tools-ops-task-1130/lib/github-policy/index.mjs";
+const canonicalUrl = "file:///home/shinelay/projects/agent-tools/lib/github-policy/index.mjs";
 const canonical: GithubPolicyLoader = () => import(canonicalUrl);
 const fixture = `
 import { createInterface } from 'node:readline';
