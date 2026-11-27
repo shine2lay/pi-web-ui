@@ -80,3 +80,11 @@ rendered from the approved prototype; preview journeys passed with 0 violations.
 - Loading: `shots/loading-390-dark@2x.png`
 - Empty: `shots/empty-390-dark@2x.png`
 - Error: `shots/error-1440-light@2x.png`
+
+## Approved project-card progress update (2026-11-26)
+
+Only the project-summary card's progress body is superseded by the
+[project-card progress design](../roles-project-progress/design.md), approved by Shine in
+Show&Tell d_is5vg33do7 v1 (decision dr-cce785524b2c, “Approved”). It labels actual milestones,
+separates recent completed-task activity, and shows current/queued/held work without inferred stages.
+The card header, grid and every other Roles component are Frozen; that design lists the full boundary.
