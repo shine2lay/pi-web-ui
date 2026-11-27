@@ -1,0 +1,69 @@
+{
+	"about": "Frontend #364: cases M-106..M-113 of the pinned specialist-memory cases (Architecture #597, v2 §5l.15-5l.17) -> the test that proves each. Server tests ran failing on mine first (11 of 14; M-111/M-112/M-113 already held and stay as guards). Page tests marked notBuilt are Task 2's to turn into it(...). Checked by tests/unit/department-specialists-explorer-case-map.test.ts.",
+	"cases": {
+		"M-106": {
+			"server": [
+				"tests/unit/openviking-explorer-specialists.test.ts > M-106: slugs are the union of specialists/ and notebook/specialists/; labels from config; URL query is no authority"
+			],
+			"page": [
+				"tests/unit/memory-explorer-specialists.test.ts > M-106 page: Specialists node under the department, slugs in order, each with Notebook, Memories, Archive"
+			]
+		},
+		"M-107": {
+			"server": [
+				"tests/unit/openviking-explorer-specialists.test.ts > M-107: no slug in either listing -> no Specialists node"
+			],
+			"page": [
+				"tests/unit/memory-explorer-specialists.test.ts > M-107 page: no slug -> no Specialists node anywhere in that department"
+			]
+		},
+		"M-108": {
+			"server": [
+				"tests/unit/openviking-explorer-specialists.test.ts > M-108: a slug root without a config is listed and labelled `no config`, never hidden",
+				"tests/unit/specialist-config-label.test.ts > each stored config: `no config` exactly when the peer refuses, else the peer's status"
+			],
+			"page": [
+				"tests/unit/memory-explorer-specialists.test.ts > M-108 page: labels `retired` and `no config` show as text; the active slug has none; none is hidden"
+			]
+		},
+		"M-109": {
+			"server": [
+				"tests/unit/openviking-explorer-specialists.test.ts > M-109: the owner view reads a specialist archive; principal from the URI, kind from the slug root"
+			],
+			"page": [
+				"tests/unit/memory-explorer-specialists.test.ts > Notebook, Memories and Archive read exactly the server's uris; no uri is built from a slug"
+			]
+		},
+		"M-110": {
+			"server": [
+				"tests/unit/openviking-explorer-specialists.test.ts > M-110: an edit with its own passkey assertion applies as written; principal from the URI"
+			],
+			"page": []
+		},
+		"M-111": {
+			"server": [
+				"tests/unit/openviking-explorer-specialists.test.ts > M-111: the same edit without an assertion -> 403 OWNER_ONLY, nothing written"
+			],
+			"page": []
+		},
+		"M-112": {
+			"server": [
+				"tests/unit/openviking-explorer-specialists.test.ts > M-112: an alias is no Explorer URI -> 400 URI_OUTSIDE_ROOTS"
+			],
+			"page": []
+		},
+		"M-113": {
+			"server": [
+				"tests/unit/openviking-explorer-specialists.test.ts > M-113: the setup-file lock holds under a specialist root -> 403 SETUP_FILE_LOCKED"
+			],
+			"page": []
+		}
+	},
+	"page_also": [
+		"tests/unit/memory-explorer-specialists.test.ts > one-sided slug: the missing place is shown empty, never hidden; a slug with 0 notes says `no notes yet`",
+		"tests/unit/memory-explorer-specialists.test.ts > read error: the node is kept, its count says `not counted`, never 0 (§5l.17)",
+		"tests/unit/memory-explorer-specialists.test.ts > SP5: an untrusted child name renders as text, never markup; it is listed (kind other), not hidden",
+		"tests/unit/memory-explorer-specialists.test.ts > a hit under a specialist shows `architecture/sre-1`; a department hit shows `architecture`",
+		"tests/unit/memory-explorer-specialists.test.ts > health line, search box, the other groups and the department root's own row: same markup with or without specialists, pinned"
+	]
+}

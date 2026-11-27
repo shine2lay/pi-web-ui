@@ -63,6 +63,7 @@ export function registerExplorerReadRoutes(
 	app: Express,
 	client: OpenVikingDaemonClient,
 	gate: OpenVikingOwnerGate,
+	identitiesDir: string,
 ): void {
 	const { http } = client;
 	const route = (path: string, method: "GET" | "POST", handler: Handler, servedLater: readonly string[] = []) => {
@@ -91,7 +92,7 @@ export function registerExplorerReadRoutes(
 		const target = readableUri(req.query.uri);
 		const page = folderPage(req);
 		await assertMemoryReachable(http);
-		return buildTreeFolder(http, target, page);
+		return buildTreeFolder(http, target, page, identitiesDir);
 	});
 
 	route(

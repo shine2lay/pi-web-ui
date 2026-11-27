@@ -6,7 +6,7 @@
  */
 import type { OpenVikingDaemonHttp } from "./daemon-http.js";
 import { statUri, textWithReason } from "./explorer-daemon.js";
-import { explorerKindOf, explorerRefusal, explorerRootHeaders } from "./explorer-rules.js";
+import { explorerKindOf, explorerPrincipalOf, explorerRefusal, explorerRootHeaders } from "./explorer-rules.js";
 import {
 	OPENVIKING_NOTE_LEVELS,
 	type OpenVikingExplorerUri,
@@ -60,6 +60,7 @@ export async function buildNote(
 		uri,
 		root: root.uri,
 		kind: explorerKindOf(uri, root),
+		principal: explorerPrincipalOf(uri, root),
 		is_folder: stat.isDir,
 		size: stat.isDir ? null : stat.size,
 		mod_time: stat.modTime,

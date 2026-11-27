@@ -149,6 +149,50 @@ export interface OpenVikingTreeChild {
 	locked: boolean;
 }
 
+// ---- v2 §5l.15 specialists nested under their department (R-V2-SPMEM-20) ----
+
+/** A slug node's status label: Phase 1's config says `retired`, has none (`no config`), or null (active). */
+export type OpenVikingSpecialistLabel = "retired" | "no config" | null;
+
+/** One slug under a department's Specialists node; every uri canonical, the slug untrusted data (SP5). */
+export interface OpenVikingSpecialistSlug {
+	slug: string;
+	/** `<d>/<slug>`, from the uri alone. */
+	principal: string;
+	/** Display only: never hides, moves or locks the node. */
+	label: OpenVikingSpecialistLabel;
+	/** `viking://user/<d>/memories/notebook/specialists/<slug>.md` (present or not: `has_notebook`). */
+	notebook: string;
+	/** The slug root `viking://user/<d>/memories/specialists/<slug>`: its `<category>/` and `_ejected/` folders. */
+	memories: string;
+	/** `<slug root>/archive`. */
+	archive: string;
+	/** null: that listing did not answer. */
+	has_notebook: boolean | null;
+	has_memories: boolean | null;
+	/** Files under the slug root; null when unmeasured (never 0). */
+	notes: number | null;
+}
+
+/** A path under `specialists/` that is no slug folder (a file, a malformed name): listed, kind `other`, never hidden. */
+export interface OpenVikingSpecialistOther {
+	uri: string;
+	name: string;
+	is_folder: boolean;
+	kind: OpenVikingExplorerKind;
+}
+
+/** The Specialists node of a department root's tree; the answer has none when there is no slug and nothing else. */
+export interface OpenVikingSpecialistsNode {
+	/** `viking://user/<d>/memories/specialists`. */
+	uri: string;
+	/** false: a listing did not answer (or was truncated); counts are null and the node is kept. */
+	read: boolean;
+	/** Union of `specialists/` and `notebook/specialists/` listings, by slug. */
+	slugs: OpenVikingSpecialistSlug[];
+	others: OpenVikingSpecialistOther[];
+}
+
 /** `GET /api/openviking/tree?uri=<folder>&offset=&limit=`: one folder level, children newest first. */
 export interface OpenVikingTreeFolderResponse {
 	uri: string;
@@ -163,6 +207,8 @@ export interface OpenVikingTreeFolderResponse {
 	abstract_reason: OpenVikingAbstractReason | null;
 	total: number;
 	children: OpenVikingTreeChild[];
+	/** Only on a department root (v2 §5l.15), else null; null too when it has no specialists. */
+	specialists: OpenVikingSpecialistsNode | null;
 }
 
 // ---- G3 note ----
@@ -188,6 +234,8 @@ export interface OpenVikingNoteResponse {
 	uri: string;
 	root: string;
 	kind: OpenVikingExplorerKind;
+	/** `<d>` or `<d>/<slug>` from the uri (v2 §5l.16); null outside department roots. */
+	principal: string | null;
 	is_folder: boolean;
 	size: number | null;
 	/** From `fs/stat`; what G5's `opened_mod_time` sends back. */
@@ -217,6 +265,8 @@ export interface OpenVikingSearchHit {
 	uri: string;
 	root: string;
 	kind: OpenVikingExplorerKind;
+	/** `<d>` or `<d>/<slug>` from the uri, never note metadata (v2 §5l.16); null outside department roots. */
+	principal: string | null;
 	/** Raw daemon score (meaning); null (exact). */
 	score: number | null;
 	/** `score / max(score)` in this response, computed once server-side; null (exact). */
@@ -364,4 +414,6 @@ export interface OpenVikingExplorerOptions {
 	 * an undo, with the challenge's end; a held delete freezes until then.
 	 */
 	onUndoAsk: (ask: (operationId: string, untilMs: number) => void) => void;
+	/** pi-identity's identities folder: specialist configs for the slug label only (v2 §5l.15, display only). */
+	identitiesDir: string;
 }

@@ -10,6 +10,7 @@ import { statUri } from "./explorer-daemon.js";
 import {
 	escapeRegex,
 	explorerKindOf,
+	explorerPrincipalOf,
 	explorerRefusal,
 	explorerRootHeaders,
 	explorerRootNamed,
@@ -197,6 +198,7 @@ export async function runSearch(
 			uri: h.uri,
 			root: h.root.uri,
 			kind: explorerKindOf(h.uri, h.root),
+			principal: explorerPrincipalOf(h.uri, h.root),
 			score: h.score,
 			relative: h.score === null || max <= 0 ? null : h.score / max,
 			abstract: h.abstract,

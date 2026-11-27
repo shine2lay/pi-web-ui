@@ -19,6 +19,7 @@ import {
 	type OpenVikingTreeRootRow,
 	type OpenVikingTreeRootsResponse,
 } from "./explorer-types.js";
+import { buildSpecialistsNode } from "./explorer-specialists.js";
 import { OPENVIKING_EXPLORER_ROOTS, walkTree, type OpenVikingLsItem, type OpenVikingTreeWalk } from "./memory-tree.js";
 import { OpenVikingDashboardError } from "./types.js";
 
@@ -154,16 +155,18 @@ export async function buildTreeFolder(
 	http: OpenVikingDaemonHttp,
 	target: OpenVikingExplorerUri,
 	page: { offset: number; limit: number },
+	identitiesDir: string,
 ): Promise<OpenVikingTreeFolderResponse> {
 	const { uri, root } = target;
 	const headers = explorerRootHeaders(root);
 	if (!(await statUri(http, uri, headers)).isDir) {
 		throw explorerRefusal("NOT_A_FOLDER", "This uri is a note, not a folder.", { uri });
 	}
-	const [level, deep, own] = await Promise.all([
+	const [level, deep, own, specialists] = await Promise.all([
 		walkTree(http, uri, headers, { include_abstract: true, level_limit: 1, node_limit: EXPLORER_ROOT_WALK.node_limit }),
 		walkTree(http, uri, headers, EXPLORER_ROOT_WALK),
 		http.result("/api/v1/content/abstract", { uri }, headers),
+		buildSpecialistsNode(http, root, uri, identitiesDir),
 	]);
 	const counts = folderCounts(deep, uri);
 	const children = folderItems(level, uri)
@@ -181,5 +184,6 @@ export async function buildTreeFolder(
 		abstract_reason: ownText.reason,
 		total: children.length,
 		children: children.slice(page.offset, page.offset + page.limit),
+		specialists,
 	};
 }

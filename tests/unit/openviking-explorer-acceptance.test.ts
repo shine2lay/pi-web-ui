@@ -462,6 +462,8 @@ describe("reads: G4 search", () => {
 				uri: `${QA_ROOT}/cases/literal.md`,
 				root: QA_ROOT,
 				kind: "case",
+				// v2 §5l.16 (frontend #364): each hit carries its principal from its uri.
+				principal: "qa",
 				score: null,
 				relative: null,
 				abstract: null,

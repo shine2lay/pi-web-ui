@@ -49,10 +49,16 @@ const GATES: Record<"allow" | "deny" | "production", OpenVikingOwnerGate> = {
 };
 
 export async function explorerHarness(
-	opts: { gate?: "allow" | "deny" | "production" | OpenVikingOwnerGate; mode?: DaemonMode } = {},
+	opts: {
+		gate?: "allow" | "deny" | "production" | OpenVikingOwnerGate;
+		mode?: DaemonMode;
+		/** pi-identity's identities folder (specialist configs, §5l.15 label); default: a new empty folder. */
+		identitiesDir?: string;
+	} = {},
 ): Promise<ExplorerHarness> {
 	const fake = daemon(opts.mode ?? "up", { explorer: true });
 	const stateDir = mkdtempSync(join(tmpdir(), "ov-explorer-"));
+	const identitiesDir = opts.identitiesDir ?? join(stateDir, "identities");
 	const changelogPath = join(stateDir, "memory-changelog.jsonl");
 	const hooks: (() => Promise<void>)[] = [];
 	const options: OpenVikingDashboardOptions = {
@@ -65,6 +71,7 @@ export async function explorerHarness(
 			onShutdown: (hook) => hooks.push(hook),
 			// Undo asks come from the owner check's write/options (openviking-owner-write.test.ts covers them).
 			onUndoAsk: () => {},
+			identitiesDir,
 		},
 	};
 	const app = express();

@@ -9,6 +9,7 @@
  * its write routes (note PUT/DELETE, undo) from explorer-write-routes.ts.
  */
 import type { Express, Request, Response } from "express";
+import { identitiesDir } from "../identities.js";
 import { createOpenVikingClient, OpenVikingDaemonClient } from "./client.js";
 import { systemExplorerClock } from "./explorer-clock.js";
 import { registerExplorerReadRoutes } from "./explorer-read-routes.js";
@@ -91,6 +92,7 @@ export function registerOpenVikingRoutes(
 		clock: systemExplorerClock,
 		onShutdown: () => {},
 		onUndoAsk: () => {},
+		identitiesDir: identitiesDir(),
 	};
 
 	app.all("/api/openviking/audit", async (req: Request, res: Response) => {
@@ -107,7 +109,7 @@ export function registerOpenVikingRoutes(
 		);
 		sendRouteResult(res, result);
 	});
-	registerExplorerReadRoutes(app, client, explorer.ownerGate);
+	registerExplorerReadRoutes(app, client, explorer.ownerGate, explorer.identitiesDir);
 	registerExplorerWriteRoutes(app, client, explorer);
 
 	return client;

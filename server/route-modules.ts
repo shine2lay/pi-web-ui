@@ -4,6 +4,7 @@
  */
 import type { Express } from "express";
 import { registerFileTransferRoutes } from "./file-transfer-routes.js";
+import { identitiesDir } from "./identities.js";
 import { ownerCheckMissing, registerOpenVikingRoutes, systemExplorerClock } from "./openviking/index.js";
 import { createOwnerCheck } from "./openviking/owner-check.js";
 import { type OwnerTelegramTool, ownerTelegramSender } from "./owner-telegram.js";
@@ -57,6 +58,8 @@ export function registerRouteModules(
 			clock: systemExplorerClock,
 			onShutdown: (hook) => shutdownHooks.push(hook),
 			onUndoAsk: owner?.onUndoAsk ?? (() => {}),
+			// Specialist configs, read for the Explorer's display-only slug label (v2 §5l.15).
+			identitiesDir: identitiesDir(),
 		},
 	});
 	const stop = () => Promise.all(shutdownHooks.map((hook) => hook())).then(() => undefined);

@@ -14,6 +14,7 @@ import {
 	type OpenVikingExplorerRoot,
 	type OpenVikingExplorerUri,
 } from "./explorer-types.js";
+import { SPECIALIST_SLUG_RE } from "../task-queue-specialist.js";
 import { OPENVIKING_EXPLORER_ROOTS } from "./memory-tree.js";
 import { OpenVikingDashboardError } from "./types.js";
 import { resolveRequestHeaders } from "./uri.js";
@@ -85,12 +86,43 @@ const KIND_OF_FIRST_SEGMENT: Record<string, OpenVikingExplorerKind> = {
 	events: "event",
 };
 
-/** Kind, from the first segment under the root; anything under `viking://resources` is a document. */
+/** A department root's folder of specialist roots (v2 §5l.2): `<root>/specialists/<slug>/`. */
+export const SPECIALISTS_SEGMENT = "specialists";
+
+/**
+ * The segments below `root`, and the slug when the uri lies under a well-formed specialist root of a department
+ * (`specialists/<slug>/...`, the slug passing the one slug rule); a malformed one stays a department path.
+ */
+function placeOf(uri: string, root: OpenVikingExplorerRoot): { below: string[]; slug: string | null } {
+	const below = uri.startsWith(`${root.uri}/`) ? uri.slice(root.uri.length + 1).split("/") : [];
+	const slug =
+		root.group === "department" && below[0] === SPECIALISTS_SEGMENT && SPECIALIST_SLUG_RE.test(below[1] ?? "")
+			? below[1]
+			: null;
+	return { below, slug };
+}
+
+/**
+ * The segment the Kind table reads: the first under the root, or under the slug root for a uri below
+ * `specialists/<slug>/` (v2 §5l.15, one rule); "" for the root itself (or the slug root itself: `specialists`).
+ */
+export function explorerKindSegmentOf(uri: string, root: OpenVikingExplorerRoot): string {
+	const { below, slug } = placeOf(uri, root);
+	return slug !== null && below.length > 2 ? below[2] : (below[0] ?? "");
+}
+
+/** Kind, from `explorerKindSegmentOf`; anything under `viking://resources` is a document. */
 export function explorerKindOf(uri: string, root: OpenVikingExplorerRoot): OpenVikingExplorerKind {
 	if (root.group === "projects") return "document";
-	const below = uri.startsWith(`${root.uri}/`) ? uri.slice(root.uri.length + 1) : "";
-	const first = below.split("/")[0];
-	return Object.hasOwn(KIND_OF_FIRST_SEGMENT, first) ? KIND_OF_FIRST_SEGMENT[first] : "other";
+	const segment = explorerKindSegmentOf(uri, root);
+	return Object.hasOwn(KIND_OF_FIRST_SEGMENT, segment) ? KIND_OF_FIRST_SEGMENT[segment] : "other";
+}
+
+/** `<d>/<slug>` under a specialist root, `<d>` elsewhere in a department root, null otherwise: the uri alone decides. */
+export function explorerPrincipalOf(uri: string, root: OpenVikingExplorerRoot): string | null {
+	if (root.role === null) return null;
+	const { slug } = placeOf(uri, root);
+	return slug === null ? root.role : `${root.role}/${slug}`;
 }
 
 export const OPERATION_ID_RE = /^op-\d+-[0-9a-f]{8}$/;

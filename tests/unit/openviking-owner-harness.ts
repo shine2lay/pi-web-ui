@@ -107,6 +107,7 @@ export async function ownerHarness(
 			clock,
 			onShutdown: (hook) => void shutdownHooks.push(hook),
 			onUndoAsk: (ask) => void (askUndo = ask),
+			identitiesDir: join(dataDir, "identities"),
 		},
 	});
 	const stop = () => Promise.all(shutdownHooks.map((hook) => hook())).then(() => undefined);
