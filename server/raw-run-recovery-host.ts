@@ -97,10 +97,11 @@ export function installRawRunRecoveryHost(session: AgentSession): RecoveryRegist
 				}
 			})();
 		}
+		const pending = admission;
 		try {
-			await admission;
+			await pending;
 		} finally {
-			admission = undefined;
+			if (admission === pending) admission = undefined;
 		}
 	};
 	const prompt = session.prompt.bind(session);

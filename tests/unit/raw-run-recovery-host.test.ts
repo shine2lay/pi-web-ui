@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { installRawRunRecoveryHost } from "../../server/raw-run-recovery-host.js";
 
 describe("host recovery admission", () => {
@@ -69,6 +70,55 @@ describe("host recovery admission", () => {
 			"refresh",
 			"request",
 		]);
+	});
+	it("an older waiter cannot clear a newer recovery promise", async () => {
+		const { session, gate } = fixture();
+		const context = new AsyncLocalStorage<string>();
+		const labels = new Map<number, string>();
+		const releases: Array<() => void> = [];
+		gate.register(() => ({
+			recover: () => new Promise<{ held: boolean }>((resolve) => releases.push(() => resolve({ held: false }))),
+		}));
+		let c: Promise<void> | undefined, d: Promise<void> | undefined;
+		let ready = false;
+		let notifyStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			notifyStarted = resolve;
+		});
+		// External scheduling probe: enter C immediately before B's old await resumes.
+		// A already released P. C now owns Q; B must not clear Q on its way out.
+		const hook = createHook({
+			init(id) {
+				const label = context.getStore();
+				if (label) labels.set(id, label);
+			},
+			before(id) {
+				if (ready && labels.get(id) === "B") {
+					hook.disable();
+					c = context.run("C", () => session.prompt());
+					queueMicrotask(() => {
+						d = context.run("D", () => session.prompt());
+						notifyStarted();
+					});
+				}
+			},
+		});
+		hook.enable();
+		const a = context.run("A", () => session.prompt());
+		const b = context.run("B", () => session.prompt());
+		expect(releases).toHaveLength(1);
+		ready = true;
+		releases[0]();
+		try {
+			await started;
+			const recoveryCount = releases.length;
+			for (const release of releases) release();
+			await Promise.all([a, b, c, d]);
+			expect(recoveryCount).toBe(2);
+		} finally {
+			hook.disable();
+			for (const release of releases) release();
+		}
 	});
 	it("ends a held boundary without throwing into the agent loop", async () => {
 		const { session, events, gate } = fixture();
