@@ -128,6 +128,7 @@ export function homeView(
 		life.lease = null;
 		life.effect = null;
 	}
+	const needsHome = own.some((line) => line.op === "release" && line.reason === "needs_home");
 	const aged =
 		cls.basePriority === "P2" && ["open", "claimed"].includes(life.state) && ports.now() - r.at >= 45 * 60_000;
 	return {
@@ -138,7 +139,8 @@ export function homeView(
 		role: r.to.role,
 		source: { kind: "role-message", ref: r.id },
 		...cls,
-		effectivePriority: aged ? "P1" : cls.basePriority,
+		route: needsHome ? "home_only" : cls.route,
+		effectivePriority: aged || (needsHome && cls.basePriority > "P1") ? "P1" : cls.basePriority,
 		promotedAt: aged ? r.at + 45 * 60_000 : null,
 		person: null,
 		payloadAuthority: "none",
