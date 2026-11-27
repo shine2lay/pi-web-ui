@@ -1,0 +1,1043 @@
+[
+	{
+		"id": "C-HSPAWN-1",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HSPAWN-1",
+		"boundary": "admit, real journal binding and startTaskChat preflight",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HSPAWN-2",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HSPAWN-2",
+		"boundary": "idle HOME with one actual request, zero allocations/audit",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HSPAWN-3",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HSPAWN-3",
+		"boundary": "idle HOME with two actual requests admits one",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HSPAWN-4",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HSPAWN-4",
+		"boundary": "three real admissions exhaust K3",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HSPAWN-5",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HSPAWN-5",
+		"boundary": "three live helpers then fourth admission with K4",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HSPAWN-6",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "config validation",
+		"status": "uncovered",
+		"reason": "Admission API accepts typed 3|4, no configuration parser port."
+	},
+	{
+		"id": "C-HSPAWN-7",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "verified sender P0 route",
+		"status": "uncovered",
+		"reason": "No host-fact injection port in runtime."
+	},
+	{
+		"id": "C-HSPAWN-8",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "owner-bound route",
+		"status": "uncovered",
+		"reason": "No owner binding fact port."
+	},
+	{
+		"id": "C-HSPAWN-9",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "text cannot promote authority",
+		"status": "uncovered",
+		"reason": "Not replayed in this bounded slice."
+	},
+	{
+		"id": "C-HSPAWN-10",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "rule16/board/owner question admission",
+		"status": "uncovered",
+		"reason": "Runtime ports contain no board or owner-question reader."
+	},
+	{
+		"id": "C-HSPAWN-11",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "ranked selection with existing live helper",
+		"status": "uncovered",
+		"reason": "Existing host test does not establish exact ranked corpus prerequisites."
+	},
+	{
+		"id": "C-HSPAWN-12",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HSPAWN-12",
+		"boundary": "actual held runtime claim excludes admission",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HSPAWN-13",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HSPAWN-13",
+		"boundary": "launch failure releases real claim and audits crashed/spawn_failed",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HID-1",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "bound identity reader",
+		"status": "uncovered",
+		"reason": "identityOfEntry has no session authority input; unbound refusal is not positive bound identity coverage."
+	},
+	{
+		"id": "C-HID-2",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HID-2",
+		"boundary": "web reader rejects helper entry carrying tools; external reader/code propagation not claimed",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HID-3",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "first identity plus all later entries",
+		"status": "uncovered",
+		"reason": "No helper branch authority reader API; specialist binding is not helper binding."
+	},
+	{
+		"id": "C-HID-4",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "registry mismatch",
+		"status": "uncovered",
+		"reason": "Web reader cannot receive authoritative registry binding."
+	},
+	{
+		"id": "C-HID-5",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "ledger lease supersedes identity",
+		"status": "uncovered",
+		"reason": "Web reader cannot receive current ledger authority."
+	},
+	{
+		"id": "C-HID-6",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "environment override",
+		"status": "external",
+		"reason": "Corpus does not name web as producer or consumer."
+	},
+	{
+		"id": "C-HID-7",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "subagent environment",
+		"status": "external",
+		"reason": "Corpus does not name web as producer or consumer."
+	},
+	{
+		"id": "C-HID-8",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "item recipient authority",
+		"status": "uncovered",
+		"reason": "Web identity reader lacks authoritative item recipient input."
+	},
+	{
+		"id": "C-HID-9",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "missing host identity",
+		"status": "external",
+		"reason": "pi-identity and pi-openviking own this case; no web consumer."
+	},
+	{
+		"id": "C-HID-10",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "matching environment identity",
+		"status": "external",
+		"reason": "Corpus does not name web as producer or consumer."
+	},
+	{
+		"id": "C-HTOOL-1",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "canonical tool decision",
+		"status": "external",
+		"reason": "No web consumer; decision stub is not policy proof."
+	},
+	{
+		"id": "C-HTOOL-2",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "bash deny",
+		"status": "external",
+		"reason": "No web consumer; decision stub is not policy proof."
+	},
+	{
+		"id": "C-HTOOL-3",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "mcp deny",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-4",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "eval deny",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-5",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "sealed tool membership",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-6",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "retained narrowing",
+		"status": "external",
+		"reason": "No web consumer; changing a decision stub is not canonical narrowing."
+	},
+	{
+		"id": "C-HTOOL-7",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "no ceiling widening",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-8",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "LSP install argument",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-9",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "LSP noninstall argument",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-10",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "LSP null argument",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-11",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "authenticated fetch",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-12",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "canonical read-only argument policy",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-13",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "canonical read-only argument policy",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-14",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "canonical read-only argument policy",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-15",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "canonical read-only argument policy",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-16",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "canonical read-only argument policy",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-17",
+		"owner": "pi-openviking",
+		"file": null,
+		"title": null,
+		"boundary": "memory zone",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-18",
+		"owner": "pi-openviking",
+		"file": null,
+		"title": null,
+		"boundary": "memory zone",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-19",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "canonical read-only argument policy",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-20",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "canonical read-only argument policy",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTOOL-21",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "MF1 literal loopback transport",
+		"status": "external",
+		"reason": "Corpus owner pi-identity; actual transport ownership pending Architecture. Host decideTool has no resolver/HTTP seam."
+	},
+	{
+		"id": "C-HTOOL-22",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "MF1 resolver/redirect transport",
+		"status": "external",
+		"reason": "Must intercept actual DNS lookup/connected address and redirect transport; no such port on InboxHelperHostPorts."
+	},
+	{
+		"id": "C-HTOOL-23",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "MF1 resolver/redirect transport",
+		"status": "external",
+		"reason": "Decision denial fixture would not prove actual transport; Architecture owns assignment of missing seam."
+	},
+	{
+		"id": "C-HTOOL-24",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "MF1 resolver/redirect transport",
+		"status": "external",
+		"reason": "No actual resolver/transport port available in web helper seam."
+	},
+	{
+		"id": "C-HTOOL-25",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "MF1 resolver/redirect transport",
+		"status": "external",
+		"reason": "No actual resolver/transport port available in web helper seam."
+	},
+	{
+		"id": "C-HPROMPT-1",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "MF2 prompt assembly",
+		"status": "uncovered",
+		"reason": "launch receives binding and hooks only; no prompt builder/capture API. No model input emitted."
+	},
+	{
+		"id": "C-HPROMPT-2",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "MF2 forged authority in prompt",
+		"status": "uncovered",
+		"reason": "No actual prompt assembly seam to inspect structurally within process."
+	},
+	{
+		"id": "C-HMSG-1",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "guard committed before semantic handoff",
+		"status": "uncovered",
+		"reason": "Need actual guard commit/handoff barrier; completed reply is not effect_pending proof."
+	},
+	{
+		"id": "C-HMSG-2",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HMSG-2",
+		"boundary": "runtime rejects fyi instead of bound reply, no RM reply",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HMSG-3",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HMSG-3",
+		"boundary": "runtime rejects wrong replyTo, no RM reply",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HMSG-4",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HMSG-4",
+		"boundary": "runtime rejects wrong target, no RM reply",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HMSG-5",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HMSG-5",
+		"boundary": "runtime rejects approval side channel, no RM reply",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HMSG-6",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "reply accepted by different lease",
+		"status": "uncovered",
+		"reason": "Not replayed in this bounded slice."
+	},
+	{
+		"id": "C-HMSG-7",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HMSG-7",
+		"boundary": "actual accepted reply replay returns same ref, zero ledger append",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HMSG-8",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HMSG-8",
+		"boundary": "changed payload conflicts after actual guard reply",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HMSG-9",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HMSG-9",
+		"boundary": "HOME supersedes real helper claim before reply",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HMSG-10",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "guard grant refusal releases HOME",
+		"status": "uncovered",
+		"reason": "Needs real guard refusal setup, not denial decision stub."
+	},
+	{
+		"id": "C-HMSG-11",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "unaccepted intent retry",
+		"status": "uncovered",
+		"reason": "Actual precommit fault barrier not wired."
+	},
+	{
+		"id": "C-HMSG-12",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "task then guard effect_pending",
+		"status": "uncovered",
+		"reason": "Actual guard commit/handoff barrier not wired."
+	},
+	{
+		"id": "C-HTASK-1",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "HOME requester and field preservation",
+		"status": "uncovered",
+		"reason": "Queue runtime used by fixture but exact requester/fields not asserted here."
+	},
+	{
+		"id": "C-HTASK-2",
+		"owner": "pi-queue",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HTASK-2",
+		"boundary": "real HOME autoApprove false, zero append/dialogs",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HTASK-3",
+		"owner": "pi-queue",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HTASK-3",
+		"boundary": "real paused HOME refuses helper task",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HTASK-4",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "update forbidden",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTASK-5",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "P0 forbidden",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTASK-6",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "specialist forbidden",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTASK-7",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "owner words forbidden",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTASK-8",
+		"owner": "pi-queue",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HTASK-8",
+		"boundary": "same lease task receipt replay, one HOME append",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HTASK-9",
+		"owner": "pi-queue",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HTASK-9",
+		"boundary": "changed task payload conflicts, one HOME append",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HTASK-10",
+		"owner": "pi-queue",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HTASK-10",
+		"boundary": "different lease task retry conflicts, one HOME append",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HTASK-11",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "consumed ticket",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTASK-12",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "missing host",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTASK-13",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "absent live lease",
+		"status": "uncovered",
+		"reason": "Superseded lease covered separately; absent lease not replayed."
+	},
+	{
+		"id": "C-HTASK-14",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "expired ticket",
+		"status": "uncovered",
+		"reason": "Fixture mints capabilities without expiry; host ticket authority seam absent."
+	},
+	{
+		"id": "C-HTASK-15",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "guessed HOME ticket",
+		"status": "external",
+		"reason": "No web consumer."
+	},
+	{
+		"id": "C-HTASK-16",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HTASK-16",
+		"boundary": "HOME append preserves live claim and null semantic receipt",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HTASK-17",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HTASK-17",
+		"boundary": "prior task blocks later lease duplicate HOME append",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HTASK-18",
+		"owner": "pi-queue",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HTASK-18",
+		"boundary": "task replay preserves claimed/reply-owed state",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HTASK-19",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HTASK-19",
+		"boundary": "HOME supersedes helper before task, zero task append",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HREL-1",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HREL-1",
+		"boundary": "host release routes original request HOME P1, no reply/dialog",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HREL-2",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "invalid need",
+		"status": "uncovered",
+		"reason": "Typed release method has no tool argument decoder seam."
+	},
+	{
+		"id": "C-HREL-3",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HREL-3",
+		"boundary": "repeated host release adds no ledger record",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HREL-4",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "release after supersession",
+		"status": "uncovered",
+		"reason": "Not replayed in bounded slice."
+	},
+	{
+		"id": "C-HREL-5",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "check release preserves existing P1",
+		"status": "uncovered",
+		"reason": "No authoritative priority setup added."
+	},
+	{
+		"id": "C-HREL-6",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HREL-6",
+		"boundary": "actual task before release retained with reply-only dispatch",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HRACE-1",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HRACE-1",
+		"boundary": "HOME claim then helper reply, zero replies",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HRACE-2",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HRACE-2",
+		"boundary": "accepted helper reply then HOME claim refuses already replied",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HRACE-3",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "reply commit contention",
+		"status": "uncovered",
+		"reason": "Promise.all alone is not deterministic effect_start barrier."
+	},
+	{
+		"id": "C-HRACE-4",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "narrow before helper call",
+		"status": "uncovered",
+		"reason": "Authoritative route fact port absent."
+	},
+	{
+		"id": "C-HRACE-5",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "narrow during effect",
+		"status": "uncovered",
+		"reason": "Route fact and actual commit barrier absent."
+	},
+	{
+		"id": "C-HRACE-6",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HRACE-6",
+		"boundary": "actual HOME task then actual guard reply",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HRACE-7",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "restart helper reply-only continuation",
+		"status": "uncovered",
+		"reason": "Not replayed in bounded slice."
+	},
+	{
+		"id": "C-HRACE-8",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HRACE-8",
+		"boundary": "task then HOME claim fences helper reply/task; HOME answers and task remains",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HRACE-9",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "task then helper close",
+		"status": "uncovered",
+		"reason": "Related close test exists but no per-ID race replay added."
+	},
+	{
+		"id": "C-HRACE-10",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "task/reply/replay/HOME sequence",
+		"status": "uncovered",
+		"reason": "Not replayed in bounded slice."
+	},
+	{
+		"id": "C-HRACE-11",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "HOME claim during queue append",
+		"status": "uncovered",
+		"reason": "No deterministic actual append barrier added."
+	},
+	{
+		"id": "C-HRACE-12",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HRACE-12",
+		"boundary": "HOME claim then helper task, zero HOME append",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HRACE-13",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "restart HOME reply-only continuation",
+		"status": "uncovered",
+		"reason": "Not replayed in bounded slice."
+	},
+	{
+		"id": "C-HRACE-14",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "guard commit/restart/handoff",
+		"status": "uncovered",
+		"reason": "Actual guard handoff barrier absent."
+	},
+	{
+		"id": "C-HRST-1",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "committed guard intent recovery",
+		"status": "uncovered",
+		"reason": "Actual guard commit/handoff barrier absent."
+	},
+	{
+		"id": "C-HRST-2",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "absent guard intent recovery",
+		"status": "uncovered",
+		"reason": "Actual precommit interruption not replayed."
+	},
+	{
+		"id": "C-HRST-3",
+		"owner": "pi-queue",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HRST-3",
+		"boundary": "actual HOME append before interruption, new runtime reconciles once",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HRST-4",
+		"owner": "pi-queue",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HRST-4",
+		"boundary": "interruption before HOME append, new runtime fences old lease",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HRST-5",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "unreadable recovery authority",
+		"status": "uncovered",
+		"reason": "Not replayed in bounded slice."
+	},
+	{
+		"id": "C-HRST-6",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "pruned answered record",
+		"status": "uncovered",
+		"reason": "Not replayed in bounded slice."
+	},
+	{
+		"id": "C-HRST-7",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "pruned unanswered record",
+		"status": "uncovered",
+		"reason": "Not replayed in bounded slice."
+	},
+	{
+		"id": "C-HRST-8",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HRST-8",
+		"boundary": "actual HOME receipt recovery keeps semantic null and reply-only dispatch",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HRST-9",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "task card with pruned request",
+		"status": "uncovered",
+		"reason": "Not replayed in bounded slice."
+	},
+	{
+		"id": "C-HRST-10",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "effect_pending not claimable",
+		"status": "uncovered",
+		"reason": "Guard commit/handoff barrier absent."
+	},
+	{
+		"id": "C-HCLOSE-1",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HCLOSE-1",
+		"boundary": "real queue close refuses once, slot retained/no alarm, retry closes without relaunch",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HCLOSE-2",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "three close failures alarm",
+		"status": "uncovered",
+		"reason": "Not replayed in bounded slice."
+	},
+	{
+		"id": "C-HCLOSE-3",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HCLOSE-3",
+		"boundary": "actual task retained after real queue close",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HCLOSE-4",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "limit event and durable plan",
+		"status": "uncovered",
+		"reason": "end accepts outcome only, no limit cause or plan/cursor input."
+	},
+	{
+		"id": "C-HCLOSE-5",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "no-effect event",
+		"status": "uncovered",
+		"reason": "Legacy event mapping not replayed; U602 outcome/cause mapping needed."
+	},
+	{
+		"id": "C-HCLOSE-6",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HCLOSE-6",
+		"boundary": "task-only turn ends unanswered; HOME task survives, next dispatch reply-only",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HCLOSE-7",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "aborted cause limit",
+		"status": "uncovered",
+		"reason": "end outcome API cannot express cause limit."
+	},
+	{
+		"id": "C-HCLOSE-8",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "unanswered cause no_effect",
+		"status": "uncovered",
+		"reason": "end outcome API cannot express cause no_effect."
+	},
+	{
+		"id": "C-HCLOSE-9",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-helper-replay.test.ts",
+		"title": "C-HCLOSE-9",
+		"boundary": "task-only failed close retains slot/task then retries without relaunch",
+		"status": "behavioral"
+	}
+]

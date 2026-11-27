@@ -1,0 +1,788 @@
+[
+	{
+		"id": "C-SCHEMA-1",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-SCHEMA-1 canonical view codec",
+		"boundary": "decodeInboxView",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-SCHEMA-2",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-SCHEMA-2 canonical view codec",
+		"boundary": "decodeInboxView",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-SCHEMA-3",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-SCHEMA-3 canonical view codec",
+		"boundary": "decodeInboxView",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-SCHEMA-4",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-SCHEMA-4 canonical view codec",
+		"boundary": "decodeInboxView",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-SCHEMA-5",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-SCHEMA-5 canonical view codec",
+		"boundary": "decodeInboxView",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-KEY-1",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "source admission",
+		"status": "uncovered",
+		"reason": "No admission API returns action/key/hash from canonical source fields."
+	},
+	{
+		"id": "C-KEY-2",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "source admission",
+		"status": "uncovered",
+		"reason": "No admission API exposes same-key same-hash skip."
+	},
+	{
+		"id": "C-KEY-3",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "source admission",
+		"status": "uncovered",
+		"reason": "No admission API exposes conflict refusal plus alarm atomically."
+	},
+	{
+		"id": "C-READ-1",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "InboxRuntime.read",
+		"status": "uncovered",
+		"reason": "Missing board and queue-card source ports; cannot replay all four sources."
+	},
+	{
+		"id": "C-READ-2",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "InboxRuntime.read/legacy delivery",
+		"status": "uncovered",
+		"reason": "Frozen test covers torn read/claim only; full corpus also requires alarm and legacy-home-delivery boundary."
+	},
+	{
+		"id": "C-READ-3",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "InboxRuntime.read",
+		"status": "uncovered",
+		"reason": "No last-good source checkpoint port for 1000 to 640 shrink."
+	},
+	{
+		"id": "C-READ-4",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "InboxRuntime.read",
+		"status": "uncovered",
+		"reason": "No authorized pruning/checkpoint evidence port."
+	},
+	{
+		"id": "C-READ-5",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "InboxRuntime.read",
+		"status": "uncovered",
+		"reason": "Corpus source-version metadata has no canonical source envelope seam."
+	},
+	{
+		"id": "C-READ-6",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-READ-6 canonical ledger sequence reader",
+		"boundary": "InboxRuntime.read/claim on real ledger",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-READ-7",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-READ-7 canonical ledger sequence reader",
+		"boundary": "InboxRuntime.read on real ledger",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-PRI-1",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "owner admission/read",
+		"status": "uncovered",
+		"reason": "No admitted owner-turn source port."
+	},
+	{
+		"id": "C-PRI-2",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "queue provenance/read",
+		"status": "uncovered",
+		"reason": "No ownTaskOf or task-journal source port; would discard sender_task input."
+	},
+	{
+		"id": "C-PRI-3",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "board/read",
+		"status": "uncovered",
+		"reason": "No board source port for stored order authority."
+	},
+	{
+		"id": "C-PRI-4",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "board/read",
+		"status": "uncovered",
+		"reason": "No board source port for stored news."
+	},
+	{
+		"id": "C-PRI-5",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "native queue-card/read",
+		"status": "uncovered",
+		"reason": "Queue accept/find handles task creation only; no native card or verified task priority source."
+	},
+	{
+		"id": "C-PRI-6",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "native queue-card/read",
+		"status": "uncovered",
+		"reason": "No native card source with unreadable task evidence."
+	},
+	{
+		"id": "C-PRI-7",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-PRI-7 canonical role-message classification",
+		"boundary": "RoleMessages storage -> InboxRuntime.read",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-PRI-8",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-PRI-8 canonical role-message classification",
+		"boundary": "RoleMessages storage -> InboxRuntime.read",
+		"status": "uncovered",
+		"reason": "Deferred nonordinary guard decision; corpus fragment lacks requestId/generation native metadata. Existing assertions preserved, not full native coverage."
+	},
+	{
+		"id": "C-PRI-9",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-PRI-9 canonical role-message classification",
+		"boundary": "RoleMessages storage -> InboxRuntime.read",
+		"status": "uncovered",
+		"reason": "Deferred nonordinary work-check report; corpus stall fragment is not a full native work-check record. Existing assertions preserved."
+	},
+	{
+		"id": "C-PRI-10",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-PRI-10 canonical role-message classification",
+		"boundary": "RoleMessages storage -> InboxRuntime.read",
+		"status": "uncovered",
+		"reason": "Deferred nonordinary CI report; corpus CI fragment is not a full native CI record. Existing assertions preserved."
+	},
+	{
+		"id": "C-PRI-11",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-PRI-11 canonical role-message classification",
+		"boundary": "RoleMessages original link -> InboxRuntime.read",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-PRI-12",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-PRI-12 canonical role-message classification",
+		"boundary": "RoleMessages original link -> InboxRuntime.read",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-PRI-13",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-PRI-13 canonical role-message classification",
+		"boundary": "RoleMessages storage -> InboxRuntime.read",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-PRI-14",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-task.test.ts",
+		"title": "C-PRI-14 HOME reader uses verified existing task priority",
+		"boundary": "queueEntriesOf -> ownTaskOf/taskQueueAll -> InboxRuntime.read",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-PRI-15",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-task.test.ts",
+		"title": "C-PRI-15 HOME reader uses verified existing task priority",
+		"boundary": "queueEntriesOf -> ownTaskOf/taskQueueAll -> InboxRuntime.read",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-PRI-16",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "sender task/read",
+		"status": "uncovered",
+		"reason": "Missing blocked-task lead ownership lookup."
+	},
+	{
+		"id": "C-PRI-17",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "sender task/read",
+		"status": "uncovered",
+		"reason": "Missing blocked-task other-lead ownership lookup."
+	},
+	{
+		"id": "C-ROUTE-1",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "own task/read",
+		"status": "uncovered",
+		"reason": "Missing own-queue provenance lookup."
+	},
+	{
+		"id": "C-ROUTE-2",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "sender task/read",
+		"status": "uncovered",
+		"reason": "Missing unreadable sender-task provenance lookup."
+	},
+	{
+		"id": "C-ROUTE-3",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-ROUTE-3 canonical role-message classification",
+		"boundary": "RoleMessages missing original -> InboxRuntime.read",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-AGE-1",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-AGE-1 reader derives aging from source time",
+		"boundary": "InboxRuntime.read with injected clock",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-AGE-2",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-AGE-2 reader derives aging from source time",
+		"boundary": "InboxRuntime.read with injected clock",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-AGE-3",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-AGE-3 reader derives aging from source time",
+		"boundary": "InboxRuntime.read with injected clock",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-AGE-4",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-read.test.ts",
+		"title": "C-AGE-4 reader derives aging from source time",
+		"boundary": "InboxRuntime.read with injected clock",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-ORD-1",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "InboxRuntime.read ordering",
+		"status": "uncovered",
+		"reason": "Order vector includes board P0; missing board source port."
+	},
+	{
+		"id": "C-SEL-1",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "selection/transport",
+		"status": "uncovered",
+		"reason": "No selection/passive-cursor/starts-turn boundary and no board source."
+	},
+	{
+		"id": "C-SEL-2",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "selection/transport",
+		"status": "uncovered",
+		"reason": "No selection/passive-cursor/starts-turn boundary."
+	},
+	{
+		"id": "C-SEL-3",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "selection/transport",
+		"status": "uncovered",
+		"reason": "No helper selection boundary or owner-turn source."
+	},
+	{
+		"id": "C-SEL-4",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "selection/transport",
+		"status": "uncovered",
+		"reason": "No helper selection/passive-cursor boundary."
+	},
+	{
+		"id": "C-LEASE-1",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LEASE-1 real claim and guard operation replay",
+		"boundary": "InboxRuntime.claim/read/audit",
+		"status": "uncovered",
+		"reason": "Deferred beyond HOME-only phase: helper lease competition; existing assertions preserved."
+	},
+	{
+		"id": "C-LEASE-2",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LEASE-2 real claim and guard operation replay",
+		"boundary": "InboxRuntime.claim/read/audit",
+		"status": "uncovered",
+		"reason": "Deferred beyond HOME-only phase: helper route refusal; existing assertions preserved."
+	},
+	{
+		"id": "C-LEASE-3",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LEASE-3 real claim and guard operation replay",
+		"boundary": "InboxRuntime.claim with torn ledger",
+		"status": "uncovered",
+		"reason": "Refusal asserted; corrupt ledger cannot expose expected open state/epoch 0. Need separate reader health source or authoritative durable claim-state query."
+	},
+	{
+		"id": "C-LEASE-4",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LEASE-4 real claim and guard operation replay",
+		"boundary": "InboxRuntime.claim/reply -> real guard",
+		"status": "uncovered",
+		"reason": "Deferred beyond HOME-only phase: superseding helpers; existing assertions preserved."
+	},
+	{
+		"id": "C-LEASE-5",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LEASE-5 real claim and guard operation replay",
+		"boundary": "InboxRuntime.end/reply",
+		"status": "uncovered",
+		"reason": "end(crashed) tests release but is not the actual session-close callback; lifecycle event adapter missing."
+	},
+	{
+		"id": "C-LEASE-6",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LEASE-6 real claim and guard operation replay",
+		"boundary": "InboxRuntime.recover/reply",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-LEASE-7",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LEASE-7 real claim and guard operation replay",
+		"boundary": "InboxRuntime.claim with actual second live lease",
+		"status": "uncovered",
+		"reason": "Deferred beyond HOME-only phase: helper holder busy; existing assertions preserved."
+	},
+	{
+		"id": "C-EFFECT-1",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-EFFECT-1 real claim and guard operation replay",
+		"boundary": "InboxRuntime.reply -> real guard/RoleMessages",
+		"status": "uncovered",
+		"reason": "Deferred helper-origin replay; resultRef symbolic alias is not asserted on each operation. Separate unnumbered HOME test proves first reply and duplicate rejection."
+	},
+	{
+		"id": "C-EFFECT-2",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "effect intent recovery",
+		"status": "uncovered",
+		"reason": "No precise crash-after-intent seam with guard-admitted receipt; existing crash tests do not replay this vector."
+	},
+	{
+		"id": "C-EFFECT-3",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "effect intent recovery",
+		"status": "uncovered",
+		"reason": "No precise crash-after-intent seam before guard admission."
+	},
+	{
+		"id": "C-EFFECT-4",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-EFFECT-4 real claim and guard operation replay",
+		"boundary": "InboxRuntime.reply -> real guard/RoleMessages",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-LIFE-1",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LIFE-1 real source and attempt lifecycle",
+		"boundary": "RoleMessages delivered state -> InboxRuntime.read",
+		"status": "uncovered",
+		"reason": "Delivered-source assertion present; helper-exit event not wired and model turn-text deliberately not inspected."
+	},
+	{
+		"id": "C-LIFE-2",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LIFE-2 real source and attempt lifecycle",
+		"boundary": "RoleMessages reply link -> InboxRuntime.read",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-LIFE-3",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LIFE-3 real source and attempt lifecycle",
+		"boundary": "RoleMessages nonreply link + InboxRuntime.claim/read",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-LIFE-4",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LIFE-4 real source and attempt lifecycle",
+		"boundary": "InboxRuntime.claim/end/read",
+		"status": "uncovered",
+		"reason": "Partial: synthetic script request lacks complete native script metadata and alone/aborted completion event boundary. Deferred beyond ordinary RM phase."
+	},
+	{
+		"id": "C-LIFE-5",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LIFE-5 real source and attempt lifecycle",
+		"boundary": "InboxRuntime.claim/end/read",
+		"status": "uncovered",
+		"reason": "Partial: synthetic script request lacks complete native script metadata and alone/aborted completion event boundary. Deferred beyond ordinary RM phase."
+	},
+	{
+		"id": "C-LIFE-6",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "passive transport completion",
+		"status": "uncovered",
+		"reason": "No passive transport receipt/cursor boundary."
+	},
+	{
+		"id": "C-LIFE-7",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LIFE-7 real source and attempt lifecycle",
+		"boundary": "RoleMessages failed state -> InboxRuntime.read",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-LIFE-8",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-LIFE-8 real claim and guard operation replay",
+		"boundary": "InboxRuntime.end(released_to_home)/claim/read",
+		"status": "uncovered",
+		"reason": "Deferred beyond HOME-only phase: helper release-to-home; existing assertions preserved."
+	},
+	{
+		"id": "C-RETRY-1",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-RETRY-1 persisted attempt and alarm replay",
+		"boundary": "InboxRuntime.end/audit/claim",
+		"status": "uncovered",
+		"reason": "State/alarm/no-ban asserted; event-driven dispatch has no observable scheduling boundary."
+	},
+	{
+		"id": "C-RETRY-2",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-RETRY-2 persisted attempt and alarm replay",
+		"boundary": "InboxRuntime.end/audit",
+		"status": "uncovered",
+		"reason": "State/alarm asserted; missing dispatch order and metadata-only retry-prefix boundary; never inspect model input."
+	},
+	{
+		"id": "C-RETRY-3",
+		"owner": "pi-web-ui",
+		"file": "tests/inbox-runtime/inbox-core-ledger.test.ts",
+		"title": "C-RETRY-3 persisted attempt and alarm replay",
+		"boundary": "InboxRuntime.end/audit/claim",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-HELPER-1",
+		"owner": "pi-web-ui/pi-identity/pi-openviking",
+		"file": null,
+		"title": null,
+		"boundary": "helper identity",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-HELPER-2",
+		"owner": "pi-web-ui/pi-identity/pi-openviking",
+		"file": null,
+		"title": null,
+		"boundary": "helper identity",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-HELPER-3",
+		"owner": "pi-web-ui/pi-identity/pi-openviking",
+		"file": null,
+		"title": null,
+		"boundary": "helper identity",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-HELPER-4",
+		"owner": "pi-web-ui/pi-identity/pi-openviking",
+		"file": null,
+		"title": null,
+		"boundary": "helper identity",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-HELPER-5",
+		"owner": "pi-web-ui/pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "helper lease binding",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-HELPER-6",
+		"owner": "pi-web-ui/pi-identity/pi-openviking",
+		"file": null,
+		"title": null,
+		"boundary": "helper identity",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-HELPER-7",
+		"owner": "pi-web-ui/pi-identity/pi-openviking",
+		"file": null,
+		"title": null,
+		"boundary": "helper identity",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-TOOL-1",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "pi-identity helper tool dispatch",
+		"status": "external",
+		"reason": "Corpus consumers include web but enforcement boundary is pi-identity only."
+	},
+	{
+		"id": "C-TOOL-2",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "pi-identity helper tool dispatch",
+		"status": "external",
+		"reason": "Corpus consumers include web but enforcement boundary is pi-identity only."
+	},
+	{
+		"id": "C-TOOL-3",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "pi-identity helper tool dispatch",
+		"status": "external",
+		"reason": "Corpus consumers include web but enforcement boundary is pi-identity only."
+	},
+	{
+		"id": "C-TOOL-4",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "pi-identity helper tool dispatch",
+		"status": "external",
+		"reason": "Corpus consumers include web but enforcement boundary is pi-identity only."
+	},
+	{
+		"id": "C-TOOL-5",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "pi-identity helper tool dispatch",
+		"status": "external",
+		"reason": "Corpus consumers include web but enforcement boundary is pi-identity only."
+	},
+	{
+		"id": "C-TOOL-6",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "pi-identity helper tool dispatch",
+		"status": "external",
+		"reason": "Corpus consumers include web but enforcement boundary is pi-identity only."
+	},
+	{
+		"id": "C-TOOL-17",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "pi-identity helper tool dispatch",
+		"status": "external",
+		"reason": "Corpus consumers include web but enforcement boundary is pi-identity only."
+	},
+	{
+		"id": "C-TOOL-7",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "pi-identity helper tool dispatch",
+		"status": "external",
+		"reason": "Corpus consumers include web but enforcement boundary is pi-identity only."
+	},
+	{
+		"id": "C-TOOL-8",
+		"owner": "pi-identity",
+		"file": null,
+		"title": null,
+		"boundary": "pi-identity helper tool dispatch",
+		"status": "external",
+		"reason": "Corpus consumers include web but enforcement boundary is pi-identity only."
+	},
+	{
+		"id": "C-TOOL-9",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "helper message_role dispatch",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-TOOL-10",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "helper message_role dispatch",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-TOOL-11",
+		"owner": "pi-web-ui",
+		"file": null,
+		"title": null,
+		"boundary": "helper message_role dispatch",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-TOOL-12",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "queue_add helper policy",
+		"status": "external",
+		"reason": "Queue-only case; no web producer, consumer or boundary."
+	},
+	{
+		"id": "C-TOOL-13",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "queue_add helper policy",
+		"status": "external",
+		"reason": "Queue-only case; no web producer, consumer or boundary."
+	},
+	{
+		"id": "C-TOOL-14",
+		"owner": "pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "queue_add helper policy",
+		"status": "external",
+		"reason": "Queue-only case; no web producer, consumer or boundary."
+	},
+	{
+		"id": "C-TOOL-15",
+		"owner": "pi-web-ui/pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "helper queue_add release",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	},
+	{
+		"id": "C-TOOL-16",
+		"owner": "pi-web-ui/pi-queue",
+		"file": null,
+		"title": null,
+		"boundary": "helper queue_add paused",
+		"status": "uncovered",
+		"reason": "Delegated helper slice; parent must attach verified per-ID evidence."
+	}
+]

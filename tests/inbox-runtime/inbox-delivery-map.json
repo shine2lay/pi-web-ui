@@ -1,0 +1,616 @@
+[
+	{
+		"id": "C-DSEL-1",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "SDK boundary selection",
+		"status": "uncovered",
+		"reason": "Boundary has no runtime/board source binding; existing count-only test does not assert priority or selected keys."
+	},
+	{
+		"id": "C-DSEL-2",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "SDK aging selection",
+		"status": "uncovered",
+		"reason": "Missing runtime binding and sender-task priority source at boundary."
+	},
+	{
+		"id": "C-DSEL-3",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "SDK aging threshold",
+		"status": "uncovered",
+		"reason": "Missing runtime binding and sender-task priority source at boundary."
+	},
+	{
+		"id": "C-DSEL-4",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "SDK equal-time key ordering",
+		"status": "uncovered",
+		"reason": "Boundary currently buffers arrival order; no canonical reader binding."
+	},
+	{
+		"id": "C-DSEL-5",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "SDK eleven-turn dispatch",
+		"status": "uncovered",
+		"reason": "Not implemented in this bounded slice; needs canonical completion-to-boundary replay."
+	},
+	{
+		"id": "C-DSEL-6",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Owner turn and passive attachment",
+		"status": "uncovered",
+		"reason": "Missing owner admission and durable packet binding."
+	},
+	{
+		"id": "C-DSEL-7",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Board P0 selection",
+		"status": "uncovered",
+		"reason": "InboxRuntimePorts has no board source."
+	},
+	{
+		"id": "C-DSEL-8",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Open task-priority refresh",
+		"status": "uncovered",
+		"reason": "No sender-task canonical source port."
+	},
+	{
+		"id": "C-DSEL-9",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Held helper route narrowing",
+		"status": "uncovered",
+		"reason": "No sender-task canonical source port for priority mutation."
+	},
+	{
+		"id": "C-DSEL-10",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Held HOME route preservation",
+		"status": "uncovered",
+		"reason": "No sender-task canonical source port for priority mutation."
+	},
+	{
+		"id": "C-DSEL-11",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Held class preservation",
+		"status": "uncovered",
+		"reason": "Needs approved canonical fact transition retaining content hash; not a fixture classification override."
+	},
+	{
+		"id": "C-DSEL-12",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Held content conflict",
+		"status": "uncovered",
+		"reason": "Available runtime read/claim seam; canonical store mutation adapter remains to be written."
+	},
+	{
+		"id": "C-DSEL-13",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Copied text cannot set priority",
+		"status": "uncovered",
+		"reason": "No canonical readable sender-task source; cannot honestly assert helper_eligible P2."
+	},
+	{
+		"id": "C-DSEL-14",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "FYI classification from source",
+		"status": "uncovered",
+		"reason": "Available RoleMessages/read seam; adapter not written in bounded slice."
+	},
+	{
+		"id": "C-DSEL-15",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Reply context turn completion",
+		"status": "uncovered",
+		"reason": "Available reply/read/end seam; adapter not written in bounded slice."
+	},
+	{
+		"id": "C-DSEL-16",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Passive landed receipt",
+		"status": "uncovered",
+		"reason": "No durable SDK landed packet binding."
+	},
+	{
+		"id": "C-DSEL-17",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Stall report dispatch",
+		"status": "uncovered",
+		"reason": "Missing canonical work-check source/boundary binding."
+	},
+	{
+		"id": "C-DSEL-18",
+		"owner": "Ops (queue producer)",
+		"file": null,
+		"title": null,
+		"boundary": "Queue ask completion",
+		"status": "uncovered",
+		"reason": "Queue acceptance port has no canonical ask-card reader or answered source."
+	},
+	{
+		"id": "C-DSEL-19",
+		"owner": "Ops (queue producer)",
+		"file": null,
+		"title": null,
+		"boundary": "Queue answered completion",
+		"status": "uncovered",
+		"reason": "Queue acceptance port has no canonical ask-card reader or answered source."
+	},
+	{
+		"id": "C-DSEL-20",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Unknown reader legacy delivery",
+		"status": "uncovered",
+		"reason": "No runtime-to-boundary fallback binding; read-only unknown assertions are insufficient."
+	},
+	{
+		"id": "C-DP3-1",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Passive never wakes",
+		"status": "uncovered",
+		"reason": "Existing legacy SDK test is not durable source replay; no canonical board-news packet source."
+	},
+	{
+		"id": "C-DP3-2",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Durable packet overflow and restart",
+		"status": "uncovered",
+		"reason": "No ledger cursor/packet prepare/land binding. Existing twenty-count test does not cover durable keys, overflow text, or restart."
+	},
+	{
+		"id": "C-DP3-3",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Landed cursor resume",
+		"status": "uncovered",
+		"reason": "No durable packet/cursor boundary API; bootstrap semantics require Architecture decision."
+	},
+	{
+		"id": "C-DP3-4",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Unreadable cursor fail closed",
+		"status": "uncovered",
+		"reason": "No cursor source/boundary API to corrupt independently of actionable reader."
+	},
+	{
+		"id": "C-DP3-5",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Passive truncation and actionable preservation",
+		"status": "uncovered",
+		"reason": "No canonical board-news packet binding; must not replace cutText with test policy."
+	},
+	{
+		"id": "C-DDONE-1",
+		"owner": "Ops",
+		"file": "tests/inbox-runtime/inbox-delivery-completion.test.ts",
+		"title": "C-DDONE-1 question closes only on accepted canonical reply",
+		"boundary": "Real RoleMessages reply validator plus InboxRuntime ledger projection",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-DDONE-2",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Non-completing events across restart",
+		"status": "uncovered",
+		"reason": "Need recorded SDK events and qualified unknown guard schedule; not synthesized state transitions."
+	},
+	{
+		"id": "C-DDONE-3",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Unreadable sender task question obligation",
+		"status": "uncovered",
+		"reason": "No sender-task source read-status seam."
+	},
+	{
+		"id": "C-DDONE-4",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Board ack completion",
+		"status": "uncovered",
+		"reason": "InboxRuntimePorts has no board reader/ack source."
+	},
+	{
+		"id": "C-DDONE-5",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Durable attempts and alarm",
+		"status": "uncovered",
+		"reason": "Read/end/recover/alarm available; exact restart sequence adapter remains unwritten."
+	},
+	{
+		"id": "C-DDONE-6",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Reply provenance and original replyId",
+		"status": "uncovered",
+		"reason": "Available canonical store seam; negative-evidence adapter remains unwritten."
+	},
+	{
+		"id": "C-DDONE-7",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Owner context completion",
+		"status": "uncovered",
+		"reason": "No host owner-turn admission source."
+	},
+	{
+		"id": "C-DDONE-8",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "FIFO after unanswered attempts",
+		"status": "uncovered",
+		"reason": "No canonical runtime-to-SDK selector binding."
+	},
+	{
+		"id": "C-DDONE-9",
+		"owner": "Ops (queue producer)",
+		"file": null,
+		"title": null,
+		"boundary": "Task receipt is reply-only, not answer",
+		"status": "uncovered",
+		"reason": "Existing race tests only cover parts; full corpus effect/prune/next-dispatch assertions remain unwritten."
+	},
+	{
+		"id": "C-DDONE-10",
+		"owner": "Ops (queue producer)",
+		"file": null,
+		"title": null,
+		"boundary": "Task crash dedup and reply-only resume",
+		"status": "uncovered",
+		"reason": "Existing crash test does not assert full corpus outcomes and next-dispatch result."
+	},
+	{
+		"id": "C-DDONE-11",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Reply clears accepted task effect",
+		"status": "uncovered",
+		"reason": "Queue seam exists; full recovery/reply/prune-pin adapter remains unwritten."
+	},
+	{
+		"id": "C-DEFF-1",
+		"owner": "Ops",
+		"file": "tests/inbox-runtime/inbox-delivery-effects.test.ts",
+		"title": "C-DEFF-1 helper reply commits one canonical receipt",
+		"boundary": "InboxRuntime helper lease -> real guard -> RoleMessages receipt",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-DEFF-2",
+		"owner": "Ops",
+		"file": "tests/inbox-runtime/inbox-delivery-effects.test.ts",
+		"title": "C-DEFF-2 HOME skips the key during real guard acceptance",
+		"boundary": "Actual guard send wrapped only to schedule concurrent HOME claim",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-DEFF-3",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Blocked guard overlap",
+		"status": "uncovered",
+		"reason": "Needs real guard blocked-policy fixture, not a forged guard result; adapter unwritten."
+	},
+	{
+		"id": "C-DEFF-4",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "D3.4 after-intent replay",
+		"status": "uncovered",
+		"reason": "Runtime lacks recorded tool-call resolver keyed by opRef; cannot replay real journal invocation."
+	},
+	{
+		"id": "C-DEFF-5",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Guard commit before handoff",
+		"status": "uncovered",
+		"reason": "Guard host hardcodes boundary:null; external injection into store and handoff schedule adapter not built."
+	},
+	{
+		"id": "C-DEFF-6",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Guard handoff before recovery",
+		"status": "uncovered",
+		"reason": "Need actual guard commit/handoff crash schedule; adapter not built."
+	},
+	{
+		"id": "C-DEFF-7",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Unknown guard prevents new claim",
+		"status": "uncovered",
+		"reason": "Need actual unreadable current-generation guard schedule, not unknown response stub."
+	},
+	{
+		"id": "C-DEFF-8",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Unknown then accepted pending guard",
+		"status": "uncovered",
+		"reason": "Need actual guard corruption/restoration and pending-handoff schedule."
+	},
+	{
+		"id": "C-DEFF-16",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Pending guard handoff resolves once",
+		"status": "uncovered",
+		"reason": "Need store commit and real guard handoff scheduling adapter."
+	},
+	{
+		"id": "C-DEFF-9",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Unreadable recorded invocation redispatch",
+		"status": "uncovered",
+		"reason": "Runtime has no recorded tool-call resolver keyed by opRef."
+	},
+	{
+		"id": "C-DEFF-10",
+		"owner": "Ops",
+		"file": "tests/inbox-runtime/inbox-delivery-effects.test.ts",
+		"title": "C-DEFF-10 superseded helper is fenced before HOME replies",
+		"boundary": "Runtime supersede epoch fences stale helper before real guard send",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-DEFF-11",
+		"owner": "Ops",
+		"file": "tests/inbox-runtime/inbox-delivery-effects.test.ts",
+		"title": "C-DEFF-11 second reply returns the original receipt without sending",
+		"boundary": "Canonical reply evidence and real guard outbox count",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-DEFF-12",
+		"owner": "Ops",
+		"file": "tests/inbox-runtime/inbox-delivery-effects.test.ts",
+		"title": "C-DEFF-12 text without replyTo cannot settle the held item",
+		"boundary": "Runtime reply validation plus real guard outbox and held ledger state",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-DEFF-13",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "AM-D3 rotation waits through D3.4 recovery",
+		"status": "uncovered",
+		"reason": "Guard quiescent/maybeRotate has no unresolved inbox-intent binding; runtime also lacks recorded invocation resolver. Need actual current.json generation assertions before/after recovery."
+	},
+	{
+		"id": "C-DEFF-15",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Tampered recorded arguments refused",
+		"status": "uncovered",
+		"reason": "No recorded invocation resolver; cannot inject changed journal args against actual effect_intent hash."
+	},
+	{
+		"id": "C-DEFF-14",
+		"owner": "Ops (helper consumer)",
+		"file": "tests/inbox-runtime/inbox-delivery-effects.test.ts",
+		"title": "C-DEFF-14 second helper cannot acquire the live lease",
+		"boundary": "InboxRuntime exclusive helper claim and epoch",
+		"status": "behavioral"
+	},
+	{
+		"id": "C-DRET-1",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Canonical save prune and tombstones",
+		"status": "uncovered",
+		"reason": "Native KEEP is 1000, corpus keep=5 requires approved retention-limit seam or faithful scale transformation; not approximated."
+	},
+	{
+		"id": "C-DRET-2",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Over-KEEP pinning and alarm",
+		"status": "uncovered",
+		"reason": "Real large fixture possible; full 1100 open plus 500 closed replay adapter remains unwritten."
+	},
+	{
+		"id": "C-DRET-3",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Intent pins replied row",
+		"status": "uncovered",
+		"reason": "Need canonical prune intent binding and approved KEEP seam for keep=1."
+	},
+	{
+		"id": "C-DRET-4",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Waiting row survives closed churn",
+		"status": "uncovered",
+		"reason": "Need approved KEEP seam for keep=1; exact corpus adapter unwritten."
+	},
+	{
+		"id": "C-DRET-5",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Explained vanished row whole read",
+		"status": "uncovered",
+		"reason": "Existing read seam available; tombstone transition adapter remains unwritten."
+	},
+	{
+		"id": "C-DRET-6",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "AM-D2 tombstone cannot erase open ledger item",
+		"status": "uncovered",
+		"reason": "Existing read seam available; exact vanished-open ledger fixture remains unwritten."
+	},
+	{
+		"id": "C-DRET-7",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Window is not whole read",
+		"status": "uncovered",
+		"reason": "Runtime has file ports only, no qualified window-result source; do not simulate a whole file as window."
+	},
+	{
+		"id": "C-DRET-8",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Unexplained vanished source",
+		"status": "uncovered",
+		"reason": "Existing file/read seam available; two-read disappearance adapter remains unwritten."
+	},
+	{
+		"id": "C-DRET-9",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Whole empty multi-source inbox",
+		"status": "uncovered",
+		"reason": "No board and own-queue qualified whole-read ports."
+	},
+	{
+		"id": "C-DRET-10",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Unreadable role store",
+		"status": "uncovered",
+		"reason": "Existing file/read/alarm seam available; per-ID adapter remains unwritten."
+	},
+	{
+		"id": "C-DMIG-1",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Canonical migration states and history unknown",
+		"status": "uncovered",
+		"reason": "Existing migration seam owned by parent/core slice; exact delivery input not replayed here."
+	},
+	{
+		"id": "C-DMIG-2",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Migration partial cursor",
+		"status": "uncovered",
+		"reason": "Existing migration seam owned by parent/core slice; exact delivery input not replayed here."
+	},
+	{
+		"id": "C-DMIG-3",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Migration fixed plan and hash conflict",
+		"status": "uncovered",
+		"reason": "Existing migration seam owned by parent/core slice; exact delivery hash/cursor replay not implemented here."
+	},
+	{
+		"id": "C-DALM-1",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Private metadata-only unanswered alarm",
+		"status": "uncovered",
+		"reason": "Runtime alarm available; exact corpus keys/attempts/visibility and ledger-line count adapter unwritten."
+	},
+	{
+		"id": "C-DALM-2",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Accepted reply clears alarm",
+		"status": "uncovered",
+		"reason": "Runtime alarm/reply available; exact corpus sequence adapter unwritten."
+	},
+	{
+		"id": "C-DALM-3",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Viewing never clears alarm",
+		"status": "uncovered",
+		"reason": "Runtime alarm/read/end available; exact corpus sequence adapter unwritten."
+	},
+	{
+		"id": "C-DALM-4",
+		"owner": "Ops",
+		"file": null,
+		"title": null,
+		"boundary": "Unknown-reader alarm without known item count",
+		"status": "uncovered",
+		"reason": "Runtime read/alarm available; exact corpus unreadable-source sequence adapter unwritten."
+	}
+]

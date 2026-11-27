@@ -2,6 +2,8 @@
  * Task 2 replaces the explicit unbuilt errors, using the canonical wire and stores.
  * No fixture interpreter, copied priority/ceiling policy or second message store.
  */
+import type { ownTaskOf } from "./own-task.js";
+import type { taskQueueAll } from "./task-queue.js";
 import type { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import type { RoleMessages, RoleMessageSender, RoleMessageSendInput } from "./role-messages.js";
 import type { InboxFence, InboxLine, InboxOutcome, InboxView } from "./shared/inbox-wire.js";
@@ -12,6 +14,16 @@ export interface InboxRuntimePorts {
 	messages: RoleMessages;
 	guard: RoleMessageGuardHost;
 	now: () => number;
+	/** Verified existing sender-task metadata, refreshed by the host from canonical transcript readers.
+	 * undefined = positively not a worker; throw = unreadable/unknown. No caller-supplied priority.
+	 * ownTaskOf binds the worker to its parent queue; taskQueueAll supplies that queue's task state.
+	 */
+	senderTask?: (file: string) =>
+		| {
+				own: NonNullable<ReturnType<typeof ownTaskOf>>;
+				queue: ReturnType<typeof taskQueueAll>;
+		  }
+		| undefined;
 	/** HOME queue's canonical command/journal boundary, not a second task store. */
 	queue?: InboxQueuePort;
 }
