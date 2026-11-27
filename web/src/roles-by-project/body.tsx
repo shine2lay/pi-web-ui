@@ -85,10 +85,23 @@ export function Body({
 	return (
 		<>
 			{calm && <CalmPanel />}
+			{project &&
+				ctx.progress.coherent &&
+				!ctx.progress.lastKnown &&
+				!ctx.progress.work?.problem &&
+				Array.isArray(ctx.progress.work?.projects) &&
+				ctx.progress.work.projects.length === 0 && <p className="rbp-note">No recorded projects</p>}
 			{grouped.tiles.length > 0 && (
 				<div className="rbp-bento">
 					{grouped.tiles.map((tile) => (
-						<Tile key={tile.group.key} ctx={ctx} tile={tile} open={opened.has(tile.group.key)} onToggle={onToggle} />
+						<Tile
+							key={tile.group.key}
+							ctx={ctx}
+							tile={tile}
+							open={opened.has(tile.group.key)}
+							onToggle={onToggle}
+							filtered={!!key}
+						/>
 					))}
 				</div>
 			)}

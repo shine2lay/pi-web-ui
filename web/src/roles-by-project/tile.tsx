@@ -1,7 +1,6 @@
 /**
- * roles-by-project tiles (design-elements.md §Tile): the closed tile (name, chip, lead, held-on, ring, numbers,
- * mini map, counts line) as one button with aria-expanded, the opened tile's full map and "Done when" fold, and
- * the compact minis of quiet projects.
+ * Roles tiles: native disclosure/header and compact quiet minis. Project grouping uses its focused progress
+ * body outside the header; Frozen non-project tiles retain their ring/count/map summary and opened map.
  */
 import type { UiBoardTask } from "../types";
 import { Icon, Ring } from "./icons";
@@ -17,6 +16,7 @@ import {
 	type TileModel,
 } from "./model";
 import { OpenedMap, Thumb } from "./task-map";
+import { ProjectProgress } from "./project-progress";
 
 const LARGE_OPEN = 6;
 
@@ -117,31 +117,6 @@ function chipOf(ctx: BoardContext, tile: TileModel): string | null {
 	return (initiative && ctx.initiatives.get(initiative)) || "Project";
 }
 
-function DoneWhen({ ctx, tile }: { ctx: BoardContext; tile: TileModel }) {
-	if (tile.group.kind !== "project") return null;
-	const goals = goalsOf(ctx.projects.get(tile.group.projectId ?? ""));
-	if (!goals?.items.length) return null;
-	return (
-		<details className="rbp-fold">
-			<summary>
-				<Icon name="chev" />
-				Done when · {goals.met} of {goals.total} met
-			</summary>
-			<ul className="rbp-dw">
-				{goals.items.map((it, i) => (
-					<li key={i} className={it.met ? "is-met" : undefined}>
-						<Icon name={it.met ? "ok" : "q"} />
-						<span>
-							{it.item}
-							<span className="rbp-sr">{it.met ? " (met)" : " (not met)"}</span>
-						</span>
-					</li>
-				))}
-			</ul>
-		</details>
-	);
-}
-
 /** "No project or tag": the open body clusters its tasks by role. */
 function RoleClusters({ rows }: { rows: readonly UiBoardTask[] }) {
 	const by = new Map<string, UiBoardTask[]>();
@@ -167,10 +142,12 @@ export function Tile({
 	tile,
 	open,
 	onToggle,
+	filtered = false,
 }: {
 	ctx: BoardContext;
 	tile: TileModel;
 	open: boolean;
+	filtered?: boolean;
 	onToggle: (key: string) => void;
 }) {
 	const g = tile.group;
@@ -207,54 +184,63 @@ export function Tile({
 				<span className="rbp-chev">
 					<Icon name="chev" />
 				</span>
-				<span className="rbp-fig">
-					<Figure ctx={ctx} tile={tile} />
-					<span className="rbp-nums">
-						<span>
-							<b className="num">{tile.open}</b>open
+				{g.kind !== "project" && (
+					<>
+						<span className="rbp-fig">
+							<Figure ctx={ctx} tile={tile} />
+							<span className="rbp-nums">
+								<span>
+									<b className="num">{tile.open}</b>open
+								</span>
+								{c["needs-you"] > 0 && (
+									<span className="c-you">
+										<b className="num">{c["needs-you"]}</b>
+										{c["needs-you"] === 1 ? "needs" : "need"} you
+									</span>
+								)}
+								{heldOf(c) > 0 && (
+									<span>
+										<b className="num">{heldOf(c)}</b>held
+									</span>
+								)}
+								{done14 !== null && (
+									<span>
+										<b className="num">{done14}</b>done · 14 days
+									</span>
+								)}
+							</span>
 						</span>
-						{c["needs-you"] > 0 && (
-							<span className="c-you">
-								<b className="num">{c["needs-you"]}</b>
-								{c["needs-you"] === 1 ? "needs" : "need"} you
+						<span className="rbp-draw">
+							<Thumb rows={tile.shown} scale={1.25} />
+						</span>
+						{tile.open > 0 && (
+							<span className="rbp-counts">
+								<CountsParts c={c} />
 							</span>
 						)}
-						{heldOf(c) > 0 && (
-							<span>
-								<b className="num">{heldOf(c)}</b>held
-							</span>
-						)}
-						{done14 !== null && (
-							<span>
-								<b className="num">{done14}</b>done · 14 days
-							</span>
-						)}
-					</span>
-				</span>
-				<span className="rbp-draw">
-					<Thumb rows={tile.shown} scale={1.25} />
-				</span>
-				{tile.open > 0 && (
-					<span className="rbp-counts">
-						<CountsParts c={c} />
-					</span>
+					</>
 				)}
 			</button>
-			{open && (
-				<div className="rbp-gbody" id={bodyId}>
-					{g.kind === "none" ? (
-						<RoleClusters rows={tile.shown} />
-					) : (
-						<OpenedMap
-							rows={tile.shown}
-							from={
-								g.kind === "role" ? { kind: "group", labelOf: (t) => groupLabelOf(ctx, t.groupKey) } : { kind: "role" }
-							}
-						/>
-					)}
-					{tile.shown.length === 0 && <p className="rbp-note">No task of this group is on the board right now.</p>}
-					<DoneWhen ctx={ctx} tile={tile} />
-				</div>
+			{g.kind === "project" ? (
+				<ProjectProgress ctx={ctx} tile={tile} open={open} filtered={filtered} bodyId={bodyId} />
+			) : (
+				open && (
+					<div className="rbp-gbody" id={bodyId}>
+						{g.kind === "none" ? (
+							<RoleClusters rows={tile.shown} />
+						) : (
+							<OpenedMap
+								rows={tile.shown}
+								from={
+									g.kind === "role"
+										? { kind: "group", labelOf: (t) => groupLabelOf(ctx, t.groupKey) }
+										: { kind: "role" }
+								}
+							/>
+						)}
+						{tile.shown.length === 0 && <p className="rbp-note">No task of this group is on the board right now.</p>}
+					</div>
+				)
 			)}
 		</article>
 	);

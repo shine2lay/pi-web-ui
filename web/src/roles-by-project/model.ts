@@ -4,7 +4,15 @@
  * truth (Backend's groups.ts), this file only filters and arranges them.
  */
 import { heldOnOf } from "../../../server/shared/roles-by-project/graph";
-import type { UiBoardGroup, UiBoardState, UiBoardTask, UiRolesOverview, UiTaskBoard, UiWorkRecord } from "../types";
+import type {
+	UiBoardGroup,
+	UiBoardState,
+	UiBoardTask,
+	UiRolesOverview,
+	UiTaskBoard,
+	UiWorkRecord,
+	UiWorkRecords,
+} from "../types";
 
 export type GroupBy = "project" | "now" | "department" | "status";
 export const GROUP_BYS: readonly GroupBy[] = ["project", "now", "department", "status"];
@@ -74,16 +82,27 @@ export const heldOf = (c: Counts) => c.blocked + c.waiting;
 /** What the page reads besides the board: names for search and the tiles. */
 export interface BoardContext {
 	board: UiTaskBoard;
+	/** Availability of this card's registry binding; no second snapshot or reader. */
+	progress: { work: UiWorkRecords | undefined; coherent: boolean; lastKnown: boolean };
 	projects: Map<string, UiWorkRecord>;
 	initiatives: Map<string, string>;
 	roleTitles: Map<string, string>;
 	groups: Map<string, UiBoardGroup>;
 }
-export function contextOf(overview: UiRolesOverview, board: UiTaskBoard): BoardContext {
+export function contextOf(overview: UiRolesOverview, board: UiTaskBoard, lastKnown = false): BoardContext {
 	return {
 		board,
-		projects: new Map((overview.work?.projects ?? []).map((p) => [p.id, p])),
-		initiatives: new Map((overview.work?.initiatives ?? []).map((i) => [i.id, i.name])),
+		progress: { work: overview.work, coherent: overview.taskBoard === board, lastKnown },
+		projects: new Map(
+			(Array.isArray(overview.work?.projects) ? overview.work.projects : [])
+				.filter((p) => p && typeof p.id === "string")
+				.map((p) => [p.id, p]),
+		),
+		initiatives: new Map(
+			(Array.isArray(overview.work?.initiatives) ? overview.work.initiatives : [])
+				.filter((i) => i && typeof i.id === "string")
+				.map((i) => [i.id, i.name]),
+		),
 		roleTitles: new Map(overview.roles.map((r) => [r.id, r.title])),
 		groups: new Map([...board.groups, ...board.roleGroups].map((g) => [g.key, g])),
 	};
