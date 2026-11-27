@@ -1,6 +1,6 @@
 // Exercise SDK boundary decisions only; no model invocation or request-body inspection.
 import { Agent, type AgentMessage, type AgentTurnContext } from "@earendil-works/pi-agent-core";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { expect, it, vi } from "vitest";
 import { InboxHomeHost } from "../../server/inbox-home-host.js";
 import { installRoleMailBoundary } from "../../server/role-mail-boundary.js";
@@ -19,8 +19,10 @@ it("F1 third unanswered boundary settles; replay/restart never pumps a fourth tu
 	});
 	const agent = new Agent({ streamFn: provider });
 	const listeners: Array<Parameters<AgentSession["subscribe"]>[0]> = [];
+	const sessionManager = SessionManager.inMemory();
 	const session = {
 		agent,
+		sessionManager,
 		subscribe: (listener: Parameters<AgentSession["subscribe"]>[0]) => {
 			listeners.push(listener);
 			return () => {};
@@ -30,14 +32,17 @@ it("F1 third unanswered boundary settles; replay/restart never pumps a fourth tu
 	let dispatches = 0;
 	installRoleMailBoundary(session, {
 		select: (rows) => host.select(B, rows),
-		landed: async (id) => {
+		landed: async (id, message) => {
 			dispatches++;
-			await host.landed(B, id);
+			await host.landed(B, id, session, message);
 		},
 		ended: (outcome) => host.ended(B, outcome, session),
 	});
-	const started = (message: AgentMessage) =>
+	const started = (message: AgentMessage) => {
 		listeners.forEach((listener) => listener({ type: "message_start", message }));
+		listeners.forEach((listener) => listener({ type: "message_end", message }));
+		sessionManager.appendMessage(message);
+	};
 	started({ role: "user", timestamp: 1, content: [{ type: "text", text: roleMessageText(h.w.rm.byId(h.id)!) }] });
 	const turn = {
 		message: { role: "assistant", content: [], stopReason: "stop" },

@@ -12,7 +12,7 @@ type Pending = { id: string; message: AgentMessage; note?: Note };
 export interface RoleMailHooks {
 	legacy?: () => boolean;
 	select?: (rows: readonly { id: string; passive: boolean }[]) => Promise<string[]>;
-	landed?: (id: string) => Promise<void>;
+	landed?: (id: string | undefined, message: AgentMessage) => Promise<void>;
 	ended?: (outcome: "turn_completed" | "aborted") => Promise<void>;
 }
 const installed = new WeakMap<
@@ -88,8 +88,15 @@ export function installRoleMailBoundary(session: Session, hooks: RoleMailHooks =
 			if (id) {
 				pending = pending.filter((p) => p.id !== id);
 				packet = packet.filter((p) => p.id !== id);
-				if (!legacy() && hooks.landed) landing = landing.then(() => hooks.landed!(id));
 			}
+		}
+		if (event.type === "message_end" && event.message.role === "user" && !legacy() && hooks.landed) {
+			const message = event.message;
+			// SDK persistence and owner-input marks happen after the synchronous event listeners.
+			// Chain before yielding so finishTurn cannot overtake the durable landing.
+			landing = landing
+				.then(() => new Promise<void>((resolve) => queueMicrotask(resolve)))
+				.then(() => hooks.landed!(idOf(message), message));
 		}
 	});
 	agent.finishTurn = async (turn, signal) => {

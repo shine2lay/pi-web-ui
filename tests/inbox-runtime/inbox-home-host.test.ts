@@ -55,7 +55,7 @@ it("HOME host preserves unanswered obligations beyond the alarm and accepts a si
 	}
 	expect(followUp).toHaveBeenCalledTimes(2);
 	expect(sendCustomMessage).toHaveBeenCalledTimes(1);
-	expect(host.runtime.audit("beta", "beta").filter((l) => l.op === "attempt")).toHaveLength(4);
+	expect(host.runtime.audit("beta", "beta").filter((l) => l.op === "attempt")).toHaveLength(3);
 	const restart = new InboxHomeHost(h.runtime.ports, homes);
 	await restart.start();
 	await restart.landed(B, h.id);

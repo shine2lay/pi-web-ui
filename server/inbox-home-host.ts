@@ -1,4 +1,6 @@
 import { join } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { inheritInboxRoot, nativeInboxRoot, type NativeRoot } from "./inbox-native-dispatch.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { InboxRuntime, type InboxClaim, type InboxRuntimePorts } from "./inbox-runtime.js";
 import { installRoleMailBoundary } from "./role-mail-boundary.js";
@@ -26,6 +28,7 @@ export class InboxHomeHost {
 	readonly runtime: InboxRuntime;
 	private metadata = new Map<string, ReturnType<NonNullable<InboxRuntimePorts["senderTask"]>> | Error>();
 	private active = new Map<string, InboxClaim>();
+	private roots = new Map<string, NativeRoot>();
 	private ready = false;
 	private landings = new Map<string, Promise<void>>();
 	private replies = new Map<string, Promise<unknown>>();
@@ -91,7 +94,9 @@ export class InboxHomeHost {
 			if (!home.homeChat) continue;
 			const slots = records
 				.map((r, i) =>
-					r.to.role === home.id && (!r.target || samePath(r.target, home.homeChat!)) && r.kind !== "reply" ? i : -1,
+					!r.peer && r.to.role === home.id && (!r.target || samePath(r.target, home.homeChat!)) && r.kind !== "reply"
+						? i
+						: -1,
 				)
 				.filter((i) => i >= 0);
 			const read = this.runtime.read(home.id);
@@ -125,8 +130,8 @@ export class InboxHomeHost {
 		const ids = new Set(rows.map((r) => r.id));
 		return read.items.filter((i) => ids.has(i.source.ref)).map((i) => i.source.ref);
 	}
-	async landed(file: string, id: string): Promise<void> {
-		const pending = (this.landings.get(file) ?? Promise.resolve()).then(() => this.land(file, id));
+	async landed(file: string, id: string | undefined, session?: AgentSession, message?: AgentMessage): Promise<void> {
+		const pending = (this.landings.get(file) ?? Promise.resolve()).then(() => this.land(file, id, session, message));
 		this.landings.set(file, pending);
 		try {
 			await pending;
@@ -134,17 +139,43 @@ export class InboxHomeHost {
 			if (this.landings.get(file) === pending) this.landings.delete(file);
 		}
 	}
-	private async land(file: string, id: string): Promise<void> {
+	private async land(
+		file: string,
+		id: string | undefined,
+		session?: AgentSession,
+		message?: AgentMessage,
+	): Promise<void> {
 		if (!this.ready) return;
 		const role = this.role(file);
 		if (!role) return;
 		await this.refresh();
 		const read = this.runtime.read(role);
 		if (read.status !== "ok") return;
-		const item = read.items.find((i) => i.source.ref === id);
-		if (!item || item.class === "passive") return;
-		const claim = await this.runtime.claim(item.key, { kind: "home", role, session: file });
-		if ("leaseId" in claim) this.active.set(file, claim);
+		const provenance =
+			session && message ? nativeInboxRoot(session.sessionManager, file, message, this.ports.messages) : undefined;
+		const item = id
+			? read.items.find((i) => i.source.ref === id)
+			: provenance?.sourceKind === "owner"
+				? read.items.find((i) => i.class !== "passive" && i.lifecycle.state === "open")
+				: undefined;
+		if (!item || item.class === "passive" || this.active.has(file)) return;
+		if (this.runtime.failedAttempts(item.key) >= 3) {
+			if (!provenance) return;
+			const original = this.ports.messages.byId(item.source.ref);
+			// Even a legacy attempt without metadata already consumed this original role-chain root.
+			if (provenance.sourceKind === "role" && original && provenance.rootRef === `rm:${original.root ?? original.id}`)
+				return;
+		}
+		const claim = await this.runtime.claim(
+			item.key,
+			{ kind: "home", role, session: file },
+			provenance && session ? { sm: session.sessionManager, provenance } : undefined,
+		);
+		if ("leaseId" in claim) {
+			this.active.set(file, claim);
+			if (provenance) this.roots.set(file, provenance);
+			else this.roots.delete(file);
+		}
 	}
 	async ended(file: string, outcome: "turn_completed" | "aborted", session: AgentSession): Promise<void> {
 		const claim = this.active.get(file);
@@ -172,7 +203,7 @@ export class InboxHomeHost {
 		const failures = this.runtime.failedAttempts(claim.key);
 		// Self-generated continuation is not an independent event (RETRY3).
 		if (record && item?.lifecycle.state === "open" && !item.lifecycle.effect && failures < 3) {
-			session.agent.followUp({
+			const continuation: AgentMessage = {
 				role: "user",
 				timestamp: this.ports.now(),
 				content: [
@@ -181,7 +212,9 @@ export class InboxHomeHost {
 						text: `[Unanswered from attempt ${item.lifecycle.attempts} — reply with message_role kind "reply", replyTo "${record.id}"]\n${roleMessageText(record)}`,
 					},
 				],
-			});
+			};
+			inheritInboxRoot(continuation, this.roots.get(file));
+			session.agent.followUp(continuation);
 		}
 		if (item && !hadAlarm && failures >= 3 && item.lifecycle.state === "open")
 			await session.sendCustomMessage(
@@ -218,7 +251,7 @@ export class InboxHomeHost {
 		if (!this.ready) return { ok: false, error: "Inbox reply held: E_RPI_UNKNOWN (recovery not ready)" };
 		await this.landings.get(sender.file);
 		const original = this.ports.messages.byId(input.replyTo);
-		if (!original || original.to.role !== role) return undefined;
+		if (!original || original.peer || original.to.role !== role) return undefined;
 		if (input.to !== original.from.role) return { ok: false, error: "Inbox reply held: E_RPI_TARGET" };
 		await this.refresh();
 		let claim = this.active.get(sender.file);
@@ -262,7 +295,7 @@ export function installHomeInboxBoundary(session: AgentSession): void {
 	installRoleMailBoundary(session, {
 		legacy: () => !service?.role(file()),
 		select: (rows) => (service && file() ? service.select(file()!, rows) : Promise.resolve(rows.map((r) => r.id))),
-		landed: (id) => (service && file() ? service.landed(file()!, id) : Promise.resolve()),
+		landed: (id, message) => (service && file() ? service.landed(file()!, id, session, message) : Promise.resolve()),
 		ended: (outcome) => (service && file() ? service.ended(file()!, outcome, session) : Promise.resolve()),
 	});
 }

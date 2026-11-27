@@ -1,5 +1,6 @@
 /** Canonical HOME coordinator. Helper entry points remain unavailable until their later integration. */
 import type { InboxCoordination } from "./inbox-coordination.js";
+import { prepareNativeDispatch, receiptNativeDispatch, type NativeDispatch } from "./inbox-native-dispatch.js";
 import { createHash, randomUUID } from "node:crypto";
 import { InboxLedger, inboxCoordinator, inboxPendingIntents, type InboxIntent } from "./inbox-ledger.js";
 import { homeView, inboxDigest, readHomeMessages } from "./inbox-home-reader.js";
@@ -88,7 +89,7 @@ export class InboxRuntime {
 			const records = readHomeMessages(this.ports.roleMessagesFile);
 			const pending = inboxPendingIntents(lines);
 			const items = records
-				.filter((r) => r.to.role === role)
+				.filter((r) => r.to.role === role && !r.peer)
 				.map((r) => {
 					const item = homeView(r, records, lines, this.ports);
 					const accepted = this.accepted.get(item.key);
@@ -147,6 +148,7 @@ export class InboxRuntime {
 	async claim(
 		key: string,
 		holder: { kind: "home" | "helper"; role: string; session: string },
+		dispatch?: NativeDispatch,
 	): Promise<InboxClaimResult> {
 		if (this.locks.has(key)) return { skipped: true };
 		return this.run(key, async () => {
@@ -158,14 +160,34 @@ export class InboxRuntime {
 					this.append(item, { op: "refusal", code: "E_RPI_HOME_ONLY" });
 					return { code: "E_RPI_HOME_ONLY" };
 				}
-				if (!inboxClaimable(item))
-					return { code: item.lifecycle.state === "replied" ? "E_RPI_ALREADY_REPLIED" : "E_RPI_BUSY" };
 				const epochs = this.ledger
 					.read()
 					.filter((l) => l.key === key && l.op === "claim")
 					.map((l) => ("epoch" in l ? l.epoch! : 0));
-				const fence = { leaseId: randomUUID(), epoch: Math.max(0, ...epochs) + 1 };
+				let fence: InboxFence = { leaseId: randomUUID(), epoch: Math.max(0, ...epochs) + 1 };
+				if (dispatch) {
+					const prepared = prepareNativeDispatch(
+						dispatch,
+						key,
+						holder.session,
+						this.ledger.read().filter((l) => l.key === key),
+						fence,
+						this.failedAttempts(key),
+						inboxClaimable(item),
+					);
+					if (!prepared) return { code: "E_RPI_PROVENANCE" };
+					fence = { leaseId: prepared.fence.leaseId, epoch: prepared.fence.epoch };
+					if (prepared.replay) {
+						receiptNativeDispatch(dispatch, key, holder.session, fence);
+						return item.lifecycle.lease === fence.leaseId
+							? { key, session: holder.session, ...fence }
+							: { skipped: true };
+					}
+				}
+				if (!inboxClaimable(item))
+					return { code: item.lifecycle.state === "replied" ? "E_RPI_ALREADY_REPLIED" : "E_RPI_BUSY" };
 				this.append(item, { op: "claim", holder, ...fence });
+				if (dispatch) receiptNativeDispatch(dispatch, key, holder.session, fence);
 				return { key, session: holder.session, ...fence };
 			} catch {
 				return { code: "E_RPI_UNKNOWN" };
