@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { InboxRuntime, type InboxClaim, type InboxRuntimePorts } from "./inbox-runtime.js";
 import { installRoleMailBoundary } from "./role-mail-boundary.js";
@@ -27,6 +28,17 @@ export class InboxHomeHost {
 	private active = new Map<string, InboxClaim>();
 	private ready = false;
 	private landings = new Map<string, Promise<void>>();
+	private replies = new Map<string, Promise<unknown>>();
+	/** The guard must recover before inbox intents can be qualified. */
+	async startWithGuard(changed: () => void): Promise<void> {
+		try {
+			await this.ports.guard.start();
+			await this.start();
+			changed();
+		} catch (error) {
+			console.error("HOME inbox recovery unavailable", error);
+		}
+	}
 	async start(): Promise<void> {
 		await this.refresh();
 		await this.runtime.recover();
@@ -136,9 +148,13 @@ export class InboxHomeHost {
 	}
 	async ended(file: string, outcome: "turn_completed" | "aborted", session: AgentSession): Promise<void> {
 		const claim = this.active.get(file);
-		if (!claim) return;
+		const role = this.role(file);
+		if (!claim || !role) return;
 		this.active.delete(file);
 		const record = this.ports.messages.byId(claim.key.slice(3));
+		const hadAlarm = this.runtime
+			.audit(role, role)
+			.some((line) => line.key === claim.key && line.op === "alarm" && line.cause === "unanswered");
 		const replied = !!record?.replyId;
 		await this.runtime.end(
 			claim,
@@ -150,11 +166,12 @@ export class InboxHomeHost {
 						? "turn_ended_unanswered"
 						: "turn_completed",
 		);
-		const role = this.role(file),
-			read = role && this.runtime.read(role);
+		const read = this.runtime.read(role);
 		if (!read || read.status !== "ok") return;
 		const item = read.items.find((i) => i.key === claim.key);
-		if (record && item?.lifecycle.state === "open" && !item.lifecycle.effect) {
+		const failures = this.runtime.failedAttempts(claim.key);
+		// Self-generated continuation is not an independent event (RETRY3).
+		if (record && item?.lifecycle.state === "open" && !item.lifecycle.effect && failures < 3) {
 			session.agent.followUp({
 				role: "user",
 				timestamp: this.ports.now(),
@@ -166,7 +183,7 @@ export class InboxHomeHost {
 				],
 			});
 		}
-		if (item && item.lifecycle.attempts === 3 && item.lifecycle.state === "open")
+		if (item && !hadAlarm && failures >= 3 && item.lifecycle.state === "open")
 			await session.sendCustomMessage(
 				{
 					customType: "role-inbox-alarm",
@@ -181,19 +198,37 @@ export class InboxHomeHost {
 		input: RoleMessageSendInput,
 		toolCallId: string,
 	): Promise<RoleMessageGuardSendResult | undefined> {
+		const pending = (this.replies.get(sender.file) ?? Promise.resolve())
+			.catch(() => {})
+			.then(() => this.replyInTurn(sender, input, toolCallId));
+		this.replies.set(sender.file, pending);
+		try {
+			return await pending;
+		} finally {
+			if (this.replies.get(sender.file) === pending) this.replies.delete(sender.file);
+		}
+	}
+	private async replyInTurn(
+		sender: RoleMessageSender,
+		input: RoleMessageSendInput,
+		toolCallId: string,
+	): Promise<RoleMessageGuardSendResult | undefined> {
 		const role = this.role(sender.file);
 		if (!role || role !== sender.role || input.kind !== "reply" || typeof input.replyTo !== "string") return undefined;
 		if (!this.ready) return { ok: false, error: "Inbox reply held: E_RPI_UNKNOWN (recovery not ready)" };
 		await this.landings.get(sender.file);
 		const original = this.ports.messages.byId(input.replyTo);
 		if (!original || original.to.role !== role) return undefined;
+		if (input.to !== original.from.role) return { ok: false, error: "Inbox reply held: E_RPI_TARGET" };
 		await this.refresh();
 		let claim = this.active.get(sender.file);
-		if (claim?.key !== `rm:${original.id}`) {
+		if (claim && claim.key !== `rm:${original.id}`) return { ok: false, error: "Inbox reply held: E_RPI_BUSY" };
+		if (!claim) {
 			const got = await this.runtime.claim(`rm:${original.id}`, { kind: "home", role, session: sender.file });
 			if (!("leaseId" in got))
 				return { ok: false, error: `Inbox reply held: ${"code" in got ? got.code : "E_RPI_BUSY"}` };
 			claim = got;
+			this.active.set(sender.file, claim);
 		}
 		const result = await this.runtime.reply(claim, sender, input, toolCallId);
 		const record = result.resultRef ? this.ports.messages.byId(result.resultRef) : undefined;
@@ -202,6 +237,26 @@ export class InboxHomeHost {
 			: { ok: false, error: `Inbox reply held: ${result.code ?? "E_RPI_UNKNOWN"}` };
 	}
 }
+export function initializeInboxHome(
+	dataDir: string,
+	messages: InboxRuntimePorts["messages"],
+	guard: InboxRuntimePorts["guard"],
+	homes: () => readonly Home[],
+): InboxHomeHost {
+	const host = new InboxHomeHost(
+		{
+			ledgerFile: join(dataDir, "role-inbox-ledger.jsonl"),
+			roleMessagesFile: join(dataDir, "role-messages.json"),
+			messages,
+			guard,
+			now: Date.now,
+		},
+		homes,
+	);
+	configureInboxHome(host);
+	return host;
+}
+
 export function installHomeInboxBoundary(session: AgentSession): void {
 	const file = () => session.sessionFile ?? undefined;
 	installRoleMailBoundary(session, {
