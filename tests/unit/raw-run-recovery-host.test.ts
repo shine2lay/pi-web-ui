@@ -11,6 +11,7 @@ describe("host recovery admission", () => {
 				getLeafId: () => "leaf",
 				buildSessionProjection: () => ({ entries: [] }),
 				getBranch: () => [],
+				getEntry: (id: string) => ({ id, type: "custom" }),
 				appendContextEdit: () => {
 					events.push("append");
 					return "edit";
@@ -82,6 +83,7 @@ describe("host recovery admission", () => {
 			host = h;
 			return {
 				recover: async () => {
+					expect(h.entry("target")).toEqual({ id: "target", type: "custom" });
 					h.append({ type: "context_edit", targetId: "target", replacement: null });
 					throw new Error("receipt");
 				},
