@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
-import { InboxHelperHost, inboxHelperBinding, type InboxHelperHostPorts } from "../../server/inbox-helper-host.js";
+import { canonSha, sortNames, toolSetSha } from "../../../pi-identity-ops-task-1120/specialists/canon.ts";
+import { InboxHelperHost, inboxHelperBinding, INBOX_HELPER_HOST_KEY, type InboxHelperHostPorts, type InboxHelperRegistryHost } from "../../server/inbox-helper-host.js";
 import { runQueueCloseChat, type QueueCloseHostContext } from "../../server/queue-chat-lane.js";
 import { A, B, chat, send, useGuardWorld } from "../../tests/unit/role-message-guard-host-harness.js";
 import { setup } from "./inbox-world.js";
@@ -23,6 +24,8 @@ async function hostFixture() {
 		queueSessionFor: () => null,
 		queueLaneRoles: { roleOfHomeChat: () => "beta" },
 	};
+	const tools = sortNames(["read", "message_role", "inbox_release"]);
+	const seal = { tools, toolSetSha: toolSetSha(tools), ceilingPolicySha: canonSha({ allowed: tools }), rolesConfigSha: canonSha({ beta: {} }) };
 	const ports: InboxHelperHostPorts = {
 		runtime: h.runtime,
 		allocate: () => {
@@ -32,7 +35,7 @@ async function hostFixture() {
 			return { sessionId: id, sessionFile: file };
 		},
 		// Fixed external resolver responses exercise host delegation, never duplicate its policy.
-		sealTools: vi.fn(async () => ["read", "message_role", "inbox_release"]),
+		seal: vi.fn(async () => seal),
 		decideTool: vi.fn(async () => ({ allowed: false as const, code: "E_RPI_TOOL_DENIED" })),
 		append: (file, customType, data) => appendFileSync(file, `${JSON.stringify({ type: "custom", customType, data })}\n`),
 		launch: async (binding, hooks) => {
@@ -43,6 +46,7 @@ async function hostFixture() {
 			expect(Object.keys(identity).sort()).toEqual(["id", "inbox", "v", "via"]);
 			expect(identity.via).toBe("inbox-helper");
 			expect(identity.inbox.leaseId).toBe(binding.leaseId);
+			expect(entries.find(e => e.customType === "inbox-helper-seal").data).toEqual(seal);
 			expect(h.runtime.audit("beta", "beta").some(line => line.op === "claim" && line.leaseId === binding.leaseId)).toBe(true);
 			launched.push(binding.sessionId);
 			hooks.gate("started"); hooks.ended();
@@ -57,6 +61,27 @@ async function hostFixture() {
 it("GREEN inert global H1 accessor provides no fabricated binding", () => {
 	expect(inboxHelperBinding("unbound-session")).toBeUndefined();
 });
+it.each(["live", "stale", "unknown"])("H1 installed queue-host transport preserves %s binding result", state => {
+	const globals = globalThis as Record<symbol, unknown>;
+	const previous = globals[INBOX_HELPER_HOST_KEY];
+	const binding = { role: "beta", msgId: "rm-00000001", leaseId: "L1", epoch: 1, homeChat: B };
+	const host: InboxHelperRegistryHost = { inboxHelperBinding: () => {
+		if (state === "live") return binding;
+		throw Object.assign(new Error("Fixture host authority"), { code: state === "stale" ? "E_RPI_STALE_LEASE" : "E_RPI_UNKNOWN" });
+	} };
+	globals[INBOX_HELPER_HOST_KEY] = host;
+	try {
+		if (state === "live") expect(inboxHelperBinding("fixture")).toEqual(binding);
+		else {
+			let code: unknown;
+			try { inboxHelperBinding("fixture"); } catch (error) { code = (error as { code?: unknown }).code; }
+			expect(code).toBe(state === "stale" ? "E_RPI_STALE_LEASE" : "E_RPI_UNKNOWN");
+		}
+	} finally {
+		if (previous === undefined) delete globals[INBOX_HELPER_HOST_KEY];
+		else globals[INBOX_HELPER_HOST_KEY] = previous;
+	}
+});
 it("H1 claim and three binding entries precede launch; same role capped at three", async () => {
 	caseOf("helper", "C-HSPAWN-11");
 	const f = await hostFixture();
@@ -65,7 +90,7 @@ it("H1 claim and three binding entries precede launch; same role capped at three
 	expect(f.launched.length).toBe(3);
 	expect(new Set(f.launched).size).toBe(3);
 	expect(f.host.live("beta")).toBe(3);
-	expect(f.ports.sealTools).toHaveBeenCalled();
+	expect(f.ports.seal).toHaveBeenCalled();
 });
 it("C-HSPAWN-2 idle HOME and one request writes no helper entries", async () => {
 	caseOf("helper", "C-HSPAWN-2"); const f = await hostFixture();

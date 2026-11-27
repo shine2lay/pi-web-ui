@@ -13,18 +13,34 @@ export interface InboxHelperBinding {
 	epoch: number;
 	homeChat: string;
 }
+/** Existing queue-host transport, never a second global registry. No install here. */
+export const INBOX_HELPER_HOST_KEY = Symbol.for("pi-web-ui.queue-host");
+export type InboxHelperBindingError = Error & { code: "E_RPI_STALE_LEASE" | "E_RPI_UNKNOWN" };
+export interface InboxHelperRegistryHost {
+	/** Undefined = no binding. Ended/superseded throws code E_RPI_STALE_LEASE;
+	 * unreadable authority throws code E_RPI_UNKNOWN. Callers preserve the code.
+	 */
+	inboxHelperBinding(sessionId: string): InboxHelperBinding | undefined;
+}
+export interface InboxHelperSeal {
+	tools: readonly string[];
+	toolSetSha: string;
+	ceilingPolicySha: string;
+	rolesConfigSha: string;
+}
 export interface InboxHelperLaunch extends InboxHelperBinding {
 	sessionId: string;
 	sessionFile: string;
 	class: InboxClass;
 	priority: InboxPriority;
-	tools: readonly string[];
+	seal: InboxHelperSeal;
 }
 export type InboxToolDecision = { allowed: true } | { allowed: false; code: string };
 export interface InboxHelperHostPorts {
 	runtime: InboxRuntime;
 	allocate(role: string): { sessionId: string; sessionFile: string };
-	sealTools(role: string): Promise<readonly string[]>;
+	/** Hashes/sealed names come from existing identity canonical primitives. */
+	seal(role: string): Promise<InboxHelperSeal>;
 	/** Production supplies the one pi-identity resolver, including schema/narrowing. */
 	decideTool(sessionId: string, name: string, args: unknown): Promise<InboxToolDecision>;
 	/** Journal entries/seal precede this call; implementation uses startTaskChat. */
@@ -44,8 +60,9 @@ const unbuilt = (): never => {
 	throw new Error("E_RPI_UNBUILT: helper host is not installed");
 };
 
-/** Consumers may query the installed host by this exact H1 name. No binding exists
- * in Task 1. A missing binding must never downgrade a helper entry to plain role.
+/** Task 2 discovers InboxHelperRegistryHost on INBOX_HELPER_HOST_KEY. This Task 1
+ * stub installs/discovers nothing. Undefined with a helper-marked entry means
+ * E_RPI_HELPER_ENTRY, never plain role; coded errors retain stale/unknown meaning.
  */
 export function inboxHelperBinding(_sessionId: string): InboxHelperBinding | undefined {
 	return undefined;
