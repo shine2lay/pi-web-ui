@@ -9,8 +9,10 @@ The existing role-message source and guard remain authoritative; no second sourc
 - One actionable message per completed turn; passive packets stay bounded at twenty.
 - Existing verified sender-task priority and source-time FIFO choose HOME order.
 - Delivery is not an answer: unanswered requests retain their durable obligation.
-- Each completed dispatch records an attempt; three unanswered attempts raise an alarm,
-  not a retry ban. Ordinary HOME remains able to answer after restart.
+- Each completed dispatch records an attempt. Three unanswered, aborted or crashed failures
+  raise one alarm and stop self-generated continuations, without closing the obligation.
+  Genuine independent events may retry; an already-running reply is not banned by the alarm.
+  Native dispatch receipts distinguish replay from a new event; timestamps are not authority.
 - Replies use the current-generation qualified guard operation identity. Accepted outbox
   operations await handoff; unknown history holds the intent instead of guessing absence.
 - Definitive nonacceptance records a refusal and permits a new claim. A reused logical
@@ -23,6 +25,8 @@ The existing role-message source and guard remain authoritative; no second sourc
 
 `server/inbox-home-host.ts` connects the role-mail boundary to the canonical runtime.
 `server/inbox-runtime.ts` owns claim/reply/attempt/recovery coordination.
+`server/inbox-coordination.ts` defines the shared keyed mutation port; the synchronous
+current-claim query is read-only, never permission to skip the effect's locked fence recheck.
 `server/inbox-ledger.ts` appends private metadata with contiguous sequence and fsync.
 `server/role-messages-source.ts` is the single source decoder and retention-pin calculation.
 `server/role-message-guard-inbox-receipt.ts` qualifies accepted/refused/absent/unknown receipts.
@@ -41,10 +45,12 @@ The second command writes home-phase-proof.json: an exact 279-row phase map plus
 runtime test's observed result and ownership. Missing evidence or a failing HOME-owned
 assertion is an error; an inventory count alone is never a behavioral pass.
 
-Current scope: 27 mapped contract cases and 62 executable HOME-owned assertions.
-The other 252 mapped cases remain deferred/external. Of 146 runtime assertions,
-84 are outside this release's ownership, including 48 observed failures; none is claimed PASS
-for release coverage merely because a partial adapter happens to pass.
+Before the Security corrections, the measured baseline was 27 mapped contract cases and
+62 executable HOME-owned assertions. The other 252 mapped cases remain deferred/external.
+Of those 146 runtime assertions, 84 were outside HOME ownership, including 48 observed failures.
+The final evidence gate must explicitly account for added Security and integration controls;
+these baseline counts are not a final corrected-build test receipt. No deferred assertion is
+claimed PASS for release coverage merely because a partial adapter happens to pass.
 The nine preserved legacy controls and 329 codec tests are separate checks.
 
 The four previously execution-linked cases C-DEFF-1, C-DEFF-2, C-DEFF-10 and C-DEFF-14
