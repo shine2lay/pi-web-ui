@@ -16,7 +16,7 @@ import "./patch-lazy-boundary-context.js";
 import "./patch-jiti-resolve-cache.js";
 // Logs whatever holds pi's sign-in lock (auth.json) for 60 s or more; logging only (#134).
 import "./auth-lock-trace.js";
-import { mergeRequesterTurn, requesterForAdmission, requesterOfTurn, roleRequesterInputOf } from "./queue-requester.js";
+import { mergeRequesterTurn, requesterForAdmission, requesterOfTurn } from "./queue-requester.js";
 import { answeredBy, listedOwnerNames } from "./sent-by.js";
 import { chatOwnerRecords, chatRequester, ownTaskOf } from "./own-task.js";
 import { OwnerContacts, ownerInputIds, type OwnerContactOutcome } from "./owner-contacts.js";
@@ -437,12 +437,12 @@ import {
 	type RoleReportResult,
 	type CiAlertResult,
 	type ScriptNoticeResult,
-	needsOwnTurn,
 } from "./role-messages.js";
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { rememberWorkerTask, roleMessageTagFacts } from "./role-message-tag-facts.js";
 import { admitRoleMailAtResume, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
-import { InboxHomeHost, configureInboxHome, installHomeInboxBoundary } from "./inbox-home-host.js";
+import { InboxHomeHost, configureInboxHome, initializeInboxHome, installHomeInboxBoundary } from "./inbox-home-host.js";
+import { roleMessageDeliveryHow } from "./role-message-delivery-how.js";
 import {
 	installPromptStartGuard,
 	promptStartPending,
@@ -18414,17 +18414,12 @@ export class AgentService {
 			log: (line) => console.log(line),
 		});
 		roleGuardService = this.roleGuard;
-		inboxHomeService = new InboxHomeHost(
-			{
-				ledgerFile: join(this.stateStore.dataDir, "role-inbox-ledger.jsonl"),
-				roleMessagesFile: join(this.stateStore.dataDir, "role-messages.json"),
-				messages: this.roleMessages,
-				guard: this.roleGuard,
-				now: Date.now,
-			},
+		inboxHomeService = initializeInboxHome(
+			this.stateStore.dataDir,
+			this.roleMessages,
+			this.roleGuard,
 			() => identityRegistry().identities,
 		);
-		configureInboxHome(inboxHomeService);
 		// board (task #76): the roles' shared board. Posting wakes nobody by itself; an order goes directly
 		// to the listed roles that have something waiting (the owner's rule, role-board.ts). Its direct turns
 		// go the way role requests do; they start with startRoleMessages.
@@ -18530,13 +18525,7 @@ export class AgentService {
 	/** role-messages: start delivering (index.ts, once the chats a restart cut off are carried on). The
 	 *  board's direct turns start with them. */
 	startRoleMessages(): void {
-		void this.roleGuard
-			.start()
-			.then(async () => {
-				await inboxHomeService?.start();
-				this.onRoleGuardChanged?.();
-			})
-			.catch((error) => console.error("HOME inbox recovery unavailable", error));
+		void inboxHomeService?.startWithGuard(() => this.onRoleGuardChanged?.());
 		this.roleMessages.start();
 		void this.proofCheck.probe(); // Ops #1073: the start-up line says whether proof-check --message works
 		this.roleBoard.start();
@@ -19095,27 +19084,9 @@ export class AgentService {
 	/** telegram-coo: index.ts hands each role reply to the plugins (PluginManager.emitRoleReply). */
 	onRoleReply: ((reply: RoleReply) => void) | null = null;
 
-	/** telegram-coo: a role message's cause: a role's, except the app's 6 am report request (its answer is
-	 *  the report the Roles page shows, not a reply for Telegram). */
-	private roleMessageCause(text: string): RoleTurnCause {
-		const id = roleMessageIdOf(text);
-		return id && this.roleMessages.byId(id)?.kind === "report" ? "other" : "role";
-	}
-
-	/** telegram-coo: how a role message goes in: its cause, and when it is a reply to a question asked for
-	 *  the owner, who answered and his send ids (the turn it starts is his, role-replies.ts forOwner). */
+	/** Existing owner and app turn causality; independent of inbox admission. */
 	private roleMessageHow(file: string, text: string): RoleDeliveryHow {
-		const owner = this.roleMessages.ownerContextFor(file, text);
-		const cause = this.roleMessages.causalityOf(file, text);
-		const record = cause.kind === "record" && cause.exactTarget ? this.roleMessages.byId(cause.record.id) : undefined;
-		const requester = record ? roleRequesterInputOf(record) : undefined;
-		return {
-			cause: this.roleMessageCause(text),
-			// A CI alert or a script's request (Ops #782) starts its own turn, never joins a running one.
-			...(record && needsOwnTurn(record) ? { requireIdle: true } : {}),
-			...(owner ? { forOwner: owner } : {}),
-			...(requester ? { requester } : {}),
-		};
+		return roleMessageDeliveryHow(this.roleMessages, file, text);
 	}
 
 	/** owner-contacts (Roles D3): the store, in the data folder (made on first use). */
