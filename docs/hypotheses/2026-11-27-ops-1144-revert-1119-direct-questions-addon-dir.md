@@ -9,6 +9,9 @@ Revert 1fdd45fc, 06f947c0 and e490271b without changing subsequent specialist, d
 ## Measurement and falsifier
 Record failing-first package and question visibility tests, then run the required protocol, type, format, sealed suite, worktree and documentation checks. Missing targets must throw, unset override must preserve behavior, and non-owner/old-owner questions must immediately appear in owner windows and the open asks list. Any fallback to mutable local packages or hidden new question falsifies the change.
 
+## Gate follow-up hypothesis
+The full suite found seven obsolete held-question assumptions outside the initially targeted routing tests. Replace only those assumptions with direct-card expectations or explicit legacy fixtures; owner isolation must remain asserted. Three Memory Explorer ancestry assertions failed under the full suite but all ten permalink tests passed in isolation without a code change; timing sensitivity remains a limitation until the full rerun. The existing routing document also fails doc-check at 517 lines/13376 tokens with four dead references. Condense it to the current contract, retaining behavior and removing obsolete history; doc-check must report zero cap/path violations.
+
 ## Scope and undo
 No deployment, restart, live chat mutation or settings-file edit. Deployment belongs to #1146. Revert the new package/question patch to undo it; recovery-host removal must not be undone casually because it restores the reported hang.
 

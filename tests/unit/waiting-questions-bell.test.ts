@@ -198,7 +198,7 @@ describe("WQ-1: the bell lists every question waiting on its owner, from any cha
 });
 
 describe("WQ-2: each owner's bell holds only his own asks", () => {
-	it("Shine's and Wai's windows list, open and answer only their own; COO-held asks wait until let through", async () => {
+	it("Shine's and Wai's windows list, open and answer only their own; non-owner-started questions appear directly", async () => {
 		cooRouter();
 		const mine = chat("shine-chat");
 		const hers = chat("wai-chat");
@@ -230,16 +230,15 @@ describe("WQ-2: each owner's bell holds only his own asks", () => {
 		expect(askHub.get(forWai.id)).toBeDefined();
 		expect(wakes).toEqual([]);
 
-		// COO's: held first (on no bell), then let through to Shine's bell only.
+		// No owner started this turn: its question still appears directly, in Shine's bell only.
 		turn(coo);
 		await asker(shine, coo)("toolu_c", [NAME]);
-		const held = askOf("name");
-		expect(askHub.heldList().map((a) => a.id)).toEqual([held.id]);
-		expect(bellIds(shine)).toEqual([forShine.id]);
-		expect(await bellOpen(shine, held.id)).toMatchObject({ ok: false, error: "no longer waiting" });
-		expect(askHub.release(held.id, "coo")).toEqual({ ok: true });
-		await turns();
-		expect(bellIds(shine)).toEqual([forShine.id, held.id].sort());
+		const direct = askOf("name");
+		expect(direct.route).toMatchObject({ to: "direct", reason: "question-direct" });
+		expect(askHub.heldList()).toEqual([]);
+		expect(bellIds(shine)).toEqual([forShine.id, direct.id].sort());
+		expect(await bellOpen(shine, direct.id)).toMatchObject({ ok: true, ask: { id: direct.id } });
+		expect(await bellOpen(wai, direct.id)).toMatchObject({ ok: false, error: "no longer waiting" });
 		expect(bellIds(wai)).toEqual([forWai.id]);
 
 		// Wai answers her own from her bell: the chat wakes with her answer.
@@ -247,7 +246,7 @@ describe("WQ-2: each owner's bell holds only his own asks", () => {
 		expect(wakes.map((w) => [w.conversationId, w.sentBy?.name, w.requester.person])).toEqual([[hers.id, "Wai", "Wai"]]);
 		expect(bellIds(wai)).toEqual([]);
 		expect(everListed(shine).has(forWai.id)).toBe(false);
-		expect(everListed(wai).has(forShine.id) || everListed(wai).has(held.id)).toBe(false);
+		expect(everListed(wai).has(forShine.id) || everListed(wai).has(direct.id)).toBe(false);
 	});
 });
 
