@@ -18,6 +18,7 @@ export default defineConfig({
 			"tests/coupled/queue-question-native.test.ts",
 			"tests/coupled/queue-owner-relay-native.test.ts",
 			"tests/coupled/queue-reply-time-limit-native.test.ts",
+			"tests/coupled/queue-steer-native.test.ts",
 		],
 		environment: "node",
 		fileParallelism: false,

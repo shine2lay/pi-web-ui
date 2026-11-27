@@ -9010,3 +9010,11 @@ no decision record was written for it.
 - Checks: `tests/unit/department-specialists.test.ts` (#1097's acceptance suite moved into the gate, only import paths and the header comment changed; shared cases re-pinned to #593's `451222c9`), `tests/unit/identity-config-parity.test.ts`, `tests/unit/specialist-wiring.test.ts` (replay, sticky header read on pi and durable sessions, owner row). Proof: `~/ops-checks/department-specialists-1101/proof.md`.
 - Sync cost: three server modules, one web module + one component, ~10 call-site lines, one CSS block. Undo: revert the commit and this entry, then `pi-web-deploy`; nothing is stored.
 
+## queue-steer: every department lead steers its own running task
+
+- `local`, never upstream (Ops #1106 seam + Ops #1107 build, Rule 18 Tasks 1-2; owner Shine 2026-11-26 m105243: "all leads should be able to steer their own worker, lets fix it for sure"). Contract: pi-queue `docs/queue-steer.md`. Why: pi-queue adds `queue_steer({ id, message, wake? })` beside `queue_reply`; this host decides which chats see it.
+- `server/tool-manager.ts`: `queue_steer` joins `TASK_CHAT_OFF_TOOL_NAMES` (a task's own chat has no queue to steer) and `COO_OFF_TOOL_NAMES` (coo has no workers). `server/identity-config.ts` names it in `DEFAULT_ALWAYS_ALLOW`, byte-identical to pi-identity's `config.ts` (`C-PARITY-1`), so roles that deny `subagents` (backend, frontend, design, ...) keep it.
+- Delivery needs no new host code: pi-queue sends `/queue steer <id> <n>` through the queue host's `runCommand` (opens a closed chat), and the task's chat hands the note to pi with `deliverAs: "steer"` mid-turn (never aborting it) or as a new prompt when idle.
+- Checks: `tests/unit/tool-manager.test.ts` (lead chats of backend/frontend/design/ops/product keep it, their task chats and coo don't), `tests/unit/identity-config-parity.test.ts`, opt-in `tests/coupled/queue-steer-native.test.ts` (real pi-queue: a backend lead steers its working task idle and mid-turn; asking, blocked and waiting-without-wake refused with nothing sent). Proof: `~/ops-checks/queue-steer-1107/proof.md`.
+- Sync cost: two list entries and one config line. Undo: revert the commit and this entry, then `pi-web-deploy`; nothing is stored.
+

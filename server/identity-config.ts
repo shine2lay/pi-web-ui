@@ -81,7 +81,7 @@ export const DEFAULT_TOOL_GROUPS: Readonly<Record<string, readonly string[]>> = 
 
 export const DEFAULT_ALWAYS_ALLOW: readonly string[] = [
 	"notebook", "tldr", "queue_done", "queue_stuck", "ask_lead",
-	"queue_wait", "message_role", "board", "telegram_send", "viking_find", "viking_read",
+	"queue_wait", "message_role", "board", "telegram_send", "viking_find", "viking_read", "queue_steer",
 ];
 
 export const SETTINGS_FIELDS = ["notebookCap", "tidyAt", "indexBudget", "notesDir", "toolGroups", "alwaysAllow", "roleSkillsDir"] as const;

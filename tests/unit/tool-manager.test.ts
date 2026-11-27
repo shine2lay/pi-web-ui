@@ -300,6 +300,7 @@ describe("tool_manage 出入口", () => {
 			"write",
 			"queue_add",
 			"queue_reply",
+			"queue_steer",
 			"queue_control",
 			"work_project",
 			"work_initiative",
@@ -327,8 +328,24 @@ describe("tool_manage 出入口", () => {
 		// 1. Unroled general chat (Lead mode): keeps temper_* and coding tools, strips Worker-only tools.
 		const unroled = fakeSet(fullCatalog);
 		applyAgentToolsGating(unroled, [], undefined, "linux", false, undefined);
-		for (const t of [...TEMPER_TOOL_NAMES, ...CODING_ROLE_TOOL_NAMES, "queue_add", "queue_control", "queue_reply"]) {
+		for (const t of [
+			...TEMPER_TOOL_NAMES,
+			...CODING_ROLE_TOOL_NAMES,
+			"queue_add",
+			"queue_control",
+			"queue_reply",
+			"queue_steer",
+		]) {
 			expect(unroled.peek()).toContain(t);
+		}
+		// queue_steer (Ops #1107): every department lead chat keeps it (backend denies subagents); coo and task chats don't.
+		for (const role of ["backend", "frontend", "design", "ops", "product"]) {
+			const leadChat = fakeSet(fullCatalog);
+			applyAgentToolsGating(leadChat, [], undefined, "linux", false, role);
+			expect(leadChat.peek()).toContain("queue_steer");
+			const taskChat = fakeSet(fullCatalog);
+			applyAgentToolsGating(taskChat, [], undefined, "linux", true, role);
+			expect(taskChat.peek()).not.toContain("queue_steer");
 		}
 		for (const t of NON_TASK_CHAT_OFF_TOOL_NAMES) {
 			expect(unroled.peek()).not.toContain(t);

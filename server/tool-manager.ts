@@ -255,9 +255,11 @@ export const WINDOWS_ONLY_TOOL_NAMES = ["powershell"] as const;
  *    stay.
  *  tldr was on this list from 2026-10-17 (owner: TL;DR "Off in task chats") and is back in task chats
  *  since 2026-10-28 (owner, Ops #621, m77209): a task posts its progress milestones to its own chat's
- *  running TL;DR. */
+ *  running TL;DR.
+ *  queue_steer (Ops #1107): a lead's note to its own running task; a task's own chat has no queue to steer. */
 export const TASK_CHAT_OFF_TOOL_NAMES = [
 	"queue_reply",
+	"queue_steer",
 	"queue_add",
 	"queue_control",
 	"work_project",
@@ -279,8 +281,8 @@ export const TASK_CHAT_OFF_TOOL_NAMES = [
 export const NON_TASK_CHAT_OFF_TOOL_NAMES = ["queue_done", "ask_lead", "queue_wait", "queue_blocked"] as const;
 
 /** Queue management tools stripped in the `coo` role's Lead / home chat (`coo` has no queue;
- *  keeps `queue_reply`, `work_project`, `work_initiative`). */
-export const COO_OFF_TOOL_NAMES = ["queue_add", "queue_control"] as const;
+ *  keeps `queue_reply`, `work_project`, `work_initiative`). queue_steer (Ops #1107): no workers to steer. */
+export const COO_OFF_TOOL_NAMES = ["queue_add", "queue_control", "queue_steer"] as const;
 
 /** Temper run/workflow tools (`temper_*`) — active only for `TEMPER_ALLOWED_ROLES` when a role is set. */
 export const TEMPER_TOOL_NAMES = ["temper_workflows", "temper_start_run", "temper_run_status"] as const;
