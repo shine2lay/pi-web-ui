@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { IDENTITY_ENTRY_TYPE, type IdentityDef } from "../server/identities.js";
+import { IDENTITY_ENTRY_TYPE, type IdentityDef } from "../../server/identities.js";
 import {
 	CONSULT_ARG_KEYS,
 	CONSULT_SPECIALIST_TOOL_NAME,
@@ -38,7 +38,7 @@ import {
 	type ConsultIdentityEntry,
 	type ConsultOutcome,
 	type ConsultResult,
-} from "../server/specialist-consult.js";
+} from "../../server/specialist-consult.js";
 import {
 	PEER_ARG_KEYS,
 	PEER_NOTE_CUSTOM_TYPE,
@@ -56,17 +56,17 @@ import {
 	type PeerDeliveryHost,
 	type PeerSendInput,
 	type PeerToolAllowed,
-} from "../server/peer-notes.js";
+} from "../../server/peer-notes.js";
 import {
 	RoleMessages,
 	transcriptHasRoleMessage,
 	type RoleMessageHost,
 	type RoleMessageRecord,
 	type RoleMessageSender,
-} from "../server/role-messages.js";
-import { sessionIndex } from "../server/session-index.js";
-import { identityOfEntry, specialistBindingOnBranch } from "../server/specialist-entry.js";
-import { REPO_ROOT } from "./lib/department-specialists-cases.js";
+} from "../../server/role-messages.js";
+import { sessionIndex } from "../../server/session-index.js";
+import { identityOfEntry, specialistBindingOnBranch } from "../../server/specialist-entry.js";
+import { REPO_ROOT } from "../lib/department-specialists-cases.js";
 import {
 	collabCase,
 	collabPiWebUiCases,
@@ -74,7 +74,7 @@ import {
 	principalPiWebUiCases,
 	resolved,
 	type SharedCase,
-} from "./lib/department-specialists-collab-cases.js";
+} from "../lib/department-specialists-collab-cases.js";
 
 const C = (n: string) => `C-COL-${n}`;
 const range = (p: string, a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => C(`${p}${a + i}`));

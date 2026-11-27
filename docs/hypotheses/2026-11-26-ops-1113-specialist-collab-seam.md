@@ -2,7 +2,7 @@
 
 Architecture #595 (`rm-83baafe5`; final pin `pin-readonly-args.sha256` `9de15cf3…`, `rm-a8d1d0c3`), #596 principal
 cases, Security GO `rm-60a0302d` (N1, N2). Rule 18 Task 1 of 2 for pi-web-ui (contract §6, `6a`-`6e`). Task 2 (Ops
-#1117) builds the seams, wires them in, moves the cases into the unit run and deploys. Disjoint from Frontend's
+#1117) builds the seams, wires them in and moves the cases into the unit run; #1118 owns deployment. Disjoint from Frontend's
 explorer work (`server/openviking/explorer*`, `web/src/components/*Explorer*`).
 
 ## Hypothesis (rule 14)
@@ -19,8 +19,8 @@ explorer work (`server/openviking/explorer*`, `web/src/components/*Explorer*`).
   the untrusted result text, the `via:"consult"` reader) and `server/peer-notes.ts` (send decision, `pn-` record
   through the existing `RoleMessages` store, delivery decision for the dispatcher's peer branch, receiver text,
   receipts, privacy).
-- **Expected result + measurement:** `tests/department-specialists-collab-acceptance.test.ts` (own config, outside
-  the gate) red on `c8a794c1` plus this seam for every consult and peer-note behaviour, green for what holds today
+- **Expected result + measurement:** `tests/unit/department-specialists-collab.test.ts` (originally in a separate acceptance config)
+  red on `c8a794c1` plus this seam for every consult and peer-note behaviour, green for what holds today
   (case coverage, consult-id cases R12/R13, principal derivation C-PR-68/69, zero web chrome); green after Task 2
   with the file moved into `tests/unit/` and no assertion removed or weakened.
 - **What proves it wrong:** any case still red after Task 2 or weakened to pass; a child session file wider than
@@ -76,5 +76,9 @@ K1..K5 (pi-identity), R14/R15, P35/P36 and Q1..Q6 (pi-queue), and the 55 princip
 
 ## Result
 
-Pending (Ops #1117). Red baseline: `~/ops-checks/department-specialists-1113/red.log` (120 failed, 6 passed of 126
-on `c8a794c1` plus this seam).
+HIT (Ops #1117): the sealed full gate passed all 126 collaboration assertions, plus actual SDK raw-argument
+negative/valid twins. No acceptance assertion changed (only eight import paths). Architecture corrected the
+three missing receipt expectations D10/D11/D12; the other 138 corpus cases remain unchanged. A4 is utility-only,
+not live-admission proof (§6f). Evidence: `~/ops-checks/department-specialists-1117/check.log` (11558 passed).
+Red baseline: `~/ops-checks/department-specialists-1113/red.log` (120 failed, 6 passed of 126 on `c8a794c1` plus
+this seam). Security review and landing are separate pending gates; #1118 owns deployment.

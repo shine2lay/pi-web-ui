@@ -627,6 +627,10 @@ import { defaultSessionDirPath, sessionIndex } from "./session-index.js";
 import { ParticipantLifecycle, type ParticipantTarget, type ParticipantLease } from "./participant-lifecycle.js";
 import { homeChatOf, identityIdOnBranch } from "./identities.js";
 import { identityCommandRefusal, withSpecialist } from "./specialist-entry.js";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { makeRuntimeConsultTool } from "./specialist-consult-runtime.js";
+import { installSpecialistRawGuard, validateRawToolInvocation } from "./specialist-raw-runtime.js";
+import { makeRuntimePeerNoteTool, readPeerTask, deliverPeerCustomMessage } from "./peer-note-runtime.js";
 import {
 	answerRecord,
 	backfill,
@@ -6005,15 +6009,7 @@ export class ClientSession {
 		return cs;
 	}
 
-	/**
-	 * Factory for cwd-bound runtimes. All conversations share ONE ModelRuntime
-	 * (the model choice is client-wide), so later conversations reuse the
-	 * instance created with the first one.
-	 *
-	 * `apply`（可选）：子代理模板 —— 会话的 system prompt / 技能 / 扩展按模板
-	 * 应用（prompt replace/append + 白名单），其余（终端接管、Windows persona
-	 * 等）仍跟随主会话设置。undefined = 按主会话设置（普通对话/不选模板的子代理）。
-	 */
+	/** Cwd-bound runtimes share ModelRuntime; optional subagent templates override resources. */
 	private makeRuntimeFactory(
 		terminals: TerminalManager,
 		apply?: SubagentTemplate,
@@ -6022,20 +6018,13 @@ export class ClientSession {
 		targetPreset?: string,
 	): CreateAgentSessionRuntimeFactory {
 		return async ({ cwd: effectiveCwd, sessionManager }) => {
+			const specialistBus = createEventBus();
 			const services = await createAgentSessionServices({
 				cwd: effectiveCwd,
 				modelRuntime: this.sharedModelRuntime,
-				// 设置面板钩子（官方 SDK 的 resourceLoader overrides）：三个 override
-				// 在每次 resourceLoader.reload() 时重放，且读取 this.settings 的当前
-				// 值——因此 session.reload() 即可让系统提示词 / 技能 / 插件开关生效，
-				// 新对话（新 runtime）也会自动带上当前设置。
-				// 子代理带模板（apply）时：prompt/skills/extensions 改读模板视图——
-				// replace 模式：无 SYSTEM.md 时把灵魂段替换为模板提示词（见下方
-				// pi-webui-persona 内联扩展）；有 SYSTEM.md 时仍由 systemPromptOverride
-				// 整体替换 base。append 模式把模板提示词追加到
-				// 末尾（此时主会话的自定义 prompt 不再叠加，角色由模板定义）；非空
-				// 白名单取代主会话开关（只启用这些），空白名单 = 跟随主会话。
+
 				resourceLoaderOptions: {
+					eventBus: specialistBus,
 					// 系统提示词 base：主会话（组合模板）恒返回 undefined → SDK 走默认分支，
 					// 工具列表/Guidelines/文档指引等自动段照常拼装；SYSTEM.md 内容仅在
 					// 此处捕获（lastBaseSystemPrompt）作 {{soul}} 自动内容。子代理模板
@@ -6078,9 +6067,7 @@ export class ClientSession {
 						if (markerGuidance) out.push(markerGuidance);
 						return out;
 					},
-					// 技能：模板非空白名单时只启用白名单里的（显式配置优先于预设）；
-					// 否则按主会话禁用集过滤。预设拿掉 skill 加载器时（minimal/code/ask）
-					// 名录同步隐藏——列出来但调不动只是噪音（见 tool-manager.ts 语义总表）。
+					// Template skill allowlists override presets; otherwise use the main disabled set.
 					skillsOverride: (res) => {
 						if (apply && apply.enabledSkills.length > 0) {
 							const set = new Set(apply.enabledSkills);
@@ -6094,9 +6081,7 @@ export class ClientSession {
 							skills: res.skills.filter((s) => !this.settingsSvc.current.disabledSkills.includes(s.name)),
 						};
 					},
-					// 插件：模板非空扩展白名单时只加载白名单里的；否则按主会话禁用集过滤。
-					// 注意 SDK 在 extensionsOverride 之后才补 sourceInfo，包扩展此处只能靠路径
-					// 匹配 —— isExtensionDisabled / isExtensionEnabled 同时比对 npm:<pkg> 候选键。
+					// Extension allowlists override disabled sets; sourceInfo is unavailable until after this hook.
 					extensionsOverride: (res) => {
 						// 自家内联扩展（灵魂替换）是基础设施，不参与白名单/禁用过滤。
 						const keepOwn = (e: { path: string }) =>
@@ -6117,26 +6102,19 @@ export class ClientSession {
 							),
 						};
 					},
-					// 组合模板渲染（主会话）+ 模板灵魂替换（子代理）：before_agent_start 在每个
-					// agent run 前触发，SDK 此时已用最新工具/资源拼好基础提示词；若配置了模板或
-					// 覆盖，则用 composer 把 {{token}} 展开为各来源文本（工具列表/项目上下文/技能
-					// 等都取自本次 run 的 systemPromptOptions，永远最新）。
+					// Compose from this run's resources after the SDK builds its base prompt.
 					extensionFactories: [
 						{
 							name: "pi-webui-persona",
 							hidden: true,
 							factory: (pi) => {
 								pi.on("before_agent_start", (event) => {
-									// 子代理模板 replace（无 SYSTEM.md 时）：默认分支拼好的提示词里
-									// 把灵魂段换成模板提示词，自动段保留；SYSTEM.md 情形已在
-									// systemPromptOverride 整体替换，此处边界不存在会自然跳过。
+									// Replace only the persona; keep SDK-generated sections.
 									if (apply) {
 										const tplPrompt = pickTemplatePrompt(apply, this.getLang()).trim();
 										if (apply.promptMode !== "replace" || !tplPrompt) return undefined;
 										const boundary = event.systemPrompt.indexOf("\n\nAvailable tools:");
-										// 边界串是 SDK 提示词的内部格式：版本一变就可能对不上。
-										// 对不上时不再静默回退默认 persona（模板等于没生效），而是把模板
-										// 提示词前置拼接——角色约束仍在，只是灵魂段没被精确替换。
+										// If the SDK boundary changes, prepend rather than silently dropping the template.
 										if (boundary === -1) {
 											const fallback = `${tplPrompt}\n\n${event.systemPrompt}`;
 											return fallback === event.systemPrompt ? undefined : { systemPrompt: fallback };
@@ -6218,8 +6196,7 @@ export class ClientSession {
 			const bridgeAnchor: { session?: AgentSession } = {};
 			const bridge = this.bridgeTarget(bridgeAnchor, ownerId);
 
-			// 为全新会话（0 条消息的空白对话/新对话）提前解析目标模型并注入，
-			// 避免 SDK findInitialModel 在无 model 时回退到内置硬编码默认（如 deepseek-v4-pro）：
+			// Resolve blank-chat models before the SDK can fall back to its built-in default.
 			let sessionModel: Parameters<AgentSession["setModel"]>[0] | undefined = initialModel;
 			if (!sessionModel) {
 				const isBlank = sessionManager.buildSessionContext().messages.length === 0;
@@ -6254,9 +6231,7 @@ export class ClientSession {
 				services,
 				sessionManager,
 				model: sessionModel,
-				// 覆盖 SDK 内置 bash（customTools 按 name 覆盖）。双实现分流：
-				// 「默认 bash 覆盖」开关（terminalBash）关 → 原生 SDK bash（纯进程、不开终端）；
-				// 开 → 终端接管 bash（persist 决定一次性/持久，可静默自动转后台）。
+				// The terminalBash setting selects native SDK execution or terminal-backed bash.
 				customTools: [
 					// P1-5：bash/read 包插件拦截（pre 拒/问即拦、post 脱敏补上下文；
 					// 未注入 toolGuard 时 withToolGuard 原样返回，零开销）。
@@ -6405,6 +6380,18 @@ export class ClientSession {
 					// role-messages: message another role's chat. Registered everywhere; pi-identity offers it only
 					// in chats with a role, and it refuses chats without one and helper chats (subagents).
 					makeMessageRoleTool(this.roleMessageHost(ownerId)),
+					makeRuntimeConsultTool({
+						session: () => bridgeAnchor.session!,
+						services,
+						bus: specialistBus,
+						installRawGuard: installSpecialistRawGuard,
+					}),
+					makeRuntimePeerNoteTool({
+						session: () => bridgeAnchor.session,
+						store: () => roleMessageService ?? undefined,
+						sender: () => this.roleMessageHost(ownerId).sender(),
+						guard: () => roleGuardService ?? undefined,
+					}),
 					...this.ownerQuestionTools(sessionManager.getSessionFile(), bridgeAnchor),
 					// board: the roles' shared board. Like message_role: registered everywhere, offered by pi-identity
 					// only in chats with a role; the poster is this chat's role as the server knows it.
@@ -6451,6 +6438,7 @@ export class ClientSession {
 			// 桥接工具归属锚点：SDK 会话对象在本 runtime 生命周期内稳定，过户只搬对话
 			// 不改它（见 ClientSession.findConversationHome）。
 			bridgeAnchor.session = created.session;
+			installSpecialistRawGuard(created.session);
 			this.sessionPluginMeta.set(created.session, { ownerId, cwd: effectiveCwd });
 			// read / write / edit 三处覆盖在会话建好后注入（见 tool-overrides.ts）：SDK 的合并链是
 			// [...扩展工具, ...customTools] 后写赢 ⇒ 创建时塞进 customTools 会**恒定顶掉**第三方扩展注册的同名工具。
@@ -6759,6 +6747,7 @@ export class ClientSession {
 		text: string,
 		/** queue-paused: QUEUE_PAUSED_CUSTOM_TYPE for what reached a paused task's chat. */
 		customType: string = ROLE_MESSAGE_CUSTOM_TYPE,
+		peer?: { turn: boolean; followUp?: boolean },
 	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
 		await this.switchSession(file);
 		const id = this.conversationIdBySessionFile(file);
@@ -6766,7 +6755,14 @@ export class ClientSession {
 		if (!id || !conv || id !== this.activeId) return { ok: false, error: "couldn't open the chat" };
 		// Busy notes join the same ordered boundary batch as role follow-ups.
 		// Notes alone never request a response (nor inject between tool calls/results).
-		await noteAtRoleMailBoundary(conv.session, { customType, content: [{ type: "text", text }], display: true });
+		if (peer) {
+			if (
+				!(await deliverPeerCustomMessage(conv.session, text, peer, (error) =>
+					console.error("Peer delivery failed", error),
+				))
+			)
+				return { ok: false, busy: true, error: "Peer note queued for the turn boundary" };
+		} else await noteAtRoleMailBoundary(conv.session, { customType, content: [{ type: "text", text }], display: true });
 		return { ok: true };
 	}
 
@@ -18373,6 +18369,8 @@ export class AgentService {
 			roles: () => identityRegistry().identities,
 			chatState: (file) => this.queueChatState(file).state,
 			deliver: (file, text) => this.sendRoleMessage(file, text, this.roleMessageHow(file, text)),
+			peerTask: readPeerTask,
+			peerNote: (file, text, opts) => this.noteRoleMessage(file, text, "peer-note", opts),
 			note: (file, text) => this.noteRoleMessage(file, text),
 			changed: () => this.onRoleMessagesChanged?.(),
 			sent: (record) => this.keepDecision(messageRecord(record)),
@@ -19260,6 +19258,7 @@ export class AgentService {
 		file: string,
 		text: string,
 		customType: string = ROLE_MESSAGE_CUSTOM_TYPE,
+		peer?: { turn: boolean; followUp?: boolean },
 	): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> {
 		return this.roleMessagesChain(async (): Promise<{ ok: true } | { ok: false; busy?: boolean; error: string }> => {
 			if (this.carryOnGate) await this.carryOnGate.catch(() => {});
@@ -19271,7 +19270,7 @@ export class AgentService {
 			try {
 				const cs = await this.attach(ROLE_MESSAGES_CLIENT_ID, sink);
 				try {
-					return await cs.noteRoleMessage(file, text, customType);
+					return await cs.noteRoleMessage(file, text, customType, peer);
 				} finally {
 					this.detach(ROLE_MESSAGES_CLIENT_ID, sink);
 				}
@@ -19673,6 +19672,7 @@ export class AgentService {
 		ClientSession.admitQuestionAnswer = questions.admitOwnerAnswer;
 		ClientSession.observeUnboundOwnerAnswer = questions.observeUnboundOwnerAnswer;
 		this.uninstallQueueHost = installQueueHost({
+			validateRawToolInvocation,
 			commitQuestion: questions.commits.commitQuestion,
 			consumeQuestionCommit: questions.commits.consumeQuestionCommit,
 			relayOwnerAnswer: questions.relays.relayOwnerAnswer,
