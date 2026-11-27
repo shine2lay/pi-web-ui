@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,7 +11,12 @@ import {
 	createEventBus,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { consultChildFile, consultIdOf, createConsultChildFile } from "../../server/specialist-consult.js";
+import {
+	consultChildFile,
+	consultIdOf,
+	createConsultChildFile,
+	makeConsultSpecialistTool,
+} from "../../server/specialist-consult.js";
 import { consultRuntimeChannel } from "../../server/specialist-consult-runtime.js";
 import { deliverPeerCustomMessage } from "../../server/peer-note-runtime.js";
 import { installSpecialistRawGuard, validateRawToolInvocation } from "../../server/specialist-raw-runtime.js";
@@ -213,6 +219,148 @@ describe("specialist runtime persisted SDK integration", () => {
 			}
 		}
 	});
+
+	it.each(["question", "context"] as const)(
+		"refuses SDK-prepared %s mutation before consult effects, with unchanged valid twin",
+		async (field) => {
+			for (const mode of ["sequential", "parallel"] as const) {
+				for (const mutate of [true, false]) {
+					const args = { target: "reader", question: "Q1", context: "C1" };
+					const callId = "prepared-consult";
+					const bus = createEventBus();
+					let prepared = 0;
+					let busCalls = 0;
+					let starts = 0;
+					let children = 0;
+					let runs = 0;
+					const results: unknown[] = [];
+					const tool = makeConsultSpecialistTool({
+						channel: {
+							admit: (request) => consultRuntimeChannel(() => session, bus).admit(request),
+							end: (id, result) => consultRuntimeChannel(() => session, bus).end(id, result),
+						},
+						createChild: (file, identity) => {
+							children++;
+							createConsultChildFile(file, identity);
+						},
+						runner: {
+							run: async () => {
+								runs++;
+								return { outcome: "done", text: "Complete" };
+							},
+						},
+					});
+					const { session, manager } = await persistedSession([
+						{
+							...tool,
+							prepareArguments: (input) => {
+								prepared++;
+								const value = input as typeof args;
+								if (mutate) value[field] = field === "question" ? "Q2" : "C2";
+								// Equal twin uses a distinct object and reversed key order, not reference/JSON equality.
+								return { context: value.context, question: value.question, target: value.target };
+							},
+							execute: async (...input) => {
+								const result = await tool.execute(...input);
+								results.push(result.details);
+								return result;
+							},
+						},
+					]);
+					installSpecialistRawGuard(session);
+					try {
+						const callerFile = manager.getSessionFile()!;
+						const consultId = consultIdOf(callerFile, callId);
+						bus.on("pi-identity:specialist", (raw) => {
+							busCalls++;
+							const request = raw as {
+								args?: unknown;
+								end?: Record<string, unknown>;
+								reply: (answer: unknown) => void;
+							};
+							if (request.end) {
+								manager.appendCustomEntry("specialist-consult", {
+									...request.end,
+									op: "end",
+									state: request.end.outcome,
+								});
+							} else {
+								expect(request.args).toEqual(args);
+								starts++;
+								manager.appendCustomEntry("specialist-consult", {
+									op: "start",
+									consultId,
+									slug: "reader",
+									callerPrincipal: "ops",
+									childTools: [],
+									childToolsSha256: createHash("sha256").update("[]").digest("hex"),
+								});
+							}
+							request.reply({ v: 1, ok: true, consult: { result: "allow" } });
+						});
+						const model = {
+							id: "fixture",
+							name: "fixture",
+							api: "openai-completions",
+							provider: "openai",
+							baseUrl: "http://unused.invalid",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 1000,
+							maxTokens: 100,
+						} as Model<"openai-completions">;
+						session.agent.state.model = model;
+						session.agent.toolExecution = mode;
+						session.setActiveToolsByName([tool.name]);
+						session.agent.getApiKey = () => "external-fixture";
+						session.agent.finishTurn = () => ({ action: "end" });
+						// Provider OUTPUT only: real SDK prepare/execute and canonical raw snapshot lifecycle.
+						session.agent.streamFunction = () => {
+							const output: AssistantMessage = {
+								role: "assistant",
+								content: [{ type: "toolCall", id: callId, name: tool.name, arguments: { ...args } }],
+								api: model.api,
+								provider: model.provider,
+								model: model.id,
+								stopReason: "toolUse",
+								timestamp: 0,
+								usage: {
+									input: 0,
+									output: 0,
+									cacheRead: 0,
+									cacheWrite: 0,
+									totalTokens: 0,
+									cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+								},
+							};
+							const stream = createAssistantMessageEventStream();
+							stream.push({ type: "done", reason: "toolUse", message: output });
+							return stream;
+						};
+						await session.agent.prompt("Exercise the external prepared consult fixture.");
+						expect(prepared).toBe(1);
+						expect(results).toEqual([
+							expect.objectContaining(
+								mutate ? { state: "error", code: "E_SPEC_DENIED" } : { state: "done", answer: "Complete" },
+							),
+						]);
+						expect(busCalls).toBe(mutate ? 0 : 2);
+						expect(starts).toBe(mutate ? 0 : 1);
+						expect(children).toBe(mutate ? 0 : 1);
+						expect(runs).toBe(mutate ? 0 : 1);
+						expect(existsSync(consultChildFile(callerFile, consultId))).toBe(!mutate);
+						const records = manager
+							.getBranch()
+							.filter((entry) => entry.type === "custom" && entry.customType === "specialist-consult");
+						expect(records).toHaveLength(mutate ? 0 : 2);
+					} finally {
+						session.dispose();
+					}
+				}
+			}
+		},
+	);
 
 	it("delivers FYI as a persisted custom message without starting any model turn", async () => {
 		const { session, manager } = await persistedSession();

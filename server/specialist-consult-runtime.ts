@@ -2,6 +2,7 @@
 import { closeSync, constants, existsSync, fsyncSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	createAgentSessionServices,
 	createAgentSessionFromServices,
@@ -21,6 +22,7 @@ import {
 } from "./specialist-consult.js";
 import { identityOfEntry } from "./specialist-entry.js";
 import { validateRawToolInvocation } from "./specialist-raw-runtime.js";
+import { childRawGateResources } from "./specialist-child-raw-gate.js";
 
 const CHANNEL = "pi-identity:specialist";
 type Row = Record<string, unknown>;
@@ -77,6 +79,8 @@ export function consultRuntimeChannel(session: () => AgentSession, bus: EventBus
 				return { ok: false, code: original.status === "invalid" ? "E_SPEC_DENIED" : "E_SPEC_UNAVAILABLE" };
 			// Admission receives the immutable original, never SDK-coerced arguments.
 			const originalArgs = original.args as ConsultArgs;
+			// The child uses prepared args; refuse any divergence before identity admission or effects.
+			if (!isDeepStrictEqual(req.args, originalArgs)) return { ok: false, code: "E_SPEC_DENIED" };
 			// A persisted start with no end is a recoverable interrupted attempt, not a second admission.
 			const previous = persistedRecords(req.callerFile).find(
 				(row) => row.op === "start" && row.consultId === req.consultId,
@@ -201,7 +205,7 @@ export function makeRuntimeConsultTool(options: ConsultRuntimeOptions) {
 				const services = await createAgentSessionServices({
 					cwd: manager.getCwd(),
 					modelRuntime: options.services.modelRuntime,
-					resourceLoaderOptions: { eventBus: bus, noContextFiles: true },
+					resourceLoaderOptions: { eventBus: bus, noContextFiles: true, ...childRawGateResources() },
 				});
 				// Only SDK-builtins and extensions instantiated for this child may execute. Never copy
 				// caller custom-tool closures: even a read-only name can retain caller authority.
