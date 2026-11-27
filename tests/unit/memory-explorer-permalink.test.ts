@@ -51,8 +51,8 @@ interface Served {
 	fetch(input: string, init?: RequestInit): Promise<Response>;
 	/** The `uri` of every note read the page sent, as the server received it (decoded once by URLSearchParams). */
 	noteUris(): string[];
-	/** Hold the page's reads of `uri` until the returned release is called. */
-	hold(uri: string): () => void;
+	/** Hold note reads (default) or a tree listing until the returned release is called. */
+	hold(uri: string, kind?: "note" | "tree"): () => void;
 }
 
 const harnesses: ExplorerHarness[] = [];
@@ -71,15 +71,16 @@ async function served(): Promise<Served> {
 		async fetch(input, init) {
 			const url = new URL(input, x.base);
 			sent.push(url);
-			const wait = url.pathname.endsWith("/note") ? held.get(url.searchParams.get("uri") ?? "") : undefined;
+			const kind = url.pathname.endsWith("/note") ? "note" : url.pathname.endsWith("/tree") ? "tree" : null;
+			const wait = kind ? held.get(`${kind}:${url.searchParams.get("uri") ?? ""}`) : undefined;
 			const res = await fetch(url, init);
 			if (wait) await wait;
 			return res;
 		},
 		noteUris: () => sent.filter((u) => u.pathname.endsWith("/note")).map((u) => u.searchParams.get("uri") ?? ""),
-		hold(uri) {
+		hold(uri, kind = "note") {
 			let release = () => {};
-			held.set(uri, new Promise<void>((r) => (release = r)));
+			held.set(`${kind}:${uri}`, new Promise<void>((r) => (release = r)));
 			return () => release();
 		},
 	};
@@ -275,17 +276,36 @@ describe("leaf link: a late answer never wins (§5l clarification)", () => {
 	it("the owner opens another note while the linked one is still loading: the late answer is dropped", async () => {
 		const server = await served();
 		const release = server.hold(SRE_MEMORY);
-		const page = await openLink(server, link(SRE_MEMORY));
-		expect(text(reader(page))).not.toContain("SRE memory text");
-		const sre = toggleOf(page, "sre-1")?.closest("li") as HTMLElement;
-		const nb = byRole(sre, "button").find((b) => text(b) === "Notebook") as HTMLElement;
-		await click(nb);
-		await settled();
-		expect(text(reader(page))).toContain("SRE notebook text");
-		release();
-		await settled();
-		expect(text(reader(page))).toContain("SRE notebook text");
-		expect(text(reader(page))).not.toContain("SRE memory text");
+		const releaseTree = server.hold(ARCH, "tree");
+		try {
+			const page = await openLink(server, link(SRE_MEMORY));
+			expect(text(reader(page))).not.toContain("SRE memory text");
+			// The note reader exists before its separately fetched navigation. Force the ordering from the failed gate.
+			expect(toggleOf(page, "sre-1")).toBeNull();
+			releaseTree();
+			// Await the actual navigation target, not openLink's fixed pause. The normal hang guard stays unchanged.
+			const nb = await vi.waitFor(async () => {
+				await flush();
+				const sre = toggleOf(page, "sre-1")?.closest("li");
+				if (!sre) throw new Error("sre-1 navigation is still loading");
+				const notebook = byRole(sre, "button").find((b) => text(b) === "Notebook");
+				if (!notebook) throw new Error("Notebook navigation is still loading");
+				expect(notebook.hasAttribute("disabled")).toBe(false);
+				return notebook;
+			});
+			await click(nb);
+			await vi.waitFor(async () => {
+				await flush();
+				expect(text(reader(page))).toContain("SRE notebook text");
+			});
+			release();
+			await settled();
+			expect(text(reader(page))).toContain("SRE notebook text");
+			expect(text(reader(page))).not.toContain("SRE memory text");
+		} finally {
+			releaseTree();
+			release();
+		}
 	});
 
 	it("leaving the tab takes the link off the address, so a later visit opens the start, not the old note", async () => {
