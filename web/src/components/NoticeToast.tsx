@@ -12,7 +12,9 @@ import type { Notice } from "../use-chat";
 export function NoticeToast({ notice, onDismiss }: { notice: Notice; onDismiss: (id: number) => void }) {
 	const t = useT();
 	const text = notice.textEn ? notice.textEn : notice.text;
-	const [paused, setPaused] = useState(false);
+	const [hovered, setHovered] = useState(false);
+	const [focused, setFocused] = useState(false);
+	const paused = hovered || focused;
 	useEffect(() => {
 		if (paused) return;
 		const t = setTimeout(() => onDismiss(notice.id), notice.level === "error" ? 12000 : 7000);
@@ -23,11 +25,17 @@ export function NoticeToast({ notice, onDismiss }: { notice: Notice; onDismiss: 
 		<div
 			className={`notice notice-${notice.level}${paused ? " paused" : ""}`}
 			role="status"
-			onMouseEnter={() => setPaused(true)}
-			onMouseLeave={() => setPaused(false)}
+			onMouseEnter={() => setHovered(true)}
+			onMouseLeave={() => setHovered(false)}
+			onFocus={() => setFocused(true)}
+			onBlur={(event) => {
+				if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
+			}}
 		>
 			<Icon className="notice-icon" />
-			<span className="notice-text">{text}</span>
+			<span className="notice-text" tabIndex={0}>
+				{text}
+			</span>
 			<button type="button" className="notice-close" title={t("close")} onClick={() => onDismiss(notice.id)}>
 				<FiX />
 			</button>
