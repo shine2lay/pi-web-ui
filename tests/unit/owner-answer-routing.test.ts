@@ -123,7 +123,9 @@ describe("stage 1: trusted accepted sources", () => {
 		expect(agent).toContain('if (disposition !== "handled") noteTurnCause(conv, flow, disposition === "queued", text)');
 		expect(agent).toContain("collectRoleInput(rec, flow)");
 		expect(agent).toContain("const owner = isHome ? ownerTurnOf(conv.turnRecord) : null");
-		expect(agent).toContain("this.roleMessages.ownerContextFor(file, text)");
+		expect(agent).toContain('import { roleMessageDeliveryHow } from "./role-message-delivery-how.js"');
+		expect(agent).toContain("return roleMessageDeliveryHow(this.roleMessages, file, text)");
+		expect(src("role-message-delivery-how.ts")).toContain("messages.ownerContextFor(file, text)");
 		expect(src("plugins.ts")).toContain('info.id === "telegram" && opts?.via === "telegram"');
 	});
 	it("mixed or unknown ownership keeps visibility but fails closed for transport", () => {
