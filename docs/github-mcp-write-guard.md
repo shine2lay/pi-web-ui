@@ -4,13 +4,15 @@
 
 Problem: the frozen tests assumed an outer tool hook could classify script source. Actual dynamic calls are resolved inside pi-mcp-adapter, and direct executors have a separate path. An outer-script regex cannot prove destination ownership.
 
-Change: authorize parsed McpClient calls with the single agent-tools policy before restart or tools/call dispatch. The configured github-mcp transport separately authorizes the live extension's actual JSON-RPC requests. Expected result: denied bridge calls produce zero child tools/call requests, while an allowed own-repository write and external read each produce exactly one. Any forbidden dispatch or rejected positive twin disproves this hypothesis.
+Change: authorize parsed McpClient calls with the single agent-tools policy before restart or tools/call dispatch. The configured github-mcp transport separately authorizes the live extension's actual JSON-RPC requests. Expected result: denied bridge calls produce zero child tools/call requests, while exact external reads produce exactly one. The latest redirect ruling supersedes owned-write positives: owned writes now deliberately dispatch zero. Any forbidden dispatch or rejected positive twin disproves this hypothesis.
 
 ## Server contract
 
 `server/github-mcp-write-guard.ts` exports `authorizeGithubMcpCall(server, tool, args, loadPolicy?)`. For connections named exactly `github` or `github-read`, it imports the fixed module `file:///home/shinelay/projects/agent-tools/lib/github-policy/index.mjs` and awaits:
 
-`authorize({kind: 'mcp', tool, args}, defaultReadOnlyResolver)`
+`authorizeHttpRuntime({kind: 'mcp', tool, args}, defaultReadOnlyResolver)`
+
+The runtime export is mandatory; an older ownership-only module fails closed, including reads. Ownership preflight is not execution permission. Owned and external HTTP mutations are refused because native consumers do not guarantee redirect safety; exact supported external reads still pass. Land agent-tools `7509c30` before deploying this adapter. See `docs/ops1130-mcp-redirect-hypothesis.md` for the failing-first runtime proof.
 
 Only `{allow: true}` permits dispatch. Import failure, invalid exports, policy denial or exceptions refuse with the fixed message `GH-OWN-REPO-ONLY: GitHub MCP call refused`. No exception details or arguments are included. There is no environment/configuration switch to disable the policy. Constructor-level module loading injection permits isolated tests using the canonical worktree implementation, not another policy.
 
@@ -45,7 +47,7 @@ Not a same-UID isolation boundary: raw HTTP, gh.real, direct server binary execu
 
 Follow-up hypothesis (2026-11-27): canonical review removed obsolete issue tool names, so the original positive fixtures no longer represent the configured MCP server. Change only the fixtures to actual `issue_write` create/update, `create_pull_request`, and `issue_read` get shapes. Expect external writes to dispatch zero and own create/update/PR plus external read to dispatch once each on both protected connections; any mismatch disproves the update. The server authorization API and implementation are unchanged. Follow-up result: HIT; sealed focused tests passed 7/7 with the updated canonical schemas and sealed full typecheck passed all five projects.
 
-`tests/unit/github-mcp-write-guard.test.ts` uses the real canonical policy from `/home/shinelay/projects/agent-tools/lib/github-policy/index.mjs`, injected explicitly, with a local synthetic stdio child and a request ledger. It exercises both protected connection names, external/unknown/ambiguous mutation negatives, own-write and external-read positives, missing policy, invalid policy decisions, resolver exceptions, async ordering and caller-argument mutation during authorization. No external mutation or model request is made.
+`tests/unit/github-mcp-write-guard.test.ts` uses the real canonical policy from `/home/shinelay/projects/agent-tools/lib/github-policy/index.mjs`, injected explicitly, with a local synthetic stdio child and a request ledger. It exercises both protected connection names, external/unknown/ambiguous and owned mutation negatives, external-read positives, missing runtime policy, invalid policy decisions, resolver exceptions, async ordering and caller-argument mutation during authorization. No external mutation or model request is made.
 
 Verification (2026-11-27): `bash scripts/sealed.sh npx vitest run tests/unit/github-mcp-write-guard.test.ts` passed all 7 tests; `bash scripts/sealed.sh npm run typecheck` passed all five TypeScript projects. `wt check` passed including WT-SIZE-500, WT-NO-FIXTURE-BRANCH, types/lint and affected tests (dead-path check skipped by the standard checker). Hypothesis: HIT for the parsed bridge boundary; transport/deployment protection remains separate and is not proved by these results. The canonical installed module intentionally remains absent until the owning installation task runs: default GitHub bridge calls fail closed meanwhile.
 

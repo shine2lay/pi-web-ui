@@ -7,7 +7,7 @@ const REFUSAL = `${GH_OWN_REPO_RULE}: GitHub MCP call refused`;
 
 /** Canonical policy owns classification, ownership and resolver semantics. */
 export interface GithubPolicyModule {
-	authorize(
+	authorizeHttpRuntime(
 		invocation: { kind: "mcp"; tool: string; args: Record<string, unknown> },
 		resolver: object,
 	): Promise<{ allow: true } | { allow: false; rule: string; reason: string }>;
@@ -28,12 +28,12 @@ export async function authorizeGithubMcpCall(
 	try {
 		const policy = await loadPolicy();
 		if (
-			typeof policy.authorize !== "function" ||
+			typeof policy.authorizeHttpRuntime !== "function" ||
 			!policy.defaultReadOnlyResolver ||
 			typeof policy.defaultReadOnlyResolver !== "object"
 		)
 			throw new Error(REFUSAL);
-		const decision = await policy.authorize({ kind: "mcp", tool, args }, policy.defaultReadOnlyResolver);
+		const decision = await policy.authorizeHttpRuntime({ kind: "mcp", tool, args }, policy.defaultReadOnlyResolver);
 		if (decision?.allow === true) return;
 	} catch {
 		// Missing/broken policy and resolver errors fail closed without exposing their contents.

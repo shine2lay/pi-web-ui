@@ -13,7 +13,7 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 ## github-mcp-write-guard: authorize parsed bridge calls with the canonical GitHub policy
 
 - `local` (Ops #1130). `McpClient.call` awaits the fixed installed agent-tools policy for `github`/`github-read` before dispatch; missing or broken policy denies. The small extracted adapter in `server/github-mcp-write-guard.ts` contains no ownership classifier or script parser.
-- Tests: `tests/unit/github-mcp-write-guard.test.ts` uses the canonical policy and a synthetic stdio child to assert zero denied dispatches and positive own-write/external-read twins. Constructor module injection only, no environment bypass.
+- Tests: `tests/unit/github-mcp-write-guard.test.ts` uses the canonical runtime policy and a synthetic stdio child to assert zero owned/external mutation dispatches and positive external reads. The adapter requires `authorizeHttpRuntime` (agent-tools `7509c30` first); ownership-only exports never permit execution. Constructor module injection only, no environment bypass.
 - Boundary: the live pi-mcp-adapter direct/gateway/dynamic-script/host-managed/UI routes rely on the separately fenced configured github-mcp transport, not a server outer hook. Contract, hypothesis, limitations and verification: `docs/github-mcp-write-guard.md`. No install or landing in this change.
 - Undo: revert this patch; the transport remains separately owned defense. Do not describe either as same-UID credential isolation.
 

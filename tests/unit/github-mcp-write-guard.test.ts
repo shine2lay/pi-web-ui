@@ -71,10 +71,16 @@ function call(bridge: McpBridge, name: string, args: Record<string, unknown>) {
 
 describe("parsed McpBridge GitHub dispatch", () => {
 	it.each(["github", "github-read"])(
-		"%s: canonical negative calls dispatch zero; own write and external read twins dispatch",
+		"%s: owned and external mutations dispatch zero; exact external reads dispatch",
 		async (server) => {
 			await withBridge(server, canonical, async (bridge, calls) => {
 				for (const [tool, args] of [
+					["issue_write", { method: "create", owner: "Shine2Lay", repo: "repo", title: "blocked" }],
+					["issue_write", { method: "update", owner: "shine2lay", repo: "repo", issue_number: 1, title: "blocked" }],
+					[
+						"create_pull_request",
+						{ owner: "shine2lay", repo: "repo", title: "blocked", base: "main", head: "feature" },
+					],
 					["issue_write", { method: "create", owner: "upstream", repo: "repo", title: "blocked" }],
 					["issue_write", { method: "update", owner: "upstream", repo: "repo", issue_number: 1, title: "blocked" }],
 					["issue_write", { method: "create", owner: "shine2lay/../upstream", repo: "repo", title: "blocked" }],
@@ -92,12 +98,6 @@ describe("parsed McpBridge GitHub dispatch", () => {
 					expect(calls()).toEqual([]);
 				}
 				const positives: Array<[string, Record<string, unknown>]> = [
-					["issue_write", { method: "create", owner: "Shine2Lay", repo: "repo", title: "allowed" }],
-					["issue_write", { method: "update", owner: "shine2lay", repo: "repo", issue_number: 1, title: "allowed" }],
-					[
-						"create_pull_request",
-						{ owner: "shine2lay", repo: "repo", title: "allowed", base: "main", head: "feature" },
-					],
 					["issue_read", { method: "get", owner: "other", repo: "demo", issue_number: 1 }],
 				];
 				for (const [tool, args] of positives) await call(bridge, tool, args);
@@ -131,35 +131,52 @@ describe("parsed McpBridge GitHub dispatch", () => {
 		const gate = new Promise<void>((resolve) => {
 			finish = resolve;
 		});
-		const authorize = vi.fn(async (request: Parameters<typeof policy.authorize>[0], resolver: object) => {
-			entered();
-			await gate;
-			return policy.authorize(request, resolver);
-		});
+		const authorizeHttpRuntime = vi.fn(
+			async (request: Parameters<typeof policy.authorizeHttpRuntime>[0], resolver: object) => {
+				entered();
+				await gate;
+				return policy.authorizeHttpRuntime(request, resolver);
+			},
+		);
 		await withBridge(
 			"github",
-			async () => ({ ...policy, authorize }),
+			async () => ({ ...policy, authorizeHttpRuntime }),
 			async (bridge, calls) => {
-				const args = { method: "create", owner: "shine2lay", repo: "repo", title: "allowed" };
-				const pending = call(bridge, "issue_write", args);
+				const args = { method: "get", owner: "other", repo: "repo", issue_number: 1 };
+				const pending = call(bridge, "issue_read", args);
 				await waiting;
 				args.owner = "upstream";
 				expect(calls()).toEqual([]);
-				expect(authorize).toHaveBeenCalledWith(
+				expect(authorizeHttpRuntime).toHaveBeenCalledWith(
 					{
 						kind: "mcp",
-						tool: "issue_write",
-						args: { method: "create", owner: "shine2lay", repo: "repo", title: "allowed" },
+						tool: "issue_read",
+						args: { method: "get", owner: "other", repo: "repo", issue_number: 1 },
 					},
 					policy.defaultReadOnlyResolver,
 				);
 				finish();
 				await pending;
 				expect(calls()).toEqual([
-					{ name: "issue_write", arguments: { method: "create", owner: "shine2lay", repo: "repo", title: "allowed" } },
+					{ name: "issue_read", arguments: { method: "get", owner: "other", repo: "repo", issue_number: 1 } },
 				]);
 			},
 		);
+	});
+
+	it.each(["github", "github-read"])("%s: old ownership-only module never authorizes execution", async (server) => {
+		const authorize = vi.fn(async () => ({ allow: true }));
+		const loader = async () => ({ authorize, defaultReadOnlyResolver: {} });
+		await withBridge(server, loader as unknown as GithubPolicyLoader, async (bridge, calls) => {
+			for (const [tool, args] of [
+				["issue_write", { method: "create", owner: "shine2lay", repo: "repo", title: "blocked" }],
+				["issue_read", { method: "get", owner: "other", repo: "repo", issue_number: 1 }],
+			] as Array<[string, Record<string, unknown>]>) {
+				await expect(call(bridge, tool, args)).rejects.toThrow(GH_OWN_REPO_RULE);
+				expect(calls()).toEqual([]);
+			}
+			expect(authorize).not.toHaveBeenCalled();
+		});
 	});
 
 	it("non-GitHub connections do not load the policy", async () => {
@@ -177,10 +194,10 @@ describe("parsed McpBridge GitHub dispatch", () => {
 		const policy = await canonical();
 		for (const loader of [
 			async () => ({}),
-			async () => ({ ...policy, authorize: async () => ({ allow: "true" }) }),
+			async () => ({ ...policy, authorizeHttpRuntime: async () => ({ allow: "true" }) }),
 			async () => ({
 				...policy,
-				authorize: async () => {
+				authorizeHttpRuntime: async () => {
 					throw new Error("secret");
 				},
 			}),
