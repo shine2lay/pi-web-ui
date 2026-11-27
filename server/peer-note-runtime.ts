@@ -1,5 +1,7 @@
 /** Persisted queue facts and custom-message delivery for department peer notes. */
 import { existsSync, readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
+import { validateRawToolInvocation } from "./specialist-raw-runtime.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { identityRegistry, samePath } from "./identities.js";
 import { ownTaskOf } from "./own-task.js";
@@ -48,6 +50,11 @@ export function makeRuntimePeerNoteTool(host: {
 			const store = host.store();
 			const sender = host.sender();
 			if (!session || !store || typeof sender === "string") return refuse("E_PEER_SENDER");
+			const original = validateRawToolInvocation(session.sessionManager.getSessionId(), callId, "peer_note");
+			if (original.status !== "valid")
+				return refuse(original.status === "invalid" ? "E_PEER_ARGS" : "E_SPEC_UNAVAILABLE");
+			// Never admit stripped/coerced SDK arguments or a different prepared payload.
+			if (!isDeepStrictEqual(args, original.args)) return refuse("E_PEER_ARGS");
 			const file = session.sessionFile;
 			const entries = session.sessionManager.getBranch();
 			const own = ownTaskOf(entries);
@@ -99,7 +106,7 @@ export function makeRuntimePeerNoteTool(host: {
 					home_chat: home,
 					home_dept: sender.role,
 					tasks: peerQueueTasks(home),
-					args,
+					args: original.args,
 					call_id: callId,
 					chain,
 					...(cause.kind === "record" ? { root: cause.record.root ?? cause.record.id, parent: cause.record.id } : {}),
