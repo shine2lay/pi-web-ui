@@ -1,0 +1,192 @@
+{
+  "version": 1,
+  "builders": ["frontend", "ops"],
+  "cases": [
+    {
+      "id": "RPP-01-named-progress",
+      "source": "server/work-records.ts#recordsOut",
+      "input": {"project": {"items": 3, "met": 1, "doneWhen": [{"item": "Brief approved", "met": false}, {"item": "Contract landed", "met": true}, {"item": "Live accepted", "met": false}]}, "group": {"projectStatus": "active", "done14d": 19, "doneShown": 6}},
+      "expected": {"fraction": "1 of 3 met", "names": ["Brief approved", "Contract landed", "Live accepted"], "marks": [false, true, false], "activity": "19 tasks completed · last 14 days", "lifecycle": "active"}
+    },
+    {
+      "id": "RPP-02-count-only",
+      "source": "server/protocol.ts#UiWorkRecord",
+      "input": {"project": {"items": 6, "met": 1}},
+      "expected": {"fraction": "1 of 6 met", "names": null, "marks": null, "notice": "Milestone names weren't sent by this server."}
+    },
+    {
+      "id": "RPP-03-empty-plan",
+      "source": "server/roles-board-protocol.ts#UiWorkDoneWhenMark",
+      "input": {"project": {"items": 0, "met": 0, "doneWhen": []}, "workProblem": null},
+      "expected": {"fraction": null, "marks": null, "notice": "No milestones recorded for this project."}
+    },
+    {
+      "id": "RPP-04-known-zero",
+      "source": "server/work-records.ts#recordsOut",
+      "input": {"project": {"items": 1, "met": 0, "doneWhen": [{"item": "Accepted live", "met": false}]}},
+      "expected": {"fraction": "0 of 1 met", "names": ["Accepted live"], "marks": [false]}
+    },
+    {
+      "id": "RPP-05-read-failed",
+      "source": "server/work-records.ts#WorkRecordsFile",
+      "input": {"work": {"projects": [], "initiatives": [], "problem": "unreadable"}},
+      "expected": {"fraction": null, "marks": null, "snapshot": "unknown", "canDeclareEmpty": false, "notice": "Milestones couldn't be read just now (not zero: unknown)."}
+    },
+    {
+      "id": "RPP-06-work-absent",
+      "source": "server/roles-board-protocol.ts#UiRolesOverview",
+      "input": {"overview": {"at": 100, "taskBoard": {"asOf": 100}}},
+      "expected": {"fraction": null, "marks": null, "snapshot": "unknown", "canDeclareEmpty": false}
+    },
+    {
+      "id": "RPP-07-project-missing",
+      "source": "web/src/roles-by-project/model.ts#contextOf",
+      "input": {"work": {"projects": [], "initiatives": []}, "group": {"projectId": "missing", "key": "project:missing"}},
+      "expected": {"fraction": null, "marks": null, "snapshot": "unknown", "canDeclareEmpty": false}
+    },
+    {
+      "id": "RPP-08-partial-registry",
+      "source": "server/protocol.ts#UiWorkRecords",
+      "input": {"variants": ["too-big", "unknown-change"], "project": {"items": 0, "met": 0, "doneWhen": []}},
+      "expected": {"snapshot": "partial", "canDeclareEmpty": false, "warning": true}
+    },
+    {
+      "id": "RPP-09-partial-queues",
+      "source": "server/roles-by-project.ts#taskBoardOf",
+      "input": {"taskBoard": {"problem": "Queues that could not be read: qa", "tasks": []}},
+      "expected": {"canDeclareEmpty": false, "warning": true, "next": "unknown"}
+    },
+    {
+      "id": "RPP-10-loading",
+      "source": "web/src/roles-by-project/RolesByProjectView.tsx#RolesByProjectView",
+      "input": {"state": {"status": "loading", "overview": null}, "lastGood": null},
+      "expected": {"snapshot": "loading", "fraction": null, "marks": null}
+    },
+    {
+      "id": "RPP-11-board-absent-after-good",
+      "source": "web/src/roles-by-project/RolesByProjectView.tsx#lastGood",
+      "input": {"lastGood": {"asOf": 100}, "overview": {"at": 200}, "newWorkGeneration": 200},
+      "expected": {"snapshot": "last-known", "warning": true, "preserve": ["board", "retry"], "freshPair": false}
+    },
+    {
+      "id": "RPP-12-stale-replay",
+      "source": "web/src/roles-state.ts#lookedAgain",
+      "input": {"firstCheckedAt": 100, "payloadCheckedAt": 100, "connection": "open"},
+      "expected": {"snapshot": "last-known", "freshPair": false}
+    },
+    {
+      "id": "RPP-13-error-with-ready",
+      "source": "web/src/roles-state.ts#receiveRoles",
+      "input": {"state": {"status": "ready", "error": "read failed"}, "lastGood": {"asOf": 100}},
+      "expected": {"snapshot": "last-known", "warning": true, "preserve": ["board", "retry"]}
+    },
+    {
+      "id": "RPP-14-heartbeat-not-items",
+      "source": "web/src/roles-state.ts#receiveRoles",
+      "input": {"payload": {"type": "roles", "asks": 0, "checkedAt": 200}, "previousWorkProblem": "unreadable"},
+      "expected": {"fraction": null, "marks": null, "warning": true, "preserve": ["workProblem"]}
+    },
+    {
+      "id": "RPP-15-malformed",
+      "source": "server/protocol.ts#UiWorkRecord",
+      "input": {"variants": [{"doneWhen": null}, {"items": -1}, {"items": 1.5}, {"items": 1, "met": 2}, {"doneWhen": [{"item": "A", "met": "false"}]}]},
+      "expected": {"fraction": null, "marks": null, "snapshot": "unknown", "warning": true}
+    },
+    {
+      "id": "RPP-16-inconsistent-list",
+      "source": "server/work-records.ts#recordsOut",
+      "input": {"project": {"items": 6, "met": 1, "doneWhen": []}},
+      "expected": {"fraction": null, "marks": null, "snapshot": "unknown", "warning": true}
+    },
+    {
+      "id": "RPP-17-parallel-now",
+      "source": "web/src/roles-by-project/model.ts#rankOf",
+      "input": {"tasks": [{"ref": "qa #245", "state": "working", "title": "Smoke checks"}, {"ref": "design #347", "state": "blocked", "title": "Assemble studio", "howToUnblock": "Have architecture lead provide land receipt"}]},
+      "expected": {"nowRefs": ["design #347", "qa #245"], "milestoneTaskLinks": null, "blockerOwner": null, "unblockText": "Have architecture lead provide land receipt"}
+    },
+    {
+      "id": "RPP-18-held-missing-reason",
+      "source": "server/roles-board-protocol.ts#UiBoardTask",
+      "input": {"tasks": [{"ref": "backend #1", "state": "waiting", "dependsOnRefs": ["ops #2"]}]},
+      "expected": {"unblockText": "How it unblocks: not recorded.", "blockerOwner": null}
+    },
+    {
+      "id": "RPP-19-role-local-queued",
+      "source": "server/roles-by-project.ts#taskBoardRowsOf",
+      "input": {"tasks": [{"ref": "ops #9", "role": "ops", "state": "queued", "queueIndex": 0}, {"ref": "qa #8", "role": "qa", "state": "queued", "queueIndex": 1}]},
+      "expected": {"queuedRefs": ["ops #9", "qa #8"], "orderScope": "role-local", "next": "not-recorded", "notice": "Queued work · no project-wide order recorded"}
+    },
+    {
+      "id": "RPP-20-idle-not-done",
+      "source": "web/src/roles-by-project/model.ts#projectTiles",
+      "input": {"group": {"projectStatus": "active", "open": 0}, "tasks": [], "complete": true, "search": ""},
+      "expected": {"lifecycle": "active", "nowRefs": [], "next": "not-recorded", "notice": "Next: not recorded · nothing queued."}
+    },
+    {
+      "id": "RPP-21-lifecycle-explicit",
+      "source": "web/src/roles-by-project/model.ts#projectTiles",
+      "input": {"group": {"projectStatus": "dropped"}, "project": {"status": "active", "items": 7, "met": 6}},
+      "expected": {"lifecycle": "dropped", "warning": true, "fraction": "6 of 7 met", "marks": null}
+    },
+    {
+      "id": "RPP-22-all-met-active",
+      "source": "server/roles-board-protocol.ts#UiBoardGroup",
+      "input": {"group": {"projectStatus": "active"}, "project": {"items": 1, "met": 1, "doneWhen": [{"item": "Plan", "met": true}]}},
+      "expected": {"lifecycle": "active", "fraction": "1 of 1 met", "marks": [true]}
+    },
+    {
+      "id": "RPP-23-filter-not-idle",
+      "source": "web/src/roles-by-project/model.ts#shownRows",
+      "input": {"search": "unmatched", "tile": {"allRefs": ["qa #245"], "shownRefs": []}, "group": {"done14d": 19}},
+      "expected": {"canDeclareEmpty": false, "activity": "19 tasks completed · last 14 days", "notice": "No matching current work", "next": "unknown"}
+    },
+    {
+      "id": "RPP-24-live-focus",
+      "source": "web/src/roles-by-project/RolesByProjectView.tsx#toggle",
+      "input": {"event": "live-update", "sameGroupAndTaskRefs": true},
+      "expected": {"preserve": ["focus", "scroll", "search-caret", "expanded", "answer-choice", "pointer-press"]}
+    },
+    {
+      "id": "RPP-25-body-only",
+      "source": "web/src/roles-by-project/tile.tsx#Tile",
+      "input": {"groupBy": "project", "kind": "project", "widths": [320, 390, 1440], "themes": ["light", "dark"]},
+      "expected": {"changedScope": "project-card-body", "chrome": [], "preserve": ["header", "grid", "other-cards", "maps", "answers", "inbox-alert-slot"]}
+    },
+    {
+      "id": "RPP-26-disclosure-access",
+      "source": "web/src/roles-by-project/tile.tsx#Tile",
+      "input": {"event": "keyboard-open", "longCriterion": "Full criterion sentence remains available", "moreNow": 2, "moreQueued": 1},
+      "expected": {"fullText": true, "nestedButtons": false, "stripAccessible": false, "preserve": ["header-focus", "task-links", "extra-rows", "reduced-motion"]}
+    },
+    {
+      "id": "RPP-27-complete-empty-registry",
+      "source": "server/work-records.ts#WorkRecordsFile",
+      "input": {"work": {"projects": [], "initiatives": []}, "group": null},
+      "expected": {"notice": "No recorded projects", "fraction": null, "marks": null, "lifecycle": "unknown"}
+    },
+    {
+      "id": "RPP-28-done-not-derived",
+      "source": "server/roles-board-protocol.ts#UiBoardGroup",
+      "input": {"group": {"projectStatus": "done"}, "project": {"items": 6, "met": 6}},
+      "expected": {"lifecycle": "done", "fraction": "6 of 6 met", "marks": null}
+    },
+    {
+      "id": "RPP-29-status-absent",
+      "source": "server/roles-board-protocol.ts#UiBoardGroup",
+      "input": {"group": {"open": 0}, "project": {"items": 1, "met": 1}},
+      "expected": {"lifecycle": "unknown", "fraction": "1 of 1 met", "marks": null}
+    },
+    {
+      "id": "RPP-30-canonical-state-priority",
+      "source": "server/shared/roles-by-project/groups.ts#boardStateOf",
+      "input": {"tasks": [{"status": "done", "paused": true}, {"status": "stuck", "paused": true}, {"status": "stuck"}, {"status": "asking"}, {"status": "ready"}, {"status": "dropped"}]},
+      "expected": {"states": ["done", "waiting", "needs-you", "waiting", "queued", null]}
+    },
+    {
+      "id": "RPP-31-links-not-inferred",
+      "source": "web/src/roles-by-project/task-map.tsx#OpenedMap",
+      "input": {"howToUnblock": "Visit javascript:alert(1) or file:///tmp/private; ask qa #1", "event": "render-text"},
+      "expected": {"blockerOwner": null, "inferredLinks": [], "preserve": ["escaped-text", "canonical-task-links", "existing-answer-flow"]}
+    }
+  ]
+}
