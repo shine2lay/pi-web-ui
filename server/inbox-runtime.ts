@@ -1,7 +1,5 @@
-/** Task 1 acceptance seam only. Not imported by the running host; no activation.
- * Task 2 replaces the explicit unbuilt errors, using the canonical wire and stores.
- * No fixture interpreter, copied priority/ceiling policy or second message store.
- */
+/** Canonical HOME coordinator. Helper entry points remain unavailable until their later integration. */
+import type { InboxCoordination } from "./inbox-coordination.js";
 import { createHash, randomUUID } from "node:crypto";
 import { InboxLedger, inboxCoordinator, inboxPendingIntents, type InboxIntent } from "./inbox-ledger.js";
 import { homeView, inboxDigest, readHomeMessages } from "./inbox-home-reader.js";
@@ -110,6 +108,24 @@ export class InboxRuntime {
 			return { status: "unknown", source: "role-messages", reason: (error as Error).message };
 		}
 	}
+	/** Shared trusted integration seam: one key, one coordinator, one writer and fence reader. */
+	coordinate<T>(key: string, action: (context: InboxCoordination) => Promise<T>): Promise<T> {
+		return this.run(key, () =>
+			action({
+				item: () => this.item(key),
+				current: (claim, ending) => {
+					if (claim.key !== key) throw new Error("E_RPI_TARGET");
+					return this.current(claim, ending);
+				},
+				lines: () => this.ledger.read().filter((line) => line.key === key),
+				append: (fields) => {
+					const item = this.item(key);
+					if (!item) throw new Error("E_RPI_UNKNOWN");
+					this.append(item, fields);
+				},
+			}),
+		);
+	}
 	private item(key: string): InboxView | undefined {
 		const records = readHomeMessages(this.ports.roleMessagesFile);
 		const r = records.find((r) => `rm:${r.id}` === key);
@@ -120,12 +136,12 @@ export class InboxRuntime {
 	}
 	private append(item: InboxView, fields: Record<string, unknown>): void {
 		this.ledger.append({
+			...fields,
 			v: "rpi/1",
 			seq: this.ledger.read().length + 1,
 			at: this.ports.now(),
 			key: item.key,
 			contentHash: item.contentHash,
-			...fields,
 		} as InboxLine);
 	}
 	async claim(
