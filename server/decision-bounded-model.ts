@@ -1,8 +1,8 @@
 // Same qualified reader/model, with the proven zero-extras session and hard pre-prompt allowance.
 import { join } from "node:path";
+import { createAddonSessionServices as createAgentSessionServices } from "./addon-bundle-paths.js";
 import {
 	createAgentSessionFromServices,
-	createAgentSessionServices,
 	ModelRuntime,
 	SessionManager,
 	SettingsManager,

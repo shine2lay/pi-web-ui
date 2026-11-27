@@ -5,9 +5,17 @@ with its safety-net clock, and AskHub's held state. Ops #685 wires every owner a
 `ownerQuestionsViaCoo`; while it is off nothing changes for any chat or surface. #686 adds COO's card and tool to let
 a held ask through or hand it back. #687 switches it on: on by default, off only when turned off in Settings.
 
-## Why
+## Current policy — Ops #1144
 
-Today every owner ask (ask_user_question, extension dialogs such as plan approvals, tool approvals and queued-task
+Owner decision `dr-88854f3751a1` (2026-11-27): **every `ask_user_question` card goes directly to its owner immediately**. This includes role-, queue-, schedule- and extension-started turns, restarted turns, missing turn records, and owner inputs more than 30 minutes old. Existing owner-specific visibility still applies; direct does not mean sharing a card with another owner.
+
+The rule retains special direct labels first, then uses `question-direct` without a route line. Questions are not held, are immediately in `askHub.list()` and the owner windows' pending-question/Questions source, and need no COO release. Dialogs, approvals and `kind=stuck` keep their existing routing. Legacy persisted hold records, release/return handling and safety-net support remain readable and supported; no store migration is needed.
+
+The sections below describe the original machinery and its remaining dialog/approval/queued-card use. References to held questions describe legacy holds, not a policy for creating new holds.
+
+## Original rationale (superseded for ask_user_question)
+
+Before this machinery, every owner ask (ask_user_question, extension dialogs such as plan approvals, tool approvals and queued-task
 cards) goes to him on every surface at once, whoever started the turn: `AskHub.add` emits "appeared" and `askUser`
 pops the dialog up in every window. So questions raised halfway through work reach him with no context (Temper #243
 and #244, RollCall #36, Ops #666).
@@ -45,8 +53,7 @@ record and times:
 admission (`index.ts` `browserRoleInput`; never a pseudo-client), or a message the Telegram plugin sends through
 `host.roles.send`. `requesterForAdmission` keeps a supplied requester only for the host's own role deliveries, so an
 extension can't claim to be him. A turn carried on after a restart keeps its saved inputs. A turn that took more than
-`REQUESTER_INPUTS_MAX` (32) inputs keeps no list, so it counts as not his; the safety net still lets its questions
-through.
+`REQUESTER_INPUTS_MAX` (32) inputs keeps no list, so it counts as not his. Questions still go directly; dialogs and approvals retain the safety net.
 
 **The window.** `OWNER_CHATTING_WINDOW_MS = 30 * 60_000`. He counts as chatting while his last accepted input in the
 asking chat is less than 30 minutes old. Unknown (absent, or not a real time) is not recent. A last input ahead of
@@ -54,18 +61,19 @@ asking chat is less than 30 minutes old. Unknown (absent, or not a real time) is
 
 **First rule that applies** (`OWNER_QUESTION_ROUTE_REASONS` is this closed list, in this order):
 
-| #   | When                                                                                                                                                                  | Route  | Reason                     |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | -------------------------- |
-| 1   | COO's own home chat asks (identity `coo`)                                                                                                                             | direct | `coo-chat`                 |
-| 2   | A queued task's card (kind `stuck`), whichever chat shows it                                                                                                          | coo    | `queued-work`              |
-| 3   | The turn holds his accepted input (he started it or typed into it while it ran) and he last wrote there under 30 minutes ago                                          | direct | `owner-chatting`           |
-| 4   | A question asked again in the same turn after COO handed it back                                                                                                      | direct | `asked-again-after-return` |
-| 5   | A continuation-grant ask                                                                                                                                              | direct | `grant-not-routed`         |
-| 6   | The turn holds his accepted input, but his last input there is 30 minutes old or more, or its time isn't known                                                        | coo    | `owner-away`               |
-| 7   | Anything else: a role message, a Board post, a queue prompt or reminder, a schedule wake-up, a subagent, a plugin or extension message, or no record started the turn | coo    | `not-started-by-owner`     |
+| #   | When                                                                                                                         | Route  | Reason                     |
+| --- | ---------------------------------------------------------------------------------------------------------------------------- | ------ | -------------------------- |
+| 1   | COO's own home chat asks (identity `coo`)                                                                                    | direct | `coo-chat`                 |
+| 2   | A queued task's card (kind `stuck`), whichever chat shows it                                                                 | coo    | `queued-work`              |
+| 3   | The turn holds his accepted input (he started it or typed into it while it ran) and he last wrote there under 30 minutes ago | direct | `owner-chatting`           |
+| 4   | A question asked again in the same turn after COO handed it back                                                             | direct | `asked-again-after-return` |
+| 5   | A continuation-grant ask                                                                                                     | direct | `grant-not-routed`         |
+| 6   | Any `kind=question` not already covered above                                                                                | direct | `question-direct`          |
+| 7   | A dialog/approval whose turn holds owner input, but his last input is at least 30 minutes old or unknown                     | coo    | `owner-away`               |
+| 8   | Any remaining dialog/approval                                                                                                | coo    | `not-started-by-owner`     |
 
 So grants and re-asks stay direct even in a turn he started long ago, and a time alone never makes a turn his: a
-fresh `ownerLastWroteAt` with no owner input in the turn is rule 7. A turn he wrote in earlier doesn't count either:
+fresh `ownerLastWroteAt` with no owner input in the turn is rule 8 for dialogs/approvals; questions use rule 6. A turn he wrote in earlier doesn't count either:
 only the asking turn's record is read. `OWNER_QUESTION_DIRECT_REASONS` and `OWNER_QUESTION_COO_REASONS` split the
 list by route.
 
@@ -73,13 +81,13 @@ list by route.
 
 On the owner's surfaces:
 
-| Case                                                         | Line                                                                                                                                                       |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| direct `owner-chatting`                                      | "You were chatting here", plus how long ago he last wrote there: "You were chatting here (you wrote 3 minutes ago)", "(you wrote just now)" under a minute |
-| direct `coo-chat`                                            | "From COO's chat"                                                                                                                                          |
-| direct `grant-not-routed`, `asked-again-after-return`        | no line (shown as before)                                                                                                                                  |
-| let through by COO with a note or a recommendation           | "Came through COO", with the note and recommendation                                                                                                       |
-| let through with nothing added (COO bare, or the safety net) | "Came through COO; COO added nothing (it reached you after 31 minutes)"                                                                                    |
+| Case                                                                     | Line                                                                                                                                                       |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| direct `owner-chatting`                                                  | "You were chatting here", plus how long ago he last wrote there: "You were chatting here (you wrote 3 minutes ago)", "(you wrote just now)" under a minute |
+| direct `coo-chat`                                                        | "From COO's chat"                                                                                                                                          |
+| direct `grant-not-routed`, `asked-again-after-return`, `question-direct` | no line (shown as before)                                                                                                                                  |
+| let through by COO with a note or a recommendation                       | "Came through COO", with the note and recommendation                                                                                                       |
+| let through with nothing added (COO bare, or the safety net)             | "Came through COO; COO added nothing (it reached you after 31 minutes)"                                                                                    |
 
 On COO's card, why COO got it first (`cooReasonWords`):
 

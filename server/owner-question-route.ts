@@ -17,7 +17,9 @@
 // asks, when he last wrote in the chat, a continuation-grant ask, a question COO handed back in this
 // turn). Its input holds no text: it never reads words and never asks a model.
 //
-// Inert groundwork (Ops #684): no caller asks it yet. #685/#686 wire it, #687 switches it on.
+// Ops #1144 (dr-88854f3751a1): ask_user_question always goes straight to its owner.
+// The historical chatting window above now applies only to dialogs and approvals; queued cards
+// keep their existing rule. Legacy persisted question holds remain readable.
 // ---------------------------------------------------------------------------
 
 import type { AskKind } from "./asks.js";
@@ -44,6 +46,8 @@ export const OWNER_QUESTION_DIRECT_REASONS = [
 	"asked-again-after-return",
 	/** The role-message guard's continuation-grant asks: not routed (the owner chose doubled limits instead). */
 	"grant-not-routed",
+	/** Every ask_user_question reaches its owner immediately, regardless of turn origin or age. */
+	"question-direct",
 ] as const;
 
 /** Why an ask goes to COO first. */
@@ -72,6 +76,7 @@ export const OWNER_QUESTION_ROUTE_REASONS: readonly OwnerQuestionRouteReason[] =
 	"owner-chatting",
 	"asked-again-after-return",
 	"grant-not-routed",
+	"question-direct",
 	"owner-away",
 	"not-started-by-owner",
 ];
@@ -102,12 +107,13 @@ export interface OwnerQuestionRouteInput {
  *     ago -> direct "owner-chatting";
  *  4. a question asked again after COO handed it back -> direct "asked-again-after-return";
  *  5. a continuation-grant ask -> direct "grant-not-routed";
- *  6. the turn holds an accepted owner input, but he last wrote there 30 minutes ago or more, or when
- *     isn't known -> coo "owner-away";
- *  7. anything else -> coo "not-started-by-owner".
+ *  6. any question -> direct "question-direct";
+ *  7. a dialog/approval's turn holds accepted owner input, but his last input is old or unknown
+ *     -> coo "owner-away";
+ *  8. any other dialog/approval -> coo "not-started-by-owner".
  * So a grant or a question asked again still goes straight to him in a turn he started long ago.
  * A turn whose input list overflowed (more than REQUESTER_INPUTS_MAX inputs) has no list left, so it
- * counts as not his (rule 7); COO's safety net still lets it through.
+ * counts as not his; questions still go direct, dialogs/approvals use COO's safety net.
  */
 export function ownerQuestionRoute(input: OwnerQuestionRouteInput): OwnerQuestionRoute {
 	if (input.homeRole === COO_ROLE) return { to: "direct", reason: "coo-chat" };
@@ -120,6 +126,7 @@ export function ownerQuestionRoute(input: OwnerQuestionRouteInput): OwnerQuestio
 		return { to: "direct", reason: "asked-again-after-return" };
 	}
 	if (input.grant === true) return { to: "direct", reason: "grant-not-routed" };
+	if (input.kind === "question") return { to: "direct", reason: "question-direct" };
 	if (ownerTurn) return { to: "coo", reason: "owner-away" };
 	return { to: "coo", reason: "not-started-by-owner" };
 }

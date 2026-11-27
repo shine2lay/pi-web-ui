@@ -16,12 +16,8 @@
  *   排队会把插件的 await 变成不定等待，调用方超时兜底更难写）。
  */
 import { join } from "node:path";
-import {
-	createAgentSessionFromServices,
-	createAgentSessionServices,
-	ModelRuntime,
-	SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import { createAddonSessionServices as createAgentSessionServices } from "./addon-bundle-paths.js";
+import { createAgentSessionFromServices, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { parseModelSpec } from "./attachments.js";
 import { attachUsageLedger } from "./usage-accounting-ledger.js";
 

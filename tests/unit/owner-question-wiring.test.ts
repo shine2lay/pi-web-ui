@@ -3,7 +3,7 @@
 // the owner's input times, the running-chats list a restart carries on from, the plugin feed and the Telegram bridge
 // (a fake Bot API), the Roles reader with its Needs-you projection, roles_overview's text and the ask_user_question
 // tool. No server, provider or model is started; temporary folders only; no question words decide anything.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +19,7 @@ import {
 	type AskRouteInput,
 } from "../../server/asks.js";
 import type { IdentityDef } from "../../server/identities.js";
+import * as routeRule from "../../server/owner-question-route.js";
 import { noteOwnerInput, ownerLastWroteOf } from "../../server/owner-input-time.js";
 import {
 	HOLD_SAFETY_NET_MS,
@@ -132,7 +133,7 @@ interface World {
 	answers: Map<string, AskFieldAnswer[]>;
 }
 
-function world(opts: { holdsFile?: string; router?: boolean } = {}): World {
+function world(opts: { holdsFile?: string; router?: boolean; legacyQuestionHolds?: boolean } = {}): World {
 	const hub = new AskHub(() => now);
 	const holdsFile = opts.holdsFile ?? join(dir, "data", OWNER_QUESTION_HOLDS_FILE);
 	mkdirSync(join(holdsFile, ".."), { recursive: true });
@@ -200,7 +201,13 @@ function world(opts: { holdsFile?: string; router?: boolean } = {}): World {
 	};
 	const answers = new Map<string, AskFieldAnswer[]>();
 	const ask = (a: Ask, facts: OwnerAskFacts, stuck?: { key: string; sig: string }) => {
+		// Explicit old-policy route, external to production: retain real question hold records and return support.
+		const legacy =
+			opts.legacyQuestionHolds && a.kind === "question"
+				? vi.spyOn(routeRule, "ownerQuestionRoute").mockReturnValueOnce({ to: "coo", reason: "not-started-by-owner" })
+				: undefined;
 		const route = opts.router === false ? undefined : router.routeAsk({ id: a.id, kind: a.kind }, facts, stuck);
+		legacy?.mockRestore();
 		hub.add(
 			a,
 			(given) => {
@@ -313,22 +320,20 @@ describe("owner asks with the switch on", () => {
 		expect(existsSync(w.holdsFile)).toBe(false);
 	});
 
-	it("the same turn once his last input is 31 minutes old: held for COO as owner-away", async () => {
+	it("the same turn once his last input is 31 minutes old: question still direct", async () => {
 		const w = world();
 		const lead = chat("ops-home");
 		ownerWrites(lead);
 		now = T0 + 31 * MIN;
 		const route = w.ask(question("q-2", lead), factsOf(lead, "ops"));
-		expect(route).toEqual({ to: "coo", reason: "owner-away", heldAt: now });
-		expect(w.events.map((e) => e.type)).toEqual(["held"]);
-		expect(w.hub.list()).toEqual([]);
-		expect(w.hub.heldList().map((a) => a.id)).toEqual(["q-2"]);
+		expect(route).toEqual({ to: "direct", reason: "question-direct" });
+		expect(w.events.map((e) => e.type)).toEqual(["appeared"]);
+		expect(w.hub.list().map((a) => a.id)).toEqual(["q-2"]);
+		expect(w.hub.heldList()).toEqual([]);
 		await w.settle();
-		expect(w.sent).toEqual([]);
-		expect(w.feed).toEqual([]);
-		// Read as written (opening a second store would count a held question as died with its process).
-		const hold = (JSON.parse(readFileSync(w.holdsFile, "utf8")) as { holds: unknown[] }).holds;
-		expect(hold).toMatchObject([{ kind: "question", reason: "owner-away", state: "held", createdAt: now }]);
+		expect(w.sent).toHaveLength(1);
+		expect(w.feed.map((e) => e.type)).toEqual(["appeared"]);
+		expect(existsSync(w.holdsFile)).toBe(false);
 	});
 
 	it("a carried-on owner turn after a restart keeps his time", () => {
@@ -357,7 +362,7 @@ describe("owner asks with the switch on", () => {
 			label: "You were chatting here (you wrote 5 minutes ago)",
 		});
 		now = T0 + 30 * MIN;
-		expect(w.ask(question("q-4", again), factsOf(again, "ops"))).toMatchObject({ to: "coo", reason: "owner-away" });
+		expect(w.ask(question("q-4", again), factsOf(again, "ops"))).toEqual({ to: "direct", reason: "question-direct" });
 		// A list written before his time was kept (an older build): the turn is still his, the time unknown.
 		const old = { ...saved };
 		delete old.ownerLastWroteAt;
@@ -370,8 +375,8 @@ describe("owner asks with the switch on", () => {
 		).toBeUndefined();
 	});
 
-	it("a question in a turn a role message started is held: not on Telegram, Needs you or the counts; on its own page", async () => {
-		const w = world();
+	it("a legacy held question stays off Telegram and Needs you until released", async () => {
+		const w = world({ legacyQuestionHolds: true });
 		const design = chat("design-home");
 		transcript(design, [needsLine("Need you: pick a port", T0 - 1000, "line0001")]);
 		roleStarts(design);
@@ -435,8 +440,8 @@ describe("owner asks with the switch on", () => {
 		expect(w.hub.heldList().map((a) => a.id)).toEqual(["appr-1"]);
 	});
 
-	it("COO's release shows its note and recommendation, the label first, everywhere", async () => {
-		const w = world();
+	it("COO's release of a legacy question shows its note and recommendation everywhere", async () => {
+		const w = world({ legacyQuestionHolds: true });
 		const design = chat("design-home");
 		transcript(design, [needsLine("Need you: pick a port", T0 - 1000, "line0006")]);
 		roleStarts(design);
@@ -470,8 +475,8 @@ describe("owner asks with the switch on", () => {
 		]);
 	});
 
-	it("the safety net lets a held ask through after 30 minutes on a fake clock", async () => {
-		const w = world();
+	it("the safety net lets a legacy held question through after 30 minutes", async () => {
+		const w = world({ legacyQuestionHolds: true });
 		const design = chat("design-home");
 		roleStarts(design);
 		w.ask(question("q-7", design), factsOf(design, "design"));
@@ -494,7 +499,7 @@ describe("owner asks with the switch on", () => {
 	it("the server's interval runs the safety net at least once a minute", () => {
 		vi.useFakeTimers({ now: T0 });
 		now = T0;
-		const w = world();
+		const w = world({ legacyQuestionHolds: true });
 		const design = chat("design-home");
 		roleStarts(design);
 		w.ask(question("q-8", design), factsOf(design, "design"));
@@ -516,7 +521,7 @@ describe("owner asks with the switch on", () => {
 				metaOf(ops),
 				now,
 			);
-		const before = world({ holdsFile });
+		const before = world({ holdsFile, legacyQuestionHolds: true });
 		expect(before.ask(card("stuck-1", 12), {}, { key: "k12", sig: "s12" })).toEqual({
 			to: "coo",
 			reason: "queued-work",
@@ -557,8 +562,9 @@ describe("owner asks with the switch on", () => {
 		expect(after.ask(card("stuck-1c", 12), {}, { key: "k12", sig: "s12" })).toMatchObject({ releasedBy: "safety-net" });
 	});
 
-	it("COO hands a question back: the chat's wake carries the return text, and asking again goes straight to him", () => {
-		const w = world();
+	it("COO hands a legacy question back; every new question goes direct", () => {
+		const fixture = { legacyQuestionHolds: true };
+		const w = world(fixture);
 		const design = chat("design-home");
 		roleStarts(design);
 		w.ask(question("q-10", design), factsOf(design, "design"));
@@ -572,15 +578,19 @@ describe("owner asks with the switch on", () => {
 		);
 		// nonblocking-ask (Ops #1087): the tool call ended when it posted; the asking chat gets this text as its wake
 		// (tests/unit/nonblocking-ask-question.test.ts NB-5).
-		// Asked again in the same turn: straight to him, with no line.
+		// Only the first card is a legacy hold; fresh questions use the real current policy.
+		fixture.legacyQuestionHolds = false;
 		expect(w.ask(question("q-11", design), factsOf(design, "design"))).toEqual({
 			to: "direct",
 			reason: "asked-again-after-return",
 		});
 		expect(w.hub.list().map((a) => a.id)).toEqual(["q-11"]);
-		// The next turn starts afresh: through COO again.
+		// Even a fresh role-started turn asks directly.
 		roleStarts(design);
-		expect(w.ask(question("q-12", design), factsOf(design, "design"))).toMatchObject({ to: "coo" });
+		expect(w.ask(question("q-12", design), factsOf(design, "design"))).toEqual({
+			to: "direct",
+			reason: "question-direct",
+		});
 		expect(new OwnerQuestionHolds(w.holdsFile, { now: () => now }).list()[0]).toMatchObject({
 			state: "returned",
 			note,
@@ -627,8 +637,8 @@ describe("owner asks with the switch on", () => {
 		expect(needsYou(released).total).toBeGreaterThan(0);
 	});
 
-	it("switching it off lets everything held through at the next sweep, as before routing", () => {
-		const w = world();
+	it("switching it off also releases legacy held questions at the next sweep", () => {
+		const w = world({ legacyQuestionHolds: true });
 		const design = chat("design-home");
 		roleStarts(design);
 		w.ask(question("q-13", design), factsOf(design, "design"));

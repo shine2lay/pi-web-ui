@@ -2,9 +2,9 @@
 import { closeSync, constants, existsSync, fsyncSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash } from "node:crypto";
+import { createAddonSessionServices as createAgentSessionServices } from "./addon-bundle-paths.js";
 import { isDeepStrictEqual } from "node:util";
 import {
-	createAgentSessionServices,
 	createAgentSessionFromServices,
 	createEventBus,
 	SessionManager,

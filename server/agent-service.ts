@@ -36,12 +36,12 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { createAddonSessionServices as createAgentSessionServices } from "./addon-bundle-paths.js";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
-	createAgentSessionServices,
 	createBashToolDefinition,
 	createEditToolDefinition,
 	createLocalBashOperations,
