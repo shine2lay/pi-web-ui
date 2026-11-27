@@ -24,11 +24,31 @@ export const E_SPEC_BINDING_CONFLICT = "E_SPEC_BINDING_CONFLICT";
  * - `"unusable"`: a `specialist` field that fails the checks (bad slug, not a string, not `via:"queue"`, no string
  *   `id`): the chat has no usable identity, never the plain department.
  */
-export type EntryIdentity = { id: string | null; specialist?: string } | "unusable";
+export interface ConsultBinding {
+	id: string;
+	caller: string;
+	callerPrincipal: string;
+}
+export type EntryIdentity = { id: string | null; specialist?: string; consult?: ConsultBinding } | "unusable";
+
+/** Consult provenance is accepted only for a caller principal in the same department. */
+function readConsult(value: unknown, dept: string): ConsultBinding | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const c = value as Record<string, unknown>;
+	if (typeof c.id !== "string" || !/^cs-[0-9a-f]{16}$/.test(c.id)) return undefined;
+	if (typeof c.caller !== "string" || !c.caller.trim()) return undefined;
+	if (typeof c.callerPrincipal !== "string") return undefined;
+	if (c.callerPrincipal !== dept) {
+		const prefix = `${dept}/`;
+		if (!c.callerPrincipal.startsWith(prefix) || !SPECIALIST_SLUG_RE.test(c.callerPrincipal.slice(prefix.length)))
+			return undefined;
+	}
+	return { id: c.id, caller: c.caller, callerPrincipal: c.callerPrincipal };
+}
 
 /** The binding of a branch's identity entries (C-BIND-*): the first specialist entry wins and stays. */
 export interface SpecialistBinding {
-	binding: { id: string | null; specialist?: string };
+	binding: { id: string | null; specialist?: string; consult?: ConsultBinding };
 	/** A later entry tried to change a specialist binding (other slug, other department, or none). */
 	conflict: boolean;
 }
@@ -41,14 +61,23 @@ export interface IdentityCommandRefusal {
 
 /** The identity an entry carries; undefined when it isn't an `identity` entry (same test as identityIdOfEntry). */
 export function identityOfEntry(entry: IdentityEntryLike): EntryIdentity | undefined {
-	if (entry.type !== "custom" || entry.customType !== IDENTITY_ENTRY_TYPE || !isIdentityData(entry.data)) {
-		return undefined;
+	if (entry.type !== "custom" || entry.customType !== IDENTITY_ENTRY_TYPE) return undefined;
+	if (!isIdentityData(entry.data)) {
+		// Malformed specialist provenance must clear a plain identity, not silently reuse it.
+		const data = entry.data;
+		return data && typeof data === "object" && ("specialist" in data || ("via" in data && data.via === "consult"))
+			? "unusable"
+			: undefined;
 	}
-	const data = entry.data as { id: string | null; via: string; specialist?: unknown };
-	if (!("specialist" in data)) return { id: data.id };
+	const data = entry.data as { id: string | null; via: string; specialist?: unknown; consult?: unknown };
+	if (!("specialist" in data)) return data.via === "consult" ? "unusable" : { id: data.id };
 	const { id, via, specialist } = data;
-	const usable = via === "queue" && typeof id === "string" && typeof specialist === "string";
-	return usable && SPECIALIST_SLUG_RE.test(specialist) ? { id, specialist } : "unusable";
+	if (typeof id !== "string" || !id || typeof specialist !== "string" || !SPECIALIST_SLUG_RE.test(specialist))
+		return "unusable";
+	if (via === "queue") return { id, specialist };
+	if (via !== "consult") return "unusable";
+	const consult = readConsult(data.consult, id);
+	return consult ? { id, specialist, consult } : "unusable";
 }
 
 /** The sticky binding over a branch's entries, oldest first; undefined when it has no identity entry. An unusable
@@ -61,7 +90,12 @@ export function specialistBindingOnBranch(entries: Iterable<IdentityEntryLike>):
 		const next = read === "unusable" ? { id: null } : read;
 		const bound = out?.binding.specialist !== undefined ? out.binding : undefined;
 		if (!bound) out = { binding: next, conflict: false };
-		else if (next.id !== bound.id || next.specialist !== bound.specialist) out = { binding: bound, conflict: true };
+		else if (
+			next.id !== bound.id ||
+			next.specialist !== bound.specialist ||
+			JSON.stringify(next.consult) !== JSON.stringify(bound.consult)
+		)
+			out = { binding: bound, conflict: true };
 	}
 	return out;
 }

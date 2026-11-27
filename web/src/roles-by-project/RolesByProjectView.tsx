@@ -82,7 +82,11 @@ export function RolesByProjectView({ active, dialogs = [], onOpen }: RolesByProj
 	if (fresh) lastGood.current = fresh;
 	const board = fresh ?? lastGood.current;
 	const failed = state.status === "error" || !!state.error || (!!overview && !fresh && !!lastGood.current);
-	const ctx = useMemo(() => (overview && board ? contextOf(overview, board) : null), [overview, board]);
+	const lastKnown = failed || model.lastReceived;
+	const ctx = useMemo(
+		() => (overview && board ? contextOf(overview, board, lastKnown) : null),
+		[overview, board, lastKnown],
+	);
 
 	// A tile whose group left the board closes (spec-page.md §Live updates).
 	useEffect(() => {

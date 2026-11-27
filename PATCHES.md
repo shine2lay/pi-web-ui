@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## github-mcp-write-guard: authorize parsed bridge calls with the canonical GitHub policy
+
+- `local` (Ops #1130). `McpClient.call` awaits the fixed installed agent-tools policy for `github`/`github-read` before dispatch; missing or broken policy denies. The small extracted adapter in `server/github-mcp-write-guard.ts` contains no ownership classifier or script parser.
+- Tests: `tests/unit/github-mcp-write-guard.test.ts` uses the canonical runtime policy and a synthetic stdio child to assert zero owned/external mutation dispatches and positive external reads. The adapter requires `authorizeHttpRuntime` (agent-tools `7509c30` first); ownership-only exports never permit execution. Constructor module injection only, no environment bypass.
+- Boundary: the live pi-mcp-adapter direct/gateway/dynamic-script/host-managed/UI routes rely on the separately fenced configured github-mcp transport, not a server outer hook. Contract, hypothesis, limitations and verification: `docs/github-mcp-write-guard.md`. No install or landing in this change.
+- Undo: revert this patch; the transport remains separately owned defense. Do not describe either as same-UID credential isolation.
+
 ## gate-no-build-cli: the systemd-install test runs the CLI from source, so `check.sh --fast` needs no build
 
 - `local` (Ops #811, for Architecture rm-a86b4982). In a worktree never built, `scripts/check.sh --fast` (which skips the build) and the full check (which runs the unit tests before it builds) failed `tests/unit/systemd-install.test.ts` with `ERR_MODULE_NOT_FOUND ... dist/server/plugin-updater.js`: its one end-to-end case imports `bin/pi-web-ui.mjs`, whose static imports name tsc's output `../dist/server/*.js`.
@@ -9009,6 +9016,16 @@ no decision record was written for it.
 - Size: `role-messages.ts`, `identities.ts`, `agent-service.ts` and `protocol.ts` do not grow (`UiTaskQueueTask` gains `specialist?` and `launch.specialist` in the same two lines, so the Queue row reads typed fields); `identity-config.ts` untouched (`C-PARITY-1`).
 - Checks: `tests/unit/department-specialists.test.ts` (#1097's acceptance suite moved into the gate, only import paths and the header comment changed; shared cases re-pinned to #593's `451222c9`), `tests/unit/identity-config-parity.test.ts`, `tests/unit/specialist-wiring.test.ts` (replay, sticky header read on pi and durable sessions, owner row). Proof: `~/ops-checks/department-specialists-1101/proof.md`.
 - Sync cost: three server modules, one web module + one component, ~10 call-site lines, one CSS block. Undo: revert the commit and this entry, then `pi-web-deploy`; nothing is stored.
+
+## department-specialists Phase 2: bounded consults and task-to-task technical notes
+
+- `local`, never upstream (Ops #1113 seam + #1117 build; Architecture #595 §6a–6e). A department chat can consult its own specialist; working tasks can send technical information within their canonical home queue. Neither mechanism grants lead or owner authority.
+- `server/specialist-consult.ts`: exact argument validation, stable consult ids, persisted private child sessions under `consults/`, resume of the same child, and explicitly untrusted answer framing. pi-identity remains the admission, sealed-tool and append-only consult-record authority. `server/specialist-entry.ts` extends the canonical sticky identity reader for well-formed `via:"consult"` entries (MF1).
+- `server/peer-notes.ts`: host-derived sender and recipient, stable `pn-` ids, idempotent admission through the existing role-message store, existing chain/hourly policy, custom `peer-note` delivery, deferred paused tasks and terminal receipts to the sender only. No user-role delivery, queue resume, cross-department visibility or new store. Existing store file permissions are retained (N1).
+- No new web chrome, sidebar rows or Recent entries. Consults are persisted below the session index's listed directories. No changes to Frontend-owned explorer files. New production modules stay under 500 lines; the three oversized integration files must not grow.
+- Strict runtime argument boundary (§6f): `server/tool-raw-invocation.ts` captures immutable originals at the public SDK start event before preparation, validates the actual registered schema without coercion, rejects undeclared original keys, and offers a repeatable trusted host callback. Missing snapshots fail closed; completion/abort/disposal clears them. A4 remains a pure stripping-utility assertion, not live-admission evidence.
+- Acceptance: `tests/unit/department-specialists-collab.test.ts`, moved from #1113's isolated suite without weakening assertions. Architecture corrected only D10/D11/D12 to require terminal receipts (`rm-3d98e53a`, new corpus `f91a269b…`); the other 138 cases and A4 are unchanged. Shared case pins stay enforced by `tests/lib/department-specialists-collab-cases.ts`. Build and land evidence: `~/ops-checks/department-specialists-1117/proof.md`; joined deployment belongs to #1118, not this patch.
+- Undo: revert this build commit before deployment, or revert and use `pi-web-deploy` after deployment. Retain existing consult session files and peer records; rollback must not delete history.
 
 ## queue-steer: every department lead steers its own running task
 

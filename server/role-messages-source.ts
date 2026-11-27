@@ -115,6 +115,7 @@ export function roleMessageRetentionPins(
 	for (const row of records) {
 		if (
 			row.state === "waiting" ||
+			!!row.peer ||
 			((row.kind === "question" || row.kind === "request") && row.state !== "failed" && !row.replyId)
 		)
 			pins.add(row.id);

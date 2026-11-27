@@ -166,9 +166,11 @@ async function journey(browser, theme) {
 		);
 		await tile(page, VIEW.roles).click();
 		check(
-			`journey ${theme}: a tile opens (aria-expanded) and shows its map and Done when`,
+			`journey ${theme}: a tile opens (aria-expanded) and shows its map and full milestones`,
 			(await tile(page, VIEW.roles).getAttribute("aria-expanded")) === "true" &&
-				/Done when/.test(await page.locator("body").innerText()),
+				/Milestones/.test(await page.locator("body").innerText()) &&
+				/Spec landed/.test(await page.locator("body").innerText()) &&
+				(await page.locator('[data-group="project:roles-by-project"] .rbp-gbody .rbp-task').count()) > 0,
 		);
 		// Architecture rm-b04e515c (ruling A): targets and axe cover the page root .rbp and any dialog it opens
 		// outside it, never the app's shell; a missing root fails. Checked twice: the page, then the answer dialog

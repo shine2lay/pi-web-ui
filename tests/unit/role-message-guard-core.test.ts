@@ -915,6 +915,58 @@ describe("expanded V2 core: exact boundaries with unchanged V1 vectors below", (
 	});
 });
 
+describe("peer native envelopes use the existing approval transaction", () => {
+	it("keeps pn routing in the outbox, spends once, and replays after restart without live context", async () => {
+		const t = await fixture();
+		const g = await t.grant(7, 1);
+		const id = "pn-1111111111111111";
+		const target = "/synthetic/task-peer.jsonl";
+		const peer = { v: 1, queue: "/synthetic/home.jsonl", fromTask: 1, toTask: 2, kind: "question" } as const;
+		const core = new RoleMessageGuardCore({
+			...t.options,
+			businessRoute: () => ({ id, target }),
+			materialize: async (intent) => ({ ...(await t.options.materialize(intent)), peer, peerTextHash: "raw-hash" }),
+		});
+		const command = t.business("peer-granted", 7, g.id, g.authority);
+		const result = await core.execute(command);
+		expect(result).toMatchObject({ state: "accepted", receipt: { messageId: id } });
+		const state = await t.state();
+		expect(state.grants[0]).toMatchObject({ acceptedUses: 1, state: "exhausted" });
+		expect(state.outbox.find((entry) => entry.message.id === id)?.message).toMatchObject({
+			id,
+			target,
+			peer,
+			peerTextHash: "raw-hash",
+		});
+		const restart = new RoleMessageGuardCore(t.options);
+		expect(await restart.execute(command)).toMatchObject({ state: "accepted", receipt: { messageId: id } });
+		expect((await t.state()).grants[0].acceptedUses).toBe(1);
+		expect(reason(await restart.execute(t.identified({ ...command, text: "changed text" })))).toBe("identity_conflict");
+		expect((await t.state()).outbox.filter((entry) => entry.message.id === id)).toHaveLength(1);
+		expect(reason(await core.execute(t.business("peer-second-use", 7, g.id, g.authority)))).toBe("grant_exhausted");
+	});
+	it("does not invoke native routing for wrong-scope or expired grants", async () => {
+		const t = await fixture();
+		const g = await t.grant(7, 1);
+		let routes = 0;
+		const core = new RoleMessageGuardCore({
+			...t.options,
+			businessRoute: () => {
+				routes++;
+				return { id: "pn-2222222222222222", target: "/synthetic/task.jsonl" };
+			},
+		});
+		const cmd = t.business("peer-wrong-scope", 7, g.id, g.authority);
+		expect(reason(await core.execute(t.identified({ ...cmd, scope: { ...cmd.scope, scopeId: "other" } })))).toBe(
+			"scope_mismatch",
+		);
+		t.f.now = (await t.state()).grants.find((grant) => grant.id === g.id)!.expiresAt;
+		expect(reason(await core.execute(t.business("peer-expired", 7, g.id, g.authority)))).toBe("grant_expired");
+		expect(routes).toBe(0);
+		expect((await t.state()).grants[0].acceptedUses).toBe(0);
+	});
+});
+
 describe("E admission: frozen policy and real-host boundary requirements", () => {
 	it("rejects wrong contract/policy/caps and does not construct a default runtime", async () => {
 		const t = await fixture();

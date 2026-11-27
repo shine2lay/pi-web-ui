@@ -41,10 +41,29 @@
 // ---------------------------------------------------------------------------
 
 import { createHash, randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { open, type FileHandle } from "node:fs/promises";
+import {
+	appendFileSync,
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import {
+	eachLine,
+	eachLineWith,
+	firstTextOf,
+	userTextOf,
+	assistantTextOf,
+	transcriptHasRoleMessage,
+} from "./role-message-transcript.js";
+export { eachLineWith, firstTextOf, transcriptHasRoleMessage } from "./role-message-transcript.js";
+import { peerNoteText, type PeerBlock } from "./peer-notes.js";
+import { peerDeliveryGate, settlePeerReceipt, type PeerDeliveryHost } from "./peer-note-delivery.js";
 import { dirname } from "node:path";
-import { StringDecoder } from "node:string_decoder";
+
 import { stallHint, stallReplyRefusal, stallTopic } from "./stall-hints.js";
 import { checkInitiative } from "./decision-records.js";
 import { samePath, type IdentityDef } from "./identities.js";
@@ -161,6 +180,9 @@ export type RoleMessageState = UiRoleMessageState;
 
 export interface RoleMessageRecord {
 	id: string;
+	peer?: PeerBlock;
+	peerReceipt?: "pending" | "delivered" | "store";
+	peerTextHash?: string;
 	/** When it was sent. */
 	at: number;
 	/** Stamped by the server: the sending chat's role, the role's title, which chat ("home chat",
@@ -347,7 +369,7 @@ type RoleMessageSchedule = (schedule: () => void) => void;
 const inSchedulingContext: RoleMessageSchedule = (schedule) => schedule();
 
 /** What the server does for the delivery (AgentService). */
-export interface RoleMessageHost extends tagRules.TagGovernanceHost {
+export interface RoleMessageHost extends tagRules.TagGovernanceHost, Partial<PeerDeliveryHost> {
 	/** Canonical inbox projection: open/claimed sources and pending effect original/reply IDs. */
 	retentionPins?(): ReadonlySet<string>;
 	/** Reorder existing waiting rows only; recipient/route policy belongs to the inbox service. */
@@ -529,7 +551,11 @@ export function roleMessageHint(r: HeaderParts, opts: { ownerAnswer?: boolean } 
 }
 
 /** The text that goes into the receiving chat. */
-export function roleMessageText(r: HeaderParts & { text: string }, opts: { ownerAnswer?: boolean } = {}): string {
+export function roleMessageText(
+	r: HeaderParts & { text: string; peer?: PeerBlock },
+	opts: { ownerAnswer?: boolean } = {},
+): string {
+	if (r.peer) return peerNoteText({ id: r.id, text: r.text, peer: r.peer }, r.peer.fromSpecialist ?? r.from.title);
 	return `${roleMessageHeader(r)}\n\n${r.text}\n\n${roleMessageHint(r, opts)}`;
 }
 
@@ -609,7 +635,9 @@ export function roleMessageIdOf(text: string): string | undefined {
 			text,
 		);
 	if (retry) return HEADER_RE.exec(text.slice(retry[0].length))?.[1] === retry[1] ? retry[1] : undefined;
-	return HEADER_RE.exec(text)?.[1];
+	return (
+		HEADER_RE.exec(text)?.[1] ?? /^Peer note from task #[^\n]+\n[^\n]+\n\[Peer note (pn-[0-9a-f]{16})\]/.exec(text)?.[1]
+	);
 }
 
 export function newRoleMessageId(taken: (id: string) => boolean): string {
@@ -625,7 +653,7 @@ function backoffMs(attempts: number): number {
 
 /** roles-overview / roles-sent: a request or question with no reply yet; a failed one isn't open. */
 function openRequest(m: RoleMessageRecord): boolean {
-	if (m.kind !== "request" && m.kind !== "question") return false;
+	if (m.peer || (m.kind !== "request" && m.kind !== "question")) return false;
 	return !m.replyId && m.state !== "replied" && m.state !== "failed";
 }
 
@@ -641,95 +669,6 @@ function firstLine(text: string, max = 120): string {
 // ---------------------------------------------------------------------------
 // Transcripts on disk
 // ---------------------------------------------------------------------------
-
-/** Each line of the transcript (from byte `from`) that holds `needle`, parsed; streamed. */
-export async function eachLineWith(
-	file: string,
-	from: number,
-	needle: string,
-	fn: (entry: unknown) => boolean,
-): Promise<void> {
-	await eachLine(file, from, (line) => {
-		if (!line.includes(needle)) return false;
-		try {
-			return fn(JSON.parse(line));
-		} catch {
-			return false;
-		}
-	});
-}
-
-/** Each line of the transcript from byte `from` (raw); streamed. `take` returns true to stop. */
-async function eachLine(file: string, from: number, take: (line: string) => boolean): Promise<void> {
-	let fh: FileHandle | undefined;
-	try {
-		fh = await open(file, "r");
-		const decoder = new StringDecoder("utf8");
-		const chunk = Buffer.alloc(256 * 1024);
-		let carry = "";
-		for (let pos = Math.max(0, from); ;) {
-			const { bytesRead } = await fh.read(chunk, 0, chunk.length, pos);
-			if (!bytesRead) {
-				take(carry + decoder.end());
-				return;
-			}
-			pos += bytesRead;
-			const lines = (carry + decoder.write(chunk.subarray(0, bytesRead))).split("\n");
-			carry = lines.pop() ?? "";
-			for (const line of lines) if (take(line)) return;
-		}
-	} catch {
-		// unreadable: nothing found
-	} finally {
-		await fh?.close().catch(() => {});
-	}
-}
-
-/** A message's first text (content as a string or as blocks). */
-export function firstTextOf(c: unknown): string | undefined {
-	if (typeof c === "string") return c;
-	if (!Array.isArray(c)) return undefined;
-	const first = c.find((b) => (b as { type?: unknown })?.type === "text") as { text?: unknown } | undefined;
-	return typeof first?.text === "string" ? first.text : undefined;
-}
-
-function userTextOf(entry: unknown): string | undefined {
-	const e = entry as { type?: unknown; message?: { role?: unknown; content?: unknown } };
-	if (e?.type !== "message" || e.message?.role !== "user") return undefined;
-	return firstTextOf(e.message.content);
-}
-
-/** The first text of a role-message custom entry (an FYI added without a turn). */
-function noteTextOf(entry: unknown): string | undefined {
-	const e = entry as { type?: unknown; customType?: unknown; content?: unknown };
-	if (e?.type !== "custom_message" || e.customType !== ROLE_MESSAGE_CUSTOM_TYPE) return undefined;
-	return firstTextOf(e.content);
-}
-
-/** Whether a user message (or, for an FYI, a role-message custom entry) starting with this message's
- *  header is in the transcript after `from`. */
-export async function transcriptHasRoleMessage(file: string, from: number, id: string): Promise<boolean> {
-	const needle = `[Role message ${id} `;
-	let found = false;
-	await eachLineWith(file, from, needle, (entry) => {
-		found = (userTextOf(entry) ?? noteTextOf(entry))?.startsWith(needle) === true;
-		return found;
-	});
-	return found;
-}
-
-/** An assistant message's text blocks, joined (thinking and tool calls left out). */
-function assistantTextOf(entry: unknown): string | undefined {
-	const e = entry as { type?: unknown; message?: { role?: unknown; content?: unknown } };
-	if (e?.type !== "message" || e.message?.role !== "assistant") return undefined;
-	const c = e.message.content;
-	if (typeof c === "string") return c;
-	if (!Array.isArray(c)) return undefined;
-	return c
-		.filter((b) => (b as { type?: unknown })?.type === "text" && typeof (b as { text?: unknown }).text === "string")
-		.map((b) => (b as { text: string }).text)
-		.join("\n");
-}
 
 /** role-reports: what a chat answered to a report request, as checks only (no text leaves this). */
 export interface RoleReportScan {
@@ -900,16 +839,19 @@ const fileRoleMessagePersistence: RoleMessagePersistence = {
 	saveStore: (file, data) => {
 		mkdirSync(dirname(file), { recursive: true });
 		const tmp = `${file}.${process.pid}.tmp`;
-		writeFileSync(tmp, JSON.stringify(data));
+		writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
+		chmodSync(tmp, 0o600);
 		renameSync(tmp, file);
 	},
 	appendChains: (file, facts) => {
 		mkdirSync(dirname(file), { recursive: true });
-		appendFileSync(file, facts.map((f) => `${JSON.stringify(f)}\n`).join(""));
+		appendFileSync(file, facts.map((f) => `${JSON.stringify(f)}\n`).join(""), { mode: 0o600 });
+		chmodSync(file, 0o600);
 	},
 	replaceChains: (file, facts) => {
 		const tmp = `${file}.${process.pid}.tmp`;
-		writeFileSync(tmp, facts.map((f) => `${JSON.stringify(f)}\n`).join(""));
+		writeFileSync(tmp, facts.map((f) => `${JSON.stringify(f)}\n`).join(""), { mode: 0o600 });
+		chmodSync(tmp, 0o600);
 		renameSync(tmp, file);
 	},
 };
@@ -1249,14 +1191,20 @@ export class RoleMessages {
 		sessionFile: string | undefined,
 		m: { role?: unknown; customType?: unknown; content?: unknown },
 	): UiRoleMessage | undefined {
-		if (m.role !== "user" && !(m.role === "custom" && m.customType === ROLE_MESSAGE_CUSTOM_TYPE)) return undefined;
+		if (
+			m.role !== "user" &&
+			!(m.role === "custom" && (m.customType === ROLE_MESSAGE_CUSTOM_TYPE || m.customType === "peer-note"))
+		)
+			return undefined;
 		const text = firstTextOf(m.content);
+		if (m.customType === "peer-note") return text ? this.stampFor(sessionFile, text) : undefined;
 		return text?.startsWith("[Role message ") ? this.stampFor(sessionFile, text) : undefined;
 	}
 
 	/** The last `n` messages, newest first, for Settings → Identities. */
-	rows(n = ROLE_MESSAGES_LIST): UiRoleMessageRow[] {
+	rows(n = ROLE_MESSAGES_LIST, viewer: { owner?: boolean; dept?: string } = { owner: true }): UiRoleMessageRow[] {
 		return this.data.messages
+			.filter((m) => !m.peer || viewer.owner === true || viewer.dept === m.from.role)
 			.slice(-n)
 			.reverse()
 			.map((m) => ({
@@ -1296,7 +1244,7 @@ export class RoleMessages {
 		const since = this.now() - windowMs;
 		const roles = new Set<string>();
 		for (const m of this.data.messages) {
-			if (m.at < since || m.from.role !== fromRole) continue;
+			if (m.peer || m.at < since || m.from.role !== fromRole) continue;
 			if (m.kind !== "question" && m.kind !== "request" && m.kind !== "fyi") continue;
 			if (sameTextKey(m.text) === want) roles.add(m.to.role);
 		}
@@ -1691,6 +1639,13 @@ export class RoleMessages {
 		return this.data.messages.filter((m) => m.at > since);
 	}
 
+	peerNow(): number {
+		return this.now();
+	}
+	peerHourlyRefusal(role: string): string | null {
+		return roleMessagesHourlyRefusal(role, this.hourlyCount(role), this.policy, this.now());
+	}
+
 	hourlyCount(role: string, now = this.now()): number {
 		return this.data.messages.filter((m) => m.kind !== "report" && m.from.role === role && now - m.at < HOUR_MS).length;
 	}
@@ -1768,9 +1723,11 @@ export class RoleMessages {
 	): { ok: true; record: RoleMessageRecord; paused: boolean; targetChat: string } {
 		const existing = this.byId(input.id);
 		const targetChatOf = (r: RoleMessageRecord) =>
-			r.kind === "reply" && r.replyTo
-				? `the chat that asked (${this.byId(r.replyTo)?.from.chat ?? "?"}), else its home chat`
-				: "its home chat";
+			r.peer
+				? `task #${r.peer.toTask}`
+				: r.kind === "reply" && r.replyTo
+					? `the chat that asked (${this.byId(r.replyTo)?.from.chat ?? "?"}), else its home chat`
+					: "its home chat";
 		if (existing) return { ok: true, record: existing, paused: this.data.paused, targetChat: targetChatOf(existing) };
 		const record: RoleMessageRecord = structuredClone(input);
 		const original = record.kind === "reply" && record.replyTo ? this.byId(record.replyTo) : undefined;
@@ -1781,8 +1738,8 @@ export class RoleMessages {
 			} catch {
 				size = 0;
 			}
-			record.scanFrom = size;
-			record.targetChat = record.targetChat ?? "the requesting chat";
+			record.scanFrom = record.peer ? 0 : size;
+			record.targetChat = record.targetChat ?? (record.peer ? `task #${record.peer.toTask}` : "the requesting chat");
 		}
 		this.data.messages.push(record);
 		// The words the receiving chat will see (as step() hashes them), so it can prove the message.
@@ -1800,7 +1757,7 @@ export class RoleMessages {
 		);
 		this.kick(schedule);
 		try {
-			this.host.sent?.(record);
+			if (!record.peer) this.host.sent?.(record);
 		} catch (err) {
 			this.log(`${record.id}: couldn't keep its decision record (${(err as Error).message})`);
 		}
@@ -1849,6 +1806,7 @@ export class RoleMessages {
 		let original: RoleMessageRecord | undefined;
 		if (kind === "reply") {
 			if (!replyTo) return { ok: false, error: "kind reply needs replyTo: the id of the message you answer (rm-…)." };
+			if (replyTo.startsWith("pn-")) return { ok: false, error: "Peer notes can only be answered with peer_note." };
 			original = this.byId(replyTo);
 			if (!original) return { ok: false, error: `There's no message ${replyTo} to reply to.` };
 			if (original.kind === "report" && original.stall)
@@ -1962,6 +1920,13 @@ export class RoleMessages {
 							this.log(`${r.id}: ${(err as Error).message}`);
 						}
 					}
+					for (const r of this.data.messages.filter((m) => m.peerReceipt === "pending")) {
+						try {
+							if (await settlePeerReceipt(r, this.host)) this.save();
+						} catch (err) {
+							this.log(`${r.id}: receipt pending (${(err as Error).message})`);
+						}
+					}
 					// role-reports: the delivered report requests whose answer isn't checked yet.
 					for (const r of this.data.messages.filter(
 						(m) => m.kind === "report" && m.state !== "waiting" && m.state !== "failed" && m.report && !m.report.reply,
@@ -2025,6 +1990,7 @@ export class RoleMessages {
 	private fail(r: RoleMessageRecord, error: string): void {
 		r.state = "failed";
 		r.error = error;
+		if (r.peer) r.peerReceipt = "pending";
 		this.inFlight.delete(r.id);
 		this.save();
 		this.log(`${r.id} failed: ${error}`);
@@ -2033,7 +1999,7 @@ export class RoleMessages {
 
 	/** decision-records (Ops #711): the host keeps a sent message's arrival or failure; that never stops a delivery. */
 	private deliverySettled(r: RoleMessageRecord, at: number): void {
-		if (r.kind === "report") return;
+		if (r.peer || r.kind === "report") return;
 		try {
 			this.host.deliverySettled?.(r, at);
 		} catch (err) {
@@ -2044,6 +2010,7 @@ export class RoleMessages {
 	/** Where a message goes: the reply's asking chat (if still there and not a finished task's), else
 	 *  the receiving role's home chat. */
 	private async route(r: RoleMessageRecord): Promise<{ file: string; label: string } | { error: string }> {
+		if (r.peer) return r.target ? { file: r.target, label: `task #${r.peer.toTask}` } : { error: "undelivered:moved" };
 		if (r.kind === "reply" && r.replyTo) {
 			const asked = this.byId(r.replyTo)?.from;
 			if (asked?.file && existsSync(asked.file) && !(await taskChatFinished(asked.file))) {
@@ -2064,13 +2031,13 @@ export class RoleMessages {
 	): Promise<void> {
 		const now = this.now();
 		// Held while paused doesn't count: a held message gets a fresh day from the resume.
-		if (now - Math.max(r.at, this.data.resumedAt ?? 0) > ROLE_MESSAGE_GIVE_UP_MS) {
+		if (!r.peer && now - Math.max(r.at, this.data.resumedAt ?? 0) > ROLE_MESSAGE_GIVE_UP_MS) {
 			this.fail(r, r.error ? `not delivered within a day (last error: ${r.error})` : "not delivered within a day");
 			return;
 		}
 		if (r.nextTryAt && now < r.nextTryAt) return;
 		const text = roleMessageText(r, { ownerAnswer: !!this.ownerAnswerOf(r.id) });
-		if (!r.target || !existsSync(r.target)) {
+		if (!r.peer && (!r.target || !existsSync(r.target))) {
 			const route = await this.route(r);
 			if ("error" in route) {
 				this.fail(r, route.error);
@@ -2090,6 +2057,10 @@ export class RoleMessages {
 			this.save();
 		}
 		const target = r.target;
+		if (!target) {
+			this.fail(r, "undelivered:moved");
+			return;
+		}
 		if (resumeFile && !samePath(target, resumeFile)) return; // a route changed while reopening
 		if (await transcriptHasRoleMessage(target, r.scanFrom ?? 0, r.id)) {
 			// Answered while on its way (the chat took it and replied before this look): "replied".
@@ -2105,6 +2076,12 @@ export class RoleMessages {
 			return;
 		}
 		const state = this.host.chatState(target);
+		const peer = r.peer ? await peerDeliveryGate(r, this.host, now, this.data.resumedAt ?? 0, state) : undefined;
+		if (peer?.action === "failed") {
+			this.fail(r, peer.reason!);
+			return;
+		}
+		if (peer?.action === "defer") return;
 		// CI must start its own app turn, never inherit a running owner's Telegram attribution.
 		// A carry-on is also an existing turn: leave the alert in the outbox until it settles.
 		// script-notice (Ops #782): a script's request likewise.
@@ -2129,14 +2106,18 @@ export class RoleMessages {
 		}
 		// An FYI starts no turn: it is added to the chat and read with its next message. queue-paused: so is
 		// anything for a task's chat the owner paused; the chat reads it once the pause is lifted.
-		const paused = !noTurn(r) && (await taskChatPaused(target));
+		const paused = !r.peer && !noTurn(r) && (await taskChatPaused(target));
 		// quiet-turns: a message routed before an update changed its hint line goes in with the new text; the
 		// store's hash follows what is sent, so the page still gets its stamp.
 		if (r.hash !== sha1(text)) {
 			r.hash = sha1(text);
 			this.save();
 		}
-		const res = noTurn(r) || paused ? await delivery.note(target, text) : await delivery.deliver(target, text);
+		const res = peer
+			? await this.host.peerNote!(target, text, { turn: peer.turn === true, followUp: peer.action === "followup" })
+			: noTurn(r) || paused
+				? await delivery.note(target, text)
+				: await delivery.deliver(target, text);
 		if (res.ok && paused)
 			this.log(`${r.id} added to ${r.targetChat ?? "?"} without a turn: its task is paused by the owner`);
 		if (res.ok) {

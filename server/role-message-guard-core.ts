@@ -136,6 +136,10 @@ export interface GuardCoreOptions {
 	 * or remaining uses; E checks id/time/actor/recipient/kind/words/chain/reply/target and blocks on any mismatch.
 	 */
 	readonly materialize: (intent: GuardMessageIntent) => Promise<GuardLegacyAcceptedMessage>;
+	/** Native business identity/routing only; never authority or policy. Runs under the same writer. */
+	readonly businessRoute?: (
+		command: Extract<GuardCommandAny, { kind: "business_send" }>,
+	) => { id: string; target: string } | undefined;
 	/** Deterministic host identity for E's own outbox/rollback maintenance commits. */
 	readonly maintenanceIdentity: (purpose: "rollback" | "outbox", key: string) => GuardOperationIdentity;
 	/** Native Owner authorisation for rollback to depth-only; false blocks. */
@@ -151,11 +155,9 @@ export interface GuardCoreOptions {
 	/** #379: durably records these settlements before E applies them; false applies none. Synchronous, under the writer. */
 	readonly recordSettlements?: (settled: readonly GuardEvidenceSettlement[]) => boolean;
 }
-/** #379: the native store's evidence for one delivery: finished ("done" or "failed") with its proof, or not yet. */
 export type GuardDeliveryEvidence =
 	| { readonly outcome: "done" | "failed"; readonly native: string; readonly proof: GuardProofReference }
 	| { readonly outcome: "pending" };
-/** #379: one outbox entry settled from native evidence (before and after), as recorded before it is applied. */
 export interface GuardEvidenceSettlement {
 	readonly before: GuardOutboxEntry;
 	readonly after: GuardOutboxEntry;
@@ -558,7 +560,6 @@ export class RoleMessageGuardCore implements GuardCoordinatorAny {
 		if (!recorded) return;
 		const next = new Map(settled.map((s) => [s.before.receipt.outboxId, s.after]));
 		state.outbox = state.outbox.map((o) => next.get(o.receipt.outboxId) ?? o);
-		// The send's idempotent result follows its entry, as an outbox step does (its receipt is unchanged).
 		const bySend = new Map(settled.map((s) => [s.before.receipt.identity.operationId, s.after]));
 		state.transactions = state.transactions.map((t) => {
 			const after = bySend.get(t.identity.operationId);
@@ -575,8 +576,6 @@ export class RoleMessageGuardCore implements GuardCoordinatorAny {
 		state.tombstones = state.tombstones.filter(
 			(t) => t.invalidThrough === "source_horizon_unknown" || t.invalidThrough > now,
 		);
-		// Ops #416 H-WW-SCAN-1: built on first use (a prune with nothing to look up never reads the receipts) and used only
-		// before the receipts are filtered below.
 		let index: ReturnType<typeof guardAuditIndex> | undefined;
 		const receipts = () => (index ??= guardAuditIndex(state.audits));
 		const terminal = new Set(
@@ -735,7 +734,6 @@ export class RoleMessageGuardCore implements GuardCoordinatorAny {
 		legacyAccepted: readonly GuardLegacyAcceptedMessage[],
 		now: number,
 	): GuardAtomicMutationAny {
-		// Ops #416 H-WW-SCAN-1: a pure digest of the identity, worked out once instead of once per receipt scanned.
 		const transactionId = guardTransactionId(identity);
 		if (!state.audits.some((a) => a.transactionId === transactionId))
 			this.audit(state, identity, "used", `operation:${result.state}`, now);
@@ -1228,6 +1226,7 @@ export class RoleMessageGuardCore implements GuardCoordinatorAny {
 			const lineage = await this.options.verifyGrantLineage(grant, snapshot, command.scope, command.to);
 			if (lineage.state !== "verified" || !equal(lineage.value, snapshot)) return deny("authority_unavailable");
 		}
+		const route = this.options.businessRoute?.(command);
 		const result = await this.accepted(
 			state,
 			command,
@@ -1246,6 +1245,8 @@ export class RoleMessageGuardCore implements GuardCoordinatorAny {
 				protectedSystem: 0,
 				newIncidentOrigin: 0,
 			},
+			route?.id,
+			route?.target ?? null,
 		);
 		if (result.result.state === "accepted" && grantIndex >= 0) {
 			const grant = state.grants[grantIndex];
@@ -1583,7 +1584,6 @@ export class RoleMessageGuardCore implements GuardCoordinatorAny {
 			if (index < 0 || !equal(state.outbox[index], entry)) throw new Error("outbox changed under reconciliation");
 			state.outbox[index] = next;
 			this.audit(state, identity, "used", `outbox:${entry.receipt.outboxId}`, now, next.lastEvidence);
-			// Durable delivery state is reflected in the original operation's idempotent result too.
 			const settled = next;
 			state.transactions = state.transactions.map((t) =>
 				t.state === "committed" &&

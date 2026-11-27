@@ -89,6 +89,7 @@
 		"@earendil-works/chord": "1.4.0",
 		"@earendil-works/pi-ai": "1.5.2",
 		"@earendil-works/pi-coding-agent": "1.5.2",
+		"@earendil-works/pi-schema": "1.5.2",
 		"@earendil-works/pi-durable": "1.4.0",
 		"@simplewebauthn/browser": "14.0.0",
 		"@simplewebauthn/server": "14.1.0",

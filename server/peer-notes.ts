@@ -1,207 +1,279 @@
-/**
- * department-specialists Phase 2 (Ops #1113, Rule 18 Task 1 seam; Architecture #595 §6c, 6d, 6e; Security GO
- * rm-60a0302d): `peer_note`, a private note from one running task of department `d`'s home queue to another.
- *
- * - The check (6c.2-6c.5) and the delivery decision (6d.2) are pure functions over the corpus's own input shape
- *   (department-specialists-collab.cases.json), so the shared cases drive them directly; the server builds the same
- *   shape from its live state (pi-queue tasks via task-queue.ts, the chat's identity entries, the role-message store).
- * - Records live in role-messages.json (ids `pn-`), stored by one store method; chain and hourly limits are the
- *   role-message ones (ROLE_MESSAGE_POLICY), no number of their own. The store file keeps its 0600 mode.
- * - Delivery is the existing dispatcher with one branch (6d.2): a `peer-note` custom message, never a user-role
- *   message, never steering; paused/held targets defer with nothing written; closed/moved/expired fail with one
- *   receipt to the sender's task chat (or the store only), never the lead home. `transcriptHasRoleMessage` (the one
- *   proof function in role-messages.ts) recognises the peer-note text.
- * - Privacy (R-COL-PRIV-1): the owner and the department itself see peer records; other departments see none.
- * - pi-identity decides whether the sending chat's sealed tool set allows `peer_note` (`toolAllowed`).
- *
- * role-messages.ts, identities.ts and agent-service.ts are over the size cap: they import from here and do not grow.
- * Task 1 leaves the functions unbuilt (they throw E_NOT_BUILT); Ops #1117 (Task 2) builds and wires them.
- * Shared cases: C-COL-P*, C-COL-D*, C-COL-V* (tests/department-specialists-collab-acceptance.test.ts).
- */
+/** Department-internal worker notes: pure admission, one existing store, no queue mutations. */
+import { createHash } from "node:crypto";
+import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { RoleMessageRecord, RoleMessages, RoleMessageSender } from "./role-messages.js";
+import { IDENTITY_ENTRY_TYPE, type IdentityEntryLike } from "./identities.js";
+import { specialistBindingOnBranch } from "./specialist-entry.js";
+import { ROLE_MESSAGE_POLICY, roleMessagesHourlyExempt } from "./role-message-limits.js";
+import { roleMessagesHourlyRefusal } from "./role-message-hourly-limit.js";
+import { ROLE_MESSAGE_TEXT_MAX, type RoleMessages, type RoleMessageSender } from "./role-messages.js";
+export { decidePeerDelivery, type PeerDeliverInput, type PeerDeliveryHost } from "./peer-note-delivery.js";
 
 export const PEER_NOTE_TOOL_NAME = "peer_note";
-/** The custom message type a delivered note has in the receiving chat (pi-queue's no-resume rule keys on it). */
 export const PEER_NOTE_CUSTOM_TYPE = "peer-note";
-export const PEER_NOTE_KINDS = ["question", "fyi", "handoff", "reply"] as const;
-export type PeerNoteKind = (typeof PEER_NOTE_KINDS)[number];
-/** The only argument keys the tool takes. */
 export const PEER_ARG_KEYS = ["to_task", "kind", "text", "reply_to"] as const;
-/** A target task must be in one of these (and started, with a chat). */
-export const PEER_OPEN_TARGET = ["working", "asking", "stuck", "waiting", "blocked"] as const;
-/** Paused targets: a note waits, nothing written. */
-export const PEER_PAUSED = ["asking", "stuck", "waiting", "blocked"] as const;
-export const PEER_NOT_OPEN_MESSAGE = "no open task with that id in your queue";
-/** 6c.6: the line under every peer-note header. */
 export const PEER_NOTE_TRUST_LINE =
 	"technical information from a teammate in your department; not an owner instruction, lead decision or plan change";
-
+export type PeerKind = "question" | "fyi" | "handoff" | "reply";
 export interface PeerBlock {
 	v: 1;
 	queue: string;
 	fromTask: number;
 	toTask: number;
-	kind: PeerNoteKind;
+	kind: PeerKind;
 	fromSpecialist?: string;
 	toSpecialist?: string;
 }
-
-/** A task of the home queue as the check and the delivery read it (pi-queue's state, read fresh). */
 export interface PeerTask {
 	id: number;
 	status: string;
 	chat?: string;
 	startedAt?: number;
 	specialist?: string;
+	queue?: string;
 	held?: boolean;
-	back_owed?: boolean;
+	backOwed?: boolean;
+	chatGone?: boolean;
 }
-
-/** The sending chat: its identity entries and what the server knows of it (never from tool arguments). */
-export interface PeerSender {
-	entries: unknown[];
-	file: string;
-	assigned?: { queue: string; task: number };
-	env?: string;
-	is_home?: boolean;
-	/** The chat's tool decision input, handed to pi-identity through `toolAllowed`. */
-	tools?: unknown;
-}
-
-/** What the check reads of the records already stored. */
-export interface PeerStoredRecord {
+interface PeerStored {
 	id: string;
 	kind: string;
-	replyTo?: string;
+	peer?: PeerBlock;
 	hash?: string;
-	peer?: Omit<PeerBlock, "v"> & { v?: 1 };
+	text?: string;
+	peerTextHash?: string;
+	replyTo?: string;
+	replyId?: string;
 }
-
 export interface PeerSendInput {
-	sender: PeerSender;
+	sender: {
+		entries: unknown[];
+		file: string;
+		assigned?: { queue: string; task: number };
+		tools?: unknown;
+		is_home?: boolean;
+		env?: string;
+	};
 	home_chat: string;
 	home_dept: string;
 	tasks: PeerTask[];
 	args: unknown;
 	call_id?: string;
-	store?: PeerStoredRecord[];
-	/** The role-message chain this send would be (the sending turn's chain + 1). */
+	store?: PeerStored[];
 	chain?: number;
-	/** An approval grant held for the chain (`owner`, or `coo` through message 22). */
-	grant?: string;
-	/** Role messages the department sent in the last hour. */
+	grant?: "coo" | "owner";
 	hourly_used?: number;
+	root?: string;
+	parent?: string;
+	/** Host-resolved policy refusal (including temporary overrides), never a tool argument. */
+	hourly_refusal?: string | null;
 }
-
-export type PeerSendDecision =
-	| {
-			result: "allow";
-			id: string;
-			/** The stored kind: handoff is stored as fyi; the arg kind stays in `peer.kind`. */
-			kind: "question" | "fyi" | "reply";
-			to_role: string;
-			target: string;
-			records_added: 0 | 1;
-			deliveries_added?: 0;
-			from_specialist?: string;
-			peer: PeerBlock;
-	  }
-	| { result: "refuse"; code: string; message?: string; step?: number; records_added: 0 };
-
-/** pi-identity's per-chat tool decision (true: the chat's sealed set allows the tool). */
 export type PeerToolAllowed = (tools: unknown, name: string) => boolean;
-
-export interface PeerDeliverInput {
-	record: { kind: string; target: string; peer: { queue: string; toTask: number } };
-	target_task: Pick<PeerTask, "status" | "chat" | "held" | "back_owed"> | null;
-	target_queue: string;
-	chat_state?: "idle" | "streaming";
-	sender_status?: string;
-	age_ms?: number;
-	landed?: boolean;
-}
-
-export type PeerDeliverDecision = {
-	result: "allow";
-	action: "followup" | "note" | "defer" | "failed" | "none";
-	turn?: boolean;
-	steer?: false;
-	message_role?: "custom";
-	writes?: 0;
-	reason?: "undelivered:closed" | "undelivered:moved" | "undelivered:expired";
-	receipt?: "sender" | "store";
-	lead_home?: 0;
-	sends?: number;
-	state?: "delivered";
+export type PeerDecision = {
+	result: "allow" | "refuse";
+	code?: string;
+	message?: string;
+	step?: number;
+	records_added: number;
+	deliveries_added?: number;
+	id?: string;
+	kind?: "question" | "fyi" | "reply";
+	to_role?: string;
+	target?: string;
+	from_specialist?: string;
+	peer?: PeerBlock;
 };
+const refuse = (code: string, message?: string): PeerDecision => ({
+	result: "refuse",
+	code,
+	records_added: 0,
+	...(message ? { message } : {}),
+});
+const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+export const peerNoteId = (file: string, callId: string) => `pn-${sha(`${file}\n${callId}`).slice(0, 16)}`;
+export const peerTextHash = (text: string) => sha(JSON.stringify(text));
+export const peerTaskOpen = (t: Pick<PeerTask, "status"> | null | undefined) =>
+	!!t && ["working", "asking", "stuck", "waiting", "blocked"].includes(t.status);
 
-/** What the dispatcher's host gains for peer records (RoleMessageHost keeps today's deliver/note for the rest). */
-export interface PeerDeliveryHost {
-	/** A task of the record's queue by id, read fresh through the existing pi-queue reader right before each send,
-	 *  with the queue it is in now (a different queue = moved); null = gone. Also read for the sender's task. */
-	peerTask(queue: string, taskId: number): (PeerTask & { queue: string }) | null;
-	/** Add a `peer-note` custom message; `turn` true starts a turn when idle, a running turn gets it as a follow-up. */
-	peerNote(
-		file: string,
-		text: string,
-		opts: { turn: boolean },
-	): Promise<{ ok: true } | { ok: false; error: string; busy?: boolean }>;
+/** Reuse the canonical sticky identity reader; corpus inputs may carry just entry data. */
+function binding(input: PeerSendInput) {
+	return specialistBindingOnBranch(
+		input.sender.entries.map((e): IdentityEntryLike => {
+			const row = e && typeof e === "object" ? (e as Record<string, unknown>) : {};
+			return typeof row.type === "string"
+				? { type: row.type, customType: row.customType as string, data: row.data }
+				: { type: "custom", customType: IDENTITY_ENTRY_TYPE, data: row };
+		}),
+	)?.binding;
+}
+export function peerArgs(input: PeerSendInput): Record<string, unknown> | undefined {
+	if (!input.args || typeof input.args !== "object" || Array.isArray(input.args)) return;
+	const args = { ...(input.args as Record<string, unknown>) };
+	// Same identity-key stripping boundary as specialist tools; never strip routing keys.
+	if (binding(input)?.specialist)
+		for (const k of ["role", "user", "agent_id", "agentId", "specialist", "slug"]) delete args[k];
+	if (Object.keys(args).some((k) => !(PEER_ARG_KEYS as readonly string[]).includes(k))) return;
+	if (!Number.isSafeInteger(args.to_task) || Number(args.to_task) <= 0) return;
+	if (!["question", "fyi", "handoff", "reply"].includes(String(args.kind))) return;
+	if (typeof args.text !== "string" || !args.text.trim() || args.text.trim().length > ROLE_MESSAGE_TEXT_MAX) return;
+	if (args.kind === "reply" ? typeof args.reply_to !== "string" || !args.reply_to : "reply_to" in args) return;
+	return args;
+}
+export function preparePeerNote(input: PeerSendInput, toolAllowed: PeerToolAllowed): PeerDecision {
+	const args = peerArgs(input);
+	if (!args) return refuse("E_PEER_ARGS");
+	const b = binding(input);
+	if (b?.consult || !toolAllowed(input.sender.tools, PEER_NOTE_TOOL_NAME))
+		return { ...refuse("E_SPEC_DENIED"), step: 3 };
+	const assigned = input.sender.assigned;
+	const own = input.tasks.find((t) => t.id === assigned?.task);
+	if (
+		!b?.id ||
+		b.id !== input.home_dept ||
+		input.sender.is_home ||
+		!assigned ||
+		assigned.queue !== input.home_chat ||
+		own?.status !== "working" ||
+		own.chat !== input.sender.file
+	)
+		return refuse("E_PEER_SENDER");
+	const id = peerNoteId(input.sender.file, input.call_id ?? "");
+	const existing = input.store?.find((m) => m.id === id);
+	if (existing) {
+		if (
+			(existing.peerTextHash ?? (existing.text === undefined ? existing.hash : peerTextHash(existing.text))) !==
+			peerTextHash(String(args.text))
+		)
+			return refuse("E_PEER_ARGS");
+		return { result: "allow", id, records_added: 0, deliveries_added: 0 };
+	}
+	const target = input.tasks.find((t) => t.id === args.to_task);
+	if (!target || target.id === own.id || !peerTaskOpen(target) || !target.startedAt || !target.chat || target.chatGone)
+		return refuse("E_PEER_NOT_OPEN", "no open task with that id in your queue");
+	if (args.kind === "reply") {
+		const q = input.store?.find((m) => m.id === args.reply_to);
+		if (
+			!q ||
+			!/^pn-[0-9a-f]{16}$/.test(q.id) ||
+			q.kind !== "question" ||
+			q.peer?.kind !== "question" ||
+			q.peer.queue !== assigned.queue ||
+			q.peer.toTask !== own.id ||
+			q.peer.fromTask !== target.id ||
+			q.replyId ||
+			input.store?.some((m) => m.replyTo === q.id)
+		)
+			return refuse("E_PEER_REPLY");
+	}
+	const peer: PeerBlock = {
+		v: 1,
+		queue: assigned.queue,
+		fromTask: own.id,
+		toTask: target.id,
+		kind: args.kind as PeerKind,
+		...(b.specialist ? { fromSpecialist: b.specialist } : {}),
+		...(target.specialist ? { toSpecialist: target.specialist } : {}),
+	};
+	return {
+		result: "allow",
+		id,
+		records_added: 1,
+		kind: args.kind === "handoff" ? "fyi" : (args.kind as "question" | "fyi" | "reply"),
+		to_role: b.id,
+		target: target.chat,
+		...(b.specialist ? { from_specialist: b.specialist } : {}),
+		peer,
+	};
 }
 
-export type PeerViewer = { owner: true } | { dept: string };
-
-function notBuilt(name: string): never {
-	throw new Error(`E_NOT_BUILT: ${name} (department specialists Phase 2, Ops #1117 Task 2)`);
+/** Native fallback only; the approval host validates structurally then uses its atomic transaction. */
+export function decidePeerNote(input: PeerSendInput, toolAllowed: PeerToolAllowed): PeerDecision {
+	const result = preparePeerNote(input, toolAllowed);
+	if (result.result !== "allow" || !result.records_added) return result;
+	const chain = input.chain ?? 1;
+	const depth = ROLE_MESSAGE_POLICY.depth;
+	if (
+		chain > depth.unapprovedThrough &&
+		!(input.grant === "owner" || (input.grant === "coo" && chain <= depth.lowerThrough))
+	)
+		return refuse(
+			"E_ROLE_CHAIN",
+			`Not sent: this would be message ${chain} in one chain of role messages (the limit is ${depth.unapprovedThrough}). Stop the back-and-forth and ask the owner how to go on.`,
+		);
+	const hourly =
+		input.hourly_refusal !== undefined
+			? input.hourly_refusal
+			: roleMessagesHourlyRefusal(input.home_dept, input.hourly_used ?? 0, ROLE_MESSAGE_POLICY, 0);
+	if (!roleMessagesHourlyExempt(input.home_dept) && hourly) return refuse("E_ROLE_HOURLY", hourly);
+	return result;
 }
 
-/** 6c.2-6c.5 in the reference order: binding, tool, args, sender, duplicate id, target, reply, chain, hourly. */
-export function decidePeerNote(_input: PeerSendInput, _toolAllowed: PeerToolAllowed): PeerSendDecision {
-	return notBuilt("decidePeerNote");
-}
-
-/** 6c.4: check, then store one `pn-` record in role-messages.json (idempotent by id), starting its delivery. */
+/** The real store, not supplied snapshots, owns duplication, replies and hourly counts. */
 export function sendPeerNote(
-	_store: RoleMessages,
-	_sender: RoleMessageSender,
-	_input: PeerSendInput,
-	_toolAllowed: PeerToolAllowed,
-): PeerSendDecision {
-	return notBuilt("sendPeerNote");
+	store: RoleMessages,
+	sender: RoleMessageSender,
+	input: PeerSendInput,
+	allowed: PeerToolAllowed,
+): PeerDecision {
+	if (sender.file !== input.sender.file || sender.role !== input.home_dept) return refuse("E_PEER_SENDER");
+	const live = {
+		...input,
+		store: store.recent(-Infinity),
+		chain: input.chain ?? sender.handling + 1,
+		hourly_used: store.hourlyCount(sender.role),
+		hourly_refusal: store.peerHourlyRefusal(sender.role),
+	};
+	const result = decidePeerNote(live, allowed);
+	if (result.result !== "allow" || !result.records_added) return result;
+	const args = peerArgs(live)!;
+	const record = store.recordOf(
+		{ ...sender, specialist: result.from_specialist },
+		{
+			kind: result.kind!,
+			text: String(args.text).trim(),
+			to: { role: sender.role, title: sender.title },
+			replyTo: typeof args.reply_to === "string" ? args.reply_to : null,
+			initiative: "",
+		},
+		result.id!,
+		store.peerNow(),
+		live.chain,
+		{ target: result.target, root: input.root, parent: input.parent },
+	);
+	record.peer = result.peer;
+	record.peerTextHash = peerTextHash(String(args.text));
+	store.admit(record);
+	return result;
 }
-
-/** 6d.2: what the dispatcher does with a peer record now. */
-export function decidePeerDelivery(_input: PeerDeliverInput): PeerDeliverDecision {
-	return notBuilt("decidePeerDelivery");
+export function peerNoteText(r: { id: string; text: string; peer: PeerBlock }, title: string): string {
+	return `Peer note from task #${r.peer.fromTask} (${title}) · ${r.peer.kind}\n${PEER_NOTE_TRUST_LINE}\n[Peer note ${r.id}]\n\n${r.text}${r.peer.kind === "question" ? `\n\nanswer once with peer_note kind reply, reply_to ${r.id}, if useful` : ""}`;
 }
-
-/** 6c.6: the text the receiving chat sees (header, trust line, the note, and for a question the reply hint). */
-export function peerNoteText(
-	_record: Pick<RoleMessageRecord, "id" | "kind" | "text"> & { peer: PeerBlock },
-	_label: string,
-): string {
-	return notBuilt("peerNoteText");
+export function peerReceiptText(id: string, task: number, reason: string): string {
+	return `Peer note ${id} to task #${task} was not delivered: ${reason === "expired" ? "it stayed paused past the give-up" : reason === "moved" ? "the task moved" : "the task is closed"}`;
 }
-
-/** 6d.4: the one receipt a sender's open task chat gets when its note could not be delivered. */
-export function peerReceiptText(_id: string, _toTask: number, _why: "closed" | "expired"): string {
-	return notBuilt("peerReceiptText");
+export function peerNoteVisible(viewer: { owner?: boolean; dept?: string }, dept: string) {
+	return viewer.owner === true || viewer.dept === dept
+		? { visible: true }
+		: { visible: false, count_shown: 0, ids_shown: 0 };
 }
-
-/** R-COL-PRIV-1: whether a viewer sees a department's peer records (and how many / which ids). */
-export function peerNoteVisible(
-	_viewer: PeerViewer,
-	_recordDept: string,
-): { visible: boolean; count_shown?: 0; ids_shown?: 0 } {
-	return notBuilt("peerNoteVisible");
-}
-
-/** What the tool calls: the server builds the sender and queue state for the calling chat, then `sendPeerNote`. */
 export interface PeerNoteToolHost {
-	send(callerFile: string, toolCallId: string, args: unknown): PeerSendDecision;
+	send(args: unknown, toolCallId: string, context?: unknown): PeerDecision | Promise<PeerDecision>;
 }
-
-/** The tool definition (name PEER_NOTE_TOOL_NAME, parameters exactly PEER_ARG_KEYS). */
-export function makePeerNoteTool(_host: PeerNoteToolHost): ToolDefinition {
-	return notBuilt("makePeerNoteTool");
+export function makePeerNoteTool(host: PeerNoteToolHost): ToolDefinition {
+	return {
+		name: PEER_NOTE_TOOL_NAME,
+		label: "Peer note",
+		description:
+			"Send technical information to an open task in your own department queue. No secrets. Not a lead decision or plan change.",
+		parameters: Type.Object({
+			to_task: Type.Integer({ minimum: 1 }),
+			kind: Type.Union([Type.Literal("question"), Type.Literal("fyi"), Type.Literal("handoff"), Type.Literal("reply")]),
+			text: Type.String({ minLength: 1 }),
+			reply_to: Type.Optional(Type.String()),
+		}),
+		execute: async (id, args, _signal, _update, ctx) => {
+			const result = await host.send(args, id, ctx);
+			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+		},
+	};
 }

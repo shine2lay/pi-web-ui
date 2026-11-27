@@ -103,6 +103,8 @@ import {
 	type GuardFreshStartRequest,
 } from "./role-message-guard-host-files.js";
 export { GUARD_FRESH_START_MAX_BYTES } from "./role-message-guard-host-files.js";
+import { chooseGrant, rootOf, parentOf, same } from "./role-message-grant-selection.js";
+export { chooseGrant } from "./role-message-grant-selection.js";
 import { guardDigest, GuardFileStore, guardJournalRefusal } from "./role-message-guard-store.js";
 import {
 	guardInboxOperationReceipt,
@@ -110,6 +112,8 @@ import {
 	type GuardInboxOperationReceipt,
 } from "./role-message-guard-inbox-receipt.js";
 import { roleMessagesHourlyRefusal } from "./role-message-hourly-limit.js";
+import { preparePeerGuard, peerGuardRoute, stampGuardedPeer, type PeerGuardEnvelope } from "./peer-note-guard.js";
+import { sendPeerNote, type PeerDecision, type PeerSendInput, type PeerToolAllowed } from "./peer-notes.js";
 import {
 	ROLE_MESSAGE_GIVE_UP_MS,
 	type RoleMessageDraft,
@@ -220,80 +224,6 @@ function refused<T>(state: "unavailable" | "invalid" | "unknown", reason: string
 	return { state, reason };
 }
 const short = (v: unknown) => guardDigest(v).slice(0, 16);
-function same(a: unknown, b: unknown): boolean {
-	return guardDigest(a) === guardDigest(b);
-}
-function rootOf(c: GuardKnownCausality): string {
-	return c.kind === "rooted" ? c.rootId : c.anchorId;
-}
-function parentOf(c: GuardKnownCausality): string | undefined {
-	return c.incomingRecordId ?? undefined;
-}
-/** Which grant (if any) a business send uses. Pure, so the stage tests can pin it.
- *  - A grant belongs to one chain line: same root, and the record it was asked from is an ancestor of
- *    this send (branches after that point share its exact finite sends; a branch from before it can't use it).
- *  - Within the selected policy's free-hop band nothing is used unless the caller names a grant.
- *  - A relevant grant that is spent, expired, denied or revoked is still handed to E, so the sender hears
- *    the exact reason instead of a fresh "approval needed".
- *  - A relevant grant whose scope doesn't cover this sender, recipient, task or hop is a mismatch, and
- *    nothing is charged. */
-export function chooseGrant(input: {
-	grants: readonly GuardGrantAny[];
-	policy?: GuardPolicy;
-	causal: GuardKnownCausality;
-	actor: GuardActor;
-	to: string;
-	now: number;
-	wanted: string | null;
-	ancestorAt: (recordId: string, hop: number) => string | undefined;
-}): { kind: "none" } | { kind: "use"; grant: GuardGrantAny } | { kind: "mismatch"; grant: GuardGrantAny; why: string } {
-	const { causal, actor, to, now, wanted } = input;
-	const hop = causal.nextHop;
-	const onLine = (g: GuardGrantAny) => {
-		if (rootOf(g.binding.causal) !== rootOf(causal)) return false;
-		const anchor = parentOf(g.binding.causal);
-		const mine = parentOf(causal);
-		if (!anchor) return true; // asked at the root: the whole root is the line
-		return !!mine && input.ancestorAt(mine, g.binding.causal.nextHop - 1) === anchor;
-	};
-	const live = (g: GuardGrantAny) => g.state === "approved" && now < g.expiresAt && g.acceptedUses < g.maximumUses;
-	let pick: GuardGrantAny | undefined;
-	if (wanted) {
-		pick = input.grants.find((g) => g.id === wanted);
-		if (!pick) return { kind: "none" };
-		if (!onLine(pick)) return { kind: "mismatch", grant: pick, why: "it belongs to another chain" };
-	} else {
-		if (hop <= (input.policy ?? ROLE_MESSAGE_POLICY).depth.unapprovedThrough) return { kind: "none" };
-		const mine = input.grants.filter(onLine);
-		if (!mine.length) return { kind: "none" };
-		const inRange = (g: GuardGrantAny) => hop >= g.binding.causal.nextHop && hop <= g.binding.upperHop;
-		const usable = mine
-			.filter((g) => live(g) && inRange(g))
-			.sort((a, b) => a.expiresAt - b.expiresAt || a.id.localeCompare(b.id));
-		// Several live grants on one line: use the first whose scope fits this send.
-		pick =
-			usable.find((g) => !misfit(g, actor, to)) ??
-			usable[0] ??
-			[...mine].filter(inRange).sort((a, b) => b.expiresAt - a.expiresAt || a.id.localeCompare(b.id))[0];
-		if (!pick) return { kind: "none" }; // nothing covers this hop: E asks for the right tier's approval
-	}
-	// Past the grant's last message: it is simply done; E asks for the next tier's approval.
-	if (hop > pick.binding.upperHop) return { kind: "none" };
-	if (hop < pick.binding.causal.nextHop)
-		return {
-			kind: "mismatch",
-			grant: pick,
-			why: `it covers messages ${pick.binding.causal.nextHop} to ${pick.binding.upperHop}, this is message ${hop}`,
-		};
-	const why = misfit(pick, actor, to);
-	return why ? { kind: "mismatch", grant: pick, why } : { kind: "use", grant: pick };
-}
-function misfit(g: GuardGrantAny, actor: GuardActor, to: string): string | null {
-	if (!g.binding.scope.participants.includes(actor.role)) return `${actor.role} isn't named in it`;
-	if (!g.binding.scope.recipients.includes(to)) return `${to} isn't a recipient in it`;
-	if (!same(g.binding.scope.task, actor.task)) return "it was given for another task";
-	return null;
-}
 /** Re-entrant in-process lease: E's store, rotation, decision records and every admit run one at a time. */
 export class GuardLease {
 	private readonly held = new AsyncLocalStorage<true>();
@@ -396,6 +326,7 @@ export interface GuardHistoryLine {
 
 /** Per-call context for E's materialize (who the native record is from, and its chain ids). */
 interface CallContext {
+	peer?: PeerGuardEnvelope;
 	sender?: RoleMessageSender;
 	draft?: RoleMessageDraft;
 	causal?: GuardKnownCausality;
@@ -822,6 +753,7 @@ export class RoleMessageGuardHost {
 			verifyStatusActor: async (actor) =>
 				this.actorCurrent(actor) ? verified(actor) : refused("unavailable", "not this role's current chat binding"),
 			materialize: async (intent) => this.materialize(intent),
+			businessRoute: (command) => peerGuardRoute(this.ctx.getStore()?.peer, command),
 			maintenanceIdentity: (purpose, key) => {
 				const identity = {
 					operationId: `maintenance:${purpose}:${key}`,
@@ -2052,7 +1984,7 @@ export class RoleMessageGuardHost {
 				...(ctx.guard ? { guard: ctx.guard } : {}),
 			},
 		);
-		return record as unknown as GuardLegacyAcceptedMessage;
+		return stampGuardedPeer(record, ctx.peer) as unknown as GuardLegacyAcceptedMessage;
 	}
 
 	/** Deliver what E accepted (same identity; E owns dispatch state), then rotate if due. */
@@ -2091,30 +2023,87 @@ export class RoleMessageGuardHost {
 		)
 			return { ok: false, error: "Not sent: inbox guard operation generation is unavailable or changed." };
 		try {
-			return await this.sendNow(sender, input, toolCallId, expectedInboxOperationRef);
+			return await this.sendNow(sender, input, toolCallId, undefined, expectedInboxOperationRef);
 		} finally {
 			if (this.status_ === "ready") await this.afterChange();
 		}
+	}
+
+	/** Same writer/approval transaction as message_role; peer validation alone bypasses own-role routing. */
+	async sendPeer(
+		sender: RoleMessageSender,
+		input: PeerSendInput,
+		toolCallId: string,
+		allowed: PeerToolAllowed,
+	): Promise<PeerDecision> {
+		return this.lease.run(async () => {
+			const rm = this.o.roleMessages();
+			if (!rm) return { result: "refuse", code: "E_PEER_SENDER", records_added: 0 };
+			const resolved = { ...input, call_id: toolCallId, grant: undefined };
+			if (this.status_ !== "ready" || !this.core || !this.senderActor(sender))
+				return sendPeerNote(rm, sender, { ...resolved, chain: undefined }, allowed);
+			return this.exclusive(async () => {
+				const outbox = (await this.state_())?.outbox ?? [];
+				const checked = preparePeerGuard(
+					rm,
+					sender,
+					resolved,
+					allowed,
+					outbox.map((entry) => entry.message as unknown as RoleMessageRecord),
+				);
+				if (!checked.ready) {
+					const pending = outbox.find((entry) => entry.message.id === checked.decision.id);
+					if (pending && this.core && checked.decision.result === "allow")
+						await this.core.reconcile(pending.receipt.identity);
+					return checked.decision;
+				}
+				const peer = checked.envelope;
+				try {
+					const result = await this.sendNow(
+						peer.sender,
+						{ to: sender.role, kind: peer.draft.kind, text: peer.draft.text, replyTo: peer.draft.replyTo ?? undefined },
+						toolCallId,
+						peer,
+					);
+					if (result.ok) return { ...peer.decision, id: result.record.id };
+					return {
+						result: "refuse",
+						code: "reason" in result && result.reason === "ordinary_hourly" ? "E_ROLE_HOURLY" : "E_ROLE_CHAIN",
+						message: result.error,
+						records_added: 0,
+					};
+				} finally {
+					if (this.status_ === "ready") await this.afterChange();
+				}
+			});
+		});
 	}
 
 	private async sendNow(
 		sender: RoleMessageSender,
 		input: RoleMessageSendInput & { grant?: unknown },
 		toolCallId: string,
+		peer?: PeerGuardEnvelope,
 		expectedInboxOperationRef?: string,
 	): Promise<RoleMessageGuardSendResult> {
 		const rm = this.o.roleMessages();
 		if (!rm) return { ok: false, error: "Role messages aren't available in this app." };
 		const inboxQualified = expectedInboxOperationRef !== undefined;
 		if (this.status_ !== "ready" || !this.core)
-			return inboxQualified ? { ok: false, error: "Not sent: inbox guard is unavailable." } : rm.send(sender, input);
-		const prepared = rm.prepare(sender, input);
+			return inboxQualified
+				? { ok: false, error: "Not sent: inbox guard is unavailable." }
+				: peer
+					? { ok: false, error: "Not sent: the approval ladder is unavailable." }
+					: rm.send(sender, input);
+		const prepared = peer ? { ok: true as const, draft: peer.draft } : rm.prepare(sender, input);
 		if (!prepared.ok) return { ...prepared, reason: "invalid_input" };
 		const actor = this.senderActor(sender);
 		if (!actor)
 			return inboxQualified
 				? { ok: false, error: "Not sent: inbox send requires a verified guard actor." }
-				: rm.send(sender, input);
+				: peer
+					? { ok: false, error: "Not sent: sender binding unavailable." }
+					: rm.send(sender, input);
 		if (inboxQualified && (!actor.currentHome || !this.actorCurrent(actor)))
 			return { ok: false, error: "Not sent: inbox send requires the current HOME actor." };
 		const refused = roleMessagesHourlyRefusal(actor.role, rm.hourlyCount(sender.role), this.policy, this.now());
@@ -2183,7 +2172,9 @@ export class RoleMessageGuardHost {
 				? { ok: false, error: "Not sent: inbox send requires a guarded business kind." }
 				: rm.send(sender, input);
 		const identity0 = {
-			operationId: guardSendOperationId(sender.file, toolCallId),
+			operationId: peer
+				? `peer-${short({ file: sender.file, toolCallId })}`
+				: guardSendOperationId(sender.file, toolCallId),
 			fingerprint: "",
 			actor,
 			version: VERSION,
@@ -2193,7 +2184,7 @@ export class RoleMessageGuardHost {
 		this.lastUser.set(sender.file, sender.guard?.lastUserText ?? "");
 		let res: GuardResultAny;
 		try {
-			res = await this.ctx.run({ sender, draft: prepared.draft, causal }, () =>
+			res = await this.ctx.run({ sender, draft: prepared.draft, causal, peer }, () =>
 				this.core!.execute({ ...command, identity }),
 			);
 		} catch (err) {

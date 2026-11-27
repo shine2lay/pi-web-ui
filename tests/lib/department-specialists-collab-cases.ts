@@ -1,5 +1,10 @@
-// department-specialists Phase 2 (Ops #1113): the §6 collaboration cases (Architecture #595, final read-only-args pin
-// work/department-specialists-595/pin-readonly-args.sha256) and #596's principal cases, read by case id. The copies in
+// department-specialists Phase 2 (Ops #1113): the §6 collaboration cases (Architecture #595) and #596's principal cases.
+// Ops #1117: new §6f runtime-arguments-receipts pin, authorized by rm-3d98e53a/rm-d75d266b SPECWINS:
+// work/department-specialists-595/pin-runtime-arguments-receipts.sha256
+// manifest sha256: f2e7b62b04c2d886538daa07b5b7d4fb7b8594e84641125182e773338ecc724f
+// §6f sha256: 3fce8ff480c6868db4098182d8fb2a561ada114ff37667e5516db0626476dba4
+// Only D10/D11/D12 receipts changed. Historical pin-readonly-args.sha256 proof remains unchanged;
+// its collaboration fixture sha256 was 2e083f39bc515c050b2f5f8fad2f44bdcc67da3bcc024ae3fa0bb6cdb57ca97e. The copies in
 // tests/fixtures are byte-for-byte Architecture's files, pinned here by sha256: an edited or re-copied file fails at
 // load, before any case runs. Re-pinning is a reviewed change (Architecture publishes the new sha).
 import { createHash } from "node:crypto";
@@ -7,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "./department-specialists-cases.js";
 
-export const COLLAB_CASES_SHA256 = "2e083f39bc515c050b2f5f8fad2f44bdcc67da3bcc024ae3fa0bb6cdb57ca97e";
+export const COLLAB_CASES_SHA256 = "f91a269b506cffd7cb863ffc497df70c1f115eb85653e71041c4c793d2ff685b";
 export const PRINCIPAL_CASES_SHA256 = "07dd113c349854722c779c40c29433ab36a105f4ebb2a5dae2201aa7c86970d1";
 
 export interface SharedCase {

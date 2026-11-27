@@ -42,6 +42,8 @@ import {
 	TERMINAL_TOOL_NAMES,
 } from "../../server/tool-manager.js";
 import { OWNER_QUESTION_TOOL } from "../../server/owner-question-tool.js";
+import { CONSULT_SPECIALIST_TOOL_NAME } from "../../server/specialist-consult.js";
+import { PEER_NOTE_TOOL_NAME } from "../../server/peer-notes.js";
 
 const AGENT_SERVICE_SRC = readFileSync(join(__dirname, "..", "..", "server", "agent-service.ts"), "utf8");
 
@@ -51,7 +53,7 @@ const INTRINSIC = new Set(["bash", "read"]);
 
 /** role-messages: tools for chats with a role only. Not a catalog row: pi-identity offers them only in role
  *  chats (ROLE_ONLY_TOOLS there), and the owner's switch is Settings -> Identities -> Role messages (pause). */
-const ROLE_ONLY = new Set([MESSAGE_ROLE_TOOL_NAME, BOARD_TOOL_NAME]);
+const ROLE_ONLY = new Set([MESSAGE_ROLE_TOOL_NAME, BOARD_TOOL_NAME, CONSULT_SPECIALIST_TOOL_NAME, PEER_NOTE_TOOL_NAME]);
 
 /** telegram-coo: read-only tools every chat always has. Not a catalog row: roles_overview only reads the
  *  Roles page's data, so there is nothing to switch off; the owner limits a role's tools in identity.json. */
@@ -76,6 +78,8 @@ const FACTORY_TOOLS: Record<string, string[]> = {
 	makeConversationReadTool: [CONVERSATION_READ_TOOL_NAME],
 	makeClaimFilesTool: [CLAIM_FILES_TOOL_NAME],
 	makeMessageRoleTool: [MESSAGE_ROLE_TOOL_NAME],
+	makeRuntimeConsultTool: [CONSULT_SPECIALIST_TOOL_NAME],
+	makeRuntimePeerNoteTool: [PEER_NOTE_TOOL_NAME],
 	makeBoardTool: [BOARD_TOOL_NAME],
 	makeRolesOverviewTool: [ROLES_OVERVIEW_TOOL_NAME],
 	makePresentFilesTool: [PRESENT_FILES_TOOL_NAME],

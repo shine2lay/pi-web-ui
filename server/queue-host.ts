@@ -26,14 +26,6 @@
  *    "<queue chat title> #4") for the queue whose chat is `file` and its task `self`: {refs} with how each
  *    stands, or {problem} (unknown, the task itself, a loop). queue-blocks.ts.
  *  - watchQueue(file) (queue-blocked): the background check looks at that queue from now on.
- *  - coordinator() (task-question decisions, AGENTS.md rule 21): the chat that decides queued tasks'
- *    questions: the Ops role's home chat, {id: "ops", file, title}, read from the roles' identity.json
- *    files (owner-only), never from a model's words; undefined while the Ops role has no usable home chat
- *    (none set, or its transcript isn't on disk) or the lookup failed: pi-queue routes every task question
- *    to it and parks the question (nothing goes to the owner by itself) while it is undefined. "none" when
- *    this machine has no Ops role at all (no role "ops" and no identities/ops folder): rule 21 can't apply,
- *    and pi-queue keeps its older flow (the main chat, then the owner), as on the command line.
- *    queueCoordinator().
  *  - leadChat(role) (queue-lead-reminders, AGENTS.md rule 24): the home chat of the role whose id is `role`,
  *    {id, file}, from the roles' identity.json files (owner-only); undefined when there's no such role or it
  *    has no home chat. pi-queue checks a block's lead with it, and a lead's chat checks with it that it is
@@ -107,6 +99,12 @@ export interface ChatState {
 }
 
 export interface QueueHostImpl {
+	/** Trusted live SDK invocation only; absent snapshots fail closed for specialist tools. */
+	validateRawToolInvocation?(
+		sessionId: string,
+		toolCallId: string,
+		toolName: string,
+	): { status: "valid"; args: unknown } | { status: "invalid" } | { status: "unavailable" };
 	/** Optional v1 question protocol. Both writers use one parent-queue lane; no model-facing capability. */
 	commitQuestion?(
 		sourceSessionId: string,
@@ -515,6 +513,7 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 				}
 			: {}),
 		...(impl.previewLaunch ? { previewLaunch: impl.previewLaunch } : {}),
+		...(impl.validateRawToolInvocation ? { validateRawToolInvocation: impl.validateRawToolInvocation } : {}),
 		...(impl.deadEnd
 			? {
 					deadEnd: (raw: QueueDeadEndRequest): Promise<QueueDeadEndResult> => {

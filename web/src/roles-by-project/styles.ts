@@ -4,6 +4,8 @@
  * (exact-surface.ts:25/34), coral #FF8A80 and lilac #C7B8FF (initiatives-exact-view.ts:53/55), with their
  * light-theme pairs from the design's tokens.css (PROVENANCE.md). Scoped to `.rbp`; no new colours or fonts.
  */
+import { PROJECT_PROGRESS_CSS } from "./project-progress-styles";
+
 const ALIASES_DARK = `
   --you-fg:var(--st-stuck-text);--you-bg:var(--st-stuck-bg);--you-bd:var(--st-stuck-border);--you-bar:var(--on-you-bg);
   --blk-fg:#FF8A80;--blk-bg:#221415;--blk-bd:#5A2A2C;--blk-bar:#FF8A80;
@@ -130,14 +132,10 @@ export const ROLES_BY_PROJECT_CSS = `
 .rbp-fold>summary::-webkit-details-marker{display:none}
 .rbp-fold>summary svg.rbp-i{transition:transform .16s ease}
 .rbp-fold[open]>summary svg.rbp-i{transform:rotate(180deg)}
-.rbp-fold>.rbp-tasks,.rbp-fold>.rbp-dw,.rbp-fold>.rbp-minis{margin-top:8px}
+.rbp-fold>.rbp-tasks,.rbp-fold>.rbp-minis{margin-top:8px}
 
 .rbp-donefold{margin-top:16px}
 .rbp-donefold>summary{padding:12px 16px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:12px;font-size:14px}
-.rbp-dw{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:4px 24px;margin:0;padding:0;list-style:none}
-.rbp-dw li{display:flex;gap:8px;align-items:flex-start;color:var(--text-secondary);font-size:14px}
-.rbp-dw li svg.rbp-i{margin-top:3px;color:var(--text-muted)}
-.rbp-dw li.is-met{color:var(--text-primary)}.rbp-dw li.is-met svg.rbp-i{color:var(--ok-fg)}
 .rbp-dag{position:relative;display:flex;gap:48px;align-items:flex-start;overflow-x:auto;padding:4px 4px 12px}
 .rbp-dag .rbp-col{display:flex;flex-direction:column;gap:12px;flex:0 0 240px;position:relative;z-index:1}
 .rbp-edges{position:absolute;left:0;top:0;width:0;height:0;pointer-events:none;z-index:0}
@@ -245,4 +243,5 @@ export const ROLES_BY_PROJECT_CSS = `
 @media (max-width:400px){.rbp-seg .rbp-lg{display:none}.rbp-seg .rbp-sm{display:inline}}
 @media (max-width:360px){.rbp-main{padding:12px 12px 64px}.rbp-th{padding:12px}.rbp-lane{padding:12px}.rbp-gb>span{display:none}}
 @media (prefers-reduced-motion:reduce){.rbp *{animation:none !important;transition:none !important}}
+${PROJECT_PROGRESS_CSS}
 `;
