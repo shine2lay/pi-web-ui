@@ -1,21 +1,9 @@
 /** Canonical v3 display bridge. No local phase replay, counting or task-key reconstruction. */
-export interface PhaseDelivery {
-	state: "available";
-	phases: Array<{
-		id: string;
-		name: string;
-		outcome: string;
-		status: "planned" | "active" | "done" | "dropped";
-		evidence?: { proof: string; at: number; by: string };
-		reason?: string;
-	}>;
-	deliveredCount: number;
-}
-export type DeliveryProjection = PhaseDelivery | { state: "unavailable"; reason: string };
+import type { UiProjectDelivery } from "./roles-board-protocol.js";
 interface PhaseReaders {
 	version: 3;
 	readWork(dir: string): unknown;
-	projectDelivery(state: unknown, id: string): DeliveryProjection | undefined;
+	projectDelivery(state: unknown, id: string): UiProjectDelivery | undefined;
 	taskPhase(state: unknown, project: string, queue: string, task: number, added: number): string | null | undefined;
 }
 export function phaseReaders(): PhaseReaders | undefined {
@@ -28,11 +16,11 @@ export function phaseReaders(): PhaseReaders | undefined {
 		? (r as PhaseReaders)
 		: undefined;
 }
-export const unavailablePhases = (): DeliveryProjection => ({
+export const unavailablePhases = (): UiProjectDelivery => ({
 	state: "unavailable",
 	reason: "Canonical phase reader unavailable; phase progress cannot be read.",
 });
-export function deliveryFromState(state: unknown, id: string, hasPhases: boolean): DeliveryProjection | undefined {
+export function deliveryFromState(state: unknown, id: string, hasPhases: boolean): UiProjectDelivery | undefined {
 	if (!hasPhases) return undefined;
 	try {
 		return phaseReaders()?.projectDelivery(state, id) ?? unavailablePhases();

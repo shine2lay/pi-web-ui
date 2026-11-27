@@ -45,6 +45,7 @@ const PICKED = [
 	"finishedAt",
 	"doneSummary",
 	"stuck",
+	"phaseId",
 ] as const satisfies readonly (keyof UiBoardTask)[];
 
 const refOf = (t: UiRoleTask) => `${t.role ?? ""} #${t.id}`;
@@ -55,9 +56,6 @@ function boardTaskOf(row: TaskBoardRow, groupKey: string, state: UiBoardState): 
 	for (const k of PICKED) if (row.task[k] !== undefined) out[k] = row.task[k];
 	return {
 		...(out as Pick<UiBoardTask, (typeof PICKED)[number]>),
-		...((row.task as UiRoleTask & { phaseId?: string | null }).phaseId !== undefined
-			? { phaseId: (row.task as UiRoleTask & { phaseId?: string | null }).phaseId }
-			: {}),
 		ref: refOf(row.task),
 		groupKey,
 		state,

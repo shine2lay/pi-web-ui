@@ -19,7 +19,8 @@
  * reader here depends on, so a compacted log shows the same records.
  */
 
-import { deliveryFromState, unavailablePhases, type DeliveryProjection } from "./project-phase-projection.js";
+import { deliveryFromState, unavailablePhases } from "./project-phase-projection.js";
+import type { UiProjectDelivery } from "./roles-board-protocol.js";
 import { statSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -44,7 +45,7 @@ const STATUSES: readonly Status[] = ["active", "done", "dropped"];
 
 interface Rec {
 	outcome?: string;
-	delivery?: DeliveryProjection;
+	delivery?: UiProjectDelivery;
 	kind: "initiative" | "project";
 	id: string;
 	name: string;
