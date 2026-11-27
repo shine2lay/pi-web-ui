@@ -11,7 +11,8 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as routeRule from "../../server/owner-question-route.js";
 import { ClientSession, makeAskUserQuestionTool } from "../../server/agent-service.js";
 import { ASK_USER_NO_CLIENT_ERROR } from "../../server/ask-delivery.js";
 import { sliceToolCallId, turnOwnersOf } from "../../server/ask-question-owners.js";
@@ -426,7 +427,7 @@ describe("NB-5: a cancel in the browser, the chat closing, and COO handing it ba
 		expect(kept()).toEqual([]);
 	});
 
-	it("COO hands it back: the card closes and the asking chat gets COO's note", async () => {
+	it("COO hands a legacy held question back: the card closes and the asking chat gets COO's note", async () => {
 		const router = new OwnerQuestionRouter({
 			enabled: () => true,
 			hub: askHub,
@@ -438,8 +439,17 @@ describe("NB-5: a cancel in the browser, the chat closing, and COO handing it ba
 			() => router.dispose(),
 		);
 		const { asking, shine, run } = setup();
-		turn(asking); // a role's message: the card goes to COO first
-		await postedNow(run("toolu_1", [PORT]));
+		turn(asking);
+		// Explicit legacy hold fixture; current role-started questions route directly.
+		const legacyRoute = vi.spyOn(routeRule, "ownerQuestionRoute").mockReturnValueOnce({
+			to: "coo",
+			reason: "not-started-by-owner",
+		});
+		try {
+			await postedNow(run("toolu_1", [PORT]));
+		} finally {
+			legacyRoute.mockRestore();
+		}
 		const ask = askOf("port");
 		expect(askHub.heldList().map((a) => a.id)).toEqual([ask.id]);
 		expect(router.returnToAsker(ask.id, "Use the port the plan names")).toEqual({ ok: true });

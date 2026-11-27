@@ -11,12 +11,8 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-	createAgentSessionFromServices,
-	createAgentSessionServices,
-	ModelRuntime,
-	SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import { addonBundlePath, createAddonSessionServices as createAgentSessionServices } from "./addon-bundle-paths.js";
+import { createAgentSessionFromServices, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { attachUsageLedger } from "./usage-accounting-ledger.js";
 
@@ -79,7 +75,7 @@ export function readerExtensionPaths(agentDir: string): string[] {
 					? String((p as { source: string }).source)
 					: "";
 		if (!/pi-anthropic-auth|pi-multi-pass/.test(src)) continue;
-		let dir = src;
+		let dir = addonBundlePath(src);
 		const git = /^git:(.+?)(?:@[^@/]+)?$/.exec(src);
 		if (git) dir = join(agentDir, "git", git[1]);
 		else if (src.startsWith("npm:")) dir = join(agentDir, "npm", "node_modules", src.slice(4).replace(/@[^@/]+$/, ""));

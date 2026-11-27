@@ -1,0 +1,122 @@
+.notices {
+	position: fixed;
+	/* Keep the existing topbar clearance, with room below for the viewport edge. */
+	top: 80px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 50;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	align-items: center;
+	width: max-content;
+	max-width: calc(100vw - 16px);
+	pointer-events: none;
+}
+
+.notice {
+	pointer-events: auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	max-width: min(760px, 92vw);
+	max-height: calc(100dvh - 96px);
+	flex-shrink: 0;
+	padding: 10px 12px 10px 14px;
+	border-radius: 10px;
+	border: 1px solid var(--border);
+	/* 等级色左条：一眼看出级别 */
+	border-left: 3px solid var(--accent);
+	background: var(--bg-elev2);
+	color: var(--text);
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1.5;
+	text-align: left;
+	box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55);
+	animation: notice-in 0.18s ease;
+}
+@keyframes notice-in {
+	from {
+		opacity: 0;
+		transform: translateY(-6px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+/* 悬浮中：计时暂停、通知一直显示——边框高亮给出反馈 */
+.notice.paused {
+	border-color: var(--accent);
+	box-shadow:
+		0 0 0 1px var(--accent),
+		0 14px 44px rgba(0, 0, 0, 0.65);
+}
+.notice-icon {
+	flex: none;
+	font-size: 15px;
+	line-height: 1;
+}
+.notice-text {
+	flex: 1;
+	min-width: 0;
+	/* Only the text scrolls: the native Close control stays in the viewport. */
+	max-height: calc(100dvh - 118px);
+	overflow-y: auto;
+	/* A long unbroken word or link wraps inside the notice instead of running past the window's edge. */
+	overflow-wrap: anywhere;
+}
+.notice-close {
+	flex: none;
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border: none;
+	border-radius: 5px;
+	background: transparent;
+	color: var(--text-dim);
+	cursor: pointer;
+	font-size: 13px;
+}
+/* Preserve the existing 20px desktop box while extending its pointer target to 24px. */
+.notice-close::after {
+	content: "";
+	position: absolute;
+	inset: -2px;
+}
+.notice-close:hover {
+	background: var(--glow-12);
+	color: var(--text);
+}
+.notice-error {
+	border-color: rgba(248, 113, 113, 0.55);
+	border-left-color: var(--notice-err-border);
+	color: var(--red-text);
+	/* 不透明背景：避免下层文字透出来干扰阅读 */
+	background: var(--notice-err-bg);
+}
+.notice-error .notice-icon {
+	color: var(--red);
+}
+.notice-warning {
+	border-color: rgba(251, 191, 36, 0.5);
+	border-left-color: var(--notice-warn-border);
+	color: var(--amber-text);
+	background: var(--notice-warn-bg);
+}
+.notice-warning .notice-icon {
+	color: var(--amber-fg);
+}
+.notice-info {
+	border-color: rgba(96, 165, 250, 0.45);
+	border-left-color: var(--notice-info-border);
+	color: var(--text);
+	background: var(--notice-info-bg);
+}
+.notice-info .notice-icon {
+	color: var(--info-blue);
+}

@@ -6,7 +6,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as routeRule from "../../server/owner-question-route.js";
 import { AgentService, ClientSession } from "../../server/agent-service.js";
 import { type Ask, type AskEvent, askHub } from "../../server/asks.js";
 import { OWNER_QUESTION_HOLDS_FILE, OwnerQuestionHolds } from "../../server/owner-question-holds.js";
@@ -83,7 +84,7 @@ const askOf = (questionId: string): Ask =>
 const ended = () => events.filter((e) => e.type === "answered" || e.type === "gone").map((e) => e.ask.id);
 const tucked = (id: string) => (statics.sharedQuestions.get(id) as { later?: boolean } | undefined)?.later === true;
 
-/** Shine's chat with Shine's question, Wai's chat with hers, COO's chat with a question held for COO; one window of
+/** Shine's chat with Shine's question, Wai's chat with hers, COO's chat with an explicitly seeded legacy held question; one window of
  *  each owner, each showing its owner's chat (a held card shows only in its own chat's window, #685). */
 async function world() {
 	const [mine, hers, coo] = [chat(dir, "shine-chat"), chat(dir, "wai-chat"), chat(dir, "coo")];
@@ -96,7 +97,16 @@ async function world() {
 	turn(coo);
 	await asker(shine, mine)("toolu_s", [PORT]);
 	await asker(shine, hers)("toolu_w", [DNS]);
-	await asker(shine, coo)("toolu_c", [NAME]);
+	// Legacy hold fixture only: new questions no longer enter this state via routing.
+	const legacyRoute = vi.spyOn(routeRule, "ownerQuestionRoute").mockReturnValueOnce({
+		to: "coo",
+		reason: "not-started-by-owner",
+	});
+	try {
+		await asker(shine, coo)("toolu_c", [NAME]);
+	} finally {
+		legacyRoute.mockRestore();
+	}
 	const ids = { shine: askOf("port").id, wai: askOf("dns").id, held: askOf("name").id };
 	expect(askOf("dns").requester).toBe("Wai");
 	expect(askHub.heldList().map((a) => a.id)).toEqual([ids.held]);
@@ -138,7 +148,7 @@ describe("QA #244 F1: forged question_answer / question_later from a window neve
 		untouched(ids);
 	});
 
-	it("T1.10: Cancel from Wai's window on the COO-held ask, and from Shine's window not showing COO's chat: refused", async () => {
+	it("T1.10: Cancel from Wai's window on the legacy COO-held ask, and from Shine's window not showing COO's chat: refused", async () => {
 		const { shine, wai, ids } = await world();
 		await asAnswerer("Wai", () => wai.client.answerQuestion(ids.held, [], true));
 		await asAnswerer("Shine", () => shine.client.answerQuestion(ids.held, [], true));

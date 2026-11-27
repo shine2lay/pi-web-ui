@@ -10,6 +10,14 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## repair-1144: remove recovery hang and stage local add-ons without hiding questions
+
+- `local` (Ops #1144; Shine `dr-88854f3751a1`). Reverts `1fdd45fc`, `06f947c0`, `e490271b`, removing the recovery host and its obsolete tests; preserves `26e1470b`, `330a6835`, `bf49100b`.
+- `server/addon-bundle-paths.ts` projects local `/home/shinelay/projects/<pkgName>` settings packages into `PI_WEB_ADDONS_DIR/<pkgName>`. Empty/unset is unchanged. Missing, non-directory or unreadable targets throw instead of falling back. Scoped SDK settings getters preserve reload behavior and selection metadata without writing settings. All host SDK factories and synchronous configured-package readers share this resolver; npm/git sources are unchanged.
+- New `ask_user_question` cards always route directly, including role-started and old owner turns; stuck escalations retain their existing COO routing. Existing owner isolation and persisted hold support remain.
+- Checks: `tests/unit/addon-bundle-paths.test.ts`, owner-question regression tests, and the standard gates. Hypothesis: `docs/hypotheses/2026-11-27-ops-1144-revert-1119-direct-questions-addon-dir.md`. No deployment/restart in this task; #1146 owns canary deployment.
+- Undo: revert the bundle/question patch; unset the bundle override for the old package-loading behavior. Do not restore the reverted recovery host without a separate repair.
+
 ## github-mcp-write-guard: authorize parsed bridge calls with the canonical GitHub policy
 
 - `local` (Ops #1130). `McpClient.call` awaits the fixed installed agent-tools policy for `github`/`github-read` before dispatch; missing or broken policy denies. The small extracted adapter in `server/github-mcp-write-guard.ts` contains no ownership classifier or script parser.

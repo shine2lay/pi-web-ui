@@ -1,6 +1,7 @@
 import { existsSync, globSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
+import { addonBundlePath } from "../addon-bundle-paths.js";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 // Use the SDK's own pattern engines without depending on npm's hoisting layout.
@@ -216,7 +217,7 @@ function packageRoot(source: string, agentDir: string): { path: string; local: b
 		return existsSync(path) ? { path, local: false } : undefined;
 	}
 	if (/^(?:[a-z][a-z\d+.-]*:|git@)/i.test(source)) return undefined;
-	const path = localPath(source, agentDir);
+	const path = localPath(addonBundlePath(source), agentDir);
 	return existsSync(path) ? { path, local: true } : undefined;
 }
 

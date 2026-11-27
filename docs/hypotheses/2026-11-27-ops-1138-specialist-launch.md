@@ -1,0 +1,11 @@
+# Specialist launch transport loss
+
+Problem/evidence: Frontend372's actual assigned metadata has specialist slug/title but no dept, effectiveTools or snapshotSha256. Canonical pi-identity verifySnapshot returns E_SPEC_SNAPSHOT. Its binding is frontend/responsive-layout-builder; journal shows all tools hidden. queue-host parseQueueChatStart calls display-only queue-profile normLaunch; agent-service startChat writes the prepared result over the original assigned launch.
+
+Hypothesis: preserve the opaque specialist snapshot at the dispatch boundary while leaving the UI projection unchanged. The canonical identity verifier/decision remains the sole authority, so valid fresh launches retain approved command/lifecycle permissions and malformed or stale seals still refuse. No started task is modified.
+
+Measurement: failing-first real parseQueueChatStart -> prepareLaunch -> assigned boundary test, using canonical buildSnapshot/verifiedTools/decideTool with nonempty registry; command and lifecycle bodies run only on allow. Negative controls: altered seal, cross-department binding, hard deny, retained narrowing. Ordinary launch unchanged; UI remains slug/title-only. Installed metadata and safe no-model probe follow landing.
+
+Falsifier: snapshot remains intact through the existing dispatch chain, or preservation fails to restore canonical positive decisions. Existing empty snapshots are never widened.
+
+Result: HIT. Before fix, queue-specialist-launch.test.ts failed 1/4 at the actual parseQueueChatStart boundary (all authority fields removed). External no-model SDK probe at /home/shinelay/ops-checks/specialist-launch-1138/probe.ts used real SDK registry (14 tools), canonical identity setup/buildSnapshot/verifier, actual dispatch parser/preparation and persisted assigned entry. Valid specialist: 5 active tools, real bash printf and isolated queue_done body executed. Ordinary control: 10 active, same command/lifecycle success. Tampered and cross-department snapshots: 0 active; frozen old seal: 4 mandatory active and bash absent despite current allow; queue_add hard deny hidden. Probe never reads model input or captures request payloads. Lifecycle body is external synthetic harness, not a production queue mutation. Full server/model-driven task creation is not claimed by this isolated test.

@@ -7,9 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClientSession } from "../../server/agent-service.js";
-import { askHub } from "../../server/asks.js";
+import { askHub, isAskHeld } from "../../server/asks.js";
 import { questionCards } from "../fixtures/question-cards.js";
 import { noteOwnerInput } from "../../server/owner-input-time.js";
+import type { OwnerAsksPush } from "../../server/owner-asks-push.js";
+import * as routeRule from "../../server/owner-question-route.js";
 import {
 	HOLD_SAFETY_NET_MS,
 	OWNER_QUESTION_HOLDS_FILE,
@@ -62,6 +64,7 @@ interface Window {
 
 const statics = ClientSession as unknown as {
 	liveSessions: Set<ClientSession>;
+	ownerAsks: OwnerAsksPush<ClientSession>;
 	sharedQuestions: Map<string, unknown>;
 	sharedApprovals: Map<string, unknown>;
 	sharedConvs: Map<string, unknown>;
@@ -117,6 +120,7 @@ afterEach(() => {
 	router.dispose();
 	stopRouted();
 	ClientSession.ownerQuestions = null;
+	vi.restoreAllMocks();
 	vi.useRealTimers();
 	rmSync(dir, { recursive: true, force: true });
 });
@@ -183,6 +187,11 @@ const chatListQuestion = (w: Window, convId: string) =>
 const heldIds = () => askHub.heldList().map((a) => a.id);
 const listedIds = () => askHub.list().map((a) => a.id);
 
+/** External fixture for questions held by an older build; new questions never take this route. */
+function legacyHeldQuestion(): void {
+	vi.spyOn(routeRule, "ownerQuestionRoute").mockReturnValueOnce({ to: "coo", reason: "not-started-by-owner" });
+}
+
 /** The lead's queue (read by the real ClientSession code): task 7 runs in a chat of its own and is stuck on a
  *  question for the owner. */
 function stuckTaskSeven(lead: FakeChat): { queue: UiTaskQueue; taskChat: string } {
@@ -236,6 +245,36 @@ function taskSevenMarks(lead: FakeChat, taskChat: string) {
 }
 
 describe("ClientSession with the switch on", () => {
+	it.each(["role", "restart", "owner-away"])("direct question visibility: %s turn", async (cause) => {
+		const { asking, mine, other } = twoWindows();
+		if (cause === "owner-away") ownerWrites(asking, T0 - 31 * MIN);
+		else roleStarts(asking);
+		if (cause === "restart") {
+			asking.turnRecord = structuredClone(asking.turnRecord);
+			startRouter();
+		}
+		const answer = cards.ask(mine.client, QUESTIONS, asking.id, "direct-regression");
+		const id = snapshotQuestion(mine)!.id;
+		expect(isAskHeld(askHub.get(id))).toBe(false);
+		expect(askHub.list().map((ask) => ask.id)).toContain(id);
+		for (const w of [mine, other]) {
+			expect(ofType(w, "question_pending")).toMatchObject([{ id }]);
+			expect(snapshotQuestion(w)).toMatchObject({ id });
+			expect(chatListQuestion(w, asking.id)).toMatchObject({ id });
+			// The actual topbar Questions feed and its open action, as wired by ClientSession.
+			statics.ownerAsks.pushTo(w.client);
+			expect(ofType(w, "owner_asks").at(-1)?.asks).toEqual(
+				expect.arrayContaining([expect.objectContaining({ askId: id })]),
+			);
+			expect(statics.ownerAsks.open(w.client, "open-question", id)).toMatchObject({
+				type: "owner_ask",
+				ok: true,
+				ask: { id, kind: "question" },
+			});
+		}
+		other.client.resolveQuestion(id, [{ id: "port", selected: ["8080"] }]);
+		await expect(answer).resolves.toEqual([{ id: "port", selected: ["8080"] }]);
+	});
 	it("ask_user_question from a turn the owner is chatting in: every window gets it at once, with its line", async () => {
 		const { asking, mine, other } = twoWindows();
 		ownerWrites(asking, T0 - MIN);
@@ -252,7 +291,8 @@ describe("ClientSession with the switch on", () => {
 		await expect(answer).resolves.toEqual([{ id: "port", selected: ["8080"] }]);
 	});
 
-	it("a question a role's turn raised waits for COO: only its own chat's page shows it, until COO lets it through", async () => {
+	it("a legacy held question remains answerable locally and can be released to every window", async () => {
+		legacyHeldQuestion();
 		const { asking, mine, other } = twoWindows();
 		roleStarts(asking);
 		const answer = cards.ask(mine.client, QUESTIONS, asking.id, "call-2");
@@ -279,7 +319,8 @@ describe("ClientSession with the switch on", () => {
 		await expect(answer).resolves.toEqual([{ id: "port", selected: ["9090"] }]);
 	});
 
-	it("answering a held question on its own page settles it", async () => {
+	it("answering a legacy held question on its own page settles it", async () => {
+		legacyHeldQuestion();
 		const { asking, mine } = twoWindows();
 		roleStarts(asking);
 		const answer = cards.ask(mine.client, QUESTIONS, asking.id);
@@ -290,7 +331,8 @@ describe("ClientSession with the switch on", () => {
 		expect(snapshotQuestion(mine)).toBeNull();
 	});
 
-	it("COO hands it back: the call returns COO's note, the pop-up closes, and asking again goes straight to him", async () => {
+	it("COO returns a legacy held question; asking again goes straight to its owner", async () => {
+		legacyHeldQuestion();
 		const { asking, mine, other } = twoWindows();
 		roleStarts(asking);
 		const first = cards.ask(mine.client, QUESTIONS, asking.id);
@@ -386,7 +428,8 @@ describe("ClientSession with the switch on", () => {
 		expect(taskSevenMarks(lead, taskChat)).toEqual({ lineInChatList: true, needsDecisionLabel: true, notice: true });
 	});
 
-	it("a chat's own needs-you line about its held question waits with it; the chat list is redrawn as it's held and answered", async () => {
+	it("a legacy held question still suppresses its needs-you line until answered", async () => {
+		legacyHeldQuestion();
 		const { asking, mine, other } = twoWindows();
 		roleStarts(asking);
 		const answer = cards.ask(mine.client, QUESTIONS, asking.id, "call-6");

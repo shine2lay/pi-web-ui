@@ -14,10 +14,10 @@
  */
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { createAddonSessionServices as createAgentSessionServices } from "./addon-bundle-paths.js";
 import { Type } from "typebox";
 import {
 	createAgentSessionFromServices,
-	createAgentSessionServices,
 	defineTool,
 	ModelRuntime,
 	SessionManager,
