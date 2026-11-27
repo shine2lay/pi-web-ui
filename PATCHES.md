@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## github-mcp-write-guard: authorize parsed bridge calls with the canonical GitHub policy
+
+- `local` (Ops #1130). `McpClient.call` awaits the fixed installed agent-tools policy for `github`/`github-read` before dispatch; missing or broken policy denies. The small extracted adapter in `server/github-mcp-write-guard.ts` contains no ownership classifier or script parser.
+- Tests: `tests/unit/github-mcp-write-guard.test.ts` uses the canonical policy and a synthetic stdio child to assert zero denied dispatches and positive own-write/external-read twins. Constructor module injection only, no environment bypass.
+- Boundary: the live pi-mcp-adapter direct/gateway/dynamic-script/host-managed/UI routes rely on the separately fenced configured github-mcp transport, not a server outer hook. Contract, hypothesis, limitations and verification: `docs/github-mcp-write-guard.md`. No install or landing in this change.
+- Undo: revert this patch; the transport remains separately owned defense. Do not describe either as same-UID credential isolation.
+
 ## gate-no-build-cli: the systemd-install test runs the CLI from source, so `check.sh --fast` needs no build
 
 - `local` (Ops #811, for Architecture rm-a86b4982). In a worktree never built, `scripts/check.sh --fast` (which skips the build) and the full check (which runs the unit tests before it builds) failed `tests/unit/systemd-install.test.ts` with `ERR_MODULE_NOT_FOUND ... dist/server/plugin-updater.js`: its one end-to-end case imports `bin/pi-web-ui.mjs`, whose static imports name tsc's output `../dist/server/*.js`.

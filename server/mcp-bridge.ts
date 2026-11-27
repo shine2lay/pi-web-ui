@@ -18,6 +18,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PluginAgentTool } from "./plugins.js";
+import { adaptMcpTool, authorizeGithubMcpCall, type GithubPolicyLoader } from "./github-mcp-write-guard.js";
 
 /** JSON-RPC 2.0 over stdio：每行一条 JSON。 */
 export interface McpServerSpec {
@@ -88,6 +89,7 @@ export class McpClient {
 		/** 启动规格；热加载按它判断「这个服务器要不要重启」（见 McpBridge.reload）。 */
 		readonly spec: McpServerSpec,
 		log?: (...a: unknown[]) => void,
+		private readonly policyLoader?: GithubPolicyLoader,
 	) {
 		this.name = name;
 		this.log = log ?? (() => {});
@@ -198,6 +200,9 @@ export class McpClient {
 	 */
 	async call(name: string, args: Record<string, unknown>, timeoutMs = 60000): Promise<unknown> {
 		if (this.shuttingDown) throw new Error(`[mcp:${this.name}] client closed, not restarting`);
+		// Snapshot before asynchronous authorization: dispatch exactly the checked arguments.
+		args = structuredClone(args);
+		await authorizeGithubMcpCall(this.name, name, args, this.policyLoader);
 		try {
 			// 自愈：子进程已退出（非主动关闭）→ 先惰性重启再发；重启失败给出明确错误而不是挂 60s 超时。
 			await this.ensureStarted(8000);
@@ -443,29 +448,6 @@ function sameMcpSpec(a: McpServerSpec, b: McpServerSpec): boolean {
 	return JSON.stringify(mcpServerSnapshot(a)) === JSON.stringify(mcpServerSnapshot(b));
 }
 
-/**
- * 整个 MCP 管理器的工具适配：把每个 MCP 工具变成 PluginAgentTool。
- * getAllToolsTool(name, callFn) 生成 execute → 转发到对应 McpClient.call。
- */
-function adaptMcpTool(serverName: string, mcpTool: McpToolDefinition, client: McpClient): PluginAgentTool {
-	const name = sanitizeToolName(mcpTool.name);
-	return {
-		name,
-		label: `${serverName} · ${mcpTool.name}`,
-		description: mcpTool.description ?? `Tool ${mcpTool.name} provided by MCP server "${serverName}"`,
-		parameters: mcpTool.inputSchema ?? {},
-		execute: async (_toolCallId: string, params: Record<string, unknown>, _signal?: AbortSignal) => {
-			return client.call(mcpTool.name, params ?? {});
-		},
-	};
-}
-
-/** 工具名必须是 [A-Za-z0-9_-]+（与插件工具同规则），MCP 可能含冒号/斜杠 — 归一化。 */
-function sanitizeToolName(name: string): string {
-	const cleaned = (name || "").replace(/[^A-Za-z0-9_-]/g, "_");
-	return cleaned || "mcp_tool";
-}
-
 /** 一次热替换的结果：给日志/提示用，也是热加载回归测试的断言面。 */
 export interface McpReloadSummary {
 	/** 沿用原实例的服务器数（规格没变，或新规格启动失败后回退）—— 这部分没有重启进程。 */
@@ -491,7 +473,10 @@ export class McpBridge {
 	constructor(
 		private dataDir: string,
 		private log: (...a: unknown[]) => void = () => {},
-		private opts: { specOverride?: { name: string; spec: McpServerSpec }[] } = {},
+		private opts: {
+			specOverride?: { name: string; spec: McpServerSpec }[];
+			policyLoader?: GithubPolicyLoader;
+		} = {},
 	) {}
 
 	/** 读取配置并启动全部服务器（顺序 fail-fast：单个失败记日志不拖垮其它）。 */
@@ -510,7 +495,7 @@ export class McpBridge {
 	/** 启动单个服务器：失败只记日志并返回 null（load / reload 共用）。 */
 	private async startOne(name: string, spec: McpServerSpec): Promise<McpClient | null> {
 		try {
-			const client = new McpClient(name, spec, this.log);
+			const client = new McpClient(name, spec, this.log, this.opts.policyLoader);
 			await client.start();
 			return client;
 		} catch (err) {
