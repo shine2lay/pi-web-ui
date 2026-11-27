@@ -1,5 +1,14 @@
 import { readFileSync } from "node:fs";
 import type { RoleMessageRecord } from "./role-messages.js";
+import { roleMessagesHourlyExempt } from "./role-message-limits.js";
+
+/** Closed history target; waiting messages and open obligations are never dropped. */
+export const ROLE_MESSAGES_KEEP = 1000;
+const HOUR_MS = 60 * 60 * 1000;
+/** role-reports: how many days back a report may be asked for (the day must be over). */
+export const ROLE_REPORT_MAX_AGE_DAYS = 7;
+/** role-reports: report records younger than this are never dropped (they are the once-per-day proof). */
+const REPORT_KEEP_MS = (ROLE_REPORT_MAX_AGE_DAYS + 2) * 24 * HOUR_MS;
 
 export interface RoleMessagesSource {
 	v: 1;
@@ -124,4 +133,54 @@ export function roleMessageRetentionPins(
 		}
 	}
 	return pins;
+}
+
+/** Calculate pruning in source order, preserving obligations and their accepted replies. */
+export function pruneRoleMessages(
+	keep: RoleMessageRecord[],
+	now: number,
+	sourcePins: () => ReadonlySet<string> | undefined,
+	log: (message: string) => void,
+): { retained: RoleMessageRecord[]; dropped: RoleMessageRecord[] } {
+	const extra = keep.length - ROLE_MESSAGES_KEEP;
+	let considered = 0;
+	let pins: ReadonlySet<string>;
+	try {
+		pins = roleMessageRetentionPins(keep, sourcePins());
+	} catch {
+		// Unknown projection cannot authorize irreversible deletion. Retry on the next save.
+		pins = new Set(keep.map((m) => m.id));
+		log("retention unknown; skipped pruning");
+	}
+	const retained = keep.filter((m) => {
+		// role-reports: a recent report request stays: it is the proof that the day was asked for.
+		const proof = m.kind === "report" && now - m.at < REPORT_KEEP_MS;
+		if (considered < extra && !pins.has(m.id) && !proof) {
+			considered++;
+			// Ops #318: unlimited traffic must not evict capped roles' unexpired hourly proof.
+			// At most capped roles × active hourly cap extra rows; exempt history rotates as before.
+			if (m.kind !== "report" && !roleMessagesHourlyExempt(m.from.role) && now - m.at < HOUR_MS) return true;
+			return false;
+		}
+		return true;
+	});
+	// Never leave a retained original without the actual accepted reply used by semantic projection.
+	const paired = roleMessageRetentionPins(keep, new Set(retained.map((m) => m.id)));
+	return { retained: keep.filter((m) => paired.has(m.id)), dropped: keep.filter((m) => !paired.has(m.id)) };
+}
+
+/** Preserve chain facts before the rotating store drops finished records. */
+export function roleMessageDroppedFacts(dropped: RoleMessageRecord[], at: number) {
+	return dropped.map((m) => ({
+		id: m.id,
+		chain: m.chain,
+		...(m.hash ? { hash: m.hash } : {}),
+		...(m.target ? { target: m.target } : {}),
+		...(m.root ? { root: m.root } : {}),
+		...(m.parent ? { parent: m.parent } : {}),
+		...(m.guard ? { guard: m.guard } : {}),
+		...(m.tags?.length ? { tags: [...m.tags] } : {}),
+		state: m.state, // #379: how it ended (the ladder settles a delivery it never saw confirmed from this)
+		at,
+	}));
 }

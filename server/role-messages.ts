@@ -60,13 +60,14 @@ import type {
 import { ownTaskOf } from "./own-task.js";
 import { ownerChannelOf, type OwnerChannel, type RoleOwnerAnswer, OWNER_IDS_MAX } from "./role-replies.js";
 import { CARRY_ON_PREFIX } from "./running-chats.js";
-import { guardPolicyIsValid, ROLE_MESSAGE_POLICY, roleMessagesHourlyExempt } from "./role-message-limits.js";
+import { guardPolicyIsValid, ROLE_MESSAGE_POLICY } from "./role-message-limits.js";
 import { roleMessagesHourlyRefusal } from "./role-message-hourly-limit.js";
 import type { GuardPolicy } from "./role-message-guard-contract-v2.js";
 import { readQueueEntries } from "./queue-entries-tail.js";
 import { statusHint } from "./turn-status.js";
-import { parseRoleMessagesSource, roleMessageRetentionPins } from "./role-messages-source.js";
-export { readRoleMessagesSource } from "./role-messages-source.js";
+import { parseRoleMessagesSource, pruneRoleMessages, roleMessageDroppedFacts } from "./role-messages-source.js";
+import { ROLE_MESSAGES_KEEP, ROLE_REPORT_MAX_AGE_DAYS } from "./role-messages-source.js";
+export { readRoleMessagesSource, ROLE_MESSAGES_KEEP, ROLE_REPORT_MAX_AGE_DAYS } from "./role-messages-source.js";
 import { noRouteError, specialistRowOf, specialistStamp } from "./specialist-messages.js";
 import type { SpecialistFrom, SpecialistSender } from "./specialist-messages.js";
 import { checkCiAlert, ciAlertHint, ciAlertKey, ciAlertText, ciAlertTitle, type CiAlert } from "./ci-alert.js";
@@ -94,8 +95,6 @@ export { ROLE_MESSAGES_HOURLY_EXEMPT_ROLES, roleMessagesHourlyExempt } from "./r
 export const ROLE_MESSAGE_CHAIN_MAX = ROLE_MESSAGE_POLICY.depth.unapprovedThrough;
 /** The longest text a message may carry. */
 export const ROLE_MESSAGE_TEXT_MAX = 4000;
-/** Closed history target; waiting messages and open obligations are never dropped. */
-export const ROLE_MESSAGES_KEEP = 1000;
 /** Rows Settings → Identities shows. */
 export const ROLE_MESSAGES_LIST = 100;
 /** board (task #76): the same text to this many roles within SAME_TEXT_WINDOW_MS -> message_role's result
@@ -130,8 +129,6 @@ export const ROLE_REPORT_HEADINGS_BEFORE = [
 	"## Learned",
 	"## Next",
 ] as const;
-/** role-reports: how many days back a report may be asked for (the day must be over). */
-export const ROLE_REPORT_MAX_AGE_DAYS = 7;
 /** role-reports: who a report request is from (not a role: the app). */
 export const ROLE_REPORT_SENDER = { role: "app", title: "the app", chat: "6 am report job", file: "" } as const;
 /** stall-wake (Ops #284): who wakes a lead about stalled work (not a role: the app's work check). */
@@ -143,8 +140,6 @@ export const ROLE_CI_SENDER = { role: "app", title: "the CI watch", chat: "CI wa
 const REPORT_SETTLE_MS = 2 * 60_000;
 /** role-reports: no answer this long after delivery: recorded as none. */
 const REPORT_GIVE_UP_MS = 6 * HOUR_MS;
-/** role-reports: report records younger than this are never dropped (they are the once-per-day proof). */
-const REPORT_KEEP_MS = (ROLE_REPORT_MAX_AGE_DAYS + 2) * 24 * HOUR_MS;
 
 const HEADER_RE = /^\[Role message (rm-[0-9a-f]{8}) /;
 
@@ -984,18 +979,7 @@ export class RoleMessages {
 	private rememberChains(dropped: RoleMessageRecord[]): void {
 		if (dropped.length === 0) return;
 		const at = this.now();
-		const facts = dropped.map((m) => ({
-			id: m.id,
-			chain: m.chain,
-			...(m.hash ? { hash: m.hash } : {}),
-			...(m.target ? { target: m.target } : {}),
-			...(m.root ? { root: m.root } : {}),
-			...(m.parent ? { parent: m.parent } : {}),
-			...(m.guard ? { guard: m.guard } : {}),
-			...(m.tags?.length ? { tags: [...m.tags] } : {}),
-			state: m.state, // #379: how it ended (the ladder settles a delivery it never saw confirmed from this)
-			at,
-		}));
+		const facts = roleMessageDroppedFacts(dropped, at);
 		for (const f of facts) this.chainMemory.set(f.id, f);
 		try {
 			this.persistence.appendChains(this.chainMemoryFile, facts);
@@ -1052,35 +1036,16 @@ export class RoleMessages {
 	private save(schedule: RoleMessageSchedule = inSchedulingContext): void {
 		const keep = this.data.messages;
 		if (keep.length > ROLE_MESSAGES_KEEP) {
-			const extra = keep.length - ROLE_MESSAGES_KEEP;
-			let considered = 0;
-			const now = this.now();
-			let pins: ReadonlySet<string>;
-			try {
-				pins = roleMessageRetentionPins(keep, this.host.retentionPins?.());
-			} catch {
-				// Unknown projection cannot authorize irreversible deletion. Retry on the next save.
-				pins = new Set(keep.map((m) => m.id));
-				this.log("retention unknown; skipped pruning");
-			}
-			const retained = keep.filter((m) => {
-				// role-reports: a recent report request stays: it is the proof that the day was asked for.
-				const proof = m.kind === "report" && now - m.at < REPORT_KEEP_MS;
-				if (considered < extra && !pins.has(m.id) && !proof) {
-					considered++;
-					// Ops #318: unlimited traffic must not evict capped roles' unexpired hourly proof.
-					// At most capped roles × active hourly cap extra rows; exempt history rotates as before.
-					if (m.kind !== "report" && !roleMessagesHourlyExempt(m.from.role) && now - m.at < HOUR_MS) return true;
-					return false;
-				}
-				return true;
-			});
-			// Never leave a retained original without the actual accepted reply used by semantic projection.
-			const paired = roleMessageRetentionPins(keep, new Set(retained.map((m) => m.id)));
-			this.data.messages = keep.filter((m) => paired.has(m.id));
+			const { retained, dropped } = pruneRoleMessages(
+				keep,
+				this.now(),
+				() => this.host.retentionPins?.(),
+				(message) => this.log(message),
+			);
+			this.data.messages = retained;
 			if (this.data.messages.length > ROLE_MESSAGES_KEEP) this.log(`retention_over_keep: ${this.data.messages.length}`);
 			// role-message-ladder (Ops rm-efd6df89): a chain's place never depends on this rotating copy.
-			this.rememberChains(keep.filter((m) => !paired.has(m.id)));
+			this.rememberChains(dropped);
 		}
 		try {
 			this.persistence.saveStore(this.file, this.data);
