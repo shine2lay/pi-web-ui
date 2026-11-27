@@ -49,6 +49,28 @@ describe("qualified HOME guard-operation receipts", () => {
 		expect(w.got).toHaveLength(0);
 	});
 
+	it("refuses qualified sends without the current HOME actor or available guard core", async () => {
+		const w = await world();
+		const call = tc();
+		const ref = w.host.inboxOperationRef(A, call)!;
+		const sender = who(w, "alpha", A);
+		const input = { to: "beta", kind: "request" as const, text: "synthetic qualified send" };
+		expect(await w.host.send({ ...sender, guard: undefined }, input, call, ref)).toMatchObject({ ok: false });
+		expect(await w.host.send({ ...sender, guard: { ...sender.guard!, isHome: false } }, input, call, ref))
+			.toMatchObject({ ok: false, error: expect.stringContaining("current HOME") });
+		const internals = w.host as unknown as { core: unknown };
+		const core = internals.core;
+		internals.core = null;
+		try {
+			expect(await w.host.send(sender, input, call, ref))
+				.toMatchObject({ ok: false, error: expect.stringContaining("guard is unavailable") });
+		} finally {
+			internals.core = core;
+		}
+		expect(await w.host.lookupInboxOperation(ref)).toEqual({ state: "unaccepted" });
+		expect(w.got).toHaveLength(0);
+	});
+
 	it("keeps accepted outbox authoritative after ok:false and across restart, without resend", async () => {
 		const w = await world();
 		const call = tc();

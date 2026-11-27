@@ -2184,7 +2184,7 @@ export class RoleMessageGuardHost {
 		)
 			return { ok: false, error: "Not sent: inbox guard operation generation is unavailable or changed." };
 		try {
-			return await this.sendNow(sender, input, toolCallId, expectedInboxOperationRef !== undefined);
+			return await this.sendNow(sender, input, toolCallId, expectedInboxOperationRef);
 		} finally {
 			if (this.status_ === "ready") await this.afterChange();
 		}
@@ -2194,20 +2194,27 @@ export class RoleMessageGuardHost {
 		sender: RoleMessageSender,
 		input: RoleMessageSendInput & { grant?: unknown },
 		toolCallId: string,
-		inboxQualified = false,
+		expectedInboxOperationRef?: string,
 	): Promise<RoleMessageGuardSendResult> {
 		const rm = this.o.roleMessages();
 		if (!rm) return { ok: false, error: "Role messages aren't available in this app." };
-		if (this.status_ !== "ready" || !this.core) return rm.send(sender, input);
+		const inboxQualified = expectedInboxOperationRef !== undefined;
+		if (this.status_ !== "ready" || !this.core) return inboxQualified
+			? { ok: false, error: "Not sent: inbox guard is unavailable." }
+			: rm.send(sender, input);
 		const prepared = rm.prepare(sender, input);
 		if (!prepared.ok) return { ...prepared, reason: "invalid_input" };
 		const actor = this.senderActor(sender);
 		if (!actor) return inboxQualified
 			? { ok: false, error: "Not sent: inbox send requires a verified guard actor." }
 			: rm.send(sender, input);
+		if (inboxQualified && (!actor.currentHome || !this.actorCurrent(actor)))
+			return { ok: false, error: "Not sent: inbox send requires the current HOME actor." };
 		const refused = roleMessagesHourlyRefusal(actor.role, rm.hourlyCount(sender.role), this.policy, this.now());
 		if (refused) return { ok: false, error: refused, reason: "ordinary_hourly" };
 		const state = await this.state_();
+		if (inboxQualified && expectedInboxOperationRef !== this.inboxOperationRef(sender.file, toolCallId))
+			return { ok: false, error: "Not sent: inbox guard generation changed during preparation." };
 		// Ops #257 (B1, N2): approvals turned off during the read (another server took the lock, another call failed).
 		if (this.offNow())
 			return {
