@@ -10,7 +10,7 @@ The contract is:
 - Undefined: no binding. A helper-marked entry then refuses `E_RPI_HELPER_ENTRY`; never ordinary-role fallback.
 - Ended/superseded lease: throw an Error with `code: "E_RPI_STALE_LEASE"`.
 - Unreadable authority: throw an Error with `code: "E_RPI_UNKNOWN"`.
-- Seal has exactly `tools`, `toolSetSha`, `ceilingPolicySha`, `rolesConfigSha`. Tests use the existing pi-identity `specialists/canon.ts` primitives; no second hash formula or ceiling resolver.
+- Seal has exactly `tools`, `toolSetSha`, `ceilingPolicySha`, `rolesConfigSha`. Tests use the existing pi-identity `/home/shinelay/projects/pi-identity/specialists/canon.ts` primitives; no second hash formula or ceiling resolver.
 
 The exported accessor is still inert (undefined); host instance methods explicitly throw unbuilt. No install/discovery side effect was added. New RED transport tests place a fixture on the existing symbol and require live binding/code propagation. Identity/OpenViking peer sa-48963350 received this exact contract. Their no-host tests remain independent and unchanged.
 
