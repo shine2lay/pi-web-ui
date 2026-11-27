@@ -28,6 +28,8 @@ The existing role-message source and guard remain authoritative; no second sourc
 `server/inbox-coordination.ts` defines the shared keyed mutation port; the synchronous
 current-claim query is read-only, never permission to skip the effect's locked fence recheck.
 `server/inbox-ledger.ts` appends private metadata with contiguous sequence and fsync.
+`server/inbox-native-dispatch.ts` reconciles native SessionManager dispatch intent/receipt
+metadata with exact ledger leases. The two stores are not atomic; ambiguous epochs hold.
 `server/role-messages-source.ts` is the single source decoder and retention-pin calculation.
 `server/role-message-guard-inbox-receipt.ts` qualifies accepted/refused/absent/unknown receipts.
 `server/shared/inbox-codec.ts` implements the codec reexported by `server/shared/inbox-wire.ts`.
@@ -45,12 +47,11 @@ The second command writes home-phase-proof.json: an exact 279-row phase map plus
 runtime test's observed result and ownership. Missing evidence or a failing HOME-owned
 assertion is an error; an inventory count alone is never a behavioral pass.
 
-Before the Security corrections, the measured baseline was 27 mapped contract cases and
-62 executable HOME-owned assertions. The other 252 mapped cases remain deferred/external.
-Of those 146 runtime assertions, 84 were outside HOME ownership, including 48 observed failures.
-The final evidence gate must explicitly account for added Security and integration controls;
-these baseline counts are not a final corrected-build test receipt. No deferred assertion is
-claimed PASS for release coverage merely because a partial adapter happens to pass.
+The integrated evidence gate measures 27 mapped contract cases and 74 executable
+HOME-owned assertions, all passing. The other 252 mapped cases remain deferred/external.
+Of 158 runtime assertions, 84 are outside HOME ownership. Twelve added HOME controls cover
+Security F1/F2, the shared coordination fence and release projection. No deferred assertion
+is claimed PASS for release coverage merely because a partial adapter happens to pass.
 The nine preserved legacy controls and 329 codec tests are separate checks.
 
 The four previously execution-linked cases C-DEFF-1, C-DEFF-2, C-DEFF-10 and C-DEFF-14

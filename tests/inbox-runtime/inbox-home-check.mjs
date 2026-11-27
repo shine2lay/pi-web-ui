@@ -10,7 +10,7 @@ const coverage = read("coverage-verification.json");
 const results = read("runtime-results.json");
 assert.equal(coverage.complete, true, "original assertion and 279 accounting checks must pass");
 assert.equal(coverage.controls.length, 9, "nine legacy controls required");
-assert.equal(results.numTotalTests, 146, "HOME acceptance inventory changed; review ownership explicitly");
+assert.equal(results.numTotalTests, 158, "HOME acceptance inventory changed; review ownership explicitly");
 const laterFiles = new Set([
 	"inbox-helper.test.ts",
 	"inbox-host.test.ts",
@@ -33,10 +33,10 @@ const execution = results.testResults.flatMap((file) =>
 		return { file: name, title: test.title, observed: test.status, phase: deferred ? "deferred" : "HOME-owned" };
 	}),
 );
-assert.equal(execution.length, 146, "missing execution records");
+assert.equal(execution.length, 158, "missing execution records");
 assert.equal(
 	execution.filter((test) => test.phase === "HOME-owned").length,
-	62,
+	74,
 	"owned inventory must not silently disappear",
 );
 const helperCases = new Set(["C-DEFF-1", "C-DEFF-2", "C-DEFF-10", "C-DEFF-14"]);
