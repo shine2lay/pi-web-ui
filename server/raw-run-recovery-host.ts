@@ -13,7 +13,6 @@ export interface NativeRecoveryHost {
 	leafId(): string;
 	projection(): ReturnType<AgentSession["sessionManager"]["buildSessionProjection"]>["entries"];
 	branch(): ReturnType<AgentSession["sessionManager"]["getBranch"]>;
-	entry(id: string): ReturnType<AgentSession["sessionManager"]["getEntry"]>;
 	append(draft: NativeRecoveryDraft): string;
 }
 export interface RecoveryRegistration {
@@ -38,7 +37,6 @@ export function installRawRunRecoveryHost(session: AgentSession): RecoveryRegist
 		leafId: () => manager.getLeafId() ?? "",
 		projection: () => manager.buildSessionProjection().entries,
 		branch: () => manager.getBranch(),
-		entry: (id) => manager.getEntry(id),
 		append: (draft) => {
 			if (!applying) throw new Error("E_RAW_RUN_OUTSIDE_RECOVERY");
 			switch (draft.type) {
