@@ -8,9 +8,15 @@ Initial observation: 20 tests, 13 RED / 7 GREEN in 2.89 seconds. Continuation at
 
 The later transport/migration ruling, 25-test changed-suite receipt, exact interfaces and remaining-blocker status are in [inbox-migration-contract.md](inbox-migration-contract.md). It supersedes the earlier pending-ruling notes below; no full-suite rerun is claimed.
 
+## Physical test-only placement and dependency order
+
+The suite was moved with editor MV operations into `tests/inbox-runtime/` after the fixture guard rejected `acceptance/` as production scope. No exemption or default-suite expansion was added. Assertion semantics stay unchanged; commands below use the new location (historical runs preceded this path-only relocation).
+
+`inbox-repo-roots.ts` resolves the host repository's canonical common git directory, then canonical siblings `pi-queue` and `pi-identity`. Runtime imports and requester source pin use that resolver; no task worktree dependency or fallback remains. Queue's pure vectors/fixtures must land in canonical pi-queue BEFORE this web suite is run after land. Its earlier task-worktree test results do not prove that installation order has happened. Parent owns final gates; no behavioral suite repeated for this relocation. Read-only root verification resolved `/home/shinelay/projects/pi-web-ui/.git`, hence siblings under `/home/shinelay/projects/`. At this checkpoint canonical queue vectors/fixtures were NOT yet landed; identity's canonical hash primitive was present. The existing explicitly supplied #607 Architecture corpus remains externally pinned at its delivery root; the parent owns final contract-source retention.
+
 ## Command and isolation
 
-From the worktree: `./node_modules/.bin/vitest run --config acceptance/inbox-runtime/inbox.config.ts` (exit 1 expected). Initial 20 tests run once after source edits, 2026-11-26, reported start 18:05:14. Ten workers; inherits the normal temp-directory setup. Default unit suite remains unchanged and excludes this directory. No model invocation, live chat, server startup or request/payload dump; only local fixed fixtures and counts/ids are observed. Standard gates/typecheck are delegated to the parent as requested.
+From the worktree: `./node_modules/.bin/vitest run --config tests/inbox-runtime/inbox.config.ts` (exit 1 expected). Initial 20 tests run once after source edits, 2026-11-26, reported start 18:05:14. Ten workers; inherits the normal temp-directory setup. Default unit suite remains unchanged and excludes this directory. No model invocation, live chat, server startup or request/payload dump; only local fixed fixtures and counts/ids are observed. Standard gates/typecheck are delegated to the parent as requested.
 
 ## Pins (read-only Architecture source, not a copied interpreter)
 
@@ -22,7 +28,7 @@ From the worktree: `./node_modules/.bin/vitest run --config acceptance/inbox-run
 | delivery/delivery.cases.json | 69 | 1aabea2f3198645e613beb47d66053e3085640a15003e71a62c28df037bdd059 |
 | helpers/helper.cases.json | 120 | aabc75c5342fe85d6a3efefebb0ebd3546b9ed54ca78c95b3e6e5eec66fab81b |
 
-Parent #602 manifest pin: c8d277d114937642d116f8967852e7a53be66f08e934351774714de102fb004b. #607 strict amendment remains parent-owned. After the initial run, the parent supplied final boundary607 sha f9e68ff62ee5189055c865779fe0ee6dd63ab842b8714835dbcdbd30e19df0a1. Its BOUNDARY.md was read and five line-op negative values added against a claim envelope in the actual ledger file. `vitest run --config acceptance/inbox-runtime/inbox.config.ts -t '#607'` ran only those new tests at 18:07:34: 5 RED at E_RPI_UNBUILT, 20 excluded by filter, 1.72s. They require UNKNOWN, no claim, no guard send/replyId, unchanged ledger; they do not yet reach those assertions. Aggregate evidence: 25 tests, 18 RED (7 actual boundaries + 11 pending seam), 7 GREEN across these two runs. Security delta pending, not GO.
+Parent #602 manifest pin: c8d277d114937642d116f8967852e7a53be66f08e934351774714de102fb004b. #607 strict amendment remains parent-owned. After the initial run, the parent supplied final boundary607 sha f9e68ff62ee5189055c865779fe0ee6dd63ab842b8714835dbcdbd30e19df0a1. Its BOUNDARY.md was read and five line-op negative values added against a claim envelope in the actual ledger file. `vitest run --config tests/inbox-runtime/inbox.config.ts -t '#607'` ran only those new tests at 18:07:34: 5 RED at E_RPI_UNBUILT, 20 excluded by filter, 1.72s. They require UNKNOWN, no claim, no guard send/replyId, unchanged ledger; they do not yet reach those assertions. Aggregate evidence: 25 tests, 18 RED (7 actual boundaries + 11 pending seam), 7 GREEN across these two runs. Security delta pending, not GO.
 
 ## Direct existing-boundary observations
 
@@ -61,7 +67,7 @@ These are named contract projections/negative variants, NOT complete replay of e
 
 ## Ownership and outstanding work
 
-- Parent: canonical `server/shared/inbox-wire.ts`, `acceptance/inbox-wire/`, strict #607 codec, standard gates. This slice never edits those paths.
+- Parent: canonical `server/shared/inbox-wire.ts`, `tests/inbox-wire/`, strict #607 codec, standard gates. This slice never edits those paths.
 - Delivery builder: real reader/ledger/coordinator, production boundary connection, durable packet/cursor/recovery, whole-source UNKNOWN, attempts/alarm projection, source retention integration. Replace inert methods, not the assertions.
 - Helper-host builder: `server/inbox-helper-host.ts` now exports `inboxHelperBinding(sessionId): InboxHelperBinding | undefined` (inert global accessor returns undefined), `InboxHelperHost` (inert instance methods), and typed allocation/seal/decision/launch/journal/working/close/archive ports. H1's exact nested binding uses role/msgId/leaseId/epoch/homeChat, matching queue's contract. Identity and OpenViking consume this accessor; absence must fail closed for helper entries. No live registry is installed. `inbox-host.test.ts` asserts claim-before-launch and three first entries, K=3 concurrent admission, idle no-spawn, spawn failure release+attempt, canonical ceiling decisions before dispatch, working-chat no-close, failed close retry+archive, release to HOME. The close port calls real `runQueueCloseChat`; only clients/chats are fixtures. Runtime lookup/admission is still RED, not proved.
 - pi-identity owner: real ceiling/schema dispatch tests including retained narrowing; no duplicated policy in this repo.
@@ -80,11 +86,15 @@ These are named contract projections/negative variants, NOT complete replay of e
 | inbox-ledger.test.ts | cea61906aac8b235bb7f54b50a5f038eff19f1e5d1832dbd507a8d2c6163f93d |
 | inbox-retention.test.ts | ff1b5b297379dd97cfb13cc20c270785651e010d920c58c317ec64431ad26e59 |
 | inbox-corpora.ts | 678452aa88c50d15f4f5060e6c9397fff3995b5d6d6c23546ed8c218475193ea |
+| inbox.config.ts | ac8243eb5841d3a678a6b781b4ed0f4af917b0247b2ce93496d271e4c9192443 |
+| inbox-repo-roots.ts | f9bfd9f428683d1add90ff43c4384af43c3f9fd5ad7ab93209ef93ad4ea85dda |
+| inbox-queue-fixture.ts | c7d663278695c35810192178ac6d384128163104b261c8e83ae85d9de9acadbf |
+| inbox-world.ts | 76f92b4554bdd60d51502545f965f66c7126480e249862b937bb262ffdf0d532 |
 | inbox-alarm.test.ts | 80bc96eec77d4f206f3d74f885282940e4b71f01b35fe6de15042f5958086882 |
-| inbox-host.test.ts | 8441c7eb8cf2d7ede861482632b9d8a899426a68c1c12287825059d15bc30248 |
+| inbox-host.test.ts | e05158d86efec683ad2317233a51eaa304c8caec8362dfcf31a005b444a67d7c |
 | inbox-migration.test.ts | e9e9ac4ed2c2a5d8eff15e138b2b90822ad721ea2de8d5478cd92ce4ace9cd0f |
 | inbox-races.test.ts | 2367b7fa4c083e94948f66a84678ae9153f3e93ade01333474403aa499aa7ae3 |
-| inbox-requester.test.ts | da85a4e23ccc4d465eebd6b2efc507d64a6011beb34211b3d7802883de71d40f |
+| inbox-requester.test.ts | d662d76b1812d21b8da7b92b108a65f560591c476a5eaa6e7d74cdd4952c8c00 |
 | ../../server/inbox-runtime.ts | 7cdfece34d0e581142210d967e7997c2dd631f67417fa154638023c48c3d9764 |
 | ../../server/inbox-helper-host.ts | 93bf93a6b25752429565f5d1a66e6cea57feb9a3c686eab38b2c105feef653c7 |
 | ../../server/inbox-migration.ts | 2d514c2fa43ce67c8059630cea055a44698011249d53d67f9f3c48dd6e3c19d6 |

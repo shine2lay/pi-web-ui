@@ -1,6 +1,7 @@
 // Bridge the queue owner's existing native test fixture into this opt-in Vitest suite.
 // No queue implementation or requester validator is copied here.
 import { vi } from "vitest";
+import { inboxRepoFile } from "./inbox-repo-roots.js";
 vi.mock("node:test", async () => {
 	const { afterAll, afterEach, beforeEach, vi } = await import("vitest");
 	return ({
@@ -20,4 +21,6 @@ vi.mock("node:test", async () => {
 	},
 });
 });
-export { fixture, session, plan } from "../../../pi-queue-ops-task-1120/tests/inbox-helper-fixture.ts";
+export const { fixture, session, plan } = (await import(
+	inboxRepoFile("pi-queue", "tests/inbox-helper-fixture.ts").href
+)) as typeof import("../../../pi-queue/tests/inbox-helper-fixture.ts");

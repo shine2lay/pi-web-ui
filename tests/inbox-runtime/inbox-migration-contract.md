@@ -41,9 +41,9 @@ Future files are `<stateRoot>/role-inbox-migration-v1/plan.json` and `progress.j
 9. Unknown fields, numeric hash and boolean index fail closed without rewriting files.
 10. Administrative rows are refused by the actual unchanged inbox decoder without throwing.
 
-Command (only changed suites, after edits):
+Command (only changed suites, after edits; path updated after physical relocation into the test-only tree):
 
-`./node_modules/.bin/vitest run --config acceptance/inbox-runtime/inbox.config.ts acceptance/inbox-runtime/inbox-host.test.ts acceptance/inbox-runtime/inbox-migration.test.ts`
+`./node_modules/.bin/vitest run --config tests/inbox-runtime/inbox.config.ts tests/inbox-runtime/inbox-host.test.ts tests/inbox-runtime/inbox-migration.test.ts`
 
 2026-11-26 18:37:24: **25 tests, 23 RED / 2 GREEN**, 3.88s. Host: 12 RED (9 unbuilt host + 3 unimplemented transport forwarding), 1 GREEN no-host accessor. Migration: 11 RED at the unbuilt administration seam, 1 GREEN actual inbox-codec rejection. The runtime assertions after unbuilt calls are not claimed as enforced. Previous whole-suite receipt remains 77 tests, 38 RED /39 GREEN; adding these 15 cases yields an inventory of 92 cases, but no new full-suite execution is claimed.
 

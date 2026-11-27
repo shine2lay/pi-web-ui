@@ -2,16 +2,17 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { requesterInputOf, requesterOf } from "../../server/queue-requester.js";
-import {
-	requesterInputOf as queueInput,
-	requesterOf as queueRequester,
-} from "../../../pi-queue-ops-task-1120/queue-requester.ts";
-import { requesterVectors } from "../../../pi-queue-ops-task-1120/tests/inbox-requester-vectors.ts";
+import { inboxRepoFile } from "./inbox-repo-roots.js";
+
+const { requesterInputOf: queueInput, requesterOf: queueRequester } = (await import(
+	inboxRepoFile("pi-queue", "queue-requester.ts").href
+)) as typeof import("../../../pi-queue/queue-requester.ts");
+const { requesterVectors } = (await import(
+	inboxRepoFile("pi-queue", "tests/inbox-requester-vectors.ts").href
+)) as typeof import("../../../pi-queue/tests/inbox-requester-vectors.ts");
 
 // Queue 427c089: one pure shared vector source; no node:test import/registration.
-const bytes = readFileSync(
-	new URL("../../../pi-queue-ops-task-1120/tests/inbox-requester-vectors.ts", import.meta.url),
-);
+const bytes = readFileSync(inboxRepoFile("pi-queue", "tests/inbox-requester-vectors.ts"));
 if (
 	createHash("sha256").update(bytes).digest("hex") !==
 	"69100f10ba641e89da39edc7cd6e189f8b182e791062e562cfd770bf0c18430a"

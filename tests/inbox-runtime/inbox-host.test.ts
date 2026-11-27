@@ -1,6 +1,9 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
-import { canonSha, sortNames, toolSetSha } from "../../../pi-identity-ops-task-1120/specialists/canon.ts";
+import { inboxRepoFile } from "./inbox-repo-roots.js";
+const { canonSha, sortNames, toolSetSha } = (await import(
+	inboxRepoFile("pi-identity", "specialists/canon.ts").href
+)) as typeof import("../../../pi-identity/specialists/canon.ts");
 import { InboxHelperHost, inboxHelperBinding, INBOX_HELPER_HOST_KEY, type InboxHelperHostPorts, type InboxHelperRegistryHost } from "../../server/inbox-helper-host.js";
 import { runQueueCloseChat, type QueueCloseHostContext } from "../../server/queue-chat-lane.js";
 import { A, B, chat, send, useGuardWorld } from "../../tests/unit/role-message-guard-host-harness.js";
