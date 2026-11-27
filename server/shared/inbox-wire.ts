@@ -75,16 +75,4 @@ export type InboxLine = {
 	| { op: "refusal"; code: string; leaseId?: string; epoch?: number }
 );
 
-// Fail closed until the delivery builder implements the single strict decoder.
-export function decodeInboxView(_input: unknown): InboxDecode<InboxView> {
-	return { ok: false, code: "E_RPI_SCHEMA" };
-}
-export function decodeInboxLine(_input: unknown): InboxDecode<InboxLine> {
-	return { ok: false, code: "E_RPI_SCHEMA" };
-}
-export function inboxClaimable(_view: unknown): boolean {
-	return false;
-}
-export function inboxNextDispatch(_view: unknown): "order" | "reply_only" | null {
-	return null;
-}
+export { decodeInboxView, decodeInboxLine, inboxClaimable, inboxNextDispatch } from "./inbox-codec.js";

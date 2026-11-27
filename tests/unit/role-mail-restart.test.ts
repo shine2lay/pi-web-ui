@@ -108,7 +108,8 @@ function fixture(kinds: Array<"question" | "request" | "fyi"> = []) {
 			await emit({ role: "custom", ...note, timestamp: now });
 		}),
 	} as unknown as AgentSession;
-	installRoleMailBoundary(session);
+	// This suite preserves the native non-HOME/queue restart route. HOME packets have separate acceptance tests.
+	installRoleMailBoundary(session, { legacy: () => true });
 	const conv = { session, listed: false, turnPending: undefined as unknown };
 	let opened = false;
 	const client = {

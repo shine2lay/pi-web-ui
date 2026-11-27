@@ -9,6 +9,12 @@ import { roleMessageIdOf } from "./role-messages.js";
 type Session = Pick<AgentSession, "agent" | "subscribe" | "sendCustomMessage">;
 type Note = Parameters<AgentSession["sendCustomMessage"]>[0];
 type Pending = { id: string; message: AgentMessage; note?: Note };
+export interface RoleMailHooks {
+	legacy?: () => boolean;
+	select?: (rows: readonly { id: string; passive: boolean }[]) => Promise<string[]>;
+	landed?: (id: string) => Promise<void>;
+	ended?: (outcome: "turn_completed" | "aborted") => Promise<void>;
+}
 const installed = new WeakMap<
 	Session,
 	{ note: (message: Note) => Promise<void>; beforeResume: (admit: () => Promise<void>) => Promise<() => void> }
@@ -30,12 +36,28 @@ function idOf(message: AgentMessage): string | undefined {
 /** Install before the first run (and on replacement runtimes): a running loop
  * captures finishTurn. These are public SDK boundary hooks, not SDK edits.
  */
-export function installRoleMailBoundary(session: Session): void {
+export function installRoleMailBoundary(session: Session, hooks: RoleMailHooks = {}): void {
 	if (installed.has(session)) return;
 	const agent = session.agent;
 	let pending: Pending[] = [];
 	let ready = false;
 	let resuming = false;
+	let packet: Pending[] = [];
+	let landing: Promise<void> = Promise.resolve();
+	const legacy = () => hooks.legacy?.() === true;
+	const select = async (): Promise<Pending[]> => {
+		if (legacy()) {
+			const batch = pending;
+			pending = [];
+			return batch;
+		}
+		if (packet.length) return packet;
+		const ids = hooks.select ? await hooks.select(pending.map((p) => ({ id: p.id, passive: !!p.note }))) : undefined;
+		const ordered = ids ? ids.map((id) => pending.find((p) => p.id === id)).filter((p): p is Pending => !!p) : pending;
+		const action = ordered.find((p) => !p.note);
+		packet = [...(action ? [action] : []), ...ordered.filter((p) => p.note).slice(0, 20)];
+		return packet;
+	};
 	const followUp = agent.followUp.bind(agent);
 	const clear = agent.clearFollowUpQueue.bind(agent);
 	const finish = agent.finishTurn;
@@ -54,6 +76,7 @@ export function installRoleMailBoundary(session: Session): void {
 	};
 	agent.clearFollowUpQueue = () => {
 		pending = pending.filter((p) => p.note); // SDK follow-up cancellation does not cancel no-turn notes
+		packet = packet.filter((p) => p.note);
 		ready = false;
 		clear();
 	};
@@ -62,12 +85,25 @@ export function installRoleMailBoundary(session: Session): void {
 	session.subscribe((event) => {
 		if (event.type === "message_start") {
 			const id = idOf(event.message);
-			if (id) pending = pending.filter((p) => p.id !== id);
+			if (id) {
+				pending = pending.filter((p) => p.id !== id);
+				packet = packet.filter((p) => p.id !== id);
+				if (!legacy() && hooks.landed) landing = landing.then(() => hooks.landed!(id));
+			}
 		}
 	});
 	agent.finishTurn = async (turn, signal) => {
 		const decision = (await finish?.(turn, signal)) || undefined;
 		ready = false;
+		const continuation = turn.message.content.some((c) => c.type === "toolCall");
+		if (!legacy() && !continuation) {
+			await landing;
+			await hooks.ended?.(
+				signal?.aborted || turn.message.stopReason === "error" || turn.message.stopReason === "aborted"
+					? "aborted"
+					: "turn_completed",
+			);
+		}
 		if (
 			!pending.length ||
 			decision?.action === "end" ||
@@ -85,16 +121,17 @@ export function installRoleMailBoundary(session: Session): void {
 		}
 		// Notes alone must not request another response. SDK buffers these until
 		// turn_end, after tool results and before the next independent prompt.
-		const notes = pending;
-		pending = [];
-		for (const row of notes) await session.sendCustomMessage(row.note!, { triggerTurn: false });
+		const notes = legacy() ? pending : pending.filter((p) => p.note).slice(0, 20);
+		for (const row of notes) {
+			await session.sendCustomMessage(row.note!, { triggerTurn: false });
+			pending = pending.filter((p) => p.id !== row.id);
+		}
 		return decision;
 	};
 	agent.prepareNextTurnWithContext = async (turn, signal) => {
 		const update = prepare ? await prepare(turn, signal) : await prepareLegacy?.(signal);
 		if (!ready || !pending.length) return update;
-		const batch = pending;
-		pending = [];
+		const batch = await select();
 		ready = false;
 		// The SDK emits/persists these with its normal message lifecycle. Include
 		// notes in the same FIFO, so they cannot overtake an older request.
@@ -118,15 +155,14 @@ export function installRoleMailBoundary(session: Session): void {
 				resuming = false;
 				if (agent.prompt === atResume) agent.prompt = original;
 			};
-			const atResume: typeof agent.prompt = (
+			const atResume: typeof agent.prompt = async (
 				input: AgentMessage | AgentMessage[] | string,
 				images?: Parameters<AgentSession["followUp"]>[1],
 			) => {
 				restore(); // one-shot; ordinary prompts and follow-ups remain untouched
 				if (agent.state.isStreaming || !Array.isArray(input) || !pending.length)
 					return typeof input === "string" ? prompt(input, images) : prompt(input);
-				const batch = pending;
-				pending = [];
+				const batch = await select();
 				ready = false;
 				return prompt([...batch.map((row) => row.message), ...input]);
 			};

@@ -113,13 +113,16 @@ describe("ladder: storage caps", () => {
 		w.rm.stop();
 		const file = join(data, "role-messages.json");
 		const stored = JSON.parse(readFileSync(file, "utf8")) as { messages: Array<Record<string, unknown>> };
+		// Only terminal records may now prune; unanswered requests have separate retention coverage.
+		for (const record of stored.messages) record.state = "failed";
 		const m0 = stored.messages[0];
 		for (let i = 0; i < 1000; i++)
 			stored.messages.push({
 				...m0,
 				id: `rm-f${i.toString(16).padStart(7, "0")}`,
 				from: { ...(m0.from as object), role: "filler" },
-				to: "filler",
+				to: { role: "filler", title: "Filler" },
+				kind: "fyi",
 				at: now - 2 * 86_400_000,
 				state: "delivered",
 			});

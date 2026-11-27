@@ -86,7 +86,7 @@ const note = (id: string) => ({
 });
 
 describe("role-mail-busy native host adapter", () => {
-	it("working service/client admits three messages, then the first completed-run boundary lands them oldest-first exactly once", async () => {
+	it("working service/client admits one actionable plus passive notes per completed boundary exactly once", async () => {
 		const h = harness();
 		const file = import.meta.filename; // existence guard, not a real chat
 		const conv = { session: h.session, listed: false };
@@ -139,11 +139,13 @@ describe("role-mail-busy native host adapter", () => {
 		// A tool continuation is not the end of the owner's running turn.
 		await h.boundary(h.turn(true));
 		expect(h.landed).toEqual([]);
-		for (let boundary = 0; boundary < 5; boundary++) {
+		await h.boundary();
+		expect(h.landed.map((m) => m.id)).toEqual([ids[0], ids[2]]);
+		for (let boundary = 0; boundary < 4; boundary++) {
 			await h.boundary();
-			expect(h.landed.map((m) => m.id)).toEqual(ids);
+			expect(h.landed.map((m) => m.id)).toEqual([ids[0], ids[2], ids[1]]);
 		}
-		expect(h.landed.map((m) => m.role)).toEqual(["user", "user", "custom"]);
+		expect(h.landed.map((m) => m.role)).toEqual(["user", "custom", "user"]);
 		expect(h.agent.followUpMode).toBe("one-at-a-time");
 	});
 

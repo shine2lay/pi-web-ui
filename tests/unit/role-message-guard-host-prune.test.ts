@@ -348,12 +348,12 @@ describe("ladder: stuck deliveries settle from the native store (#379)", () => {
 		expect(w.rm.byId(sc)).toBeUndefined();
 	});
 
-	it("a record the native store dropped (finished) settles from its chain memory and leaves 5 h after the drop", async () => {
+	it("a closed FYI the native store dropped settles dispatched from chain memory and leaves 5 h after the drop", async () => {
 		const w = await world();
 		const T0 = now;
 		busy(w, G);
 		const restore = loseAcks(w);
-		const sd = idOf(await send(w, "alpha", A, "gamma", { text: "stuck d" }, ""));
+		const sd = idOf(await send(w, "alpha", A, "gamma", { kind: "fyi", text: "stuck d" }, ""));
 		restore();
 		// T0 + 1 h 10: a send prunes the hour-old charge; still waiting.
 		setNow(T0 + H + 10 * M);
@@ -371,19 +371,21 @@ describe("ladder: stuck deliveries settle from the native store (#379)", () => {
 				...m0,
 				id: `rm-f${i.toString(16).padStart(7, "0")}`,
 				from: { ...(m0.from as object), role: "filler" },
-				to: "filler",
+				to: { role: "filler", title: "Filler" },
+				kind: "fyi",
 				at: now - 2 * 86_400_000,
 				state: "delivered",
 			});
 		writeFileSync(file, JSON.stringify(stored));
 		const w2 = await restartWithReconcileRefused(w);
 		expect((await entryOf(w2, sd))?.state).toBe("unknown"); // injected restart refusal, not the expired charge
-		await w2.rm.tick(); // delivered, then dropped by the save (oldest finished record first)
+		await w2.rm.tick(); // no longer waiting; retained obligations may have displaced older filler first
+		w2.rm.admit({ ...w2.rm.byId(sd)!, id: "rm-fffff001" }, () => {}); // pressure after delivery
 		expect(w2.rm.byId(sd)).toBeUndefined();
 		expect(w2.rm.chainFact(sd)).toBeDefined();
 		expect(await send(w2, "coo", C, "alpha", { text: "trigger" }, "")).toMatchObject({ ok: true });
 		expect(await entryOf(w2, sd)).toMatchObject({
-			state: "handled",
+			state: "dispatched",
 			lastEvidence: { eventId: "native:dropped:delivered" },
 		});
 		setNow(T0 + 7 * H + 10 * M);
@@ -414,7 +416,8 @@ describe("ladder: stuck deliveries settle from the native store (#379)", () => {
 				...m0,
 				id: `rm-f${i.toString(16).padStart(7, "0")}`,
 				from: { ...(m0.from as object), role: "filler" },
-				to: "filler",
+				to: { role: "filler", title: "Filler" },
+				kind: "fyi",
 				at: now - 2 * 86_400_000,
 				state: "delivered",
 			});

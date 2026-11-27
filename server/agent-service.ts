@@ -441,7 +441,8 @@ import {
 } from "./role-messages.js";
 import { RoleMessageGuardHost } from "./role-message-guard-host.js";
 import { rememberWorkerTask, roleMessageTagFacts } from "./role-message-tag-facts.js";
-import { admitRoleMailAtResume, installRoleMailBoundary, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
+import { admitRoleMailAtResume, noteAtRoleMailBoundary } from "./role-mail-boundary.js";
+import { InboxHomeHost, configureInboxHome, installHomeInboxBoundary } from "./inbox-home-host.js";
 import {
 	installPromptStartGuard,
 	promptStartPending,
@@ -1982,6 +1983,7 @@ function quietLeadAt(conv: Conversation, idx: ChatIndex, start: number): UiQuiet
 let roleMessageService: RoleMessages | null = null;
 /** role-message-ladder: the approval ladder over message_role (AgentService sets it; null in other engines). */
 let roleGuardService: RoleMessageGuardHost | null = null;
+let inboxHomeService: InboxHomeHost | null = null;
 /** Ops #1073: proof-check on QA's messages (AgentService sets it; null: a QA chat's message is held). */
 let proofCheckGateService: ProofCheckGate | null = null;
 /** ladder-alarm: when this server's process started (ms); the approval step is set up once, at start, so when
@@ -6484,7 +6486,7 @@ export class ClientSession {
 
 	/** Wrap a fresh runtime as a new conversation record. */
 	private makeConversation(runtime: AgentSessionRuntime, id: string, terminals: TerminalManager): Conversation {
-		installRoleMailBoundary(runtime.session);
+		installHomeInboxBoundary(runtime.session);
 		// prompt-start-race (Ops #261): one prompt start at a time; a racing start follows the run.
 		installPromptStartGuard(runtime.session);
 		const conv: Conversation = {
@@ -8007,7 +8009,7 @@ export class ClientSession {
 		conv.unsubscribe?.();
 		conv.session = conv.runtime.session;
 		this.attachConversationUsage(conv);
-		installRoleMailBoundary(conv.session);
+		installHomeInboxBoundary(conv.session);
 		installPromptStartGuard(conv.session);
 		// per-chat-dialogs：换了会话（/new、/resume、强制重建）→ 旧会话问的弹窗作废。
 		conv.dialogs.cancelExcept(conv.session);
@@ -18370,6 +18372,8 @@ export class AgentService {
 		// role-messages: the store is read now (message_role works at once); delivery starts with
 		// startRoleMessages, once the restart's carry-on is done.
 		this.roleMessages = new RoleMessages(join(this.stateStore.dataDir, "role-messages.json"), {
+			retentionPins: () => inboxHomeService?.retentionPins() ?? new Set(),
+			orderWaiting: (rows) => inboxHomeService?.orderWaiting(rows) ?? Promise.resolve(rows),
 			roles: () => identityRegistry().identities,
 			chatState: (file) => this.queueChatState(file).state,
 			deliver: (file, text) => this.sendRoleMessage(file, text, this.roleMessageHow(file, text)),
@@ -18410,6 +18414,17 @@ export class AgentService {
 			log: (line) => console.log(line),
 		});
 		roleGuardService = this.roleGuard;
+		inboxHomeService = new InboxHomeHost(
+			{
+				ledgerFile: join(this.stateStore.dataDir, "role-inbox-ledger.jsonl"),
+				roleMessagesFile: join(this.stateStore.dataDir, "role-messages.json"),
+				messages: this.roleMessages,
+				guard: this.roleGuard,
+				now: Date.now,
+			},
+			() => identityRegistry().identities,
+		);
+		configureInboxHome(inboxHomeService);
 		// board (task #76): the roles' shared board. Posting wakes nobody by itself; an order goes directly
 		// to the listed roles that have something waiting (the owner's rule, role-board.ts). Its direct turns
 		// go the way role requests do; they start with startRoleMessages.
@@ -18515,7 +18530,13 @@ export class AgentService {
 	/** role-messages: start delivering (index.ts, once the chats a restart cut off are carried on). The
 	 *  board's direct turns start with them. */
 	startRoleMessages(): void {
-		void this.roleGuard.start().then(() => this.onRoleGuardChanged?.());
+		void this.roleGuard
+			.start()
+			.then(async () => {
+				await inboxHomeService?.start();
+				this.onRoleGuardChanged?.();
+			})
+			.catch((error) => console.error("HOME inbox recovery unavailable", error));
 		this.roleMessages.start();
 		void this.proofCheck.probe(); // Ops #1073: the start-up line says whether proof-check --message works
 		this.roleBoard.start();
@@ -20791,7 +20812,11 @@ export class AgentService {
 		if (roleMessageService === this.roleMessages) roleMessageService = null;
 		if (proofCheckGateService === this.proofCheck) proofCheckGateService = null;
 		this.roleGuard.stop();
-		if (roleGuardService === this.roleGuard) roleGuardService = null;
+		if (roleGuardService === this.roleGuard) {
+			roleGuardService = null;
+			inboxHomeService = null;
+			configureInboxHome(undefined);
+		}
 		this.roleBoard.stop();
 		if (roleBoardService === this.roleBoard) roleBoardService = null;
 		this.queueScanner.stop();

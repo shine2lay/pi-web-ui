@@ -1,7 +1,7 @@
 import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { GuardStoreStateAny } from "../../server/role-message-guard-contract-v2.js";
+import type { GuardStoreStateV2 } from "../../server/role-message-guard-contract-v2.js";
 import { RoleMessageGuardHost, type RoleMessageGuardHostOptions } from "../../server/role-message-guard-host.js";
 import { guardInboxOperationReceipt, guardSendOperationId } from "../../server/role-message-guard-inbox-receipt.js";
 import { guardOperationKey } from "../../server/role-message-guard-store.js";
@@ -9,7 +9,7 @@ import { A, chainTo, data, tc, useGuardWorld, who, world, type World } from "./r
 
 useGuardWorld();
 const stateOf = async (w: World) =>
-	(await (w.host as unknown as { state_(): Promise<GuardStoreStateAny | null> }).state_())!;
+	(await (w.host as unknown as { state_(): Promise<GuardStoreStateV2 | null> }).state_())!;
 const rotate = (host: RoleMessageGuardHost) =>
 	(host as unknown as { rotate(force: boolean): Promise<void> }).rotate(true);
 const generation = () => readFileSync(join(data, "role-message-guard", "current.json"), "utf8");
@@ -44,8 +44,9 @@ describe("qualified HOME guard-operation receipts", () => {
 		expect(await w.host.lookupInboxOperation("send-unqualified")).toMatchObject({ state: "unknown" });
 		await rotate(w.host);
 		expect(await w.host.lookupInboxOperation(ref)).toMatchObject({ state: "unknown" });
-		expect(await w.host.send(who(w, "alpha", A), { to: "beta", kind: "request", text: "synthetic" }, call, ref))
-			.toMatchObject({ ok: false });
+		expect(
+			await w.host.send(who(w, "alpha", A), { to: "beta", kind: "request", text: "synthetic" }, call, ref),
+		).toMatchObject({ ok: false });
 		expect(w.got).toHaveLength(0);
 	});
 
@@ -56,14 +57,17 @@ describe("qualified HOME guard-operation receipts", () => {
 		const sender = who(w, "alpha", A);
 		const input = { to: "beta", kind: "request" as const, text: "synthetic qualified send" };
 		expect(await w.host.send({ ...sender, guard: undefined }, input, call, ref)).toMatchObject({ ok: false });
-		expect(await w.host.send({ ...sender, guard: { ...sender.guard!, isHome: false } }, input, call, ref))
-			.toMatchObject({ ok: false, error: expect.stringContaining("current HOME") });
+		expect(
+			await w.host.send({ ...sender, guard: { ...sender.guard!, isHome: false } }, input, call, ref),
+		).toMatchObject({ ok: false, error: expect.stringContaining("current HOME") });
 		const internals = w.host as unknown as { core: unknown };
 		const core = internals.core;
 		internals.core = null;
 		try {
-			expect(await w.host.send(sender, input, call, ref))
-				.toMatchObject({ ok: false, error: expect.stringContaining("guard is unavailable") });
+			expect(await w.host.send(sender, input, call, ref)).toMatchObject({
+				ok: false,
+				error: expect.stringContaining("guard is unavailable"),
+			});
 		} finally {
 			internals.core = core;
 		}
@@ -77,8 +81,9 @@ describe("qualified HOME guard-operation receipts", () => {
 		const ref = w.host.inboxOperationRef(A, call)!;
 		w.host.registerInboxIntentHold(() => true);
 		refuseNextHandoff(w);
-		expect(await w.host.send(who(w, "alpha", A), { to: "beta", kind: "request", text: "synthetic pending" }, call, ref))
-			.toMatchObject({ ok: false, error: expect.stringContaining("Accepted but not handed off") });
+		expect(
+			await w.host.send(who(w, "alpha", A), { to: "beta", kind: "request", text: "synthetic pending" }, call, ref),
+		).toMatchObject({ ok: false, error: expect.stringContaining("Accepted but not handed off") });
 		const receipt = await w.host.lookupInboxOperation(ref);
 		expect(receipt).toMatchObject({ state: "accepted", resultRef: expect.any(String) });
 		const restarted = restartHost(w);
@@ -99,9 +104,18 @@ describe("qualified HOME guard-operation receipts", () => {
 		const next = await chainTo(w, 7);
 		const call = tc();
 		const ref = w.host.inboxOperationRef(next.file, call)!;
-		expect(await w.host.send(who(w, next.from, next.file), {
-			to: next.to, kind: "request", text: "synthetic refusal",
-		}, call, ref)).toMatchObject({ ok: false });
+		expect(
+			await w.host.send(
+				who(w, next.from, next.file),
+				{
+					to: next.to,
+					kind: "request",
+					text: "synthetic refusal",
+				},
+				call,
+				ref,
+			),
+		).toMatchObject({ ok: false });
 		expect(await w.host.lookupInboxOperation(ref)).toMatchObject({ state: "refused" });
 	});
 
@@ -111,29 +125,69 @@ describe("qualified HOME guard-operation receipts", () => {
 		const ref = w.host.inboxOperationRef(A, call)!;
 		await w.host.send(who(w, "alpha", A), { to: "beta", kind: "request", text: "synthetic projection" }, call, ref);
 		const state = await stateOf(w);
-		const transaction = state.transactions.find((entry) => entry.identity.operationId === guardSendOperationId(A, call))!;
-		const refused: GuardStoreStateAny = { ...state, outbox: [], transactions: [{
-			state: "committed", transactionId: transaction.transactionId, identity: transaction.identity,
-			result: { state: "blocked", reason: "identity_conflict", request: null, requiredTier: null, accepted: false },
-		}] };
-		expect(guardInboxOperationReceipt(ref, 1, { state: "ready", value: refused }))
-			.toEqual({ state: "refused", reason: "identity_conflict" });
+		const transaction = state.transactions.find(
+			(entry) => entry.identity.operationId === guardSendOperationId(A, call),
+		)!;
+		const refused: GuardStoreStateV2 = {
+			...state,
+			outbox: [],
+			transactions: [
+				{
+					state: "committed",
+					transactionId: transaction.transactionId,
+					identity: transaction.identity,
+					result: { state: "blocked", reason: "identity_conflict", request: null, requiredTier: null, accepted: false },
+				},
+			],
+		};
+		expect(guardInboxOperationReceipt(ref, 1, { state: "ready", value: refused })).toEqual({
+			state: "refused",
+			reason: "identity_conflict",
+		});
 		// Even a later refusal must not outrank an accepted outbox entry.
-		expect(guardInboxOperationReceipt(ref, 1, { state: "ready", value: { ...refused, outbox: state.outbox } }))
-			.toMatchObject({ state: "accepted" });
-		expect(guardInboxOperationReceipt(ref, 1, { state: "unknown", reason: "prepared publication" }))
-			.toEqual({ state: "unknown", reason: "prepared publication" });
-		const prepared: GuardStoreStateAny = { ...state, outbox: [], transactions: [{
-			state: "prepared", identity: transaction.identity, transactionId: transaction.transactionId,
-			reservation: { preparedAt: 0, origin: "alpha", destination: "beta", grantId: null,
-				incidentIdentityDigest: null, requestGenerationKey: null, usage: null,
-				initialIncidentSlot: false, terminalIncidentSlot: false },
-		}] };
+		expect(
+			guardInboxOperationReceipt(ref, 1, { state: "ready", value: { ...refused, outbox: state.outbox } }),
+		).toMatchObject({ state: "accepted" });
+		expect(guardInboxOperationReceipt(ref, 1, { state: "unknown", reason: "prepared publication" })).toEqual({
+			state: "unknown",
+			reason: "prepared publication",
+		});
+		const prepared: GuardStoreStateV2 = {
+			...state,
+			outbox: [],
+			transactions: [
+				{
+					state: "prepared",
+					identity: transaction.identity,
+					transactionId: transaction.transactionId,
+					reservation: {
+						preparedAt: 0,
+						origin: "alpha",
+						destination: "beta",
+						grantId: null,
+						incidentIdentityDigest: null,
+						requestGenerationKey: null,
+						usage: null,
+						initialIncidentSlot: false,
+						terminalIncidentSlot: false,
+					},
+				},
+			],
+		};
 		expect(guardInboxOperationReceipt(ref, 1, { state: "ready", value: prepared })).toMatchObject({ state: "unknown" });
-		const pruned: GuardStoreStateAny = { ...state, outbox: [], transactions: [], tombstones: [{
-			kind: "operation", identityDigest: guardOperationKey(transaction.identity), invalidThrough: "source_horizon_unknown",
-			lastTransactionId: transaction.transactionId,
-		}] };
+		const pruned: GuardStoreStateV2 = {
+			...state,
+			outbox: [],
+			transactions: [],
+			tombstones: [
+				{
+					kind: "operation",
+					identityDigest: guardOperationKey(transaction.identity),
+					invalidThrough: "source_horizon_unknown",
+					lastTransactionId: transaction.transactionId,
+				},
+			],
+		};
 		expect(guardInboxOperationReceipt(ref, 1, { state: "ready", value: pruned })).toMatchObject({ state: "unknown" });
 	});
 
@@ -142,11 +196,17 @@ describe("qualified HOME guard-operation receipts", () => {
 		const before = generation();
 		let pending = true;
 		w.host.registerInboxIntentHold(() => pending);
-		expect((w.host as unknown as { quiescent(s: GuardStoreStateAny, now: number): boolean })
-			.quiescent(await stateOf(w), Date.now())).toBe(false);
+		expect(
+			(w.host as unknown as { quiescent(s: GuardStoreStateV2, now: number): boolean }).quiescent(
+				await stateOf(w),
+				Date.now(),
+			),
+		).toBe(false);
 		await rotate(w.host);
 		expect(generation()).toBe(before);
-		w.host.registerInboxIntentHold(() => { throw new Error("synthetic unreadable ledger"); });
+		w.host.registerInboxIntentHold(() => {
+			throw new Error("synthetic unreadable ledger");
+		});
 		await rotate(w.host);
 		expect(generation()).toBe(before);
 		w.host.registerInboxIntentHold(() => pending);

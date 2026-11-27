@@ -609,6 +609,11 @@ export function reportHeadings(text: string): { headings: boolean; missing: stri
 
 /** The role message id a user message's text starts with (any text: verify it with the store). */
 export function roleMessageIdOf(text: string): string | undefined {
+	const retry =
+		/^\[Unanswered from attempt [1-9][0-9]* — reply with message_role kind "reply", replyTo "(rm-[0-9a-f]{8})"\]\n/.exec(
+			text,
+		);
+	if (retry) return HEADER_RE.exec(text.slice(retry[0].length))?.[1] === retry[1] ? retry[1] : undefined;
 	return HEADER_RE.exec(text)?.[1];
 }
 
@@ -1055,7 +1060,7 @@ export class RoleMessages {
 				pins = roleMessageRetentionPins(keep, this.host.retentionPins?.());
 			} catch {
 				// Unknown projection cannot authorize irreversible deletion. Retry on the next save.
-				pins = new Set(keep.map(m => m.id));
+				pins = new Set(keep.map((m) => m.id));
 				this.log("retention unknown; skipped pruning");
 			}
 			const retained = keep.filter((m) => {
@@ -1071,11 +1076,11 @@ export class RoleMessages {
 				return true;
 			});
 			// Never leave a retained original without the actual accepted reply used by semantic projection.
-			const paired = roleMessageRetentionPins(keep, new Set(retained.map(m => m.id)));
-			this.data.messages = keep.filter(m => paired.has(m.id));
+			const paired = roleMessageRetentionPins(keep, new Set(retained.map((m) => m.id)));
+			this.data.messages = keep.filter((m) => paired.has(m.id));
 			if (this.data.messages.length > ROLE_MESSAGES_KEEP) this.log(`retention_over_keep: ${this.data.messages.length}`);
 			// role-message-ladder (Ops rm-efd6df89): a chain's place never depends on this rotating copy.
-			this.rememberChains(keep.filter(m => !paired.has(m.id)));
+			this.rememberChains(keep.filter((m) => !paired.has(m.id)));
 		}
 		try {
 			this.persistence.saveStore(this.file, this.data);
@@ -1136,13 +1141,18 @@ export class RoleMessages {
 	}
 
 	private async orderedWaiting(): Promise<readonly RoleMessageRecord[]> {
-		const fifo = this.data.messages.filter(m => m.state === "waiting").sort((a, b) => a.at - b.at);
+		const fifo = this.data.messages.filter((m) => m.state === "waiting").sort((a, b) => a.at - b.at);
 		if (!this.host.orderWaiting) return fifo;
 		try {
 			const ordered = await this.host.orderWaiting(Object.freeze([...fifo]));
 			const identities = new Set(fifo);
-			if (Array.isArray(ordered) && ordered.length === fifo.length && new Set(ordered).size === fifo.length
-				&& ordered.every(row => identities.has(row))) return ordered;
+			if (
+				Array.isArray(ordered) &&
+				ordered.length === fifo.length &&
+				new Set(ordered).size === fifo.length &&
+				ordered.every((row) => identities.has(row))
+			)
+				return ordered;
 		} catch {
 			// Ordering is advisory; legacy delivery still works if the inbox reader is unavailable.
 		}

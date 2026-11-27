@@ -602,7 +602,9 @@ export class RoleMessageGuardHost {
 			const store = this.store;
 			const generation = this.currentGeneration();
 			if (
-				this.status_ !== "ready" || !store || typeof generation !== "number" ||
+				this.status_ !== "ready" ||
+				!store ||
+				typeof generation !== "number" ||
 				join(this.o.dir, `gen-${generation}`) !== this.storeDir
 			)
 				return { state: "unknown", reason: "current guard generation is unavailable" };
@@ -673,7 +675,8 @@ export class RoleMessageGuardHost {
 			});
 			const rolledBack = await this.previousReaderRan();
 			if (rolledBack) {
-				if (this.inboxRotationHeld()) throw new Error("previous reader ran: unresolved inbox intents prevent safe rotation");
+				if (this.inboxRotationHeld())
+					throw new Error("previous reader ran: unresolved inbox intents prevent safe rotation");
 				this.o.log(`approval ladder: ${rolledBack}; open requests and grants revoked (fresh generation)`);
 				await this.rotate(true);
 			}
@@ -2199,15 +2202,15 @@ export class RoleMessageGuardHost {
 		const rm = this.o.roleMessages();
 		if (!rm) return { ok: false, error: "Role messages aren't available in this app." };
 		const inboxQualified = expectedInboxOperationRef !== undefined;
-		if (this.status_ !== "ready" || !this.core) return inboxQualified
-			? { ok: false, error: "Not sent: inbox guard is unavailable." }
-			: rm.send(sender, input);
+		if (this.status_ !== "ready" || !this.core)
+			return inboxQualified ? { ok: false, error: "Not sent: inbox guard is unavailable." } : rm.send(sender, input);
 		const prepared = rm.prepare(sender, input);
 		if (!prepared.ok) return { ...prepared, reason: "invalid_input" };
 		const actor = this.senderActor(sender);
-		if (!actor) return inboxQualified
-			? { ok: false, error: "Not sent: inbox send requires a verified guard actor." }
-			: rm.send(sender, input);
+		if (!actor)
+			return inboxQualified
+				? { ok: false, error: "Not sent: inbox send requires a verified guard actor." }
+				: rm.send(sender, input);
 		if (inboxQualified && (!actor.currentHome || !this.actorCurrent(actor)))
 			return { ok: false, error: "Not sent: inbox send requires the current HOME actor." };
 		const refused = roleMessagesHourlyRefusal(actor.role, rm.hourlyCount(sender.role), this.policy, this.now());
@@ -2271,9 +2274,10 @@ export class RoleMessageGuardHost {
 			replyTo: prepared.draft.replyTo,
 			grantId: grant?.id ?? null,
 		};
-		if (!["question", "request", "fyi", "reply"].includes(body.businessKind)) return inboxQualified
-			? { ok: false, error: "Not sent: inbox send requires a guarded business kind." }
-			: rm.send(sender, input);
+		if (!["question", "request", "fyi", "reply"].includes(body.businessKind))
+			return inboxQualified
+				? { ok: false, error: "Not sent: inbox send requires a guarded business kind." }
+				: rm.send(sender, input);
 		const identity0 = {
 			operationId: guardSendOperationId(sender.file, toolCallId),
 			fingerprint: "",

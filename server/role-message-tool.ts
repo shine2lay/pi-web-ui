@@ -15,6 +15,7 @@ import {
 	SAME_TEXT_WINDOW_MS,
 	type RoleMessages,
 	type RoleMessageSender,
+	type RoleMessageSendInput,
 } from "./role-messages.js";
 import { AI_READER_POINTER, BOARD_ROUTING_RULE } from "./board-tool.js";
 import type { RoleMessageGuardHost } from "./role-message-guard-host.js";
@@ -29,6 +30,7 @@ export function sameTextHint(roles: readonly string[]): string {
 }
 
 export { MESSAGE_ROLE_TOOL_NAME };
+import { homeInboxReply } from "./inbox-home-host.js";
 
 /** Implemented by ClientSession (the chat this runtime belongs to). */
 export interface MessageRoleHost {
@@ -184,7 +186,9 @@ export function makeMessageRoleTool(host: MessageRoleHost): ToolDefinition {
 				...(p.tags !== undefined ? { tags: p.tags } : {}),
 				...(p.confirmNewTag !== undefined ? { confirmNewTag: p.confirmNewTag } : {}),
 			};
-			const res = guard ? await guard.send(sender, { ...input, grant: p.grant }, _id) : service.send(sender, input);
+			const inbox = await homeInboxReply(sender, { ...input, grant: p.grant } as RoleMessageSendInput, _id);
+			const res =
+				inbox ?? (guard ? await guard.send(sender, { ...input, grant: p.grant }, _id) : service.send(sender, input));
 			if (!res.ok) {
 				service.noteRefused(sender, p.to, p.kind, res.error);
 				const need = (res as { approvalRequired?: { hop: number; tier: "lower" | "owner"; approver: string } })
