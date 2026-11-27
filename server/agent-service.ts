@@ -38,7 +38,6 @@ import {
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { installRawRunRecoveryHost } from "./raw-run-recovery-host.js";
 import {
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
@@ -6436,12 +6435,13 @@ export class ClientSession {
 					makeLspTool({ cwd: effectiveCwd, ownerId }),
 				],
 			});
-			// Stable SDK session identity anchors bridge ownership across conversation transfers.
-			installRawRunRecoveryHost(created.session);
+			// 桥接工具归属锚点：SDK 会话对象在本 runtime 生命周期内稳定，过户只搬对话
+			// 不改它（见 ClientSession.findConversationHome）。
 			bridgeAnchor.session = created.session;
 			installSpecialistRawGuard(created.session);
 			this.sessionPluginMeta.set(created.session, { ownerId, cwd: effectiveCwd });
-			// Install overrides after creation so customTools do not shadow extension-owned read/write/edit.
+			// read / write / edit 三处覆盖在会话建好后注入（见 tool-overrides.ts）：SDK 的合并链是
+			// [...扩展工具, ...customTools] 后写赢 ⇒ 创建时塞进 customTools 会**恒定顶掉**第三方扩展注册的同名工具。
 			installToolOverrides(created.session as unknown as OverrideSessionLike, [
 				...this.toolOverrideSpecs(ownerId, effectiveCwd),
 				...toolTimeLimitSpecs(), // ops #863: the owner's 2-minute limit on google_search / queue_reply
