@@ -51,7 +51,7 @@
 import { existsSync } from "node:fs";
 import { consumeOwnerSetting } from "./queue-owner.js";
 import { requesterOf } from "./queue-requester.js";
-import { checkPatch, normLaunch, QueueLaunchRefused } from "./queue-profile.js";
+import { checkPatch, normDispatchLaunch, QueueLaunchRefused } from "./queue-profile.js";
 import type { ChatSpeed, UiTaskLaunch, UiTaskRequester, UiWorkTaskState } from "./protocol.js";
 import type {
 	QuestionBinding,
@@ -345,7 +345,7 @@ export function parseQueueChatStart(raw: unknown): QueueChatStart | string {
 	if (typeof o.model === "string" && /^[^/\s]+\/\S+$/.test(o.model)) out.model = o.model;
 	if (typeof o.thinking === "string" && THINKING.has(o.thinking)) out.thinking = o.thinking;
 	if (o.launch !== undefined) {
-		const launch = normLaunch(o.launch);
+		const launch = normDispatchLaunch(o.launch);
 		const checked = checkPatch(o.launch);
 		if (!launch || checked.problems.length) return "invalid launch profile";
 		for (const f of ["model", "thinking", "speed"] as const) {

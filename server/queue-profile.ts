@@ -57,6 +57,14 @@ export function normLaunch(raw: unknown): UiTaskLaunch | undefined {
 	for (const f of PROFILE_FIELDS) if (l.from[f] === "task" || l.from[f] === "queue") from[f] = l.from[f];
 	return { ...normProfile(l), from, ...launchSpecialistField(raw) }; // department-specialists: slug + title only
 }
+/** Dispatch carries the opaque pi-identity seal, not normLaunch's UI-only label.
+ * The child's canonical verifier still rejects malformed snapshots; never repair or widen one here. */
+export function normDispatchLaunch(raw: unknown): UiTaskLaunch | undefined {
+	const launch = normLaunch(raw);
+	if (!launch) return undefined;
+	const input = raw as Record<string, unknown>;
+	return { ...launch, ...("specialist" in input ? { specialist: input.specialist } : {}) };
+}
 export function resolveLaunch(
 	defaults?: UiTaskProfile,
 	override?: UiTaskProfile,
