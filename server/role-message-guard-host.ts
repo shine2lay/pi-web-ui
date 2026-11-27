@@ -96,6 +96,11 @@ import {
 } from "./role-message-guard-core.js";
 import { GuardFileLock } from "./role-message-guard-lock.js";
 import { guardDigest, GuardFileStore, guardJournalRefusal } from "./role-message-guard-store.js";
+import {
+	guardInboxOperationReceipt,
+	guardSendOperationId,
+	type GuardInboxOperationReceipt,
+} from "./role-message-guard-inbox-receipt.js";
 import { roleMessagesHourlyRefusal } from "./role-message-hourly-limit.js";
 import {
 	ROLE_MESSAGE_GIVE_UP_MS,
@@ -527,6 +532,7 @@ export class RoleMessageGuardHost {
 	private lastObserved = 0;
 	private store: GuardFileStore | null = null;
 	private storeDir = "";
+	private inboxIntentHold: (() => boolean) | null = null;
 	private core: RoleMessageGuardCore | null = null;
 	private adapters: ReturnType<typeof createGuardApprovalAdapters> | null = null;
 	private status_: "starting" | "ready" | "degraded" = "starting";
@@ -565,6 +571,50 @@ export class RoleMessageGuardHost {
 		return { status: this.status_, reason: this.degradedReason };
 	}
 
+	/** Register the ledger's synchronous unresolved-intent reader before start/recovery. No runtime import. */
+	registerInboxIntentHold(hasUnresolvedIntents: () => boolean): void {
+		this.inboxIntentHold = hasUnresolvedIntents;
+	}
+
+	private inboxRotationHeld(): boolean {
+		try {
+			return this.inboxIntentHold?.() ?? false;
+		} catch {
+			return true; // An unreadable ledger is not evidence of quiescence.
+		}
+	}
+
+	/** Persist this qualified physical reference before send; null cannot prove non-acceptance. */
+	inboxOperationRef(file: string, toolCallId: string): string | null {
+		if (!file || !toolCallId || this.status_ !== "ready" || !this.store) return null;
+		try {
+			const generation = this.currentGeneration();
+			if (typeof generation !== "number" || join(this.o.dir, `gen-${generation}`) !== this.storeDir) return null;
+			return `guard:${generation}:${guardSendOperationId(file, toolCallId)}`;
+		} catch {
+			return null;
+		}
+	}
+
+	/** RoleMessages.replyId is checked by the caller first. This never resends or marks a reply done. */
+	async lookupInboxOperation(opRef: string): Promise<GuardInboxOperationReceipt> {
+		try {
+			const store = this.store;
+			const generation = this.currentGeneration();
+			if (
+				this.status_ !== "ready" || !store || typeof generation !== "number" ||
+				join(this.o.dir, `gen-${generation}`) !== this.storeDir
+			)
+				return { state: "unknown", reason: "current guard generation is unavailable" };
+			const read = await store.read();
+			if (store !== this.store || generation !== this.currentGeneration() || this.status_ !== "ready")
+				return { state: "unknown", reason: "guard generation changed during lookup" };
+			return guardInboxOperationReceipt(opRef, generation, read);
+		} catch (err) {
+			return { state: "unknown", reason: err instanceof Error ? err.message : String(err) };
+		}
+	}
+
 	// -------------------------------------------------------------------------
 	// Startup, rotation, rollback detection, stop
 	// -------------------------------------------------------------------------
@@ -592,8 +642,11 @@ export class RoleMessageGuardHost {
 			this.decisions = this.readJsonl<GuardDecisionEvent>(join(this.o.dir, "decisions.jsonl"));
 			this.questions = this.readJson<GuardQuestionRecord[]>(join(this.o.dir, "questions.json")) ?? [];
 			await this.exclusive(async () => {
-				this.cleanGenerations(gen);
 				let dir = join(this.o.dir, `gen-${gen}`);
+				if (this.inboxRotationHeld()) {
+					if (!this.hasGeneration() || !existsSync(join(dir, "journal.json")))
+						throw new Error("bootstrap: unresolved inbox intents require the existing guard history");
+				} else this.cleanGenerations(gen);
 				// Ops #253 (Architecture A1): a first start names its generation before it makes it. A crash before the store
 				// is ready then leaves current.json naming gen-<gen>, made or not, which the next start opens as usual; never
 				// a gen folder without current.json, which N3 turns off.
@@ -620,6 +673,7 @@ export class RoleMessageGuardHost {
 			});
 			const rolledBack = await this.previousReaderRan();
 			if (rolledBack) {
+				if (this.inboxRotationHeld()) throw new Error("previous reader ran: unresolved inbox intents prevent safe rotation");
 				this.o.log(`approval ladder: ${rolledBack}; open requests and grants revoked (fresh generation)`);
 				await this.rotate(true);
 			}
@@ -675,6 +729,7 @@ export class RoleMessageGuardHost {
 	 *  nothing is written. Runs under the lease. A crash before current.json switches leaves the request, and the next
 	 *  start does it again. */
 	private async freshStart(gen: number): Promise<{ store: GuardFileStore; dir: string } | null> {
+		if (this.inboxRotationHeld()) return null;
 		const request = this.freshStartRequest(gen);
 		if (request === null) return null;
 		if (typeof request === "string") {
@@ -947,6 +1002,7 @@ export class RoleMessageGuardHost {
 	/** Nothing open: no unsettled transaction, no undelivered message, no open request or live grant. */
 	private quiescent(s: GuardStoreStateAny, now: number): boolean {
 		return (
+			!this.inboxRotationHeld() &&
 			s.transactions.every((t) => t.state === "committed") &&
 			s.outbox.every(
 				(o) => o.state === "handled" || o.state === "failed" || (o.state === "dispatched" && o.message.kind === "fyi"),
@@ -1010,7 +1066,7 @@ export class RoleMessageGuardHost {
 		await this.exclusive(async () => {
 			const read = await this.store?.read();
 			if (!read || read.state !== "ready") throw new Error("rotation: store not ready");
-			if (!force && !this.quiescent(read.value, this.now())) return;
+			if (this.inboxRotationHeld() || (!force && !this.quiescent(read.value, this.now()))) return;
 			const at = this.currentGeneration();
 			if (typeof at === "string") throw new Error(`rotation: current.json ${at}`); // Ops #248 (N3): never guess
 			const gen = at + 1;
@@ -1032,6 +1088,7 @@ export class RoleMessageGuardHost {
 		what: string,
 		adopt?: (store: GuardFileStore, dir: string) => void,
 	): Promise<{ store: GuardFileStore; dir: string }> {
+		if (this.inboxRotationHeld()) throw new Error(`${what}: unresolved inbox intents hold the guard generation`);
 		const dir = join(this.o.dir, `gen-${gen}`);
 		rmSync(dir, { recursive: true, force: true });
 		let store: GuardFileStore;
@@ -1050,6 +1107,7 @@ export class RoleMessageGuardHost {
 			}
 			throw err;
 		}
+		if (this.inboxRotationHeld()) throw new Error(`${what}: inbox intent appeared while preparing the generation`);
 		this.writeCurrent(gen);
 		adopt?.(store, dir);
 		// Ops #257 (Architecture B5): the switch is done, so the generation counts as begun; a clean-up that fails now
@@ -2118,9 +2176,15 @@ export class RoleMessageGuardHost {
 		sender: RoleMessageSender,
 		input: RoleMessageSendInput & { grant?: unknown },
 		toolCallId: string,
+		expectedInboxOperationRef?: string,
 	): Promise<RoleMessageGuardSendResult> {
+		if (
+			expectedInboxOperationRef !== undefined &&
+			expectedInboxOperationRef !== this.inboxOperationRef(sender.file, toolCallId)
+		)
+			return { ok: false, error: "Not sent: inbox guard operation generation is unavailable or changed." };
 		try {
-			return await this.sendNow(sender, input, toolCallId);
+			return await this.sendNow(sender, input, toolCallId, expectedInboxOperationRef !== undefined);
 		} finally {
 			if (this.status_ === "ready") await this.afterChange();
 		}
@@ -2130,6 +2194,7 @@ export class RoleMessageGuardHost {
 		sender: RoleMessageSender,
 		input: RoleMessageSendInput & { grant?: unknown },
 		toolCallId: string,
+		inboxQualified = false,
 	): Promise<RoleMessageGuardSendResult> {
 		const rm = this.o.roleMessages();
 		if (!rm) return { ok: false, error: "Role messages aren't available in this app." };
@@ -2137,7 +2202,9 @@ export class RoleMessageGuardHost {
 		const prepared = rm.prepare(sender, input);
 		if (!prepared.ok) return { ...prepared, reason: "invalid_input" };
 		const actor = this.senderActor(sender);
-		if (!actor) return rm.send(sender, input);
+		if (!actor) return inboxQualified
+			? { ok: false, error: "Not sent: inbox send requires a verified guard actor." }
+			: rm.send(sender, input);
 		const refused = roleMessagesHourlyRefusal(actor.role, rm.hourlyCount(sender.role), this.policy, this.now());
 		if (refused) return { ok: false, error: refused, reason: "ordinary_hourly" };
 		const state = await this.state_();
@@ -2197,9 +2264,11 @@ export class RoleMessageGuardHost {
 			replyTo: prepared.draft.replyTo,
 			grantId: grant?.id ?? null,
 		};
-		if (!["question", "request", "fyi", "reply"].includes(body.businessKind)) return rm.send(sender, input);
+		if (!["question", "request", "fyi", "reply"].includes(body.businessKind)) return inboxQualified
+			? { ok: false, error: "Not sent: inbox send requires a guarded business kind." }
+			: rm.send(sender, input);
 		const identity0 = {
-			operationId: `send-${short({ file: sender.file, toolCallId })}`,
+			operationId: guardSendOperationId(sender.file, toolCallId),
 			fingerprint: "",
 			actor,
 			version: VERSION,

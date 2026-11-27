@@ -122,7 +122,7 @@ export function guardTransactionId(identity: GuardOperationIdentity): string {
 function sameIdentity(a: GuardOperationIdentity, b: GuardOperationIdentity): boolean {
 	return guardDigest(a) === guardDigest(b);
 }
-export function guardOperationKey(identity: GuardOperationIdentity): string {
+export function guardOperationKey(identity: Pick<GuardOperationIdentity, "version" | "operationId">): string {
 	// Operation ids are host-assigned across the store. Role/session changes cannot reopen one.
 	return guardDigest({ version: identity.version, operationId: identity.operationId });
 }
