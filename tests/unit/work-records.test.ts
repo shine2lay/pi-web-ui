@@ -130,6 +130,7 @@ describe("workRecordsFrom", () => {
 				{
 					id: "roles-page",
 					name: "Project roles-page",
+					outcome: "A deliverable",
 					lead: "ops",
 					status: "active",
 					initiative: "team",
@@ -140,6 +141,7 @@ describe("workRecordsFrom", () => {
 				{
 					id: "solo",
 					name: "Project solo",
+					outcome: "A deliverable",
 					lead: "ops",
 					status: "active",
 					initiative: null,

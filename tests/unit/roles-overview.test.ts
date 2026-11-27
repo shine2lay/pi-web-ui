@@ -1445,6 +1445,7 @@ describe("where tasks belong (roles-panel)", () => {
 				{
 					id: "roles-page",
 					name: "Roles page",
+					outcome: "o",
 					lead: "ops",
 					status: "active",
 					initiative: "team-in-temper",

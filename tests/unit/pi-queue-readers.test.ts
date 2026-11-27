@@ -263,6 +263,7 @@ describe("the Roles page's records with pi-queue's readers", () => {
 				{
 					id: "trial",
 					name: "Trial",
+					outcome: "Something",
 					lead: "temper",
 					status: "done",
 					initiative: "team",
@@ -273,6 +274,7 @@ describe("the Roles page's records with pi-queue's readers", () => {
 				{
 					id: "loose",
 					name: "Loose",
+					outcome: "Something",
 					lead: "ops",
 					status: "active",
 					initiative: null,

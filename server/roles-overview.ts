@@ -64,6 +64,8 @@ import {
 } from "./shared/task-delivery-resolver.js";
 import { briefOfAsk } from "./owner-card-brief.js";
 import { taskQueueFromEntries, taskQueueHeld, taskQueueLaneUse } from "./task-queue.js";
+import { dirname } from "node:path";
+import { taskPhaseResolver } from "./project-phase-projection.js";
 import { WorkRecordsFile } from "./work-records.js";
 import {
 	doneFactsOfTasks,
@@ -86,7 +88,7 @@ import {
 	ROLES_REPORT_MAX,
 	type ReportRun,
 } from "./roles-reports.js";
-import { lineOf, newestWaiting, roleModelLabel, roleWorkMode, statusOf, writtenForAsk } from "./roles-row.js";
+import { homeModelOf, lineOf, newestWaiting, roleWorkMode, statusOf, writtenForAsk } from "./roles-row.js";
 import { ChatPaths, TranscriptScans, type TranscriptScan } from "./roles-transcripts.js";
 import { TLDR_MAX_LINES, tldrLinesFromEntries } from "./tldr-lines.js";
 
@@ -733,7 +735,9 @@ export class RolesOverviewReader {
 
 		// The queue in short.
 		const resolvedDoneById = new Map<number, UiRoleTask>();
+		const phaseFile = this.host.workFile?.();
 		const baseTaskOpts = {
+			...(phaseFile ? { phaseOf: taskPhaseResolver(dirname(phaseFile), home) } : {}),
 			queuesByRole,
 			queueRunning: running,
 			queueHold,
@@ -853,7 +857,7 @@ export class RolesOverviewReader {
 			problems.push("board");
 		}
 		const homeBusy = home ? this.host.chatState(home) === "working" : false;
-		const model = home ? this.modelOf(home, recordedModel) : undefined;
+		const model = home ? homeModelOf(this.host, home, recordedModel) : undefined;
 		const sortedAsks = sortAsks(asks);
 		const status = statusOf({
 			asks: sortedAsks.length,
@@ -894,18 +898,6 @@ export class RolesOverviewReader {
 		};
 	}
 
-	/** roles-model: the home chat's model as its header shows it: the open chat's live model, else the newest
-	 *  model change in its file named from the app's model list. Unknown: undefined ("Not recorded"). */
-	private modelOf(home: string, recorded: TranscriptScan["model"]): string | undefined {
-		try {
-			const live = this.host.chatModel?.(home);
-			if (live !== undefined) return roleModelLabel(live);
-			return recorded ? roleModelLabel(this.host.modelName?.(recorded.provider, recorded.modelId)) : undefined;
-		} catch {
-			return undefined;
-		}
-	}
-
 	/** roles-config-history (Ops #209): every role's settings as the page shows them, for the recorder
 	 *  (roles-config-history.ts). Reads like read() (cached) and writes nothing; a part it can't read now is left
 	 *  out, so the recorder keeps that part's last value. */
@@ -920,7 +912,7 @@ export class RolesOverviewReader {
 				try {
 					const s = await this.scans.read(home);
 					queue = taskQueueFromEntries(s.queue, true, Number.MAX_SAFE_INTEGER, undefined, s.sessionId);
-					model = this.modelOf(home, s.model);
+					model = homeModelOf(this.host, home, s.model);
 				} catch {
 					queue = undefined;
 				}

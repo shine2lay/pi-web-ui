@@ -19,6 +19,7 @@
  * reader here depends on, so a compacted log shows the same records.
  */
 
+import { deliveryFromState, unavailablePhases, type DeliveryProjection } from "./project-phase-projection.js";
 import { statSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -42,6 +43,8 @@ type Status = UiWorkRecord["status"];
 const STATUSES: readonly Status[] = ["active", "done", "dropped"];
 
 interface Rec {
+	outcome?: string;
+	delivery?: DeliveryProjection;
 	kind: "initiative" | "project";
 	id: string;
 	name: string;
@@ -118,6 +121,11 @@ export function workRecordsFrom(log: string): UiWorkRecords {
 		}
 		const key = `${kind}\u0000${e.id}`;
 		const cur = recs.get(key);
+		if (kind === "project" && act?.startsWith("phase")) {
+			if (cur) cur.delivery = unavailablePhases();
+			unknown = true;
+			continue;
+		}
 		if (act === "create") {
 			const doneWhen = doneList(e.doneWhen);
 			const initiative = kind === "project" ? initiativeOf(e.initiative) : null;
@@ -127,6 +135,7 @@ export function workRecordsFrom(log: string): UiWorkRecords {
 			}
 			recs.set(key, {
 				kind,
+				...(typeof e.outcome === "string" ? { outcome: e.outcome } : {}),
 				id: e.id,
 				name: e.name,
 				lead: e.lead,
@@ -143,6 +152,7 @@ export function workRecordsFrom(log: string): UiWorkRecords {
 		}
 		if (act === "change") {
 			const ch = e.changes && typeof e.changes === "object" ? (e.changes as Record<string, unknown>) : {};
+			if (typeof ch.outcome === "string") cur.outcome = ch.outcome;
 			// A field the store couldn't have written is left as it was, and said.
 			if (ch.name !== undefined) {
 				if (workName(ch.name)) cur.name = ch.name;
@@ -189,6 +199,8 @@ function recordsOut(recs: Iterable<Rec>, unknown: boolean): UiWorkRecords {
 		// roles-by-project G1: each item with its mark (by itemKey); items/met count the same list.
 		const doneWhen = r.doneWhen.map((item) => ({ item, met: r.met.has(itemKey(item)) }));
 		return {
+			...(r.kind === "project" && r.outcome !== undefined ? { outcome: r.outcome } : {}),
+			...(r.delivery ? { delivery: r.delivery } : {}),
 			id: r.id,
 			name: r.name,
 			lead: r.lead,
@@ -250,6 +262,8 @@ export function workRecordsFromState(state: unknown): UiWorkRecords | undefined 
 			}
 			recs.push({
 				kind,
+				...(typeof r.outcome === "string" ? { outcome: r.outcome } : {}),
+				...(kind === "project" && r.phases !== undefined ? { delivery: deliveryFromState(state, id, true) } : {}),
 				id,
 				name: r.name,
 				lead: r.lead,

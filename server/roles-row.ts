@@ -18,6 +18,21 @@ import { rulesGoals, rulesWorkMode } from "./role-rules.js";
 /** roles-model: the most the page gets of a model's name. */
 export const ROLE_MODEL_MAX = 120;
 
+/** Prefer the live model, falling back to the recorded provider/model name. */
+export function homeModelOf(
+	host: { chatModel?(file: string): unknown; modelName?(provider: string, modelId: string): unknown },
+	home: string,
+	recorded?: { provider: string; modelId: string },
+): string | undefined {
+	try {
+		const live = host.chatModel?.(home);
+		if (live !== undefined) return roleModelLabel(live);
+		return recorded ? roleModelLabel(host.modelName?.(recorded.provider, recorded.modelId)) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** roles-model: a model name fit for the page (trimmed, short, no control characters), else undefined. */
 export function roleModelLabel(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;

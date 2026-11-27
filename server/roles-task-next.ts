@@ -116,6 +116,7 @@ export function linkOf(parent: UiTaskParent | undefined): keyof NonNullable<UiRo
 }
 
 export interface TaskOfOptions {
+	phaseOf?: (project: string, task: number, added: number) => string | null | undefined;
 	queuesByRole?: QueuesByRoleInput;
 	queueRunning?: boolean;
 	queueHold?: UiTaskQueueHold;
@@ -246,7 +247,12 @@ export function taskOf(
 				}
 			: undefined;
 
+	const phaseId =
+		t.parent && "project" in t.parent && t.addedAt !== undefined
+			? options?.phaseOf?.(t.parent.project, t.id, t.addedAt)
+			: undefined;
 	return {
+		...(phaseId !== undefined ? { phaseId } : {}),
 		id: t.id,
 		...(t.priority ? { priority: t.priority } : {}),
 		...(department ? { role: department } : {}),
