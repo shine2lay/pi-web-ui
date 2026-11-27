@@ -1,0 +1,9 @@
+{
+  "core": { "path": "tests/role-priority-inbox/role-priority-inbox.cases.json", "sha256": "a93ee55478be95282bca124e31400e419035fe016e497995b828585e2242d7b1" },
+  "codec": { "path": "tests/role-priority-inbox/unified/wire602.cases.json", "sha256": "6520bc8eddf2187f369db96e215e453c62912e30519f5111201735ede8ed348e", "count": 43 },
+  "boundary": { "path": "../architecture-dept-inbox-boundary-607/tests/role-priority-inbox/unified/boundary607.cases.json", "sha256": "f9e68ff62ee5189055c865779fe0ee6dd63ab842b8714835dbcdbd30e19df0a1", "count": 232, "twins": 47 },
+  "successorManifestSha256": "295fafebb19fc605facdd7b0dc0152ff3d2171c4e1fbbdd30b0ea3d738f320dd",
+  "successorSourceSha256": "1d14c0a11d37cb6af04aecd049e6404aeaec3c56f00b205815b0f54f88ddd418",
+  "successorCheckerSha256": "f5757e2125d4e83fed29aee3e7bdfcb05fe9f810a1693f4d19fd664ecbc041da",
+  "successorContractSha256": "1ad7f99312e6e01b396f0cd1d910fe5c0c9ffc621579267097dd9256081ed8c9"
+}
