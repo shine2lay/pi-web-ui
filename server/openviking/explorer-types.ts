@@ -173,7 +173,11 @@ export interface OpenVikingSpecialistSlug {
 	/** null: that listing did not answer. */
 	has_notebook: boolean | null;
 	has_memories: boolean | null;
-	/** Files under the slug root; null when unmeasured (never 0). */
+	/** Eligible leaves under the slug root excluding its direct archive/ subtree; null when unmeasured. */
+	memories_notes: number | null;
+	/** Eligible leaves under the direct archive/ subtree only; null when unmeasured. */
+	archive_notes: number | null;
+	/** Both buckets plus notebook presence; null when any operand is unknown. */
 	notes: number | null;
 }
 

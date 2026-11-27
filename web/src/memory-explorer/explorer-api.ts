@@ -66,7 +66,10 @@ export interface SpecialistEntry {
 	/** false: that place isn't there (shown empty); null: memory didn't say. */
 	readonly hasNotebook: boolean | null;
 	readonly hasMemories: boolean | null;
-	/** Notes kept under its own folder; null = not counted (never 0). */
+	/** Disjoint counts from the server's existing walk; null = not counted, never guessed. */
+	readonly memoriesCount: number | null;
+	readonly archiveCount: number | null;
+	/** Both buckets plus notebook presence; null if any operand is unknown. */
 	readonly noteCount: number | null;
 }
 

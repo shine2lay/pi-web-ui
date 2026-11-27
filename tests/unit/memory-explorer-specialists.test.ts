@@ -51,6 +51,8 @@ const slugRow = (
 	archive: `${SPEC}/${slug}/archive`,
 	has_notebook: notebook,
 	has_memories: memories,
+	memories_notes: memories ? (notes === null ? null : notes - Number(notebook) - 1) : 0,
+	archive_notes: memories ? 1 : 0,
 	notes,
 });
 
@@ -60,7 +62,7 @@ const NODE: OpenVikingSpecialistsNode = {
 	read: true,
 	slugs: [
 		slugRow("dba-2", "no config", false, true, 2),
-		slugRow("ret-3", "retired", true, false, 0),
+		slugRow("ret-3", "retired", true, false, 1),
 		slugRow("sre-1", null, true, true, 3),
 	],
 	others: [{ uri: `${SPEC}/${encodeURIComponent(HOSTILE)}`, name: HOSTILE, is_folder: false, kind: "other" }],
@@ -311,7 +313,7 @@ describe("tree: a department's Specialists node (§5l.15)", () => {
 		expect(own("sre-1")).not.toMatch(/retired|no config/);
 	});
 
-	it("one-sided slug: the missing place is shown empty, never hidden; a slug with 0 notes says `no notes yet`", async () => {
+	it("one-sided slug: missing place stays empty; notebook-only is one note, not no notes yet", async () => {
 		const page = await mountPage(fakeServer());
 		await expand(page, "Architecture");
 		await expand(page, "Specialists");
@@ -319,7 +321,46 @@ describe("tree: a department's Specialists node (§5l.15)", () => {
 		expect(placeIn(dba, "Notebook")).toBeTruthy();
 		expect(text(dba)).toMatch(/empty/i);
 		const ret = await expand(page, "ret-3");
-		expect(text(ret.querySelector("[data-tree-row]"))).toContain("no notes yet");
+		expect(text(ret.querySelector("[data-tree-row]"))).not.toContain("no notes yet");
+		expect(text(ret.querySelector("[data-tree-row]"))).toContain("1 note");
+		expect(text(placeIn(ret, "Notebook")?.closest("[data-tree-row]"))).toContain("1 note");
+		expect(text(placeIn(ret, "Memories")?.closest("[data-tree-row]"))).toContain("empty");
+	});
+
+	it("each existing leaf row shows its own count, not the total", async () => {
+		const page = await mountPage(fakeServer());
+		await expand(page, "Architecture");
+		await expand(page, "Specialists");
+		const sre = await expand(page, "sre-1");
+		for (const place of ["Notebook", "Memories", "Archive"])
+			expect(text(placeIn(sre, place)?.closest("[data-tree-row]"))).toContain("1 note");
+	});
+
+	it("old producer's missing buckets stay unknown; zero total cannot imply verified empty", async () => {
+		const old = { ...slugRow("sre-1", null, false, true, 0) };
+		Reflect.deleteProperty(old, "memories_notes");
+		Reflect.deleteProperty(old, "archive_notes");
+		const page = await mountPage(fakeServer({ node: { ...NODE, slugs: [old] } }));
+		await expand(page, "Architecture");
+		await expand(page, "Specialists");
+		const sre = await expand(page, "sre-1");
+		expect(text(sre.querySelector("[data-tree-row]"))).not.toContain("no notes yet");
+		for (const place of ["Memories", "Archive"])
+			expect(text(placeIn(sre, place)?.closest("[data-tree-row]"))).toContain("not counted");
+	});
+
+	it("verified empty alone says no notes yet; unread notebook retains known leaf counts and error", async () => {
+		const empty = { ...slugRow("empty-1", null, false, false, 0) };
+		const unread = { ...slugRow("sre-1", null, true, true, 3), has_notebook: null, notes: null };
+		const page = await mountPage(fakeServer({ node: { ...NODE, read: false, slugs: [empty, unread] } }));
+		await expand(page, "Architecture");
+		const node = await expand(page, "Specialists");
+		expect(text(node)).toContain("Couldn't read all of it.");
+		expect(text((await expand(page, "empty-1")).querySelector("[data-tree-row]"))).toContain("no notes yet");
+		const sre = await expand(page, "sre-1");
+		expect(text(placeIn(sre, "Notebook")?.closest("[data-tree-row]"))).toContain("not counted");
+		expect(text(placeIn(sre, "Memories")?.closest("[data-tree-row]"))).toContain("1 note");
+		expect(text(sre.querySelector("[data-tree-row]"))).toContain("not counted");
 	});
 
 	it("read error: the node is kept, its count says `not counted`, never 0 (§5l.17)", async () => {

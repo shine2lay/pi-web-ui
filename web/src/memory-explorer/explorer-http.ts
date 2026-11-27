@@ -134,7 +134,11 @@ export function specialistsFromNode(node: OpenVikingSpecialistsNode): Specialist
 			archive: s.archive,
 			hasNotebook: s.has_notebook,
 			hasMemories: s.has_memories,
-			noteCount: s.notes,
+			memoriesCount: s.memories_notes ?? null,
+			archiveCount: s.archive_notes ?? null,
+			// Older producers omitted the partition (and excluded notebooks from notes).
+			// Their total cannot verify an empty specialist under the additive contract.
+			noteCount: s.memories_notes == null || s.archive_notes == null || s.has_notebook === null ? null : s.notes,
 		})),
 		others: node.others.map((o) => ({ uri: o.uri, name: o.name, isFolder: o.is_folder })),
 	};

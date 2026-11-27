@@ -119,6 +119,8 @@ const specialist = (
 	archive: `${DESIGN_SPECIALISTS}/${slug}/archive`,
 	hasNotebook,
 	hasMemories,
+	memoriesCount: hasMemories ? noteCount - Number(hasNotebook) - 1 : 0,
+	archiveCount: hasMemories ? 1 : 0,
 	noteCount,
 });
 export const SPECIALISTS_NODE: SpecialistsNode = {
@@ -127,7 +129,7 @@ export const SPECIALISTS_NODE: SpecialistsNode = {
 	specialists: [
 		specialist("a11y-reviewer", null, true, true, 3),
 		specialist("motion-2", "no config", false, true, 2),
-		specialist("brand-old", "retired", true, false, 0),
+		specialist("brand-old", "retired", true, false, 1),
 	],
 	others: [],
 };

@@ -134,14 +134,17 @@ const toggleOf = (page: HTMLElement, name: string) =>
 	) ?? null;
 const isOpen = (page: HTMLElement, name: string) => toggleOf(page, name)?.getAttribute("aria-expanded") === "true";
 const current = (page: HTMLElement) =>
-	[...tree(page).querySelectorAll('[data-tree-row][aria-current="true"]')].map((r) => text(r));
+	[...tree(page).querySelectorAll('[data-tree-row][aria-current="true"]')].map((r) => text(r.querySelector("button")));
 
 describe("leaf link: opens the note with its place in the tree open (§5l.17)", () => {
 	it("a memory leaf: the note reads, Architecture -> Specialists -> sre-1 open with no tap; reload does it again", async () => {
 		const server = await served();
 		let page = await openLink(server, link(SRE_MEMORY));
 		expect(text(reader(page))).toContain("SRE memory text");
-		for (const row of ["Architecture", "Specialists", "sre-1"]) expect(isOpen(page, row), row).toBe(true);
+		await vi.waitFor(async () => {
+			await flush();
+			for (const row of ["Architecture", "Specialists", "sre-1"]) expect(isOpen(page, row), row).toBe(true);
+		});
 		expect(isOpen(page, "dba-2")).toBe(false);
 		expect(server.noteUris()).toContain(SRE_MEMORY);
 

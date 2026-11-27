@@ -64,7 +64,7 @@
 		}
 	},
 	"page_also": [
-		"tests/unit/memory-explorer-specialists.test.ts > one-sided slug: the missing place is shown empty, never hidden; a slug with 0 notes says `no notes yet`",
+		"tests/unit/memory-explorer-specialists.test.ts > one-sided slug: missing place stays empty; notebook-only is one note, not no notes yet",
 		"tests/unit/memory-explorer-specialists.test.ts > read error: the node is kept, its count says `not counted`, never 0 (§5l.17)",
 		"tests/unit/memory-explorer-specialists.test.ts > SP5: an untrusted child name renders as text, never markup; it is listed (kind other), not hidden",
 		"tests/unit/memory-explorer-specialists.test.ts > a hit under a specialist shows `architecture/sre-1`; a department hit shows `architecture`",

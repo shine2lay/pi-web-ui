@@ -75,7 +75,16 @@ export async function buildSpecialistsNode(
 	if (slugs.length === 0 && others.length === 0 && below !== null && notebooks !== null) return null;
 	const rows: OpenVikingSpecialistSlug[] = slugs.map((slug) => {
 		const memories = `${uri}/${slug}`;
-		const notes = below === null ? null : below.filter((i) => !i.isDir && i.uri.startsWith(`${memories}/`)).length;
+		// Partition the existing eligible leaves, never crawl or classify them a second way.
+		const leaves = below?.filter((i) => !i.isDir && i.uri.startsWith(`${memories}/`));
+		const archive_notes =
+			leaves === undefined ? null : leaves.filter((i) => i.uri.startsWith(`${memories}/archive/`)).length;
+		const memories_notes = leaves === undefined || archive_notes === null ? null : leaves.length - archive_notes;
+		const has_notebook = notebooks === null ? null : notebookSlugs.has(slug);
+		const notes =
+			memories_notes === null || archive_notes === null || has_notebook === null
+				? null
+				: memories_notes + archive_notes + Number(has_notebook);
 		return {
 			slug,
 			principal: explorerPrincipalOf(memories, root) ?? dept,
@@ -83,8 +92,10 @@ export async function buildSpecialistsNode(
 			notebook: `${notebookUri}/${slug}.md`,
 			memories,
 			archive: `${memories}/archive`,
-			has_notebook: notebooks === null ? null : notebookSlugs.has(slug),
+			has_notebook,
 			has_memories: below === null ? null : slugFolders.has(slug),
+			memories_notes,
+			archive_notes,
 			notes,
 		};
 	});

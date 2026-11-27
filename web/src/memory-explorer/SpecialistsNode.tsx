@@ -84,10 +84,17 @@ function Leaf({
 	uri,
 	isFolder,
 	missing,
+	count,
 	current,
 	onOpen,
 	onOpenNote,
-}: Omit<OpenProps, "reveal"> & { name: string; uri: string; isFolder: boolean; missing: boolean }) {
+}: Omit<OpenProps, "reveal"> & {
+	name: string;
+	uri: string;
+	isFolder: boolean;
+	missing: boolean;
+	count?: number | null;
+}) {
 	return (
 		<li>
 			<div className="mx-tree-row" data-tree-row aria-current={current === uri ? "true" : undefined}>
@@ -100,24 +107,50 @@ function Leaf({
 				>
 					<span className="mx-tree-name">{name}</span>
 				</button>
-				{missing ? <span className="mx-tree-count mx-dim">empty</span> : null}
+				{count !== undefined ? (
+					<Count count={count} none="empty" />
+				) : missing ? (
+					<span className="mx-tree-count mx-dim">empty</span>
+				) : null}
 			</div>
 		</li>
 	);
 }
 
 function Specialist({ entry, ...open }: OpenProps & { entry: SpecialistEntry }) {
+	const verifiedEmpty = entry.hasNotebook === false && entry.memoriesCount === 0 && entry.archiveCount === 0;
 	return (
 		<Branch
 			label={entry.slug}
 			status={entry.label}
-			side={<Count count={entry.noteCount} none="no notes yet" />}
+			side={<Count count={entry.noteCount === 0 && !verifiedEmpty ? null : entry.noteCount} none="no notes yet" />}
 			startOpen={holds(entry, open.reveal)}
 		>
 			<ul>
-				<Leaf {...open} name="Notebook" uri={entry.notebook} isFolder={false} missing={entry.hasNotebook === false} />
-				<Leaf {...open} name="Memories" uri={entry.memories} isFolder missing={entry.hasMemories === false} />
-				<Leaf {...open} name="Archive" uri={entry.archive} isFolder missing={entry.hasMemories === false} />
+				<Leaf
+					{...open}
+					name="Notebook"
+					uri={entry.notebook}
+					isFolder={false}
+					missing={entry.hasNotebook === false}
+					count={entry.hasNotebook === null ? null : Number(entry.hasNotebook)}
+				/>
+				<Leaf
+					{...open}
+					name="Memories"
+					uri={entry.memories}
+					isFolder
+					missing={entry.hasMemories === false}
+					count={entry.memoriesCount}
+				/>
+				<Leaf
+					{...open}
+					name="Archive"
+					uri={entry.archive}
+					isFolder
+					missing={entry.hasMemories === false}
+					count={entry.archiveCount}
+				/>
 			</ul>
 		</Branch>
 	);

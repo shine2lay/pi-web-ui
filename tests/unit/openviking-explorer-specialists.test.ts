@@ -13,6 +13,8 @@ import type { OwnerWriteOp } from "../../server/openviking/owner-session-types.j
 import { OPENVIKING_EXPLORER_ROOTS } from "../../server/openviking/memory-tree.js";
 import { explorerUri, memoryCase, resolved } from "../lib/department-specialists-memory-cases.js";
 import { NOW } from "./openviking-daemon-fake.js";
+import { specialistsFromNode } from "../../web/src/memory-explorer/explorer-http.js";
+import { EXPLORER_ROOT_WALK } from "../../server/openviking/explorer-types.js";
 import { type ExplorerHarness, explorerHarness, q } from "./openviking-explorer-harness.js";
 import { FakePasskey } from "./openviking-owner-fakes.js";
 import { expectOwnerOnly, type OwnerHarness, ownerHarness, PI_RP } from "./openviking-owner-harness.js";
@@ -95,8 +97,8 @@ describe("tree: a department root shows its Specialists node (R-V2-SPMEM-20, §5
 		expect(r.body.specialists.read).toBe(true);
 		expect(caseFields(r.body.specialists.slugs)).toEqual(expectedNodes("M-106"));
 		const [db2, sre1] = r.body.specialists.slugs;
-		expect(db2).toMatchObject({ principal: "architecture/db-2", has_notebook: true, has_memories: false, notes: 0 });
-		expect(sre1).toMatchObject({ principal: "architecture/sre-1", has_notebook: true, has_memories: true, notes: 1 });
+		expect(db2).toMatchObject({ principal: "architecture/db-2", has_notebook: true, has_memories: false, notes: 1 });
+		expect(sre1).toMatchObject({ principal: "architecture/sre-1", has_notebook: true, has_memories: true, notes: 2 });
 		for (const word of c.private ?? []) expect(JSON.stringify(r.body)).not.toContain(word);
 		// The one count is untouched: the root's notes still include the specialist files (R-EXPLORER-COUNT-1).
 		const roots = await x.call("GET", "/api/openviking/tree/roots");
@@ -159,6 +161,90 @@ describe("tree: a department root shows its Specialists node (R-V2-SPMEM-20, §5
 		expect(r.status).toBe(200);
 		expect(r.body.specialists).toMatchObject({ read: false });
 		for (const s of r.body.specialists.slugs) expect(s.notes).toBeNull();
+	});
+});
+
+describe("counts addendum: real walk -> route serializer -> browser adapter", () => {
+	async function counted() {
+		const x = await explorerHarness();
+		open.push(x);
+		return x;
+	}
+	async function row(x: ExplorerHarness, slug = "sre-1") {
+		const r = await x.call("GET", `/api/openviking/tree?uri=${q(ARCH)}`);
+		expect(r.status).toBe(200);
+		return specialistsFromNode(r.body.specialists).specialists.find((s) => s.slug === slug);
+	}
+	it("empty notebook is one file; mixed buckets partition exact archive/ and keep root totals unchanged", async () => {
+		const x = await counted();
+		x.fake.store.put(`${ARCH}/notebook/specialists/only-1.md`, "");
+		const base = `${ARCH}/specialists/sre-1`;
+		for (const path of ["cases/a.md", "archive/a.md", "archive2/a.md", "_ejected/a.md", "other.txt"])
+			x.fake.store.put(`${base}/${path}`, "a");
+		x.fake.store.put(`${ARCH}/notebook/specialists/sre-1.md`, "");
+		x.fake.store.folder(`${ARCH}/specialists/empty-1`);
+		const before = x.fake.calls.length;
+		const r = await x.call("GET", `/api/openviking/tree?uri=${q(ARCH)}`);
+		expect(r.body.specialists.slugs).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ slug: "only-1", notes: 1, memories_notes: 0, archive_notes: 0, has_notebook: true }),
+				expect.objectContaining({ slug: "sre-1", notes: 6, memories_notes: 4, archive_notes: 1 }),
+				expect.objectContaining({
+					slug: "empty-1",
+					notes: 0,
+					memories_notes: 0,
+					archive_notes: 0,
+					has_notebook: false,
+				}),
+			]),
+		);
+		const walks = x.fake.calls.slice(before).filter((c) => c.url.pathname === "/api/v1/fs/tree");
+		expect(walks.map((c) => c.url.searchParams.get("uri")).sort()).toEqual(
+			[ARCH, ARCH, `${ARCH}/specialists`, `${ARCH}/notebook/specialists`].sort(),
+		);
+		// The folder route already reads its own root abstract, never a specialist body.
+		expect(
+			x.fake.calls
+				.slice(before)
+				.filter((c) => c.url.pathname.startsWith("/api/v1/content/"))
+				.map((c) => [c.url.pathname, c.url.searchParams.get("uri")]),
+		).toEqual([["/api/v1/content/abstract", ARCH]]);
+		expect(specialistsFromNode(r.body.specialists).specialists.find((s) => s.slug === "sre-1")).toMatchObject({
+			noteCount: 6,
+			memoriesCount: 4,
+			archiveCount: 1,
+		});
+		const roots = await x.call("GET", "/api/openviking/tree/roots");
+		expect(roots.body.roots).toHaveLength(17);
+		expect(roots.body.roots.find((r: { uri: string }) => r.uri === ARCH).notes).toBe(8); // seeded case + 7 files
+	});
+	it.each(["specialists", "notebook/specialists"])(
+		"unreadable %s keeps independently known counts and read error",
+		async (path) => {
+			const x = await counted();
+			x.fake.store.put(`${ARCH}/specialists/sre-1/cases/a.md`, "a");
+			x.fake.store.put(`${ARCH}/notebook/specialists/sre-1.md`, "");
+			x.fake.state.failures.push({ path: "/api/v1/fs/tree", uri: `${ARCH}/${path}`, status: 500, code: "INTERNAL" });
+			const s = await row(x);
+			expect(s).toMatchObject({
+				noteCount: null,
+				memoriesCount: path === "specialists" ? null : 1,
+				archiveCount: path === "specialists" ? null : 0,
+				hasNotebook: path === "specialists" ? true : null,
+			});
+		},
+	);
+	it.each(["specialists", "notebook/specialists"])("truncated %s is unknown, never verified zero", async (path) => {
+		const x = await counted();
+		x.fake.store.put(`${ARCH}/specialists/sre-1/cases/a.md`, "a");
+		x.fake.store.put(`${ARCH}/notebook/specialists/sre-1.md`, "");
+		for (let n = 0; n < EXPLORER_ROOT_WALK.node_limit; n++) x.fake.store.put(`${ARCH}/${path}/pad-${n}.md`, "");
+		expect(await row(x)).toMatchObject({
+			noteCount: null,
+			memoriesCount: path === "specialists" ? null : 1,
+			archiveCount: path === "specialists" ? null : 0,
+			hasNotebook: path === "specialists" ? true : null,
+		});
 	});
 });
 
