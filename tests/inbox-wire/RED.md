@@ -13,7 +13,10 @@ Security GO rm-1ab7b1d6 applies to that reference delta, not runtime implementat
 
 From pi-web-ui worktree:
 
-`scripts/sealed.sh node --import tsx --test --test-reporter=tap acceptance/inbox-wire/codec.acceptance.ts`
+`scripts/sealed.sh node --import tsx --test --test-reporter=tap tests/inbox-wire/codec.acceptance.ts`
+
+Original run path was acceptance/inbox-wire; moved byte-identically under tests/ after
+wt check correctly identified acceptance/ as outside its test-only boundary. No exemption.
 
 Observed exit 1; 329 tests, 261 pass, 68 fail, 0 skipped/cancelled/todo.
 Failures are acceptance assertions against the inert fail-closed codec (false versus true).
@@ -31,7 +34,7 @@ implemented schema validation; the valid twins prevent that all-refuse stub from
 - Effect-only reference vectors are applied to lifecycle.effect through the actual
   TypeScript view decoder; no copied reference effect decoder is introduced.
 - Invalid views assert no exception, claimable=false and next-dispatch=null.
-- Reader UNKNOWN/no effect enforcement belongs to acceptance/inbox-runtime, not this codec claim.
+- Reader UNKNOWN/no effect enforcement belongs to tests/inbox-runtime, not this codec claim.
 
 ## Immutable assertion hashes
 

@@ -46,13 +46,14 @@ Any shared existing call site must have one builder; agree its owner before para
 
 | Suite | Owner | Boundary |
 |---|---|---|
-| acceptance/inbox-wire/codec.acceptance.ts | delivery | canonical TypeScript codec; unchanged core views plus amended successor cases |
-| acceptance/inbox-runtime/ | delivery + helperhost, disjoint test files | actual host/boundary/guard/ledger/RoleMessages observations |
+| tests/inbox-wire/codec.acceptance.ts | delivery | canonical TypeScript codec; unchanged core views plus amended successor cases |
+| tests/inbox-runtime/ | delivery + helperhost, disjoint test files | actual host/boundary/guard/ledger/RoleMessages observations |
 | identity inbox acceptance | identity | actual resolveIdentity/tool_call path |
 | OV inbox acceptance | OV | actual identity/scope boundary |
 | queue inbox acceptance | queue | actual tool-add/requester/journal boundary |
 
 Explicit RED suites remain outside standard defaults until builders wire them in.
+They live under tests/ (standard checker test boundary); the default suite is tests/unit/.
 RED counts are evidence of missing implementation, not a substitute for real-boundary coverage.
 Test clocks, synthetic records and crash hooks belong only in external harnesses.
 No model input or tool-result bodies are printed; evidence is ids/counts/hashes only.
