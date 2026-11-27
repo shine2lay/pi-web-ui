@@ -65,6 +65,8 @@ import { roleMessagesHourlyRefusal } from "./role-message-hourly-limit.js";
 import type { GuardPolicy } from "./role-message-guard-contract-v2.js";
 import { readQueueEntries } from "./queue-entries-tail.js";
 import { statusHint } from "./turn-status.js";
+import { parseRoleMessagesSource, roleMessageRetentionPins } from "./role-messages-source.js";
+export { readRoleMessagesSource } from "./role-messages-source.js";
 import { noRouteError, specialistRowOf, specialistStamp } from "./specialist-messages.js";
 import type { SpecialistFrom, SpecialistSender } from "./specialist-messages.js";
 import { checkCiAlert, ciAlertHint, ciAlertKey, ciAlertText, ciAlertTitle, type CiAlert } from "./ci-alert.js";
@@ -92,7 +94,7 @@ export { ROLE_MESSAGES_HOURLY_EXEMPT_ROLES, roleMessagesHourlyExempt } from "./r
 export const ROLE_MESSAGE_CHAIN_MAX = ROLE_MESSAGE_POLICY.depth.unapprovedThrough;
 /** The longest text a message may carry. */
 export const ROLE_MESSAGE_TEXT_MAX = 4000;
-/** Messages the store keeps (waiting ones are never dropped). */
+/** Closed history target; waiting messages and open obligations are never dropped. */
 export const ROLE_MESSAGES_KEEP = 1000;
 /** Rows Settings → Identities shows. */
 export const ROLE_MESSAGES_LIST = 100;
@@ -351,6 +353,10 @@ const inSchedulingContext: RoleMessageSchedule = (schedule) => schedule();
 
 /** What the server does for the delivery (AgentService). */
 export interface RoleMessageHost extends tagRules.TagGovernanceHost {
+	/** Canonical inbox projection: open/claimed sources and pending effect original/reply IDs. */
+	retentionPins?(): ReadonlySet<string>;
+	/** Reorder existing waiting rows only; recipient/route policy belongs to the inbox service. */
+	orderWaiting?(records: readonly RoleMessageRecord[]): Promise<readonly RoleMessageRecord[]>;
 	/** The roles now (pi-identity's identity list). */
 	roles(): IdentityDef[];
 	/** Whether the chat with this transcript is working (a turn runs, a message is on its way). */
@@ -1025,13 +1031,7 @@ export class RoleMessages {
 			return; // none yet
 		}
 		try {
-			const parsed = JSON.parse(raw) as Partial<StoreFile>;
-			this.data = {
-				v: FILE_VERSION,
-				paused: parsed.paused === true,
-				...(typeof parsed.resumedAt === "number" ? { resumedAt: parsed.resumedAt } : {}),
-				messages: Array.isArray(parsed.messages) ? parsed.messages.filter((m) => m && typeof m.id === "string") : [],
-			};
+			this.data = parseRoleMessagesSource(raw);
 		} catch (err) {
 			// Kept aside, not dropped: the owner can still read it.
 			const aside = `${this.file}.bad-${this.now()}`;
@@ -1050,22 +1050,32 @@ export class RoleMessages {
 			const extra = keep.length - ROLE_MESSAGES_KEEP;
 			let considered = 0;
 			const now = this.now();
-			const gone: RoleMessageRecord[] = [];
-			this.data.messages = keep.filter((m) => {
+			let pins: ReadonlySet<string>;
+			try {
+				pins = roleMessageRetentionPins(keep, this.host.retentionPins?.());
+			} catch {
+				// Unknown projection cannot authorize irreversible deletion. Retry on the next save.
+				pins = new Set(keep.map(m => m.id));
+				this.log("retention unknown; skipped pruning");
+			}
+			const retained = keep.filter((m) => {
 				// role-reports: a recent report request stays: it is the proof that the day was asked for.
 				const proof = m.kind === "report" && now - m.at < REPORT_KEEP_MS;
-				if (considered < extra && m.state !== "waiting" && !proof) {
+				if (considered < extra && !pins.has(m.id) && !proof) {
 					considered++;
 					// Ops #318: unlimited traffic must not evict capped roles' unexpired hourly proof.
 					// At most capped roles × active hourly cap extra rows; exempt history rotates as before.
 					if (m.kind !== "report" && !roleMessagesHourlyExempt(m.from.role) && now - m.at < HOUR_MS) return true;
-					gone.push(m);
 					return false;
 				}
 				return true;
 			});
+			// Never leave a retained original without the actual accepted reply used by semantic projection.
+			const paired = roleMessageRetentionPins(keep, new Set(retained.map(m => m.id)));
+			this.data.messages = keep.filter(m => paired.has(m.id));
+			if (this.data.messages.length > ROLE_MESSAGES_KEEP) this.log(`retention_over_keep: ${this.data.messages.length}`);
 			// role-message-ladder (Ops rm-efd6df89): a chain's place never depends on this rotating copy.
-			this.rememberChains(gone);
+			this.rememberChains(keep.filter(m => !paired.has(m.id)));
 		}
 		try {
 			this.persistence.saveStore(this.file, this.data);
@@ -1125,10 +1135,25 @@ export class RoleMessages {
 		if (!this.timer && !this.running) this.deferredUntilStart = true;
 	}
 
+	private async orderedWaiting(): Promise<readonly RoleMessageRecord[]> {
+		const fifo = this.data.messages.filter(m => m.state === "waiting").sort((a, b) => a.at - b.at);
+		if (!this.host.orderWaiting) return fifo;
+		try {
+			const ordered = await this.host.orderWaiting(Object.freeze([...fifo]));
+			const identities = new Set(fifo);
+			if (Array.isArray(ordered) && ordered.length === fifo.length && new Set(ordered).size === fifo.length
+				&& ordered.every(row => identities.has(row))) return ordered;
+		} catch {
+			// Ordering is advisory; legacy delivery still works if the inbox reader is unavailable.
+		}
+		this.log("invalid inbox waiting order; using FIFO");
+		return fifo;
+	}
+
 	/** Hand only this reopened chat's waiting mail through the normal policy/proof/retry checks. */
 	async beforeResume(file: string, delivery: Pick<RoleMessageHost, "deliver" | "note">): Promise<void> {
 		if (!this.deferredUntilStart || this.data.paused || this.stopped) return;
-		for (const record of this.data.messages.filter((m) => m.state === "waiting").sort((a, b) => a.at - b.at)) {
+		for (const record of await this.orderedWaiting()) {
 			if (this.data.paused || this.stopped) break;
 			try {
 				const route = record.target && existsSync(record.target) ? { file: record.target } : await this.route(record);
@@ -1954,7 +1979,7 @@ export class RoleMessages {
 				do {
 					this.again = false;
 					if (this.data.paused || this.stopped) break;
-					for (const r of this.data.messages.filter((m) => m.state === "waiting").sort((a, b) => a.at - b.at)) {
+					for (const r of await this.orderedWaiting()) {
 						if (this.data.paused || this.stopped) break;
 						try {
 							await this.step(r);
