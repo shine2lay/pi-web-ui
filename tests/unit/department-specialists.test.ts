@@ -450,7 +450,12 @@ describe("C-CHIP: one small chip on the queue row and the task chat's header (R-
 		};
 		walk(join(REPO_ROOT, "web", "src"));
 		const named = files.filter((f) => /specialist/i.test(f));
-		expect(named.filter((f) => !/(^|\/)(specialist-chip\.ts|SpecialistChip\.tsx)$/.test(f))).toEqual([]);
+		// v2 §5l.15 adds exactly one more: the Memory Explorer's Specialists node (Frontend #365); nothing else.
+		expect(
+			named.filter(
+				(f) => !/(^|\/)(specialist-chip\.ts|SpecialistChip\.tsx|memory-explorer\/SpecialistsNode\.tsx)$/.test(f),
+			),
+		).toEqual([]);
 	});
 });
 

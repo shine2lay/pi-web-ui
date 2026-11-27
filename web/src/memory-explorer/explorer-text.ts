@@ -71,10 +71,40 @@ function placeOf(uri: string): Place {
 	throw new Error(`not a place memory keeps notes: ${uri}`);
 }
 
+/** The uri lies under a place the page can show (a link's note, §5l.17); the server still decides if it reads. */
+export function isShownPlace(uri: string): boolean {
+	try {
+		placeOf(uri);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /** Folders and file below the place, e.g. ["preferences", "a.md"]. */
 function segments(uri: string): string[] {
 	const place = placeOf(uri);
 	return uri.slice(place.uri.length).split("/").filter(Boolean);
+}
+
+/** A department keeps each specialist's own notes in `specialists/<slug>/`, with the same kind folders inside. */
+const SPECIALISTS_FOLDER = "specialists";
+
+function isUnderSpecialist(uri: string, segs: readonly string[]): boolean {
+	return segs[0] === SPECIALISTS_FOLDER && segs.length >= 2 && groupOf(uri) === "department";
+}
+
+/** Segments below where kinds start: the place, or a specialist's own folder inside a department's place. */
+function kindSegments(uri: string): string[] {
+	const segs = segments(uri);
+	return isUnderSpecialist(uri, segs) ? segs.slice(2) : segs;
+}
+
+/** A specialist's own folder (`…/specialists/<slug>`) when `uri` is in one; else null. */
+export function specialistRootOf(uri: string): string | null {
+	const segs = segments(uri);
+	if (!isUnderSpecialist(uri, segs)) return null;
+	return `${placeOf(uri).uri}/${segs[0]}/${segs[1]}`;
 }
 
 function lastSegment(uri: string): string {
@@ -124,9 +154,12 @@ export function folderLabel(uri: string): string {
 	if (segs.length === 0) return rootName(uri);
 	const last = segs[segs.length - 1];
 	if (groupOf(uri) === "projects") return last;
-	if (segs.length === 1 && KIND_FOLDERS[last]) return KIND_FOLDERS[last][0];
-	if (segs[0] === "events" && segs.length === 3) return `${MONTHS[Number(last) - 1]} ${segs[1]}`;
-	if (segs[0] === "events" && segs.length === 4) return `${MONTHS[Number(segs[2]) - 1].slice(0, 3)} ${Number(last)}`;
+	// A specialist's folder is named by its slug, as stored.
+	if (segs.length === 2 && isUnderSpecialist(uri, segs)) return last;
+	const kinds = kindSegments(uri);
+	if (kinds.length === 1 && KIND_FOLDERS[last]) return KIND_FOLDERS[last][0];
+	if (kinds[0] === "events" && kinds.length === 3) return `${MONTHS[Number(last) - 1]} ${kinds[1]}`;
+	if (kinds[0] === "events" && kinds.length === 4) return `${MONTHS[Number(kinds[2]) - 1].slice(0, 3)} ${Number(last)}`;
 	return humanize(last);
 }
 
@@ -139,7 +172,7 @@ export function noteTitle(uri: string): string {
 
 export function kindWord(uri: string): string {
 	if (groupOf(uri) === "projects") return "Document";
-	const segs = segments(uri);
+	const segs = kindSegments(uri);
 	return segs.length > 1 ? (KIND_FOLDERS[segs[0]]?.[1] ?? "Note") : "Note";
 }
 

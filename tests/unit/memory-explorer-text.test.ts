@@ -14,6 +14,7 @@ import {
 	matchLevel,
 	noteTitle,
 	rootName,
+	specialistRootOf,
 	summaryText,
 } from "../../web/src/memory-explorer/explorer-text.js";
 
@@ -76,6 +77,21 @@ describe("kinds", () => {
 		expect(kindWord("viking://user/design/memories/experiences/a.md")).toBe("Lesson");
 		expect(kindWord("viking://resources/x/README.md")).toBe("Document");
 		expect(kindWord("viking://user/design/memories/identity.md")).toBe("Note");
+	});
+	// v2 §5l.15 (frontend #365): a specialist's own folder holds the same kind folders as its department.
+	it("words a specialist's own folder by its slug and its kind folders as a department's", () => {
+		const sre = "viking://user/architecture/memories/specialists/sre-1";
+		expect(folderLabel("viking://user/architecture/memories/specialists")).toBe("Specialists");
+		expect(folderLabel(sre)).toBe("sre-1");
+		expect(folderLabel(`${sre}/preferences`)).toBe("Rules");
+		expect(folderLabel(`${sre}/events/2026/11`)).toBe("November 2026");
+		expect(folderLabel(`${sre}/archive`)).toBe("Archive");
+		expect(kindWord(`${sre}/preferences/a.md`)).toBe("Rule");
+		expect(kindWord(`${sre}/archive/run.md`)).toBe("Note");
+		expect(specialistRootOf(`${sre}/cases/a.md`)).toBe(sre);
+		// Only inside a department's place: shared notes keep their own folder named `specialists`.
+		expect(specialistRootOf("viking://user/default/memories/specialists/x/a.md")).toBeNull();
+		expect(kindWord("viking://user/default/memories/specialists/x/preferences/a.md")).toBe("Note");
 	});
 });
 

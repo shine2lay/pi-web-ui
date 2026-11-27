@@ -52,6 +52,34 @@ export interface MemoryItem {
 	readonly kindCounts?: KindCounts | null;
 }
 
+/** A specialist's status word: `retired`, `no config`, `config unreadable` (a read error), or null. Display only. */
+export type SpecialistLabel = "retired" | "no config" | "config unreadable" | null;
+
+/** One specialist under a department's Specialists node; every uri as the server listed it (never built here). */
+export interface SpecialistEntry {
+	/** The store's folder or file name: untrusted text, shown as text only. */
+	readonly slug: string;
+	readonly label: SpecialistLabel;
+	readonly notebook: string;
+	readonly memories: string;
+	readonly archive: string;
+	/** false: that place isn't there (shown empty); null: memory didn't say. */
+	readonly hasNotebook: boolean | null;
+	readonly hasMemories: boolean | null;
+	/** Notes kept under its own folder; null = not counted (never 0). */
+	readonly noteCount: number | null;
+}
+
+/** A department's Specialists node: its specialists and any other path kept beside them. */
+export interface SpecialistsNode {
+	readonly uri: string;
+	/** false: memory didn't answer for all of it, so it isn't counted. */
+	readonly read: boolean;
+	readonly specialists: readonly SpecialistEntry[];
+	/** Paths that are no specialist's folder: listed as they are, never hidden. */
+	readonly others: readonly { readonly uri: string; readonly name: string; readonly isFolder: boolean }[];
+}
+
 /** A folder opened in the reader. */
 export interface FolderListing {
 	readonly folder: MemoryItem;
@@ -63,6 +91,8 @@ export interface FolderListing {
 	readonly total: number;
 	/** Pass back to read the next page of children; null = no more. */
 	readonly nextCursor: string | null;
+	/** A department's own place only: its Specialists node; null when it has none. */
+	readonly specialists?: SpecialistsNode | null;
 }
 
 /** A note opened in the reader: the levels memory keeps. */
@@ -100,6 +130,8 @@ export interface SearchHit {
 	/** Exact words: the matching line and its number. */
 	readonly line?: string;
 	readonly lineNumber?: number;
+	/** Whose notes these are, from where it is kept: "architecture" or "architecture/sre-1"; null = shared. */
+	readonly principal?: string | null;
 }
 
 export interface SearchAnswer {

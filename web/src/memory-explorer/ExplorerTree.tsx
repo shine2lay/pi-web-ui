@@ -8,6 +8,7 @@ import { useState } from "react";
 import type { MemoryExplorerApi, MemoryItem, MemoryRoot, RootGroup } from "./explorer-api.js";
 import { GROUP_HEADINGS, folderLabel } from "./explorer-text.js";
 import { KindBar, KindKey } from "./KindBar.js";
+import { SpecialistsNode, specialistsCount } from "./SpecialistsNode.js";
 import type { Load } from "./use-load.js";
 import { useLoad } from "./use-load.js";
 
@@ -24,21 +25,36 @@ interface TreeProps {
 	readonly api: MemoryExplorerApi;
 	readonly current: string | null;
 	onOpen(uri: string): void;
+	/** Opens a note in the reader (a specialist's notebook). */
+	onOpenNote(uri: string): void;
+	/** A link's note: the root holding it and its specialist rows start open (v2 §5l.17). */
+	readonly reveal: string | null;
 }
 
-function SubFolders({ api, uri, current, onOpen }: TreeProps & { uri: string }) {
+function SubFolders({ api, uri, current, onOpen, onOpenNote, reveal }: TreeProps & { uri: string }) {
 	const { load } = useLoad(uri, (signal) => api.folder(uri, null, signal));
 	if (load.status === "loading") return <p className="mx-tree-note">Opening…</p>;
 	if (load.status === "failed") {
 		return <p className="mx-tree-note">Couldn't open this folder.</p>;
 	}
-	const folders = load.data.items.filter((item) => item.isFolder);
-	if (folders.length === 0) return null;
+	// A department's `specialists/` folder is shown as its Specialists node instead (v2 §5l.15).
+	const node = load.data.specialists ?? null;
+	const all = load.data.items.filter((item) => item.isFolder);
+	const folders = node ? all.filter((item) => item.uri !== node.uri) : all;
+	if (folders.length === 0 && !node) return null;
+	const open = { current, onOpen, onOpenNote, reveal };
 	return (
 		<ul>
 			{folders.map((folder) => (
-				<TreeRow key={folder.uri} api={api} item={folder} current={current} onOpen={onOpen} />
+				<TreeRow key={folder.uri} api={api} item={folder} {...open} />
 			))}
+			{node ? (
+				<SpecialistsNode
+					node={node}
+					count={specialistsCount(node, all.find((item) => item.uri === node.uri)?.noteCount)}
+					{...open}
+				/>
+			) : null}
 		</ul>
 	);
 }
@@ -49,8 +65,12 @@ function TreeRow({
 	root,
 	current,
 	onOpen,
+	onOpenNote,
+	reveal,
 }: TreeProps & { item: Pick<MemoryItem, "uri" | "noteCount" | "kindCounts">; root?: boolean }) {
-	const [open, setOpen] = useState(item.uri === SHARED_OPEN_BY_DEFAULT);
+	const [open, setOpen] = useState(
+		() => item.uri === SHARED_OPEN_BY_DEFAULT || (root === true && reveal?.startsWith(`${item.uri}/`) === true),
+	);
 	const label = folderLabel(item.uri);
 	// null: too many to count, or the place didn't answer; never shown as 0.
 	const count = item.noteCount ?? null;
@@ -80,7 +100,16 @@ function TreeRow({
 					</span>
 				)}
 			</div>
-			{open && count !== 0 ? <SubFolders api={api} uri={item.uri} current={current} onOpen={onOpen} /> : null}
+			{open && count !== 0 ? (
+				<SubFolders
+					api={api}
+					uri={item.uri}
+					current={current}
+					onOpen={onOpen}
+					onOpenNote={onOpenNote}
+					reveal={reveal}
+				/>
+			) : null}
 		</li>
 	);
 }

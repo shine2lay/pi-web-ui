@@ -28,6 +28,8 @@ export interface ExplorerReply {
 
 export interface ExplorerHarness {
 	fake: ReturnType<typeof daemon>;
+	/** The routes' address, `http://127.0.0.1:<port>` (a page under test fetches through it). */
+	base: string;
 	stateDir: string;
 	changelogPath: string;
 	/** Hooks the routes handed to `onShutdown`; `shutdown()` runs them as the server's stop would. */
@@ -83,6 +85,7 @@ export async function explorerHarness(
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 	return {
 		fake,
+		base,
 		stateDir,
 		changelogPath,
 		shutdown: async () => {

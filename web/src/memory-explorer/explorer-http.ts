@@ -16,6 +16,7 @@ import type {
 	OpenVikingNoteResponse,
 	OpenVikingSearchHit,
 	OpenVikingSearchResponse,
+	OpenVikingSpecialistsNode,
 	OpenVikingTreeChild,
 	OpenVikingTreeFolderResponse,
 	OpenVikingTreeRootsResponse,
@@ -39,6 +40,7 @@ import {
 	type SearchAnswer,
 	type SearchHit,
 	type SearchRequest,
+	type SpecialistsNode,
 } from "./explorer-api.js";
 import { explorerErrorOf } from "./owner-session.js";
 
@@ -120,6 +122,24 @@ export function itemFromChild(child: OpenVikingTreeChild): MemoryItem {
 	};
 }
 
+export function specialistsFromNode(node: OpenVikingSpecialistsNode): SpecialistsNode {
+	return {
+		uri: node.uri,
+		read: node.read,
+		specialists: node.slugs.map((s) => ({
+			slug: s.slug,
+			label: s.label,
+			notebook: s.notebook,
+			memories: s.memories,
+			archive: s.archive,
+			hasNotebook: s.has_notebook,
+			hasMemories: s.has_memories,
+			noteCount: s.notes,
+		})),
+		others: node.others.map((o) => ({ uri: o.uri, name: o.name, isFolder: o.is_folder })),
+	};
+}
+
 export function listingFromFolder(
 	answer: OpenVikingTreeFolderResponse,
 	overview: string | null,
@@ -143,6 +163,7 @@ export function listingFromFolder(
 		items: answer.children.map(itemFromChild),
 		total: answer.total,
 		nextCursor: next < answer.total && answer.children.length > 0 ? String(next) : null,
+		specialists: answer.specialists ? specialistsFromNode(answer.specialists) : null,
 	};
 }
 
@@ -157,8 +178,8 @@ export function hitFromSearch(hit: OpenVikingSearchHit): SearchHit {
 		summary: hit.abstract,
 	};
 	return hit.line_text === null
-		? { item, score: hit.score ?? undefined, relative: hit.relative ?? undefined }
-		: { item, line: hit.line_text, lineNumber: hit.line_number ?? undefined };
+		? { item, score: hit.score ?? undefined, relative: hit.relative ?? undefined, principal: hit.principal }
+		: { item, line: hit.line_text, lineNumber: hit.line_number ?? undefined, principal: hit.principal };
 }
 
 /** Memory's own health word, plus places that didn't answer, as the page's three states. */

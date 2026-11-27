@@ -18,6 +18,7 @@ import {
 	matchLevel,
 	noteTitle,
 	parentOf,
+	specialistRootOf,
 	summaryText,
 } from "./explorer-text.js";
 import { KindBar } from "./KindBar.js";
@@ -74,6 +75,8 @@ function whereShort(uri: string): string | null {
 	const parent = parentOf(uri);
 	if (!parent || parentOf(parent) === null) return null;
 	if (groupOf(uri) !== "projects" && parentOf(parentOf(parent) as string) === null) return null;
+	// In a specialist's own folder, its kind folders read as a department's do.
+	if (parentOf(parent) === specialistRootOf(uri)) return null;
 	return folderLabel(parent);
 }
 
@@ -82,6 +85,8 @@ export interface RowExtra {
 	readonly relative?: number;
 	readonly line?: string;
 	readonly lineNumber?: number;
+	/** Search hits: whose notes these are ("architecture/sre-1"), as the server read it from where it is kept. */
+	readonly principal?: string | null;
 }
 
 export function NoteRow({
@@ -123,6 +128,7 @@ export function NoteRow({
 					<span>
 						{keptIn(item.uri)} · {item.isFolder ? "Folder" : kindWord(item.uri)}
 						{where ? ` · ${where}` : ""}
+						{extra.principal ? ` · ${extra.principal}` : ""}
 					</span>
 					<span className="mx-num">{facts}</span>
 				</span>

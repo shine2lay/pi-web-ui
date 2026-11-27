@@ -1,7 +1,8 @@
 /**
- * Frontend #364 (v2 §5l.15): the Explorer's slug label reads specialist configs with a copy of pi-identity's Phase 1
- * reader (`readConfig`, specialists/files.ts + schema.ts). Rule 23 parity: for each stored config below, the label is
- * `no config` exactly when pi-identity's own reader refuses, else the status it reads (`retired`, or null for active).
+ * Frontend #365 (v2 §5l.15 + §5l clarification "Status labels use the one specialist reader"): the Explorer's slug
+ * label is a thin projection of pi-identity's own `readConfig`, loaded from the pi-identity the host has installed.
+ * These cases run through that real reader: the loaded function is pi-identity's own (delegation), and each stored
+ * config's label follows its answer: `no config` only for E_SPEC_NOT_FOUND, `config unreadable` for any other refusal.
  * The peer is the pi-identity checkout on this machine (PI_IDENTITY_PEER=<folder> overrides it); a missing peer fails.
  */
 import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
@@ -9,12 +10,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { specialistConfigLabel } from "../../server/openviking/specialist-config-label.js";
+import {
+	loadSpecialistReader,
+	specialistConfigLabel,
+	type SpecialistReader,
+} from "../../server/openviking/specialist-config-label.js";
 
 const PEER = process.env.PI_IDENTITY_PEER ?? "/home/shinelay/projects/pi-identity";
-const PEER_FILES = join(PEER, "specialists", "files.ts");
-type PeerAnswer = { result: "allow"; config: { status: string } } | { result: "refuse"; code: string };
-type ReadConfig = (identities: string, dept: string, slug: string) => PeerAnswer;
+const PEER_ENTRY = join(PEER, "specialists", "readonly.ts");
 
 const good = (slug: string, extra: Record<string, unknown> = {}) =>
 	JSON.stringify({ v: 1, id: slug, title: `Specialist ${slug}`, status: "active", ...extra });
@@ -57,27 +60,72 @@ function identities(): string {
 	return dir;
 }
 
-describe("specialist label: parity with pi-identity's readConfig (rule 23)", () => {
-	it("each stored config: `no config` exactly when the peer refuses, else the peer's status", async () => {
-		if (!existsSync(PEER_FILES))
-			throw new Error(`${PEER_FILES} is missing; set PI_IDENTITY_PEER to a pi-identity checkout`);
-		const peer = (await import(pathToFileURL(PEER_FILES).href)) as { readConfig: ReadConfig };
-		const dir = identities();
-		const rows = Object.keys(STORED).map((slug) => {
-			const answer = peer.readConfig(dir, "qa", slug);
-			const expected = answer.result === "refuse" ? "no config" : answer.config.status === "retired" ? "retired" : null;
-			return { slug, label: specialistConfigLabel(dir, "qa", slug), expected };
-		});
-		expect(rows.map((r) => [r.slug, r.label])).toEqual(rows.map((r) => [r.slug, r.expected]));
-		// The table covers all three outcomes, so parity is not met by one constant answer.
-		expect(new Set(rows.map((r) => r.expected))).toEqual(new Set([null, "retired", "no config"]));
+/** An agent folder whose settings install the given packages (pi's settings.json `packages`). */
+function agentDirWith(packages: string[]): string {
+	const dir = mkdtempSync(join(tmpdir(), "spec-agent-"));
+	writeFileSync(join(dir, "settings.json"), JSON.stringify({ packages }));
+	return dir;
+}
+
+async function peerReader(): Promise<SpecialistReader> {
+	if (!existsSync(PEER_ENTRY))
+		throw new Error(`${PEER_ENTRY} is missing; set PI_IDENTITY_PEER to a pi-identity checkout`);
+	return (await import(pathToFileURL(PEER_ENTRY).href)) as SpecialistReader;
+}
+
+describe("specialist label: a projection of pi-identity's own readConfig", () => {
+	it("loads pi-identity's own readConfig from the installed package (delegation, not a copy)", async () => {
+		const peer = await peerReader();
+		const reader = await loadSpecialistReader(agentDirWith([PEER]));
+		expect(reader?.readConfig).toBe(peer.readConfig);
 	});
 
-	it("an invalid slug or a department with no specialists folder: `no config`, never a throw", () => {
+	it("each stored config: the label follows the real reader's answer", async () => {
+		const reader = await loadSpecialistReader(agentDirWith([PEER]));
+		if (!reader) throw new Error("pi-identity did not load from its installed package");
 		const dir = identities();
-		expect(specialistConfigLabel(dir, "qa", "Bad_Name")).toBe("no config");
-		expect(specialistConfigLabel(dir, "qa", "../qa")).toBe("no config");
-		expect(specialistConfigLabel(dir, "design", "act-1")).toBe("no config");
-		expect(specialistConfigLabel(join(dir, "missing"), "qa", "act-1")).toBe("no config");
+		const rows = Object.keys(STORED).map((slug) => {
+			const answer = reader.readConfig(dir, "qa", slug);
+			const expected =
+				answer.result === "allow"
+					? answer.config.status === "retired"
+						? "retired"
+						: null
+					: answer.code === "E_SPEC_NOT_FOUND"
+						? "no config"
+						: "config unreadable";
+			return { slug, label: specialistConfigLabel(reader, dir, "qa", slug), expected };
+		});
+		expect(rows.map((r) => [r.slug, r.label])).toEqual(rows.map((r) => [r.slug, r.expected]));
+		// Absence and a refused file read differently; the table covers every outcome, so no constant answer passes.
+		expect(Object.fromEntries(rows.map((r) => [r.slug, r.label]))).toMatchObject({
+			"act-1": null,
+			"ret-1": "retired",
+			"none-1": "no config",
+			"bad-json": "config unreadable",
+			linked: "config unreadable",
+			"folder-cfg": "config unreadable",
+		});
+	});
+
+	it("a department or identities folder with no config: `no config`; a slug the reader refuses: unreadable", async () => {
+		const reader = await loadSpecialistReader(agentDirWith([PEER]));
+		const dir = identities();
+		expect(specialistConfigLabel(reader, dir, "design", "act-1")).toBe("no config");
+		expect(specialistConfigLabel(reader, join(dir, "missing"), "qa", "act-1")).toBe("no config");
+		expect(specialistConfigLabel(reader, dir, "qa", "../qa")).toBe("config unreadable");
+	});
+
+	it("no loadable pi-identity, or a reader that throws: `config unreadable`, never a guessed `no config`", async () => {
+		expect(await loadSpecialistReader(agentDirWith([]))).toBeNull();
+		expect(await loadSpecialistReader(join(tmpdir(), "no-such-agent-dir"))).toBeNull();
+		const dir = identities();
+		expect(specialistConfigLabel(null, dir, "qa", "none-1")).toBe("config unreadable");
+		const throwing: SpecialistReader = {
+			readConfig: () => {
+				throw new Error("EIO");
+			},
+		};
+		expect(specialistConfigLabel(throwing, dir, "qa", "act-1")).toBe("config unreadable");
 	});
 });

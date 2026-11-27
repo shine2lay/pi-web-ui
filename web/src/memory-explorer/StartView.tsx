@@ -156,8 +156,8 @@ export function SearchResults({
 						onOpen={onOpen}
 						extra={
 							asked.mode === "meaning"
-								? { score: hit.score, relative: hit.relative }
-								: { line: hit.line, lineNumber: hit.lineNumber }
+								? { score: hit.score, relative: hit.relative, principal: hit.principal }
+								: { line: hit.line, lineNumber: hit.lineNumber, principal: hit.principal }
 						}
 					/>
 				))}

@@ -20,7 +20,7 @@
 		"M-108": {
 			"server": [
 				"tests/unit/openviking-explorer-specialists.test.ts > M-108: a slug root without a config is listed and labelled `no config`, never hidden",
-				"tests/unit/specialist-config-label.test.ts > each stored config: `no config` exactly when the peer refuses, else the peer's status"
+				"tests/unit/specialist-config-label.test.ts > each stored config: the label follows the real reader's answer"
 			],
 			"page": [
 				"tests/unit/memory-explorer-specialists.test.ts > M-108 page: labels `retired` and `no config` show as text; the active slug has none; none is hidden"
@@ -50,13 +50,17 @@
 			"server": [
 				"tests/unit/openviking-explorer-specialists.test.ts > M-112: an alias is no Explorer URI -> 400 URI_OUTSIDE_ROOTS"
 			],
-			"page": []
+			"page": [
+				"tests/unit/memory-explorer-permalink.test.ts > an alias, an outside place, another site or a malformed escape: the start opens, no note is read; the server refuses them too"
+			]
 		},
 		"M-113": {
 			"server": [
 				"tests/unit/openviking-explorer-specialists.test.ts > M-113: the setup-file lock holds under a specialist root -> 403 SETUP_FILE_LOCKED"
 			],
-			"page": []
+			"page": [
+				"tests/unit/memory-explorer-permalink.test.ts > M-113 page: a setup file under a specialist root is refused by the server; the page shows its setup-file state"
+			]
 		}
 	},
 	"page_also": [
@@ -64,6 +68,14 @@
 		"tests/unit/memory-explorer-specialists.test.ts > read error: the node is kept, its count says `not counted`, never 0 (§5l.17)",
 		"tests/unit/memory-explorer-specialists.test.ts > SP5: an untrusted child name renders as text, never markup; it is listed (kind other), not hidden",
 		"tests/unit/memory-explorer-specialists.test.ts > a hit under a specialist shows `architecture/sre-1`; a department hit shows `architecture`",
-		"tests/unit/memory-explorer-specialists.test.ts > health line, search box, the other groups and the department root's own row: same markup with or without specialists, pinned"
+		"tests/unit/memory-explorer-specialists.test.ts > health line, search box, the other groups and the department root's own row: same markup with or without specialists, pinned",
+		"tests/unit/memory-explorer-permalink.test.ts > a memory leaf: the note reads, Architecture -> Specialists -> sre-1 open with no tap; reload does it again",
+		"tests/unit/memory-explorer-permalink.test.ts > each leaf kind: notebook (marked current), archive, and a notebook-only slug",
+		"tests/unit/memory-explorer-permalink.test.ts > the query is decoded once: an escaped `%2e%2e` stays literal text and is never read as `..`",
+		"tests/unit/memory-explorer-permalink.test.ts > a missing leaf: `This note isn't in memory any more`, its ancestry still open, no other note shown",
+		"tests/unit/memory-explorer-permalink.test.ts > a traversal or an unknown department: the server refuses it and the page shows its error",
+		"tests/unit/memory-explorer-permalink.test.ts > a read error (memory fails the read): the error state with Try again, the tree kept",
+		"tests/unit/memory-explorer-permalink.test.ts > the owner opens another note while the linked one is still loading: the late answer is dropped",
+		"tests/unit/memory-explorer-permalink.test.ts > leaving the tab takes the link off the address, so a later visit opens the start, not the old note"
 	]
 }

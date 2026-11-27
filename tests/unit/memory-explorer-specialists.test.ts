@@ -22,10 +22,7 @@ import type {
 } from "../../server/openviking/explorer-types.js";
 import { MemoryExplorerPage } from "../../web/src/components/MemoryExplorerPage.js";
 import type { OwnerWebAuthn } from "../../web/src/memory-explorer/owner-session.js";
-import { byRole, click, flush, oneByRole, text, typeInto } from "./memory-explorer/explorer-dom.js";
-
-/** Task 2 turns these into `it`. Skipped meanwhile, so the land gate stays green while they are unbuilt. */
-const notBuilt = it.skip;
+import { byRole, click, flush, oneByRole, text, typeInto, visibleWords } from "./memory-explorer/explorer-dom.js";
 
 const AT = "2026-11-14T01:21:00.000Z";
 const SHARED = "viking://user/default/memories";
@@ -278,24 +275,21 @@ const placeIn = (slug: HTMLElement, name: string) =>
 	byRole(slug, "button").find((b) => text(b).startsWith(name)) ?? null;
 
 describe("tree: a department's Specialists node (§5l.15)", () => {
-	notBuilt(
-		"M-106 page: Specialists node under the department, slugs in order, each with Notebook, Memories, Archive",
-		async () => {
-			const page = await mountPage(fakeServer());
-			const arch = await expand(page, "Architecture");
-			const node = await expand(page, "Specialists");
-			expect(arch.contains(node)).toBe(true);
-			// The raw `specialists` folder is not listed a second time beside the node.
-			expect(byRole(arch, "button").filter((b) => b.getAttribute("data-folder") === SPEC)).toHaveLength(0);
-			const slugs = ["dba-2", "ret-3", "sre-1"].map((s) => rowOf(page, s));
-			expect(slugs.every((s) => s !== null && node.contains(s))).toBe(true);
-			for (const slug of ["dba-2", "ret-3", "sre-1"]) {
-				const row = await expand(page, slug);
-				for (const place of ["Notebook", "Memories", "Archive"])
-					expect(placeIn(row, place), `${slug} ${place}`).toBeTruthy();
-			}
-		},
-	);
+	it("M-106 page: Specialists node under the department, slugs in order, each with Notebook, Memories, Archive", async () => {
+		const page = await mountPage(fakeServer());
+		const arch = await expand(page, "Architecture");
+		const node = await expand(page, "Specialists");
+		expect(arch.contains(node)).toBe(true);
+		// The raw `specialists` folder is not listed a second time beside the node.
+		expect(byRole(arch, "button").filter((b) => b.getAttribute("data-folder") === SPEC)).toHaveLength(0);
+		const slugs = ["dba-2", "ret-3", "sre-1"].map((s) => rowOf(page, s));
+		expect(slugs.every((s) => s !== null && node.contains(s))).toBe(true);
+		for (const slug of ["dba-2", "ret-3", "sre-1"]) {
+			const row = await expand(page, slug);
+			for (const place of ["Notebook", "Memories", "Archive"])
+				expect(placeIn(row, place), `${slug} ${place}`).toBeTruthy();
+		}
+	});
 
 	// Holds today (no node is drawn yet); live now so Task 2 keeps it.
 	it("M-107 page: no slug -> no Specialists node anywhere in that department", async () => {
@@ -307,34 +301,28 @@ describe("tree: a department's Specialists node (§5l.15)", () => {
 		expect(rowOf(page, "Specialists")).toBeNull();
 	});
 
-	notBuilt(
-		"M-108 page: labels `retired` and `no config` show as text; the active slug has none; none is hidden",
-		async () => {
-			const page = await mountPage(fakeServer());
-			await expand(page, "Architecture");
-			await expand(page, "Specialists");
-			const own = (slug: string) => text((rowOf(page, slug) as HTMLElement).querySelector("[data-tree-row]"));
-			expect(own("ret-3")).toContain("retired");
-			expect(own("dba-2")).toContain("no config");
-			expect(own("sre-1")).not.toMatch(/retired|no config/);
-		},
-	);
+	it("M-108 page: labels `retired` and `no config` show as text; the active slug has none; none is hidden", async () => {
+		const page = await mountPage(fakeServer());
+		await expand(page, "Architecture");
+		await expand(page, "Specialists");
+		const own = (slug: string) => text((rowOf(page, slug) as HTMLElement).querySelector("[data-tree-row]"));
+		expect(own("ret-3")).toContain("retired");
+		expect(own("dba-2")).toContain("no config");
+		expect(own("sre-1")).not.toMatch(/retired|no config/);
+	});
 
-	notBuilt(
-		"one-sided slug: the missing place is shown empty, never hidden; a slug with 0 notes says `no notes yet`",
-		async () => {
-			const page = await mountPage(fakeServer());
-			await expand(page, "Architecture");
-			await expand(page, "Specialists");
-			const dba = await expand(page, "dba-2");
-			expect(placeIn(dba, "Notebook")).toBeTruthy();
-			expect(text(dba)).toMatch(/empty/i);
-			const ret = await expand(page, "ret-3");
-			expect(text(ret.querySelector("[data-tree-row]"))).toContain("no notes yet");
-		},
-	);
+	it("one-sided slug: the missing place is shown empty, never hidden; a slug with 0 notes says `no notes yet`", async () => {
+		const page = await mountPage(fakeServer());
+		await expand(page, "Architecture");
+		await expand(page, "Specialists");
+		const dba = await expand(page, "dba-2");
+		expect(placeIn(dba, "Notebook")).toBeTruthy();
+		expect(text(dba)).toMatch(/empty/i);
+		const ret = await expand(page, "ret-3");
+		expect(text(ret.querySelector("[data-tree-row]"))).toContain("no notes yet");
+	});
 
-	notBuilt("read error: the node is kept, its count says `not counted`, never 0 (§5l.17)", async () => {
+	it("read error: the node is kept, its count says `not counted`, never 0 (§5l.17)", async () => {
 		const page = await mountPage(fakeServer({ node: UNREAD_NODE }));
 		await expand(page, "Architecture");
 		const node = rowOf(page, "Specialists");
@@ -344,21 +332,18 @@ describe("tree: a department's Specialists node (§5l.15)", () => {
 		expect(own).not.toMatch(/\b0\b/);
 	});
 
-	notBuilt(
-		"SP5: an untrusted child name renders as text, never markup; it is listed (kind other), not hidden",
-		async () => {
-			const page = await mountPage(fakeServer());
-			await expand(page, "Architecture");
-			await expand(page, "Specialists");
-			expect(text(tree(page))).toContain(HOSTILE);
-			expect(page.querySelector("img")).toBeNull();
-			expect((window as { __pwned?: number }).__pwned).toBeUndefined();
-		},
-	);
+	it("SP5: an untrusted child name renders as text, never markup; it is listed (kind other), not hidden", async () => {
+		const page = await mountPage(fakeServer());
+		await expand(page, "Architecture");
+		await expand(page, "Specialists");
+		expect(text(tree(page))).toContain(HOSTILE);
+		expect(page.querySelector("img")).toBeNull();
+		expect((window as { __pwned?: number }).__pwned).toBeUndefined();
+	});
 });
 
 describe("links: only the canonical ?uri= the server sent (§5l.15, SP5)", () => {
-	notBuilt("Notebook, Memories and Archive read exactly the server's uris; no uri is built from a slug", async () => {
+	it("Notebook, Memories and Archive read exactly the server's uris; no uri is built from a slug", async () => {
 		const server = fakeServer();
 		const page = await mountPage(server);
 		await expand(page, "Architecture");
@@ -377,14 +362,15 @@ describe("links: only the canonical ?uri= the server sent (§5l.15, SP5)", () =>
 		// Every read named a uri the server listed (or a root): nothing made up from slug, role or principal text.
 		const known = new Set([...server.served, ...ROOTS.roots.map((r) => r.uri)]);
 		expect(server.askedUris().filter((u) => !known.has(u))).toEqual([]);
-		// The query carries the uri alone: no slug, role or principal parameter.
-		for (const u of server.sent)
+		// The query carries the uri alone: no slug, role or principal parameter. (Tree and note reads: the page's
+		// frozen change-record read keeps its own `owner_only` query, frontend #365.)
+		for (const u of server.sent.filter((s) => /\/(tree|note)$/.test(s.pathname)))
 			for (const k of u.searchParams.keys()) expect(["uri", "level", "offset", "limit"]).toContain(k);
 	});
 });
 
 describe("search: each hit shows its principal from the server (§5l.16)", () => {
-	notBuilt("a hit under a specialist shows `architecture/sre-1`; a department hit shows `architecture`", async () => {
+	it("a hit under a specialist shows `architecture/sre-1`; a department hit shows `architecture`", async () => {
 		const page = await mountPage(fakeServer());
 		const find = oneByRole(page, "region", "Search memory");
 		await typeInto(oneByRole(find, "searchbox") as HTMLInputElement, "deploy");
@@ -392,9 +378,10 @@ describe("search: each hit shows its principal from the server (§5l.16)", () =>
 		await flush();
 		const hitRow = (uri: string) =>
 			byRole(page, "button").find((b) => b.getAttribute("data-note") === uri) as HTMLElement;
-		expect(text(hitRow(SRE_NOTE))).toContain("architecture/sre-1");
-		expect(text(hitRow(`${ARCH}/cases/c1.md`))).toContain("architecture");
-		expect(text(hitRow(`${ARCH}/cases/c1.md`))).not.toContain("architecture/");
+		// Visible words: the row's frozen stored-path line ([data-path]) holds `viking://user/architecture/…` itself.
+		expect(visibleWords(hitRow(SRE_NOTE))).toContain("architecture/sre-1");
+		expect(visibleWords(hitRow(`${ARCH}/cases/c1.md`))).toContain("architecture");
+		expect(visibleWords(hitRow(`${ARCH}/cases/c1.md`))).not.toContain("architecture/");
 		// No specialist-only search scope is added.
 		const scopes = byRole(find, "option").map((o) => text(o));
 		expect(scopes.some((s) => /specialist|sre-1/i.test(s))).toBe(false);

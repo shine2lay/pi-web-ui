@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { explorerKindOf, explorerKindSegmentOf, explorerPrincipalOf } from "../../server/openviking/explorer-rules.js";
 import type { OwnerWriteOp } from "../../server/openviking/owner-session-types.js";
 import { OPENVIKING_EXPLORER_ROOTS } from "../../server/openviking/memory-tree.js";
@@ -22,6 +22,20 @@ const archRoot = OPENVIKING_EXPLORER_ROOTS.find((r) => r.uri === ARCH);
 if (!archRoot) throw new Error("architecture root missing");
 const ARCH_ROOT = archRoot;
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+
+// The label reads through the pi-identity the host installs (§5l clarification): install this machine's checkout in
+// an agent folder of this file's own, so labels come from pi-identity's real reader.
+const sharedAgentDir = process.env.PI_CODING_AGENT_DIR;
+beforeAll(() => {
+	const agentDir = mkdtempSync(join(tmpdir(), "ov-agent-"));
+	const peer = process.env.PI_IDENTITY_PEER ?? "/home/shinelay/projects/pi-identity";
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [peer] }));
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+});
+afterAll(() => {
+	if (sharedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = sharedAgentDir;
+});
 
 const open: Array<{ close(): Promise<void> }> = [];
 afterEach(async () => {

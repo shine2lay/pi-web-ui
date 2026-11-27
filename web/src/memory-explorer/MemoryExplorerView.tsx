@@ -25,7 +25,7 @@ import {
 	type SearchScope,
 } from "./explorer-api.js";
 import { ExplorerTree } from "./ExplorerTree.js";
-import { clock, folderLabel } from "./explorer-text.js";
+import { clock, folderLabel, isShownPlace } from "./explorer-text.js";
 import { FindPanel } from "./FindPanel.js";
 import { FolderReader } from "./FolderReader.js";
 import { HealthLine, memoryAnswers } from "./HealthLine.js";
@@ -48,6 +48,11 @@ export interface MemoryExplorerViewProps {
 	readonly now?: () => number;
 	/** The owner's Passkeys button, at the end of the header. */
 	readonly account?: ReactNode;
+	/**
+	 * A link's note (`?uri=`, v2 §5l.17): opened first, and its place in the tree shown open. Read as the server
+	 * answers for it; a uri it refuses shows the reader's normal error.
+	 */
+	readonly linkedUri?: string | null;
 }
 
 function backLabel(previous: Place | undefined, searching: boolean): string | null {
@@ -56,7 +61,7 @@ function backLabel(previous: Place | undefined, searching: boolean): string | nu
 	return `Back to ${folderLabel(previous.uri)}`;
 }
 
-export function MemoryExplorerView({ api, now = Date.now, account }: MemoryExplorerViewProps) {
+export function MemoryExplorerView({ api, now = Date.now, account, linkedUri = null }: MemoryExplorerViewProps) {
 	const health = useLoad("health", (signal) => api.health(signal));
 	const roots = useLoad("roots", (signal) => api.roots(signal));
 	const recorded = useLoad("changes", (signal) => api.changes(signal));
@@ -71,7 +76,13 @@ export function MemoryExplorerView({ api, now = Date.now, account }: MemoryExplo
 			signal,
 		),
 	);
-	const [steps, setSteps] = useState<Step[]>([{ place: { kind: "start" }, returnTo: null }]);
+	const [steps, setSteps] = useState<Step[]>(() => [
+		{ place: { kind: "start" }, returnTo: null },
+		// A link to no place the page shows (an alias, another site) opens the start; the server decides the rest.
+		...(linkedUri && isShownPlace(linkedUri)
+			? [{ place: { kind: "note", uri: linkedUri } as const, returnTo: null }]
+			: []),
+	]);
 	const [focusAfterBack, setFocusAfterBack] = useState<string | null>(null);
 	const [ask, setAsk] = useState<ConfirmAsk | null>(null);
 	const [offer, setOffer] = useState<UndoOffer | null>(null);
@@ -260,7 +271,9 @@ export function MemoryExplorerView({ api, now = Date.now, account }: MemoryExplo
 						totalNotes={health.load.data?.totalNotes ?? null}
 						onRetry={roots.reload}
 						current={place.kind === "start" ? null : place.uri}
+						reveal={linkedUri}
 						onOpen={openFolder}
+						onOpenNote={(uri) => go({ kind: "note", uri }, null)}
 					/>
 				</div>
 			</main>

@@ -16,7 +16,7 @@ import {
 	type OpenVikingSpecialistsNode,
 } from "./explorer-types.js";
 import { walkTree, type OpenVikingLsItem, type OpenVikingTreeWalk } from "./memory-tree.js";
-import { specialistConfigLabel } from "./specialist-config-label.js";
+import { installedSpecialistReader, specialistConfigLabel } from "./specialist-config-label.js";
 import { OpenVikingDashboardError } from "./types.js";
 
 const NOTEBOOK_FOLDER = `notebook/${SPECIALISTS_SEGMENT}`;
@@ -51,9 +51,10 @@ export async function buildSpecialistsNode(
 	const dept = root.role;
 	const uri = `${root.uri}/${SPECIALISTS_SEGMENT}`;
 	const notebookUri = `${root.uri}/${NOTEBOOK_FOLDER}`;
-	const [below, notebooks] = await Promise.all([
+	const [below, notebooks, reader] = await Promise.all([
 		listing(http, uri, root, EXPLORER_ROOT_WALK.level_limit),
 		listing(http, notebookUri, root, 1),
+		installedSpecialistReader(),
 	]);
 
 	const childName = (item: OpenVikingLsItem) => item.uri.slice(uri.length + 1).split("/")[0];
@@ -78,7 +79,7 @@ export async function buildSpecialistsNode(
 		return {
 			slug,
 			principal: explorerPrincipalOf(memories, root) ?? dept,
-			label: specialistConfigLabel(identitiesDir, dept, slug),
+			label: specialistConfigLabel(reader, identitiesDir, dept, slug),
 			notebook: `${notebookUri}/${slug}.md`,
 			memories,
 			archive: `${memories}/archive`,

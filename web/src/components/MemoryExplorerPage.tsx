@@ -4,10 +4,11 @@
  *
  * Builds the owner's passkey client and the one HTTP seam and hands them to the view. While the tab
  * is shown the address carries `view=openviking`, so a reload or a shared link opens the Memory tab
- * again; leaving the tab takes it off.
+ * again; leaving the tab takes it off. A link may add `uri=<note>` (v2 §5l.17): read once when the tab first
+ * shows, that note opens with its place in the tree open; leaving the tab takes it off too.
  */
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createHttpExplorerApi } from "../memory-explorer/explorer-http.js";
 import { MemoryExplorerView } from "../memory-explorer/MemoryExplorerView.js";
 import { AddForWriteBox, PasskeysBox } from "../memory-explorer/OwnerDialogs.js";
@@ -17,6 +18,7 @@ import "../memory-explorer/memory-explorer.css";
 
 const VIEW_PARAM = "view";
 const VIEW_VALUE = "openviking";
+const URI_PARAM = "uri";
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -32,7 +34,10 @@ export interface MemoryExplorerPageProps {
 function setViewParam(on: boolean): void {
 	const url = new URL(window.location.href);
 	if (on) url.searchParams.set(VIEW_PARAM, VIEW_VALUE);
-	else if (url.searchParams.get(VIEW_PARAM) === VIEW_VALUE) url.searchParams.delete(VIEW_PARAM);
+	else {
+		if (url.searchParams.get(VIEW_PARAM) === VIEW_VALUE) url.searchParams.delete(VIEW_PARAM);
+		url.searchParams.delete(URI_PARAM);
+	}
 	if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
 }
 
@@ -41,6 +46,8 @@ export function MemoryExplorerPage({ active, fetch, webauthn }: MemoryExplorerPa
 	const access = useOwnerAccess(session);
 	const { ownerAssertion } = access;
 	const api = useMemo(() => createHttpExplorerApi({ fetch, ownerAssertion }), [fetch, ownerAssertion]);
+	// URLSearchParams decodes once; the server's uri check decides what it is (the address is never authority).
+	const [linkedUri] = useState(() => new URL(window.location.href).searchParams.get(URI_PARAM) || null);
 	useEffect(() => {
 		if (!active) return;
 		setViewParam(true);
@@ -58,7 +65,7 @@ export function MemoryExplorerPage({ active, fetch, webauthn }: MemoryExplorerPa
 
 	return (
 		<>
-			<MemoryExplorerView api={api} account={account} />
+			<MemoryExplorerView api={api} account={account} linkedUri={linkedUri} />
 			{box?.kind === "add-for-write" ? <AddForWriteBox access={access} /> : null}
 			{box?.kind === "passkeys" ? <PasskeysBox access={access} opener={box.opener} /> : null}
 		</>

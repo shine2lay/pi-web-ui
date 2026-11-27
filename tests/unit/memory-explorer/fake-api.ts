@@ -21,6 +21,8 @@ import {
 	type SearchAnswer,
 	type SearchHit,
 	type SearchRequest,
+	type SpecialistEntry,
+	type SpecialistsNode,
 } from "../../../web/src/memory-explorer/explorer-api.js";
 
 export const NOW = "2026-11-14T01:25:00.000Z";
@@ -101,6 +103,42 @@ const FOLDERS: Record<string, MemoryItem[]> = {
 	[`${OPS}/preferences`]: [NOTES[4]],
 };
 
+/** Design's Specialists node (v2 §5l.15): active with both places, memories only (no config), notebook only (retired). */
+export const DESIGN_SPECIALISTS = `${DESIGN}/specialists`;
+const specialist = (
+	slug: string,
+	label: SpecialistEntry["label"],
+	hasNotebook: boolean,
+	hasMemories: boolean,
+	noteCount: number,
+): SpecialistEntry => ({
+	slug,
+	label,
+	notebook: `${DESIGN}/notebook/specialists/${slug}.md`,
+	memories: `${DESIGN_SPECIALISTS}/${slug}`,
+	archive: `${DESIGN_SPECIALISTS}/${slug}/archive`,
+	hasNotebook,
+	hasMemories,
+	noteCount,
+});
+export const SPECIALISTS_NODE: SpecialistsNode = {
+	uri: DESIGN_SPECIALISTS,
+	read: true,
+	specialists: [
+		specialist("a11y-reviewer", null, true, true, 3),
+		specialist("motion-2", "no config", false, true, 2),
+		specialist("brand-old", "retired", true, false, 0),
+	],
+	others: [],
+};
+export const SPECIALIST_NOTE = note(
+	`${DESIGN_SPECIALISTS}/a11y-reviewer/cases/contrast-on-hover.md`,
+	"case",
+	12,
+	900,
+	"Blend the background on hover only; instant text colour fails contrast mid-blend.",
+);
+
 export const MEANING_HITS: readonly SearchHit[] = [
 	{ item: NOTES[0], score: 0.886, relative: 1 },
 	{ item: NOTES[2], score: 0.871, relative: 0.983 },
@@ -120,6 +158,15 @@ export interface FakeOptions {
 	empty?: boolean;
 	/** Places search couldn't reach. */
 	missedPlaces?: number;
+	/** Design has specialists: its Specialists node, and search hits that say whose notes they are. */
+	specialists?: boolean;
+}
+
+/** `<department>` or `<department>/<slug>` from where a hit is kept, as the server words it; null = shared. */
+function principalOf(uri: string): string | null {
+	const m = /^viking:\/\/user\/([^/]+)\/memories(?:\/specialists\/([^/]+)\/)?/.exec(uri);
+	if (!m || m[1] === "default") return null;
+	return m[2] ? `${m[1]}/${m[2]}` : m[1];
 }
 
 export type FakeApi = { [K in keyof MemoryExplorerApi]: ReturnType<typeof vi.fn> & MemoryExplorerApi[K] };
@@ -158,13 +205,22 @@ export function fakeApi(options: FakeOptions = {}): FakeApi {
 			guard("roots", () => (options.empty ? ROOTS.map((r) => ({ ...r, noteCount: 0, kindCounts: {} })) : ROOTS)),
 		folder: (uri) =>
 			guard("folder", (): FolderListing => {
-				const items = options.empty ? [] : (FOLDERS[uri] ?? []);
+				const withNode = options.specialists === true && uri === DESIGN;
+				const listed = options.empty ? [] : (FOLDERS[uri] ?? []);
+				const items = withNode ? [folder(DESIGN_SPECIALISTS, 12, 5, null), ...listed] : listed;
 				const self = ROOTS.some((r) => r.uri === uri)
 					? folder(uri, 4, items.length, null)
 					: (Object.values(FOLDERS)
 							.flat()
 							.find((i) => i.uri === uri) ?? folder(uri, 4, 0, null));
-				return { folder: self, overview: null, items, total: items.length, nextCursor: null };
+				return {
+					folder: self,
+					overview: null,
+					items,
+					total: items.length,
+					nextCursor: null,
+					...(withNode ? { specialists: SPECIALISTS_NODE } : {}),
+				};
 			}),
 		recent: (scope, limit) =>
 			guard("recent", () =>
@@ -188,7 +244,13 @@ export function fakeApi(options: FakeOptions = {}): FakeApi {
 			guard("search", (): SearchAnswer => {
 				const missedPlaces = options.missedPlaces ?? 0;
 				if (request.query.includes("nothing")) return { hits: [], missedPlaces };
-				const hits = request.mode === "meaning" ? MEANING_HITS : WORD_HITS;
+				const found = request.mode === "meaning" ? MEANING_HITS : WORD_HITS;
+				const hits = options.specialists
+					? [{ item: SPECIALIST_NOTE, score: 0.889, relative: 1 }, ...found].map((h) => ({
+							...h,
+							principal: principalOf(h.item.uri),
+						}))
+					: found;
 				return {
 					hits: hits.filter((h) => request.scope === "all" || h.item.uri.startsWith(`${request.scope}/`)),
 					missedPlaces,

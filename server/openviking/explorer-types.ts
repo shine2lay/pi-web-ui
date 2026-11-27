@@ -151,8 +151,11 @@ export interface OpenVikingTreeChild {
 
 // ---- v2 §5l.15 specialists nested under their department (R-V2-SPMEM-20) ----
 
-/** A slug node's status label: Phase 1's config says `retired`, has none (`no config`), or null (active). */
-export type OpenVikingSpecialistLabel = "retired" | "no config" | null;
+/**
+ * A slug node's status label from pi-identity's reader: `retired`, none (`no config`), a config it can't read or
+ * refuses (`config unreadable`, a read error, never a guessed absence), or null (active).
+ */
+export type OpenVikingSpecialistLabel = "retired" | "no config" | "config unreadable" | null;
 
 /** One slug under a department's Specialists node; every uri canonical, the slug untrusted data (SP5). */
 export interface OpenVikingSpecialistSlug {

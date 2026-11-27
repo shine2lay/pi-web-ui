@@ -4,7 +4,8 @@
 //
 // `?state=` picks the case: live (default), loading, empty, error, down, degraded, results, reader,
 // confirm; and on the actual page with a fake server (no sign-in, Ops #1080): page, passkeys (the
-// Passkeys box), add-passkey (a Save on an address with no passkey opens Add a passkey).
+// Passkeys box), add-passkey (a Save on an address with no passkey opens Add a passkey); specialists (Design's
+// Specialists node open, with search hits that say whose notes they are).
 import { createRoot } from "react-dom/client";
 import { MemoryExplorerPage } from "../web/src/components/MemoryExplorerPage";
 import { MemoryExplorerView } from "../web/src/memory-explorer/MemoryExplorerView";
@@ -26,6 +27,7 @@ const OPTIONS: Record<string, FakeOptions> = {
 	error: { fail: { recent: "FAILED", roots: "FAILED" } },
 	down: { health: "down", fail: { recent: "MEMORY_DOWN", roots: "MEMORY_DOWN" } },
 	degraded: { health: "degraded", missedPlaces: 1 },
+	specialists: { specialists: true },
 };
 const PAGE_STATES = ["page", "passkeys", "add-passkey"];
 
@@ -138,7 +140,7 @@ async function drive(): Promise<void> {
 		click(dialog ? button("Save", dialog) : null);
 		await settle();
 	}
-	if (state === "results") {
+	if (state === "results" || state === "specialists") {
 		const input = host.querySelector<HTMLInputElement>(".mx-find-box input");
 		if (!input) return;
 		const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -148,6 +150,14 @@ async function drive(): Promise<void> {
 	}
 	if (state === "reader" || state === "confirm" || state === "down-after-load") click(host.querySelector(".mx-row"));
 	await settle();
+	if (state === "specialists") {
+		// Design's place open, its Specialists node open, and each specialist open (v2 §5l.15).
+		for (const name of ["Design", "Specialists", "a11y-reviewer", "motion-2", "brand-old"]) {
+			click(host.querySelector(`[aria-label="Open ${name}"]`));
+			// Short: ui-check shoots once the network is quiet, not when this drive ends.
+			await new Promise((r) => setTimeout(r, 30));
+		}
+	}
 	if (state === "confirm") {
 		click(document.querySelector(".mx-btn-danger"));
 	}
