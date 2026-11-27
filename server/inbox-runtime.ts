@@ -172,6 +172,10 @@ export class InboxRuntime {
 			}
 		});
 	}
+	/** Read-only query, never an authority token: effects must recheck inside coordinate. */
+	requireCurrent(claim: InboxClaim): void {
+		this.current(claim);
+	}
 	private current(claim: InboxClaim, ending = false): InboxView {
 		const item = this.item(claim.key);
 		if (!item) throw new Error("E_RPI_UNKNOWN");
@@ -190,6 +194,16 @@ export class InboxRuntime {
 		)
 			throw new Error("E_RPI_STALE_LEASE");
 		return item;
+	}
+	failedAttempts(key: string): number {
+		return this.ledger
+			.read()
+			.filter(
+				(line) =>
+					line.key === key &&
+					line.op === "attempt" &&
+					["turn_ended_unanswered", "aborted", "crashed"].includes(line.outcome),
+			).length;
 	}
 	async end(claim: InboxClaim, outcome: InboxOutcome): Promise<void> {
 		await this.run(claim.key, async () => {
@@ -211,10 +225,11 @@ export class InboxRuntime {
 			});
 			if (
 				item.class === "reply_required" &&
-				item.lifecycle.attempts + 1 >= 3 &&
+				item.lifecycle.state !== "replied" &&
+				this.failedAttempts(item.key) >= 3 &&
 				!this.ledger.read().some((l) => l.key === item.key && l.op === "alarm")
 			)
-				this.append(item, { op: "alarm", attempts: item.lifecycle.attempts + 1, cause: "unanswered" });
+				this.append(item, { op: "alarm", attempts: this.failedAttempts(item.key), cause: "unanswered" });
 		});
 	}
 	private async reconcile(intent: InboxIntent): Promise<"done" | "open" | "pending" | "unknown"> {
