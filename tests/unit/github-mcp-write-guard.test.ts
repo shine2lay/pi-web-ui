@@ -15,7 +15,7 @@ const canonical: GithubPolicyLoader = () => import(canonicalUrl);
 const fixture = `
 import { createInterface } from 'node:readline';
 import { appendFileSync } from 'node:fs';
-const tools = ['create_issue', 'list_issues', 'create_repository', 'unknown_mutation'];
+const tools = ['issue_write', 'issue_read', 'create_pull_request', 'create_repository', 'unknown_mutation'];
 createInterface({input: process.stdin}).on('line', line => {
  const msg = JSON.parse(line);
  let result;
@@ -43,7 +43,7 @@ async function withBridge(
 	});
 	try {
 		await bridge.load();
-		expect(bridge.getTools()).toHaveLength(4);
+		expect(bridge.getTools()).toHaveLength(5);
 		await run(bridge, () => {
 			try {
 				return readFileSync(log, "utf8")
@@ -75,22 +75,33 @@ describe("parsed McpBridge GitHub dispatch", () => {
 		async (server) => {
 			await withBridge(server, canonical, async (bridge, calls) => {
 				for (const [tool, args] of [
-					["create_issue", { owner: "upstream", repo: "repo", title: "blocked" }],
-					["create_issue", { owner: "shine2lay/../upstream", repo: "repo", title: "blocked" }],
-					["create_issue", { repo: "repo", title: "unknown destination" }],
-					["create_issue", { owner: "shine2lay", repo: "repo", title: "blocked", unexpected: true }],
+					["issue_write", { method: "create", owner: "upstream", repo: "repo", title: "blocked" }],
+					["issue_write", { method: "update", owner: "upstream", repo: "repo", issue_number: 1, title: "blocked" }],
+					["issue_write", { method: "create", owner: "shine2lay/../upstream", repo: "repo", title: "blocked" }],
+					["issue_write", { method: "create", repo: "repo", title: "unknown destination" }],
+					["issue_write", { method: "create", owner: "shine2lay", repo: "repo", title: "blocked", unexpected: true }],
+					[
+						"issue_write",
+						{ method: "create", owner: "shine2lay", repo: "repo", title: "blocked", parent_owner: "upstream" },
+					],
+					["create_pull_request", { owner: "upstream", repo: "repo", title: "blocked", base: "main", head: "feature" }],
 					["unknown_mutation", { owner: "shine2lay", repo: "repo" }],
 					["create_repository", { name: "unproven-account" }],
 				] as Array<[string, Record<string, unknown>]>) {
 					await expect(call(bridge, tool, args)).rejects.toThrow(GH_OWN_REPO_RULE);
 					expect(calls()).toEqual([]);
 				}
-				await call(bridge, "create_issue", { owner: "Shine2Lay", repo: "repo", title: "allowed" });
-				await call(bridge, "list_issues", { owner: "upstream", repo: "repo" });
-				expect(calls()).toEqual([
-					{ name: "create_issue", arguments: { owner: "Shine2Lay", repo: "repo", title: "allowed" } },
-					{ name: "list_issues", arguments: { owner: "upstream", repo: "repo" } },
-				]);
+				const positives: Array<[string, Record<string, unknown>]> = [
+					["issue_write", { method: "create", owner: "Shine2Lay", repo: "repo", title: "allowed" }],
+					["issue_write", { method: "update", owner: "shine2lay", repo: "repo", issue_number: 1, title: "allowed" }],
+					[
+						"create_pull_request",
+						{ owner: "shine2lay", repo: "repo", title: "allowed", base: "main", head: "feature" },
+					],
+					["issue_read", { method: "get", owner: "other", repo: "demo", issue_number: 1 }],
+				];
+				for (const [tool, args] of positives) await call(bridge, tool, args);
+				expect(calls()).toEqual(positives.map(([name, args]) => ({ name, arguments: args })));
 			});
 		},
 	);
@@ -102,9 +113,9 @@ describe("parsed McpBridge GitHub dispatch", () => {
 				throw new Error("sensitive import detail");
 			},
 			async (bridge, calls) => {
-				await expect(call(bridge, "list_issues", { owner: "upstream", repo: "repo" })).rejects.toThrow(
-					`${GH_OWN_REPO_RULE}: GitHub MCP call refused`,
-				);
+				await expect(
+					call(bridge, "issue_read", { method: "get", owner: "other", repo: "demo", issue_number: 1 }),
+				).rejects.toThrow(`${GH_OWN_REPO_RULE}: GitHub MCP call refused`);
 				expect(calls()).toEqual([]);
 			},
 		);
@@ -129,19 +140,23 @@ describe("parsed McpBridge GitHub dispatch", () => {
 			"github",
 			async () => ({ ...policy, authorize }),
 			async (bridge, calls) => {
-				const args = { owner: "shine2lay", repo: "repo", title: "allowed" };
-				const pending = call(bridge, "create_issue", args);
+				const args = { method: "create", owner: "shine2lay", repo: "repo", title: "allowed" };
+				const pending = call(bridge, "issue_write", args);
 				await waiting;
 				args.owner = "upstream";
 				expect(calls()).toEqual([]);
 				expect(authorize).toHaveBeenCalledWith(
-					{ kind: "mcp", tool: "create_issue", args: { owner: "shine2lay", repo: "repo", title: "allowed" } },
+					{
+						kind: "mcp",
+						tool: "issue_write",
+						args: { method: "create", owner: "shine2lay", repo: "repo", title: "allowed" },
+					},
 					policy.defaultReadOnlyResolver,
 				);
 				finish();
 				await pending;
 				expect(calls()).toEqual([
-					{ name: "create_issue", arguments: { owner: "shine2lay", repo: "repo", title: "allowed" } },
+					{ name: "issue_write", arguments: { method: "create", owner: "shine2lay", repo: "repo", title: "allowed" } },
 				]);
 			},
 		);
@@ -173,8 +188,8 @@ describe("parsed McpBridge GitHub dispatch", () => {
 			await expect(
 				authorizeGithubMcpCall(
 					"github",
-					"list_issues",
-					{ owner: "upstream", repo: "repo" },
+					"issue_read",
+					{ method: "get", owner: "other", repo: "demo", issue_number: 1 },
 					loader as GithubPolicyLoader,
 				),
 			).rejects.toThrow(`${GH_OWN_REPO_RULE}: GitHub MCP call refused`);
