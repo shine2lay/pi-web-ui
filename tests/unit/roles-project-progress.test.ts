@@ -339,6 +339,16 @@ it("recorded unblock wording is shown once without an invented second heading", 
 	expect(host.querySelector(".rpp-unblock")?.textContent).toBe(raw);
 });
 
+it("closed milestone hover text keeps the complete source criterion", async () => {
+	await tile(good.cases[0].input, undefined, false);
+	const criteria = [...host.querySelectorAll(".rpp-criterion")];
+	expect(criteria.length).toBeGreaterThan(0);
+	for (const criterion of criteria) {
+		expect(criterion.textContent).not.toBe("");
+		expect(criterion.getAttribute("title")).toBe(criterion.textContent);
+	}
+});
+
 it("RPP-30 / RPP-130 producer's canonical terminal/paused precedence (no UI remapper)", () => {
 	const c = good.cases[29];
 	const states = (c.input as Scenario).tasks.map((t: Scenario) =>

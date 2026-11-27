@@ -56,7 +56,9 @@ export function ProjectProgress({
 										<span className="rpp-number num" aria-hidden="true">
 											{n + 1}
 										</span>
-										<span className="rpp-criterion">{it.item}</span>
+										<span className="rpp-criterion" title={it.item}>
+											{it.item}
+										</span>
 										<span className="rbp-sr">{it.met ? " (met)" : " (not met)"}</span>
 									</li>
 								))}
