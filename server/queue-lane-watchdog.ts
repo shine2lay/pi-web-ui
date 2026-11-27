@@ -276,23 +276,29 @@ export class QueueLaneWatchdog {
 		const expired = new Promise<QueueLaneStall>((resolve) => {
 			fire = resolve;
 		});
-		const arm = () => {
+		const arm = (delayMs = start.deadlineMs) => {
 			if (timer) clearTimeout(timer);
 			timer = setTimeout(() => {
 				if (stopped) return;
+				const elapsedMs = Date.now() - since;
+				// Timer delivery alone is not proof the deadline clock has reached its limit.
+				if (elapsedMs < start.deadlineMs) {
+					arm(start.deadlineMs - elapsedMs);
+					return;
+				}
 				stopped = true;
 				fire({
 					role: start.role,
 					lane: start.lane,
 					phase,
-					elapsedMs: Date.now() - since,
+					elapsedMs,
 					deadlineMs: start.deadlineMs,
 					taskId: start.taskId ?? null,
 					sessionFile: start.sessionFile ?? null,
 					conversationId: start.conversationId ?? null,
 					...sampleQueueHeap(this.host.queueMemoryUsage?.()),
 				});
-			}, start.deadlineMs);
+			}, delayMs);
 			timer.unref?.();
 		};
 		arm();
