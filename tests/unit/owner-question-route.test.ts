@@ -18,7 +18,7 @@ const MIN = 60_000;
 function turn(cause: "browser" | "role", channel?: "browser" | "telegram") {
 	const record = newTurnRecord();
 	const inputId = "ri-00000000-0000-4000-8000-000000000001";
-	const requester = requesterForAdmission({ cause, ...(channel ? { ownerChannel: channel, inputId } : {}) });
+	const requester = requesterForAdmission({ cause, inputId, ...(channel ? { ownerChannel: channel } : {}) });
 	collectRoleInput(record, { cause, requester, ...(channel ? { ownerChannel: channel } : {}) });
 	return record;
 }
@@ -66,7 +66,7 @@ describe("unchanged dialog, approval and stuck routing", () => {
 				reason: "owner-away",
 			});
 		}
-		for (const record of [undefined, turn("role"), { requesterOverflow: true }]) {
+		for (const record of [undefined, turn("role"), { requesterOverflow: true as const }]) {
 			expect(ownerQuestionRoute({ kind, now, turn: record, ownerLastWroteAt: now })).toEqual({
 				to: "coo",
 				reason: "not-started-by-owner",
