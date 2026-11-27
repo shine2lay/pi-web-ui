@@ -13,7 +13,6 @@ import type {
 	UiRoleTask,
 	UiTaskGroupRollup,
 	UiTouchSystemSummary,
-	UiWorkRecords,
 } from "./protocol.js";
 
 /** G1: one done-when item of a work-registry record, in registry order; `met` by itemKey (trim, lower case). */
@@ -21,6 +20,40 @@ export interface UiWorkDoneWhenMark {
 	item: string;
 	met: boolean;
 }
+
+/** Work registry display record; shared by the project card and existing registry views. */
+export interface UiWorkRecord {
+	id: string;
+	name: string;
+	lead: string;
+	status: "active" | "done" | "dropped";
+	initiative?: string | null;
+	items: number;
+	met: number;
+	doneWhen?: UiWorkDoneWhenMark[];
+	/** Project's actionable brief, as recorded. */
+	outcome?: string;
+	/** Absent = exact legacy body; null = unavailable; available empty phases = opted-in empty roadmap. */
+	delivery?: UiProjectDelivery | null;
+}
+export interface UiWorkRecords {
+	initiatives: UiWorkRecord[];
+	projects: UiWorkRecord[];
+	problem?: "unreadable" | "too-big" | "unknown-change";
+}
+
+/** Project-phase wire seam mirrors pi-queue/work-phases.ts (Ops #1139).
+ * Producer owns evidence validity, delivery count and exact task-incarnation joins. */
+export interface UiProjectPhase {
+	id: string;
+	name: string;
+	outcome: string;
+	status: "planned" | "active" | "done" | "dropped";
+	evidence?: { proof: string; at: number; by: string };
+	reason?: string;
+}
+export type UiProjectDelivery =
+	{ state: "available"; phases: UiProjectPhase[]; deliveredCount: number } | { state: "unavailable"; reason: string };
 
 /** A task's place on the board; `dropped` tasks are not on it. */
 export type UiBoardState = "needs-you" | "blocked" | "waiting" | "working" | "queued" | "done";
@@ -68,6 +101,7 @@ export interface UiBoardTask extends Pick<
 	| "finishedAt"
 	| "doneSummary"
 	| "stuck"
+	| "phaseId"
 > {
 	/** "<role> #<id>", the same canonical form as dependsOnRefs. */
 	ref: string;

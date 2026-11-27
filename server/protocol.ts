@@ -2549,6 +2549,8 @@ export interface UiTouchSystemSummary {
 
 /** roles-overview: a task of a role's home queue. */
 export interface UiRoleTask extends UiOwnerWaitingOn {
+	/** Registry-resolved exact task incarnation: null = Project work; absent = unavailable/legacy. */
+	phaseId?: string | null;
 	/** Original proposal inputs, separate from plan approval. */
 	requester?: UiTaskRequester;
 	id: number;
@@ -2665,29 +2667,6 @@ export interface UiRoleTaskOwing {
 	due?: number;
 	reminders: number;
 	chain?: string[];
-}
-
-/** roles-panel: an initiative or project of the work registry (pi-work-management), as the Roles page shows it. */
-export interface UiWorkRecord {
-	id: string;
-	name: string;
-	lead: string;
-	status: "active" | "done" | "dropped";
-	/** Projects: the initiative it serves, or null (deliberately standalone). */
-	initiative?: string | null;
-	/** Its done-when items, and how many are marked met. */
-	items: number;
-	met: number;
-	/** roles-by-project G1: each item with its mark, registry order ([] = none; absent = older server). */
-	doneWhen?: import("./roles-board-protocol.js").UiWorkDoneWhenMark[];
-}
-
-/** roles-panel: the work registry's records (read only). */
-export interface UiWorkRecords {
-	initiatives: UiWorkRecord[];
-	projects: UiWorkRecord[];
-	/** It couldn't be read (the rest of the page still shows), or a change this app doesn't know was skipped. */
-	problem?: "unreadable" | "too-big" | "unknown-change";
 }
 
 /** initiatives-plan-data (Ops #223): one done-when item of an initiative or project, in its list order. */
