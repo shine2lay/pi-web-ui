@@ -50,7 +50,7 @@ export type InboxTaskResult =
 	| { status: "refused"; code: string; need?: "plan"; queuedTask?: number };
 export interface InboxQueuePort {
 	homeSession: string;
-	accept(intent: InboxTaskIntent): Promise<InboxTaskResult>;
+	accept(intent: InboxTaskIntent, opRef?: string): Promise<InboxTaskResult>;
 	/** Reads actual HOME journal receipts; undefined means a qualified absence. */
 	find(opKey: string): Promise<{ queuedTask: number; payloadSha256: string } | undefined>;
 }
@@ -174,7 +174,15 @@ export class InboxRuntime {
 	}
 	/** Read-only query, never an authority token: effects must recheck inside coordinate. */
 	requireCurrent(claim: InboxClaim): void {
-		this.current(claim);
+		try {
+			this.current(claim);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "E_RPI_UNKNOWN";
+			const code = ["E_RPI_STALE_LEASE", "E_RPI_ALREADY_REPLIED", "E_RPI_UNKNOWN"].includes(message)
+				? message
+				: "E_RPI_UNKNOWN";
+			throw Object.assign(new Error(code), { code });
+		}
 	}
 	private current(claim: InboxClaim, ending = false): InboxView {
 		const item = this.item(claim.key);
