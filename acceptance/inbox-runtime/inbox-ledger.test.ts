@@ -1,28 +1,13 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { GuardStoreState } from "../../server/role-message-guard-contract.js";
-import { InboxRuntime, type InboxClaim } from "../../server/inbox-runtime.js";
-import { A, B, clock, data, send, useGuardWorld, who, world } from "../../tests/unit/role-message-guard-host-harness.js";
+import { B, clock, send, useGuardWorld, who, world } from "../../tests/unit/role-message-guard-host-harness.js";
 import { caseOf } from "./inbox-corpora.js";
 
+import { claimOf, setup } from "./inbox-world.js";
+
 useGuardWorld();
-async function setup() {
-	const w = await world();
-	const sent = await send(w, "alpha", A, "beta");
-	if (!sent.ok) throw new Error("Fixture request was refused");
-	const id = sent.record.id;
-	const ledgerFile = join(data, "role-inbox-ledger.jsonl");
-	const roleMessagesFile = join(data, "role-messages.json");
-	writeFileSync(ledgerFile, "", { mode: 0o600 });
-	const runtime = new InboxRuntime({ ledgerFile, roleMessagesFile, messages: w.rm, guard: w.host, now: clock });
-	return { w, id, key: `rm:${id}`, runtime, ledgerFile, roleMessagesFile };
-}
-function claimOf(value: Awaited<ReturnType<InboxRuntime["claim"]>>): InboxClaim {
-	if (!("leaseId" in value)) throw new Error("Expected a live lease");
-	return value;
-}
 it("C-DDONE-2 delivered plus ended turn leaves reply obligation open", async () => {
 	const c = caseOf("delivery", "C-DDONE-2");
 	const h = await setup();

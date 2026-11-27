@@ -1,10 +1,10 @@
-# Priority inbox Task 1: runtime acceptance slice (partial)
+# Priority inbox Task 1: runtime acceptance seams
 
 ## Hypothesis and result
 
 Before edits: today's real mail boundary drains a batch and consumes pending rows at preparation, not landing. Today's RoleMessages prune may evict delivered unanswered rows. New opt-in assertions should fail on those actual paths, without activation; a failure only in a new stub does not establish the corresponding runtime defect.
 
-Observed: 20 tests, 13 RED / 7 GREEN in 2.89 seconds. Seven RED tests reach existing production boundaries; six stop at the explicitly unbuilt runtime seam. This is NOT full core90/delivery69/helper120 coverage or a Task 1 completion receipt.
+Initial observation: 20 tests, 13 RED / 7 GREEN in 2.89 seconds. Continuation at the parent's request added actual requester parity, guard/HOME journal crash-races, helper host/binding/ceiling/close interfaces and alarm projections. Latest explicit run: **77 tests, 38 RED / 39 GREEN**, 13.58 seconds, 2026-11-26 18:17:42. Of the 38 RED, 9 reach existing production behavior (7 original plus 2 real web requester rejects); 29 stop at explicitly unbuilt runtime/host seams. These are named contract projections, NOT full replay of all 279 corpus cases.
 
 ## Command and isolation
 
@@ -61,11 +61,13 @@ These are named contract projections/negative variants, NOT complete replay of e
 
 - Parent: canonical `server/shared/inbox-wire.ts`, `acceptance/inbox-wire/`, strict #607 codec, standard gates. This slice never edits those paths.
 - Delivery builder: real reader/ledger/coordinator, production boundary connection, durable packet/cursor/recovery, whole-source UNKNOWN, attempts/alarm projection, source retention integration. Replace inert methods, not the assertions.
-- Helper-host builder: actual launch registry/seal, shared admission slot counter, spawn-before-prompt and close/archive host paths; no implementation or complete host acceptance seam supplied here.
+- Helper-host builder: `server/inbox-helper-host.ts` now exports `inboxHelperBinding(sessionId): InboxHelperBinding | undefined` (inert global accessor returns undefined), `InboxHelperHost` (inert instance methods), and typed allocation/seal/decision/launch/journal/working/close/archive ports. H1's exact nested binding uses role/msgId/leaseId/epoch/homeChat, matching queue's contract. Identity and OpenViking consume this accessor; absence must fail closed for helper entries. No live registry is installed. `inbox-host.test.ts` asserts claim-before-launch and three first entries, K=3 concurrent admission, idle no-spawn, spawn failure release+attempt, canonical ceiling decisions before dispatch, working-chat no-close, failed close retry+archive, release to HOME. The close port calls real `runQueueCloseChat`; only clients/chats are fixtures. Runtime lookup/admission is still RED, not proved.
 - pi-identity owner: real ceiling/schema dispatch tests including retained narrowing; no duplicated policy in this repo.
-- pi-queue owner: actual HOME ticket/journal acceptance and exactly-one task/reply crash-race tests. This slice has no task acceptance test; a fake journal simulator would not satisfy that boundary.
+- pi-queue owner: ordinary HOME command/journal acceptance remains canonical. Web now uses queue's existing `tests/inbox-helper-fixture.ts`, real extension command and real queue replay through `InboxQueuePort.accept/find`; no journal or policy simulator. `inbox-races.test.ts` asserts 3 reply/HOME orderings, task-then-reply, before/after-append crashes, idempotent restart, concurrent task calls, changed-payload conflict and later-lease conflict with exactly one disk add/outbox reply. They stop at unbuilt claims; the ordinary HOME add control reaches the actual queue and passes. `inbox-requester.test.ts` imports queue's exact 32 exported vectors (suppresses its node:test registration), invokes both actual requester validators and envelopes: 2 RED valid helper forms, 30 GREEN. No copied requester parser or vector list.
 - Migration: pending Architecture ruling requested by parent as rm-7c12cf78. D4 RET-4's migrate:<id>/cursor does not have a specified U602.1 opcode. No opcode invented, no migration pass claimed.
-- Still missing: full per-ID adapters for the 279 cases, P0/native queue-card suppression, all crash points, task/reply concurrency races, guard generation rotation with pending inbox intents, helper ceiling/spawn/close, migration, UI alarm privacy/clearing, full retention/history reconciliation. These are coverage gaps, not successes or inferred GREENs.
+- `InboxRuntime` now additionally exposes task acceptance and metadata alarm projection; `InboxTaskIntent/Result` match the queue grant/result shapes. Tests pass the actual HOME journal adapter, not a fake acceptance function. `inbox-alarm.test.ts` asserts department/owner visibility, metadata-only fields, repeated-view/recovery stability, accepted-reply clearing and UNKNOWN projection. UI DOM implementation remains outside this slice.
+- Remaining architecture-only blocker: D4 RET-4 migration opcode/cursor location/shape (rm-7c12cf78). #607 Security delta approval remains pending; no activation GO claimed.
+- Evidence limits: full per-ID replay of the 279 cases, all native queue-card/P0 combinations and guard rotation schedules are not claimed. Ceiling tests here prove the host delegation interface, not the pi-identity resolver itself (owned/tested there). All unbuilt-method failures are expected Task 1 RED, not successful runtime proofs. Production remains unchanged.
 
 ## Assertion file hashes
 
@@ -73,7 +75,14 @@ These are named contract projections/negative variants, NOT complete replay of e
 |---|---|
 | inbox-boundary.test.ts | 42e19dce2de91f04c98d59c4fdd87e773072f93180ce885f72a07fe93ddbfa7b |
 | inbox-helper.test.ts | bc4bcc6a094bdfa276b98cdebf1c7ceb32b8fb43a2b1c094bc446309de80d0d7 |
-| inbox-ledger.test.ts | 47a3a9c897720ab5db1c33d026fc15ac635ff80c5062dbc7b2232cc46b758bcc |
+| inbox-ledger.test.ts | cea61906aac8b235bb7f54b50a5f038eff19f1e5d1832dbd507a8d2c6163f93d |
 | inbox-retention.test.ts | ff1b5b297379dd97cfb13cc20c270785651e010d920c58c317ec64431ad26e59 |
 | inbox-corpora.ts | 678452aa88c50d15f4f5060e6c9397fff3995b5d6d6c23546ed8c218475193ea |
-| ../../server/inbox-runtime.ts | 87d8be22d074985999779b57e1867eba037f88ac775ec12bf6cd92c1707cd36d |
+| inbox-alarm.test.ts | 80bc96eec77d4f206f3d74f885282940e4b71f01b35fe6de15042f5958086882 |
+| inbox-host.test.ts | 1daedba3791dcf53be67df741f9bd77616c7dbcd5e171d4a04f02b39ad31fcda |
+| inbox-races.test.ts | 2367b7fa4c083e94948f66a84678ae9153f3e93ade01333474403aa499aa7ae3 |
+| inbox-requester.test.ts | 3aa0bb57d7241558f5f6565ef2b6b21626ce2d5fae6ed0fc9a53602cf6d4c993 |
+| ../../server/inbox-runtime.ts | 7cdfece34d0e581142210d967e7997c2dd631f67417fa154638023c48c3d9764 |
+| ../../server/inbox-helper-host.ts | 575100b437e9b311afdc12666c06cac04721b4c359cade862b9e209f23d662dd |
+
+Production seam formatting: `prettier --check server/inbox-runtime.ts server/inbox-helper-host.ts` PASS. `git diff --check` PASS. Parent owns remaining standard gates/typecheck. Only explicit paths staged/committed; no deploy/land.
