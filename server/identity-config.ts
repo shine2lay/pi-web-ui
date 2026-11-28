@@ -191,7 +191,9 @@ export interface RoleConfig {
 	tools: { allow: string[] | null; deny: string[] };
 	unique: boolean; memory: Partial<MemoryLimits>;
 	workMode: WorkMode | null; goals: RoleGoal[] | null;
+	inbox?: { helpers: 3 | 4 };
 }
+export const inboxHelpers = (config?: RoleConfig | null): 3 | 4 => config?.inbox?.helpers ?? 3;
 export interface MemoryLimits { notebookCap: number; tidyAt: number; indexBudget: number; }
 const MEMORY_FIELDS = ["notebookCap", "tidyAt", "indexBudget"] as const;
 
@@ -219,6 +221,13 @@ export const BASE_FIELDS = ["id", "title", "folder", "homeChat", "pastHomeChats"
 type Feature = (value: unknown, config: RoleConfig, problems: string[], settings: Settings) => void;
 
 export const FEATURES: Record<string, Feature> = {
+	inbox(value, config, problems) {
+		if (!isObject(value)) { problems.push(`"inbox" must be an object with helpers 3 or 4; got ${quote(value)}`); return; }
+		const start = problems.length;
+		for (const key of Object.keys(value)) if (key !== "helpers") problems.push(`unknown field "inbox.${key}" (known: helpers)`);
+		if (value.helpers !== 3 && value.helpers !== 4) problems.push(`"inbox.helpers" must be 3 or 4; got ${quote(value.helpers)}`);
+		else if (problems.length === start) config.inbox = { helpers: value.helpers };
+	},
 	prompt(value, config, problems) {
 		if (value === null || value === false) {
 			config.prompt = null; config.promptSet = true; return;

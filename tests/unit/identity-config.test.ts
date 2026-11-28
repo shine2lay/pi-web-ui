@@ -262,7 +262,7 @@ describe("a role's row in Settings", () => {
 		expect(problems).toContain("its prompt file notes.md isn't in the role's folder");
 		const logged = log.mock.calls.map((c) => String(c[0]));
 		expect(logged).toContain(
-			`[identities] gamma's settings: unknown field "colour" (known: id, title, folder, homeChat, pastHomeChats, prompt, skills, tools, unique, memory, workMode, goals)`,
+			`[identities] gamma's settings: unknown field "colour" (known: id, title, folder, homeChat, pastHomeChats, inbox, prompt, skills, tools, unique, memory, workMode, goals)`,
 		);
 		const before = log.mock.calls.length;
 		identityRegistry(true);
