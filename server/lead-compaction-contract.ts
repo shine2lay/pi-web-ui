@@ -26,7 +26,9 @@ export interface PrefixPrepared extends PreparedBase {
 	readonly summaryHash: string;
 	readonly anchorHash: string;
 }
-export interface SparsePrepared extends PreparedBase { readonly strategy: "sparse" }
+export interface SparsePrepared extends PreparedBase {
+	readonly strategy: "sparse";
+}
 export type Prepared = PrefixPrepared | SparsePrepared;
 declare const ticketBrand: unique symbol;
 /** Host-created identity capability; serialized/cloned objects cannot be used to commit. */
@@ -78,7 +80,10 @@ export interface PrefixNativeDraft {
 	readonly tokensBefore: number;
 	readonly details: Readonly<Record<string, unknown>>;
 }
-export interface SparseNativeDraft { readonly strategy: "sparse"; readonly application: unknown }
+export interface SparseNativeDraft {
+	readonly strategy: "sparse";
+	readonly application: unknown;
+}
 export type NativeDraft = PrefixNativeDraft | SparseNativeDraft;
 export interface VerifiedCommit {
 	readonly prepared: Prepared;

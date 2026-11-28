@@ -47,9 +47,14 @@ export class LeadCompactionHost implements LeadNativeHost {
 	) {
 		this.admission = admission;
 	}
-	markSparsePending(sessionId: string, pending: {applicationId:string;applicationHash:string}): void {
-		const fence = this.captureFence(sessionId), file = this.admission.file(fence.source);
-		if (file.pendingSparse && (file.pendingSparse.applicationId !== pending.applicationId || file.pendingSparse.applicationHash !== pending.applicationHash))
+	markSparsePending(sessionId: string, pending: { applicationId: string; applicationHash: string }): void {
+		const fence = this.captureFence(sessionId),
+			file = this.admission.file(fence.source);
+		if (
+			file.pendingSparse &&
+			(file.pendingSparse.applicationId !== pending.applicationId ||
+				file.pendingSparse.applicationHash !== pending.applicationHash)
+		)
 			throw new Error("conflicting-native-recovery");
 		file.pendingSparse = { ...pending };
 		file.recovery = true;
@@ -57,7 +62,12 @@ export class LeadCompactionHost implements LeadNativeHost {
 	clearSparsePending(sessionId: string, planId: string, planHash: string): void {
 		const file = this.admission.file(this.captureFence(sessionId).source);
 		if (!file.recovery && !file.pendingSparse) return;
-		if (file.locked || file.session || file.pendingSparse?.applicationId !== planId || file.pendingSparse.applicationHash !== planHash)
+		if (
+			file.locked ||
+			file.session ||
+			file.pendingSparse?.applicationId !== planId ||
+			file.pendingSparse.applicationHash !== planHash
+		)
 			throw new Error("native-recovery-not-confirmed");
 		file.pendingSparse = undefined;
 		file.recovery = false;
@@ -106,7 +116,13 @@ export class LeadCompactionHost implements LeadNativeHost {
 		this.tickets.set(ticket, structuredClone(verified));
 		return ticket;
 	}
-	private status(verified: VerifiedCommit, state: Status["state"], errorCode?: string, nativeEntryId?: string, afterEstimate?: number): Status {
+	private status(
+		verified: VerifiedCommit,
+		state: Status["state"],
+		errorCode?: string,
+		nativeEntryId?: string,
+		afterEstimate?: number,
+	): Status {
 		return {
 			sessionId: verified.fence.sessionId,
 			state,
@@ -131,8 +147,11 @@ export class LeadCompactionHost implements LeadNativeHost {
 			return this.status(verified, "blocked", "authority-drift");
 		}
 		const session = file.session;
-		const sparseRecovery = verified.prepared.strategy === "sparse" && file.recovery &&
-			file.pendingSparse?.applicationId === verified.prepared.planId && file.pendingSparse.applicationHash === verified.prepared.planHash;
+		const sparseRecovery =
+			verified.prepared.strategy === "sparse" &&
+			file.recovery &&
+			file.pendingSparse?.applicationId === verified.prepared.planId &&
+			file.pendingSparse.applicationHash === verified.prepared.planHash;
 		if (
 			(session &&
 				(!session.isIdle || session.isStreaming || session.pendingMessageCount || this.ports.busy(session))) ||
@@ -158,7 +177,9 @@ export class LeadCompactionHost implements LeadNativeHost {
 					});
 					this.owed.set(file.source, { verified, nativeEntryId });
 					this.ports.invalidate(session);
-				} finally { this.spans.set(file.source, performance.now() - began); }
+				} finally {
+					this.spans.set(file.source, performance.now() - began);
+				}
 			} else if (session) {
 				const draft = verified.draft;
 				if (draft.strategy === "sparse") throw new Error("prefix-draft-required");
@@ -191,8 +212,12 @@ export class LeadCompactionHost implements LeadNativeHost {
 				file.revision++;
 			}
 			if (session) {
-				try { const tokens = session.getContextUsage()?.tokens; if (typeof tokens === "number" && Number.isFinite(tokens)) afterEstimate = tokens; }
-				catch { /* Missing measurement is not permission for a second native effect. */ }
+				try {
+					const tokens = session.getContextUsage()?.tokens;
+					if (typeof tokens === "number" && Number.isFinite(tokens)) afterEstimate = tokens;
+				} catch {
+					/* Missing measurement is not permission for a second native effect. */
+				}
 			}
 			await this.ports.acknowledge(verified.prepared, {
 				nativeEntryId,
@@ -231,14 +256,15 @@ export class LeadCompactionHost implements LeadNativeHost {
 			}
 			await this.ports.verifySource(file.source, sessionId);
 			const replacement = await this.admission.owned(file, () => this.ports.reconstruct(file.source, file.session!));
-			const recoveredId = owed.verified.draft.strategy === "sparse"
-				? await this.admission.owned(file, async () => {
-					const result = await this.ports.sparse!.apply(replacement, owed.verified);
-					await syncNativeFile(file.source);
-					replacement.refreshContext();
-					return result.nativeEntryId;
-				})
-				: appliedEntry(replacement, owed.verified.prepared);
+			const recoveredId =
+				owed.verified.draft.strategy === "sparse"
+					? await this.admission.owned(file, async () => {
+							const result = await this.ports.sparse!.apply(replacement, owed.verified);
+							await syncNativeFile(file.source);
+							replacement.refreshContext();
+							return result.nativeEntryId;
+						})
+					: appliedEntry(replacement, owed.verified.prepared);
 			if (replacement.sessionId !== sessionId || (owed.nativeEntryId && recoveredId !== owed.nativeEntryId))
 				throw new Error("native-recovery-mismatch");
 			await syncNativeFile(file.source);

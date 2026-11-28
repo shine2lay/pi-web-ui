@@ -15,7 +15,9 @@ import { LeadCompactionHost, type LeadHostPorts } from "../../server/lead-compac
 import type { Prepared } from "../../server/lead-compaction-contract.js";
 import type { LeadAdmission } from "../../server/lead-compaction-admission.js";
 
-export async function nativeFixture(options: { inputHold?: Promise<void>; admission?: LeadAdmission; leadingProtected?: boolean } = {}) {
+export async function nativeFixture(
+	options: { inputHold?: Promise<void>; admission?: LeadAdmission; leadingProtected?: boolean } = {},
+) {
 	const root = mkdtempSync(join(tmpdir(), "lead-host-"));
 	const settingsManager = SettingsManager.inMemory();
 	const modelRuntime = await ModelRuntime.create({
@@ -56,7 +58,8 @@ export async function nativeFixture(options: { inputHold?: Promise<void>; admiss
 	});
 	await resourceLoader.reload();
 	const manager = SessionManager.create(root, root);
-	if (options.leadingProtected) manager.appendCustomMessageEntry("protected-injection", "keep native protection", true, { protected: true });
+	if (options.leadingProtected)
+		manager.appendCustomMessageEntry("protected-injection", "keep native protection", true, { protected: true });
 	manager.appendMessage({ role: "user", content: "old", timestamp: 1 });
 	manager.appendMessage({
 		role: "assistant",
@@ -97,23 +100,23 @@ export async function nativeFixture(options: { inputHold?: Promise<void>; admiss
 	let acknowledgements = 0;
 	let ackGate: Promise<void> | undefined;
 	const ports: LeadHostPorts = {
-			resolveHome: (id) => (id === session.sessionId ? { source, role: "ops", bindingEpoch: epoch } : undefined),
-			busy: () => busy,
-			invalidate: () => {},
-			acknowledge: async () => {
-				if (ackGate) await ackGate;
-				acknowledgements++;
-			},
-			coldApply: async () => {
-				throw new Error("unexpected-cold");
-			},
-			verifySource: async () => {
-				for (const line of readFileSync(source, "utf8").trim().split("\n")) JSON.parse(line);
-			},
-			reconstruct: async (_source, previous) => {
-				previous.dispose();
-				return create(SessionManager.open(source));
-			},
+		resolveHome: (id) => (id === session.sessionId ? { source, role: "ops", bindingEpoch: epoch } : undefined),
+		busy: () => busy,
+		invalidate: () => {},
+		acknowledge: async () => {
+			if (ackGate) await ackGate;
+			acknowledgements++;
+		},
+		coldApply: async () => {
+			throw new Error("unexpected-cold");
+		},
+		verifySource: async () => {
+			for (const line of readFileSync(source, "utf8").trim().split("\n")) JSON.parse(line);
+		},
+		reconstruct: async (_source, previous) => {
+			previous.dispose();
+			return create(SessionManager.open(source));
+		},
 	};
 	const host = new LeadCompactionHost(ports, options.admission);
 	host.attach(session);

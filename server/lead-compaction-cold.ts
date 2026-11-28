@@ -14,7 +14,12 @@ export interface ColdNativeConfig {
 async function request(
 	config: ColdNativeConfig,
 	data: Record<string, unknown>,
-): Promise<{ nativeEntryId?: string; afterEstimate?: number; validated?: boolean; pending?: { applicationId: string; applicationHash: string; startEntryId: string }[] }> {
+): Promise<{
+	nativeEntryId?: string;
+	afterEstimate?: number;
+	validated?: boolean;
+	pending?: { applicationId: string; applicationHash: string; startEntryId: string }[];
+}> {
 	if (
 		[
 			config.sdkModule,
@@ -49,9 +54,17 @@ export function coldNativeApply(
 	return async (verified) => {
 		if (verified.fence.cached) throw new Error("cold-cached-collision");
 		if (verified.draft.strategy !== "sparse") validateDraft(verified.prepared, verified.draft);
-		const result = await request(config, { verified, details: verified.draft.strategy === "sparse" ? undefined : nativeDetails(verified.prepared, verified.draft) });
+		const result = await request(config, {
+			verified,
+			details: verified.draft.strategy === "sparse" ? undefined : nativeDetails(verified.prepared, verified.draft),
+		});
 		if (typeof result.nativeEntryId !== "string") throw new Error("cold-native-recovery-required");
-		return { nativeEntryId: result.nativeEntryId, ...(typeof result.afterEstimate === "number" && Number.isFinite(result.afterEstimate) ? { afterEstimate: result.afterEstimate } : {}) };
+		return {
+			nativeEntryId: result.nativeEntryId,
+			...(typeof result.afterEstimate === "number" && Number.isFinite(result.afterEstimate)
+				? { afterEstimate: result.afterEstimate }
+				: {}),
+		};
 	};
 }
 export function nativeRecoveryInspection(config: ColdNativeConfig) {
