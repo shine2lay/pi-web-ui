@@ -17,6 +17,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - `server/work-delivery-bridge.ts` consumes pi-queue readers v4; `server/work-records.ts` projects shared DTOs. Cache includes canonical reader identities: failing-first startup test showed unchanged log stats otherwise retain unavailable data after the add-on loads.
 - Tests: `tests/unit/work-delivery-bridge.test.ts`, `tests/unit/work-delivery-cache.test.ts`, existing registry/overview reader tests; paired canonical acceptance in pi-queue `tests/work-delivery.test.ts`. Undo: revert these source/DTO commits and deploy the previous web build; additive registry focus events require the compatible pi-queue reader to remain installed.
 
+## lead-native-fence: retain input across fenced native lead compaction
+
+- `local` (Ops #1156, H slice of Ops1154 / Architecture611). One host-owned per-file revision/generation/admission domain covers native manager writes, input, open, reload and disposal. Cached compaction uses the same live SDK manager and public refresh; cold compaction uses an exclusively owned native worker, fsync/reopen and the existing E journal's durable acknowledgement.
+- Incoming input stays owned during commit or failed-refresh recovery. Native deferred notes count as pending even when the SDK's public pending count is zero. Public factory reconstruction retains the existing home/conversation and rebinds queued input; no detached cached manager or private SDK method is introduced.
+- Contract and integration: `docs/lead-compaction-host.md`. Checks: `tests/unit/lead-compaction-host.test.ts`, external `tests/helpers/lead-compaction-host-acceptance.ts`, and canonical E/native `tests/helpers/lead-compaction-cold-proof.mts`. Unsupported full acceptance cases fail explicitly. No scheduler activation/deploy or largest-real responsiveness claim in H.
+- Undo: revert this patch and deploy the chosen prior web ref with `pi-web-deploy`; preserve all native history, archives and append-only E records. Integration owns installation and rollback receipts.
+
 ## repair-1144: remove recovery hang and stage local add-ons without hiding questions
 
 - `local` (Ops #1144; Shine `dr-88854f3751a1`). Reverts `1fdd45fc`, `06f947c0`, `e490271b`, removing the recovery host and its obsolete tests; preserves `26e1470b`, `330a6835`, `bf49100b`.

@@ -26,6 +26,7 @@
  * straight through to the SDK.
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { unwrapLeadCustomMessage, leadCustomMessageIsSynchronous } from "./lead-compaction-session.js";
 
 /** Server-only freshness check; never read from chat text or public prompt options. */
 export const PROMPT_FRESHNESS = Symbol("pi-web-ui.prompt-freshness");
@@ -75,9 +76,12 @@ export function isKnownNoTurnMessagePath(
 	session: GuardedSession,
 	native: GuardedSession["sendCustomMessage"],
 ): boolean {
-	if (session.sendCustomMessage === native) return true;
+	if (!leadCustomMessageIsSynchronous(session)) return false;
+	const sender = unwrapLeadCustomMessage(session.sendCustomMessage);
+	const expected = unwrapLeadCustomMessage(native);
+	if (sender === expected) return true;
 	const guard = customMessageGuards.get(session);
-	return guard?.original === native && guard.wrapped === session.sendCustomMessage;
+	return !!guard && unwrapLeadCustomMessage(guard.original) === expected && guard.wrapped === sender;
 }
 
 /** A start that arrives while another is under way, or with a run going, follows that run. */

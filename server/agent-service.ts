@@ -37,17 +37,27 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { createAddonSessionServices as createAgentSessionServices } from "./addon-bundle-paths.js";
+import {
+	createAgentSessionRuntime,
+	createFencedSession,
+	SessionManager,
+	trackNativeManager,
+	withNativeOpen,
+	reloadNativeResources,
+	noteNativeInput,
+	withNativeLifecycle,
+} from "./lead-compaction-runtime.js";
+import type { LeadHostPorts } from "./lead-compaction-host.js";
+import { resolveCanonicalLeadHome } from "./lead-compaction-homes.js";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	createAgentSessionFromServices,
-	createAgentSessionRuntime,
 	createBashToolDefinition,
 	createEditToolDefinition,
 	createLocalBashOperations,
 	createWriteToolDefinition,
 	getAgentDir,
-	SessionManager,
 	SettingsManager,
 	VERSION,
 	type AgentSession,
@@ -4133,6 +4143,66 @@ export class ClientSession {
 	}
 	/** 所有客户端共用的一份对话表（见上）。 */
 	private static readonly sharedConvs = new Map<string, Conversation>();
+	/** H-owned native lifecycle bridge. Creating ports does not schedule or activate compaction. */
+	static leadCompactionPorts(
+		acknowledge: LeadHostPorts["acknowledge"],
+		coldApply: LeadHostPorts["coldApply"],
+		verifySource: LeadHostPorts["verifySource"],
+	): LeadHostPorts {
+		const find = (session: AgentSession) => [...ClientSession.sharedConvs.values()].find((c) => c.session === session);
+		return {
+			resolveHome: resolveCanonicalLeadHome,
+			acknowledge,
+			coldApply,
+			verifySource,
+			busy: (session) => {
+				const conv = find(session);
+				return (
+					!conv ||
+					!!conv.sendsInFlight ||
+					conv.dialogs.size > 0 ||
+					conv.toolStartTimes.size > 0 ||
+					conv.terminals.countBlockingLive() > 0 ||
+					conv.queueSteering.length > 0 ||
+					conv.queueFollowUp.length > 0 ||
+					promptStartPending(session) ||
+					session.isRetrying ||
+					session.isBashRunning ||
+					session.hasPendingBashMessages
+				);
+			},
+			invalidate: (session) => {
+				invalidateSessionStats(session);
+				const conv = find(session);
+				if (!conv) throw new Error("native-owner-unavailable");
+				conv.uiMessageCache.clear();
+				conv.msgIds.clear();
+				conv.nextMsgId = 1;
+				conv.chatIndex = undefined;
+				conv.lastMessagesSig = "";
+				conv.lastMessagesArray = [];
+				conv.tldrCache = undefined;
+				conv.identityCache = undefined;
+				conv.taskQueueCache = undefined;
+				for (const client of ClientSession.liveSessions) client.scheduleSnapshot();
+			},
+			reconstruct: async (source, previous) => {
+				const conv = find(previous);
+				const client = [...ClientSession.liveSessions].find((c) => c.convs.get(conv?.id ?? "") === conv);
+				if (!conv || !client) throw new Error("native-owner-unavailable");
+				// Reconstruct from the journal through public APIs, without a model run or switch hooks.
+				// The old owner was admitted idle; all new inputs are held in nativeLeadAdmission.
+				previous.dispose();
+				const runtime = await createAgentSessionRuntime(
+					client.makeRuntimeFactory(conv.terminals, conv.subagentTemplate, conv.id, previous.model, conv.agentPreset),
+					{ cwd: conv.cwd, agentDir: client.agentDir, sessionManager: SessionManager.open(source) },
+				);
+				conv.runtime = runtime;
+				await client.bindSession(conv);
+				return conv.session;
+			},
+		};
+	}
 	/** One persisted-session opener across browser, scheduler and participant clients.
 	 *  open-chain (Ops #641): each job is labelled, logged past a minute and bounded (server/open-chain.ts). */
 	static openChainTiming: OpenChainTiming = OPEN_CHAIN_TIMING;
@@ -6019,7 +6089,7 @@ export class ClientSession {
 		initialModel?: Parameters<AgentSession["setModel"]>[0],
 		targetPreset?: string,
 	): CreateAgentSessionRuntimeFactory {
-		return async ({ cwd: effectiveCwd, sessionManager }) => {
+		const create: CreateAgentSessionRuntimeFactory = async ({ cwd: effectiveCwd, sessionManager }) => {
 			const specialistBus = createEventBus();
 			const services = await createAgentSessionServices({
 				cwd: effectiveCwd,
@@ -6459,6 +6529,7 @@ export class ClientSession {
 				diagnostics: services.diagnostics,
 			};
 		};
+		return (options) => createFencedSession(options.sessionManager, () => create(options));
 	}
 
 	/** Create independent goal state for one conversation. Preferences are
@@ -11867,7 +11938,7 @@ export class ClientSession {
 		// 技能名录段/终端引导是按 run 组装的提示词：重载 resourceLoader 让新预设
 		// 即时生效（只有空白会话能切到这里，无历史可丢）。
 		try {
-			await conv.session.resourceLoader.reload();
+			await reloadNativeResources(conv.session);
 		} catch {
 			// loader 未就绪——首轮 run 组装时自然读到新预设。
 		}
@@ -12270,6 +12341,7 @@ export class ClientSession {
 		// or still being handled, so it can never land twice.
 		const receipt = promptIds.begin(id, conv.id, (msg) => this.emit(this.withAckRev(msg)));
 		if (!receipt) return;
+		noteNativeInput(conv.session);
 		// optimistic-send: this message's place in the chat's line, taken before any await so the
 		// places follow the order the messages came in (see takePromptAdmission).
 		const flow: PromptFlow = {
@@ -13206,6 +13278,10 @@ export class ClientSession {
 
 	/** Interrupt a run: abort, with a force-reset fallback on timeout. */
 	private async interruptRun(conv: Conversation, reason: string): Promise<void> {
+		return withNativeLifecycle(conv.session, () => ClientSession.prototype.interruptOwnedRun.call(this, conv, reason));
+	}
+
+	private async interruptOwnedRun(conv: Conversation, reason: string): Promise<void> {
 		if (!this.conversationStreaming(conv) && conv.session.isIdle) {
 			return;
 		}
@@ -13260,6 +13336,12 @@ export class ClientSession {
 	 *  persisted session. The conversation record itself is kept (same id,
 	 *  same cwd, same serialization caches), so the UI stays attached. */
 	private async forceResetConversation(conv: Conversation, reason: string): Promise<void> {
+		return withNativeLifecycle(conv.session, () =>
+			ClientSession.prototype.forceResetOwnedConversation.call(this, conv, reason),
+		);
+	}
+
+	private async forceResetOwnedConversation(conv: Conversation, reason: string): Promise<void> {
 		// #280：先记下本次对话自己的会话文件——重建必须回到同一个文件，
 		// 不能用 continueRecent(cwd) 按 mtime 取「最近」（同 cwd 多会话时会接错文件）。
 		const ownFile = (() => {
@@ -13582,7 +13664,7 @@ export class ClientSession {
 				// 显式预设与默认不一致：工厂组装提示词时用的是默认视图，重载一次对齐
 				// （技能名录/终端引导；此时 conv 已进 map，override 能读到归属预设）。
 				try {
-					await conv.session.resourceLoader.reload();
+					await reloadNativeResources(conv.session);
 				} catch {
 					// loader 未就绪——首轮 run 组装时自然对齐。
 				}
@@ -15953,6 +16035,12 @@ export class ClientSession {
 	}
 
 	private async switchSessionNow(path: string, validate?: (sm: SessionManager) => void): Promise<void> {
+		return withNativeOpen(path.startsWith("durable://") ? path : resolve(path), () =>
+			ClientSession.prototype.switchSessionOwned.call(this, path, validate),
+		);
+	}
+
+	private async switchSessionOwned(path: string, validate?: (sm: SessionManager) => void): Promise<void> {
 		// switch-loading：target 用客户端发来的原始 path（不是 resolve 后的），客户端才能对上。
 		const target: SwitchTarget = { kind: "session", path };
 		if (this.quiesceBlocked()) {
@@ -16109,7 +16197,7 @@ export class ClientSession {
 			// is) falls back to the SDK's own load. Either way the scan no longer holds the entries.
 			const handedOver = fastOpen && scan ? openScannedSession(scan) : null;
 			if (scan) scan.entries = [];
-			const sessionManager = handedOver ?? SessionManager.open(targetPath);
+			const sessionManager = handedOver ? trackNativeManager(handedOver) : SessionManager.open(targetPath);
 			validate?.(sessionManager);
 			const targetCwd = sessionManager.getCwd();
 			if (validate) {

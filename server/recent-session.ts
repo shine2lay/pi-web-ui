@@ -13,7 +13,7 @@
 import { closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "./lead-compaction-runtime.js";
 import { defaultSessionDirPath } from "./session-index.js";
 
 /** As the SDK's header discovery: at most this much of a file is read looking for its header. */
