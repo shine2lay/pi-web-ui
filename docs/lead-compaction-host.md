@@ -25,7 +25,7 @@ real-size responsiveness is integration's obligation, not established by isolate
   installed paths: SDK module, OpenViking package root, existing plan journal, session root,
   identity directory and rollout-state file. No model/client-supplied paths.
 - E exports `createLeadExecutor(config, host, { observation, progress })` from
-  `pi-openviking/src/v2/lead-executor.ts`. Configure ports with closures referencing E's
+  `../pi-openviking/src/v2/lead-executor.ts`. Configure ports with closures referencing E's
   `acknowledge`; preserve its private draft and `details.openviking` verbatim. H adds only
   `details.leadCompaction` for exact native replay identity.
 - `enumerateCanonicalHomes()` / `resolveCanonicalLeadHome()` reuse the existing identity
