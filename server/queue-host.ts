@@ -52,7 +52,9 @@ import { existsSync } from "node:fs";
 import { consumeOwnerSetting } from "./queue-owner.js";
 import { requesterOf } from "./queue-requester.js";
 import { checkPatch, normDispatchLaunch, QueueLaunchRefused } from "./queue-profile.js";
-import type { ChatSpeed, UiTaskLaunch, UiTaskRequester, UiWorkTaskState } from "./protocol.js";
+import type { UiTaskLaunch, UiTaskRequester, UiWorkTaskState } from "./protocol.js";
+import type { QueueChatStart, ChatStateName, ChatState } from "./queue-chat-types.js";
+export type { QueueChatStart, ChatStateName, ChatState } from "./queue-chat-types.js";
 import type {
 	QuestionBinding,
 	QuestionChange,
@@ -64,41 +66,10 @@ import type { OwnerRelayCapability, OwnerRelayRequest, OwnerRelayResult } from "
 
 export const QUEUE_HOST_KEY = Symbol.for("pi-web-ui.queue-host");
 
-/** What startChat gets, checked. */
-export interface QueueChatStart {
-	cwd: string;
-	name: string;
-	prompt: string;
-	entries: { customType: string; data: unknown }[];
-	/** "provider/id" */
-	model?: string;
-	thinking?: string;
-	speed?: ChatSpeed;
-	launch?: UiTaskLaunch;
-	/** Queue extension commits the completed snapshot synchronously; false cancels a stale launch. */
-	onPrepared?: (launch: UiTaskLaunch) => boolean;
-}
-
-/** Whether a chat is working now (see chatState). */
-export type ChatStateName = "working" | "idle" | "closed";
-
-export interface ChatState {
-	state: ChatStateName;
-	/** When it last did something: its transcript's last write (ms). Missing when that can't be read. */
-	lastActiveAt?: number;
-	/**
-	 * queue-turn-since (pi-queue #211): working, when its current turn started (ms), from its running-list entry.
-	 * Missing when no turn is known to run (a carry-over whose turn hasn't started, a compaction alone).
-	 */
-	turnSince?: number;
-	/**
-	 * queue-back-owed (Ops #393): how many of its helper chats (subagents, theirs included) are at work now. Missing
-	 * when none. pi-queue doesn't count a paused task's chat as stopped while one runs: it may still write.
-	 */
-	subagents?: number;
-}
-
 export interface QueueHostImpl {
+	/** Canonical lead-only policy; the host owns provenance and non-transcript runtime application. */
+	leadThinking?(sessionId: string): { level?: string; source: string; reason?: string };
+	applyLeadThinking?(sessionId: string, level: string): { level?: string; source: string; reason?: string };
 	/** Trusted live SDK invocation only; absent snapshots fail closed for specialist tools. */
 	validateRawToolInvocation?(
 		sessionId: string,
@@ -490,6 +461,9 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 		v: 1 as const,
 		profiles: 1 as const,
 		consumeOwnerSetting,
+		...(impl.leadThinking && impl.applyLeadThinking
+			? { leadThinking: impl.leadThinking, applyLeadThinking: impl.applyLeadThinking }
+			: {}),
 		...(impl.commitQuestion && impl.consumeQuestionCommit
 			? {
 					commitQuestion: impl.commitQuestion,
