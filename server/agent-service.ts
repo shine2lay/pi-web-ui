@@ -43,6 +43,7 @@ import {
 	SessionManager,
 	trackNativeManager,
 	withNativeOpen,
+	NativeRecoveryHeldError,
 	reloadNativeResources,
 	noteNativeInput,
 	withNativeLifecycle,
@@ -15832,9 +15833,18 @@ export class ClientSession {
 	}
 
 	private async switchSessionNow(path: string, validate?: (sm: SessionManager) => void): Promise<void> {
-		return withNativeOpen(path.startsWith("durable://") ? path : resolve(path), () =>
-			ClientSession.prototype.switchSessionOwned.call(this, path, validate),
-		);
+		try {
+			return await withNativeOpen(path.startsWith("durable://") ? path : resolve(path), () =>
+				ClientSession.prototype.switchSessionOwned.call(this, path, validate),
+			);
+		} catch (err) {
+			// A held lead home must end the page's loading state and say why, not hang (found by the
+			// installed-wiring test's planted fault). The hold itself stays: nothing opens around it.
+			if (!(err instanceof NativeRecoveryHeldError)) throw err;
+			console.error(`[lead-compaction] home open held: ${err.code}`);
+			const text = `This lead chat is held while its context recovery is repaired (${err.code}). Nothing was lost; Ops can restore it.`;
+			this.emitSwitchFailed({ kind: "session", path }, text, text);
+		}
 	}
 
 	private async switchSessionOwned(path: string, validate?: (sm: SessionManager) => void): Promise<void> {

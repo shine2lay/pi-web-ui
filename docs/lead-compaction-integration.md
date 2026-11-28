@@ -73,6 +73,36 @@ occurred, original captures stayed unchanged and the failure is retained. The fi
 checked separately, and the next attempt resumes the SAME frozen private plans rather than refreezing.
 No largest-real or installed success is claimed until that evidence is complete.
 
+## Real-size result, 2026-11-28 (attempt 9)
+
+Hypothesis (pi-openviking `docs/hypotheses/2026-11-28-sparse-invisible-closure.md`): entries with no
+model-visible message pinned tool pairs, so plans froze above the trigger. Outcome: HIT. With
+pi-openviking fcff71f the same two private copies went from 1,032,768 to 171,025 estimated tokens
+(Frontend) and from 1,225,840 to 177,421 (Backend) in one sparse application each, then stayed at
+170,637 and 174,134 after three growth and reopen rounds with a second application each. Zero model
+calls, 3 of 3 inputs delivered once per home, 0 archive conflicts, original captures unchanged.
+
+The harness still recorded the run as failed, for two reasons that are not shrink failures: the
+final status carried no after-estimate (fixed here: the frozen plan's estimate is reported), and one
+HTTP error among 1,430 health samples of the separate live service during the 40 minutes, with no
+10-second timeout. That error cannot be attributed to the code under test and is not counted either way.
+
+Cost seen: the first catch-up of a 1M-token home takes about 30 to 40 minutes of background CPU,
+mostly complete-byte identity re-checks per archived run. It runs in the worker, not the web thread.
+
+Open limit: visible protected notices (role messages, memory cards, queue reports, terminal notices)
+are never archived and were 110K to 115K of each copy. They grow with history, so the floor rises
+over time. Which of them may be archived once old is an Architecture question (rm-909a51ad).
+
+## Installed wiring test
+
+`tests/lead-compaction-wiring-test.mjs` starts the built server in its own temp home with the add-on
+staged the way `pi-web-deploy` stages it. It shows recovery enabled with no startup error, a made-up
+lead home checked off-thread (ready, below the trigger), and that home opening after the recovery
+preflight. Its planted fault (nothing staged) shows the startup error reported, never "enabled", and
+the home refused. The first run of that fault found the open hanging with no answer; the page now
+gets a plain refusal naming the hold, and the server log gets one line with the machine code.
+
 ## Checks and rollout
 
 Preserve frozen Ops1154 A1–A6 assertions. The external actual-host adapter must fail unsupported

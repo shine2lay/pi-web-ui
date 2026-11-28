@@ -165,10 +165,24 @@ export async function withNativeLifecycle<T>(
 	}
 }
 
+/** The recovery preflight refused this open. Carries a machine code only, never chat content. */
+export class NativeRecoveryHeldError extends Error {
+	readonly code: string;
+	constructor(cause: unknown) {
+		const message = cause instanceof Error ? cause.message : "";
+		const code = /^[A-Za-z_-]{1,60}$/.test(message) ? message : "lead-recovery-held";
+		super(code, { cause });
+		this.code = code;
+	}
+}
 /** File ownership before host scan/open, retained until an existing cache or new runtime is adopted. */
 export async function withNativeOpen<T>(source: string, operation: () => Promise<T>): Promise<T> {
 	if (!isAbsolute(source) || !existsSync(source)) return operation(); // Non-native/missing targets retain the host's normal validation path.
-	await recoveryPreflight?.(resolve(source));
+	try {
+		await recoveryPreflight?.(resolve(source));
+	} catch (cause) {
+		throw new NativeRecoveryHeldError(cause);
+	}
 	const file = nativeLeadAdmission.file(resolve(source));
 	file.opening++;
 	file.generation++;
