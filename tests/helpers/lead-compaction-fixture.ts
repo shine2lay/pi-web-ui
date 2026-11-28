@@ -11,11 +11,11 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { fauxProvider } from "@earendil-works/pi-ai";
-import { LeadCompactionHost } from "../../server/lead-compaction-host.js";
+import { LeadCompactionHost, type LeadHostPorts } from "../../server/lead-compaction-host.js";
 import type { Prepared } from "../../server/lead-compaction-contract.js";
 import type { LeadAdmission } from "../../server/lead-compaction-admission.js";
 
-export async function nativeFixture(options: { inputHold?: Promise<void>; admission?: LeadAdmission } = {}) {
+export async function nativeFixture(options: { inputHold?: Promise<void>; admission?: LeadAdmission; leadingProtected?: boolean } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "lead-host-"));
 	const settingsManager = SettingsManager.inMemory();
 	const modelRuntime = await ModelRuntime.create({
@@ -56,6 +56,7 @@ export async function nativeFixture(options: { inputHold?: Promise<void>; admiss
 	});
 	await resourceLoader.reload();
 	const manager = SessionManager.create(root, root);
+	if (options.leadingProtected) manager.appendCustomMessageEntry("protected-injection", "keep native protection", true, { protected: true });
 	manager.appendMessage({ role: "user", content: "old", timestamp: 1 });
 	manager.appendMessage({
 		role: "assistant",
@@ -95,8 +96,7 @@ export async function nativeFixture(options: { inputHold?: Promise<void>; admiss
 	let epoch = 0;
 	let acknowledgements = 0;
 	let ackGate: Promise<void> | undefined;
-	const host = new LeadCompactionHost(
-		{
+	const ports: LeadHostPorts = {
 			resolveHome: (id) => (id === session.sessionId ? { source, role: "ops", bindingEpoch: epoch } : undefined),
 			busy: () => busy,
 			invalidate: () => {},
@@ -114,9 +114,8 @@ export async function nativeFixture(options: { inputHold?: Promise<void>; admiss
 				previous.dispose();
 				return create(SessionManager.open(source));
 			},
-		},
-		options.admission,
-	);
+	};
+	const host = new LeadCompactionHost(ports, options.admission);
 	host.attach(session);
 	const summary = "archived old exchange";
 	const ticket = () => {
@@ -143,6 +142,7 @@ export async function nativeFixture(options: { inputHold?: Promise<void>; admiss
 	};
 	return {
 		host,
+		configurePorts: (update: Partial<LeadHostPorts>) => Object.assign(ports, update),
 		create,
 		session,
 		manager,

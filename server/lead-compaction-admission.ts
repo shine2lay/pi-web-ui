@@ -16,6 +16,7 @@ export interface FileAdmission {
 	locked: boolean;
 	recovery: boolean;
 	internal: boolean;
+	pendingSparse?: { applicationId: string; applicationHash: string };
 	readonly waiters: (() => void)[];
 	checkpoint?: { messageEntryId: string; toolResultEntryIds: string[] };
 }
@@ -133,6 +134,12 @@ export class LeadAdmission {
 	/** The caller must finish with release; no archive or network is permitted inside. */
 	acquire(file: FileAdmission): boolean {
 		if (file.locked || file.recovery || file.opening || file.active || file.pending || file.deferred) return false;
+		file.locked = true;
+		return true;
+	}
+	/** Only a verified recovery ticket may use this; queued input stays outside native state. */
+	acquireRecovery(file: FileAdmission): boolean {
+		if (!file.recovery || file.locked || file.active || (file.opening && !this.openingOwned(file))) return false;
 		file.locked = true;
 		return true;
 	}

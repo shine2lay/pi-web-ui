@@ -48,6 +48,7 @@ import {
 	withNativeLifecycle,
 } from "./lead-compaction-runtime.js";
 import type { LeadHostPorts } from "./lead-compaction-host.js";
+import { leadSettled, leadOpened, leadIdle } from "./lead-compaction-events.js";
 import type { Conversation } from "./conversation-state.js";
 export type { Conversation } from "./conversation-state.js";
 import { resolveCanonicalLeadHome } from "./lead-compaction-homes.js";
@@ -8813,13 +8814,12 @@ export class ClientSession {
 					conv.pendingCompaction = null;
 					void this.executePendingCompaction(conv, pending);
 				}
-				// done-any-chat：这一刻 session.isStreaming 才变回 false（agent_end 时还在收尾：
-				// 排队的追问、自动压缩都算这一轮）。以前没人在这时推列表，「在跑」要等 agent_end
-				// 之后 800ms 那次刷新碰运气（收尾慢就还显示在跑），而且只推给订阅方。
-				// 同步 v0.96.1：上游自己加了这个 case，这行并进来；两个同名 case 时后一个永远不跑。
+				// done-any-chat: settled (not agent_end) includes queued follow-ups and compaction.
+				// Publish immediately to all windows, rather than waiting for the 800ms refresh.
 				ClientSession.emitConversationsToAll();
 				// telegram-coo: the run is over: a role's home chat hands its reply to the plugins that listen.
 				this.settleTurnRecord(conv);
+				leadSettled(conv.session.sessionId);
 				break;
 			}
 			case "entry_appended": {
@@ -14205,12 +14205,12 @@ export class ClientSession {
 		void this.listCommands();
 	}
 
-	/** Switch the ACTIVE conversation without interrupting any other chat. */
 	/** switch-loading：切换回执。成功回执必须在 flushSnapshot() **之后**发 —— 客户端收到它
 	 *  就撤掉「正在打开…」，那时新对话的内容必须已经在路上（flushSnapshot 同步 emit，
 	 *  同一条 socket 保序，所以「先快照后回执」在这里就是调用顺序）。 */
 	private emitSwitchDone(target: SwitchTarget): void {
 		this.emit({ type: "switch_done", target });
+		leadOpened(this.activeSessionId());
 	}
 
 	private emitSwitchFailed(target: SwitchTarget, text: string, textEn: string): void {
@@ -18866,7 +18866,6 @@ export class AgentService {
 	/** index.ts: a run recorded changes (the Roles page follows them). */
 	onRolesConfigChanged: (() => void) | null = null;
 
-	/** chat-slots (Ops #266): stops the blank-chat sweep (disposeAll). */
 	private stopBlankChatSweep: (() => void) | null = null;
 
 	/** chat-slots: index.ts starts it after the restart's carry-on. Every minute, closes the blank chats no
@@ -18879,6 +18878,7 @@ export class AgentService {
 			if (this.quiesced) return;
 			try {
 				ClientSession.sweepBlankChats(sweep);
+				leadIdle();
 			} catch (err) {
 				console.error(`[chat-slots] the blank-chat sweep failed: ${(err as Error).message}`);
 			}

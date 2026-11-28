@@ -13,6 +13,11 @@ import { fenceManager, fenceSession, managerFenceRevision } from "./lead-compact
 /** One process-owned domain, shared by UI, scheduler, extensions, restore and native apply. */
 export const nativeLeadAdmission = new LeadAdmission();
 let webHost: { ports: LeadHostPorts; host: LeadCompactionHost } | undefined;
+let recoveryPreflight: ((source: string) => Promise<void>) | undefined;
+/** Server installs this before accepting clients; unit/worker runtimes do not enable lead recovery. */
+export function setNativeRecoveryPreflight(check: ((source: string) => Promise<void>) | undefined): void {
+	recoveryPreflight = check;
+}
 /** Integration's only web-host constructor: always joins the existing runtime ownership domain. */
 export function createWebLeadCompactionHost(ports: LeadHostPorts): LeadCompactionHost {
 	if (webHost && webHost.ports !== ports) throw new Error("lead-host-already-configured");
@@ -71,6 +76,7 @@ export async function createFencedSession(
 ): Promise<CreateAgentSessionRuntimeResult> {
 	const source = manager.getSessionFile();
 	if (!source || !isAbsolute(source)) return create();
+	await recoveryPreflight?.(source);
 	trackNativeManager(manager);
 	const file = nativeLeadAdmission.file(source);
 	nativeLeadAdmission.assertReadable(source);
@@ -110,7 +116,9 @@ export function fenceRuntime(runtime: AgentSessionRuntime): AgentSessionRuntime 
 					if ((file.locked || file.recovery) && !nativeLeadAdmission.owns(file))
 						await nativeLeadAdmission.available(file);
 					if (method === "switchSession" && typeof args[0] === "string") {
-						target = nativeLeadAdmission.file(resolve(args[0]));
+						const targetSource = resolve(args[0]);
+						await recoveryPreflight?.(targetSource);
+						target = nativeLeadAdmission.file(targetSource);
 						target.opening++;
 						target.generation++;
 						if ((target.locked || target.recovery) && !nativeLeadAdmission.owns(target))
@@ -160,6 +168,7 @@ export async function withNativeLifecycle<T>(
 /** File ownership before host scan/open, retained until an existing cache or new runtime is adopted. */
 export async function withNativeOpen<T>(source: string, operation: () => Promise<T>): Promise<T> {
 	if (!isAbsolute(source) || !existsSync(source)) return operation(); // Non-native/missing targets retain the host's normal validation path.
+	await recoveryPreflight?.(resolve(source));
 	const file = nativeLeadAdmission.file(resolve(source));
 	file.opening++;
 	file.generation++;

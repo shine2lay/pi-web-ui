@@ -38,6 +38,8 @@ import { VERSION, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { sdkCopies, sdkOriginNote } from "./sdk-origin.js";
 import { PROTOCOL_VERSION } from "./protocol-version.js";
 import { AgentService, decisionsSessionsRoot, workspacePath, QuiesceRejectedError } from "./agent-service.js";
+import { startLeadCompaction, stopLeadCompaction, leadCompactionDiagnostics, ensureLeadRecoveryBeforeOpen } from "./lead-compaction-integration.js";
+import { setNativeRecoveryPreflight } from "./lead-compaction-runtime.js";
 import { describeError, errorMessage, guardCalls, installProcessGuards } from "./crash-guard.js";
 import type { BusyConversation, NewChatOutcome } from "./agent-service.js";
 import type { ParticipantTarget } from "./participant-lifecycle.js";
@@ -447,7 +449,7 @@ app.get("/api/busy", (_req, res) => {
 		res.status(501).json({ error: `the ${ENGINE} engine does not report busy chats` });
 		return;
 	}
-	res.json({ busy: service.busyConversations() });
+	res.json({ busy: service.busyConversations(), ...(service instanceof AgentService ? { leadCompaction: leadCompactionDiagnostics() } : {}) });
 });
 
 /** chat-slots (Ops #266): open chats per project, counts only (no titles, no chat text): all of them, the ones
@@ -4379,6 +4381,7 @@ service.onOAuthLogin = (provider) =>
 		if (reason) console.log(`[subs-limits] after OAuth sign-in to ${provider}: ${reason}`);
 	});
 
+if (service instanceof AgentService) setNativeRecoveryPreflight(ensureLeadRecoveryBeforeOpen);
 httpServer.listen(PORT, HOST, () => {
 	// session-index: History and Recent chats are ready for the windows that reconnect.
 	service.warmSessionIndex?.();
@@ -4399,6 +4402,7 @@ httpServer.listen(PORT, HOST, () => {
 				service.startRolesConfigHistory?.();
 				// chat-slots: then the sweep that closes blank chats no window had open for 10 minutes.
 				service.startBlankChatSweep?.();
+				if (!shuttingDown && service instanceof AgentService) await startLeadCompaction().catch(() => console.error("[lead-compaction] E_LEAD_STARTUP"));
 				// usage-accounting: then design B's pass, every 30 s, and its figures on the Roles page.
 				if (!shuttingDown) startUsageMeter();
 			})(),
@@ -4609,6 +4613,7 @@ async function shutdown(signal: "SIGINT" | "SIGTERM" = "SIGINT"): Promise<void> 
 		mcpHotReload.dispose();
 		mcpBridge.dispose();
 		await globalLspPool.shutdownAll();
+		await stopLeadCompaction();
 		await Promise.all([service.disposeAll(), modulesStopped]);
 		if (usageStopped) await Promise.race([usageStopped, new Promise((done) => setTimeout(done, 3000).unref())]);
 		// Don't let dead browsers hold the exit open: half-open WebSocket /

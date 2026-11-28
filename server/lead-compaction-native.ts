@@ -5,6 +5,7 @@ import type { NativeDraft, Prepared } from "./lead-compaction-contract.js";
 
 export const LEAD_COMPACTION_DETAIL = "leadCompaction";
 export function nativeDetails(prepared: Prepared, draft: NativeDraft): Record<string, unknown> {
+	if (prepared.strategy === "sparse" || draft.strategy === "sparse") throw new Error("prefix-draft-required");
 	return {
 		...draft.details,
 		[LEAD_COMPACTION_DETAIL]: {
@@ -16,6 +17,7 @@ export function nativeDetails(prepared: Prepared, draft: NativeDraft): Record<st
 	};
 }
 export function validateDraft(prepared: Prepared, draft: NativeDraft): void {
+	if (prepared.strategy === "sparse" || draft.strategy === "sparse") throw new Error("sparse-adapter-required");
 	if (
 		createHash("sha256").update(draft.summary).digest("hex") !== prepared.summaryHash ||
 		draft.firstKeptEntryId !== prepared.boundary ||
@@ -35,6 +37,7 @@ export async function syncNativeFile(source: string): Promise<void> {
 }
 /** The native manager is authoritative for applied identity. Never inspect model payloads. */
 export function appliedEntry(session: AgentSession, prepared: Prepared): string | undefined {
+	if (prepared.strategy === "sparse") throw new Error("sparse-adapter-required");
 	for (const entry of session.sessionManager.getEntries()) {
 		if (entry.type !== "compaction") continue;
 		const details = entry.details as Record<string, unknown> | undefined;

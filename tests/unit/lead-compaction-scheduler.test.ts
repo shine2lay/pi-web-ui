@@ -33,6 +33,33 @@ function fixture(
 
 // External scalar capability adapters only. Joined real H/E/SDK A1–A6 acceptance is NOT claimed here.
 describe("lead scheduler capability integration", () => {
+	it("retains E measurements through H completion but never into another attempt", async () => {
+		const entered = deferred<void>();
+		const done = deferred<Status>();
+		const f = fixture(async () => {
+			entered.resolve();
+			return done.promise;
+		});
+		const run = f.scheduler.requestCheck({ sessionId: "home", trigger: "idle" });
+		await entered.promise;
+		f.scheduler.progress({
+			sessionId: "home",
+			state: "ready",
+			measurementSource: "current-projection",
+			measurementRevision: 3,
+			beforeEstimate: 210000,
+			afterEstimate: 150000,
+		});
+		done.resolve({ sessionId: "home", state: "applied", nativeEntryId: "native-1" });
+		expect(await run).toMatchObject({
+			state: "applied",
+			beforeEstimate: 210000,
+			afterEstimate: 150000,
+			measurementRevision: 3,
+		});
+		f.requestCheck.mockResolvedValueOnce({ sessionId: "home", state: "waiting_busy" });
+		expect(await f.scheduler.requestCheck({ sessionId: "home", trigger: "idle" })).not.toHaveProperty("beforeEstimate");
+	});
 	it("coalesces simultaneous checks without blocking another unopened canonical home", async () => {
 		const held = deferred<Status>();
 		const second = deferred<void>();

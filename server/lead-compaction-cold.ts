@@ -14,7 +14,7 @@ export interface ColdNativeConfig {
 async function request(
 	config: ColdNativeConfig,
 	data: Record<string, unknown>,
-): Promise<{ nativeEntryId?: string; validated?: boolean }> {
+): Promise<{ nativeEntryId?: string; afterEstimate?: number; validated?: boolean; pending?: { applicationId: string; applicationHash: string; startEntryId: string }[] }> {
 	if (
 		[
 			config.sdkModule,
@@ -45,13 +45,26 @@ async function request(
 /** Construct only inside trusted server integration; no client-selected paths or authority. */
 export function coldNativeApply(
 	config: ColdNativeConfig,
-): (verified: VerifiedCommit) => Promise<{ nativeEntryId: string }> {
+): (verified: VerifiedCommit) => Promise<{ nativeEntryId: string; afterEstimate?: number }> {
 	return async (verified) => {
 		if (verified.fence.cached) throw new Error("cold-cached-collision");
-		validateDraft(verified.prepared, verified.draft);
-		const result = await request(config, { verified, details: nativeDetails(verified.prepared, verified.draft) });
+		if (verified.draft.strategy !== "sparse") validateDraft(verified.prepared, verified.draft);
+		const result = await request(config, { verified, details: verified.draft.strategy === "sparse" ? undefined : nativeDetails(verified.prepared, verified.draft) });
 		if (typeof result.nativeEntryId !== "string") throw new Error("cold-native-recovery-required");
-		return { nativeEntryId: result.nativeEntryId };
+		return { nativeEntryId: result.nativeEntryId, ...(typeof result.afterEstimate === "number" && Number.isFinite(result.afterEstimate) ? { afterEstimate: result.afterEstimate } : {}) };
+	};
+}
+export function nativeRecoveryInspection(config: ColdNativeConfig) {
+	return async (source: string, sessionId: string) => {
+		const result = await request(config, { mode: "inspect", source, sessionId });
+		if (result.validated !== true) throw new Error("native-source-unverified");
+		return result.pending ?? [];
+	};
+}
+export function nativePrefixVerifier(config: ColdNativeConfig) {
+	return async (source: string, sessionId: string, bytes: number, hash: string): Promise<void> => {
+		const result = await request(config, { mode: "prefix", source, sessionId, bytes, hash });
+		if (result.validated !== true) throw new Error("native-prefix-unverified");
 	};
 }
 export function nativeSourceVerifier(config: ColdNativeConfig): (source: string, sessionId: string) => Promise<void> {

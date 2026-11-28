@@ -9,20 +9,25 @@ export interface Fence {
 	readonly leafId: string | null;
 	readonly cached: boolean;
 }
-export interface Prepared {
+export interface PreparedBase {
 	readonly planId: string;
 	readonly planHash: string;
 	readonly originalFence: Fence;
 	readonly bindingFingerprint: string;
 	readonly archiveFingerprints: readonly string[];
-	readonly boundary: string | null;
-	readonly summaryHash: string;
 	readonly sourceHash: string;
-	readonly anchorHash: string;
 	readonly protectedHash: string;
 	readonly tailHash: string;
 	readonly checkpointHash: string;
 }
+export interface PrefixPrepared extends PreparedBase {
+	readonly strategy?: "prefix";
+	readonly boundary: string | null;
+	readonly summaryHash: string;
+	readonly anchorHash: string;
+}
+export interface SparsePrepared extends PreparedBase { readonly strategy: "sparse" }
+export type Prepared = PrefixPrepared | SparsePrepared;
 declare const ticketBrand: unique symbol;
 /** Host-created identity capability; serialized/cloned objects cannot be used to commit. */
 export interface Ticket {
@@ -66,12 +71,15 @@ export type LeadProgress = (status: Status) => void;
  * E receives issueTicket only in the host-created bridge closure, never over public transport.
  * Native draft content is not in Prepared or Status and must never be logged.
  */
-export interface NativeDraft {
+export interface PrefixNativeDraft {
+	readonly strategy?: "prefix";
 	readonly summary: string;
 	readonly firstKeptEntryId: string | null;
 	readonly tokensBefore: number;
 	readonly details: Readonly<Record<string, unknown>>;
 }
+export interface SparseNativeDraft { readonly strategy: "sparse"; readonly application: unknown }
+export type NativeDraft = PrefixNativeDraft | SparseNativeDraft;
 export interface VerifiedCommit {
 	readonly prepared: Prepared;
 	readonly fence: Fence;
@@ -86,6 +94,7 @@ export interface LeadExecutor {
 	resume(planId: string, planHash: string): Promise<Ticket | Status>;
 	/** Append-only durable attempt in the existing E journal; rejects on failed durability. */
 	acknowledge(prepared: Prepared, result: { nativeEntryId: string; fence: Fence; recovered: boolean }): Promise<void>;
+	nativeProgress?(prepared: Prepared, cursor: number, nativeEntryId: string, fence: Fence): Promise<void>;
 }
 export interface LeadNativeHost extends ExecutorHost {
 	tryApply(ticket: Ticket): Promise<Status>;

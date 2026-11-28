@@ -1,0 +1,11 @@
+{
+  "result": "FAIL",
+  "stage": "worker-prepare",
+  "node": "22.22.0",
+  "errorCode": "ERR_MODULE_NOT_FOUND",
+  "missingModule": "pi-identity",
+  "importedFrom": "/home/shinelay/projects/pi-openviking-ops-task-1159/src/v2/fold-binding.ts",
+  "environmentFinding": "OV worktree has no node_modules; existing /home/shinelay/projects/pi-openviking/node_modules contains pi-identity",
+  "loaderArguments": [],
+  "nodeOptions": null
+}

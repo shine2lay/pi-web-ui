@@ -31,8 +31,21 @@ export function createLeadScheduler(options: LeadSchedulerOptions) {
 		}
 		return result;
 	}
-	function publish(value: Status, home: CanonicalHome, trigger: LeadTrigger): Status {
-		const status = Object.freeze({ ...projectLeadStatus(value, home), trigger });
+	function publish(value: Status, home: CanonicalHome, trigger: LeadTrigger, inheritMeasurement = false): Status {
+		// E measures; H's final native receipt contains no estimates. Carry only measured scalars
+		// within this attempt, never previous-attempt authority/errors/native effects.
+		const previous = inheritMeasurement ? snapshots.get(home.sessionId) : undefined;
+		const fields = [
+			"measurementSource",
+			"measurementRevision",
+			"beforeEstimate",
+			"afterEstimate",
+			"protectedFloorEstimate",
+		] as const;
+		const measured = previous
+			? Object.fromEntries(fields.filter((key) => previous[key] !== undefined).map((key) => [key, previous[key]]))
+			: {};
+		const status = Object.freeze({ ...measured, ...projectLeadStatus(value, home), trigger });
 		snapshots.set(home.sessionId, status);
 		// A broken viewer must not turn an actual native apply into a failed compaction.
 		try {
@@ -54,7 +67,7 @@ export function createLeadScheduler(options: LeadSchedulerOptions) {
 			try {
 				// H/E own busy admission, applied-plan reconciliation BEFORE threshold, and fresh accounting.
 				const result = await options.checks.requestCheck(request);
-				return publish(result, home, request.trigger);
+				return publish(result, home, request.trigger, true);
 			} catch {
 				return publish(
 					{
@@ -86,7 +99,7 @@ export function createLeadScheduler(options: LeadSchedulerOptions) {
 			const home = homes().find((candidate) => candidate.sessionId === value.sessionId);
 			const previous = snapshots.get(value.sessionId);
 			if (!home || !active.has(value.sessionId) || !previous?.trigger) return;
-			publish(value, home, previous.trigger);
+			publish(value, home, previous.trigger, true);
 		},
 		status(): readonly Status[] {
 			const ids = new Set(homes().map((home) => home.sessionId));

@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## lead-compaction-join: schedule native lead catch-up with honest protected floors
+
+- `local` (Ops #1159, integration of H/E/T under Ops1154 / Architecture611). Joins the existing native admission singleton to the off-thread executor and scalar scheduler. Startup, settled, home-open and existing idle cadence share one orchestration path; paired OpenViking removes the replaced synchronous v2 turn-end hook.
+- Native recovery is awaited before retry; canonical archive/plan/native ownership remains unchanged. The existing authenticated busy diagnostics exposes sanitized status and same-attempt measurements, never raw content. Worker ACP and emergency recovery are untouched.
+- Tests: `tests/unit/lead-compaction-checks.test.ts`, `tests/unit/lead-compaction-scheduler.test.ts`, actual external `tests/helpers/lead-compaction-acceptance.mts`; full frozen A1–A6 and installed proof remain required, not inferred from source checks. Contract, limits and paired rollback: `docs/lead-compaction-integration.md`.
+- Undo: deploy the recorded prior paired web/add-on release through `pi-web-deploy`; never delete archives, native entries or append-only plans/attempts.
+
 ## delivery-proof-focus: canonical proof and explicit current project
 
 - `local` (Ops #1167; Product linked-four-sections brief, Architecture project-delivery-hierarchy contract). Reuses native project acceptance; no nested delivery entity, live focus write or migration.
