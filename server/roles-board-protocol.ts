@@ -13,13 +13,23 @@ import type {
 	UiRoleTask,
 	UiTaskGroupRollup,
 	UiTouchSystemSummary,
+	UiWorkDoneItem,
+	UiWorkTaskRef,
 } from "./protocol.js";
 
 /** G1: one done-when item of a work-registry record, in registry order; `met` by itemKey (trim, lower case). */
 export interface UiWorkDoneWhenMark {
 	item: string;
 	met: boolean;
+	/** Absent on a met item means proof unavailable, never unmet. */
+	evidence?: UiWorkDoneItem["met"];
 }
+
+export type UiCurrentProject =
+	| { state: "selected"; projectId: string }
+	| { state: "unselected" }
+	| { state: "stale"; projectId: string; reason: string }
+	| { state: "unavailable"; reason: string };
 
 /** Work registry display record; shared by the project card and existing registry views. */
 export interface UiWorkRecord {
@@ -31,7 +41,11 @@ export interface UiWorkRecord {
 	items: number;
 	met: number;
 	doneWhen?: UiWorkDoneWhenMark[];
-	/** Project's actionable brief, as recorded. */
+	/** Initiative focus only; absent producer capability means unavailable, not unselected. */
+	currentProject?: UiCurrentProject;
+	/** Exact direct members; project tasks inherit their initiative through the project. Absent = unavailable. */
+	taskRefs?: UiWorkTaskRef[];
+	/** Initiative or project's actionable brief, as recorded. */
 	outcome?: string;
 	/** Absent = exact legacy body; null = unavailable; available empty phases = opted-in empty roadmap. */
 	delivery?: UiProjectDelivery | null;
