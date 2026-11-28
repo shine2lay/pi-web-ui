@@ -10,6 +10,13 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## delivery-proof-focus: canonical proof and explicit current project
+
+- `local` (Ops #1167; Product linked-four-sections brief, Architecture project-delivery-hierarchy contract). Reuses native project acceptance; no nested delivery entity, live focus write or migration.
+- Hypothesis: Roles loses native proof and initiative outcome; a versioned canonical projection restores proof/by/at and exact queue/task/added refs without another formula. Explicit selected/unselected/stale/unavailable focus prevents guessed selection. Missing bridge preserves met=true as proof unavailable.
+- `server/work-delivery-bridge.ts` consumes pi-queue readers v4; `server/work-records.ts` projects shared DTOs. Cache includes canonical reader identities: failing-first startup test showed unchanged log stats otherwise retain unavailable data after the add-on loads.
+- Tests: `tests/unit/work-delivery-bridge.test.ts`, `tests/unit/work-delivery-cache.test.ts`, existing registry/overview reader tests; paired canonical acceptance in pi-queue `tests/work-delivery.test.ts`. Undo: revert these source/DTO commits and deploy the previous web build; additive registry focus events require the compatible pi-queue reader to remain installed.
+
 ## repair-1144: remove recovery hang and stage local add-ons without hiding questions
 
 - `local` (Ops #1144; Shine `dr-88854f3751a1`). Reverts `1fdd45fc`, `06f947c0`, `e490271b`, removing the recovery host and its obsolete tests; preserves `26e1470b`, `330a6835`, `bf49100b`.

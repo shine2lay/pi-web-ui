@@ -1434,6 +1434,8 @@ describe("where tasks belong (roles-panel)", () => {
 				{
 					id: "team-in-temper",
 					name: "Team in Temper",
+					outcome: "o",
+					currentProject: { state: "unavailable", reason: "Canonical current-project reader unavailable" },
 					lead: "architecture",
 					status: "active",
 					items: 1,

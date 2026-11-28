@@ -31,6 +31,10 @@ const initiative = (id: string, extra: Record<string, unknown> = {}) => ({
 	...extra,
 });
 // roles-by-project G1: each record's done-when items with their marks (none met by create).
+const initiativeDelivery = {
+	outcome: "Something worth having",
+	currentProject: { state: "unavailable", reason: "Canonical current-project reader unavailable" },
+};
 const initiativeMarks = [
 	{ item: "First thing works", met: false },
 	{ item: "Second thing works", met: false },
@@ -83,6 +87,7 @@ describe("workRecordsFrom", () => {
 		expect(r).toEqual({
 			initiatives: [
 				{
+					...initiativeDelivery,
 					id: "fine",
 					name: "Initiative fine",
 					lead: "architecture",
@@ -117,6 +122,7 @@ describe("workRecordsFrom", () => {
 		expect(r).toEqual({
 			initiatives: [
 				{
+					...initiativeDelivery,
 					id: "team",
 					name: "Initiative team",
 					lead: "architecture",
@@ -182,6 +188,7 @@ describe("workRecordsFrom", () => {
 			),
 		);
 		expect(r.initiatives[0]).toEqual({
+			...initiativeDelivery,
 			id: "team",
 			name: "Team work",
 			lead: "owner",
@@ -241,6 +248,7 @@ describe("workRecordsFrom", () => {
 		expect(r).toEqual({
 			initiatives: [
 				{
+					...initiativeDelivery,
 					id: "team",
 					name: "Initiative team",
 					lead: "architecture",

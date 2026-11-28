@@ -257,7 +257,17 @@ describe("the Roles page's records with pi-queue's readers", () => {
 		const second = { item: "Second", met: false };
 		expect(workRecordsFromState(state)).toEqual({
 			initiatives: [
-				{ id: "team", name: "Team", lead: "ops", status: "active", items: 2, met: 1, doneWhen: [first(true), second] },
+				{
+					id: "team",
+					name: "Team",
+					outcome: "Something",
+					currentProject: { state: "unavailable", reason: "Canonical current-project reader unavailable" },
+					lead: "ops",
+					status: "active",
+					items: 2,
+					met: 1,
+					doneWhen: [first(true), second],
+				},
 			],
 			projects: [
 				{

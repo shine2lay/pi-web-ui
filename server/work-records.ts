@@ -19,6 +19,12 @@
  * reader here depends on, so a compacted log shows the same records.
  */
 
+import {
+	workDeliveryReader,
+	unavailableCurrentProject,
+	type DeliveryReader,
+	type WorkDeliveryRecord,
+} from "./work-delivery-bridge.js";
 import { deliveryFromState, unavailablePhases } from "./project-phase-projection.js";
 import type { UiProjectDelivery } from "./roles-board-protocol.js";
 import { statSync } from "node:fs";
@@ -44,6 +50,7 @@ type Status = UiWorkRecord["status"];
 const STATUSES: readonly Status[] = ["active", "done", "dropped"];
 
 interface Rec {
+	canonicalDelivery?: WorkDeliveryRecord;
 	outcome?: string;
 	delivery?: UiProjectDelivery;
 	kind: "initiative" | "project";
@@ -198,9 +205,14 @@ export function workRecordsFrom(log: string): UiWorkRecords {
 function recordsOut(recs: Iterable<Rec>, unknown: boolean): UiWorkRecords {
 	const out = (r: Rec): UiWorkRecord => {
 		// roles-by-project G1: each item with its mark (by itemKey); items/met count the same list.
-		const doneWhen = r.doneWhen.map((item) => ({ item, met: r.met.has(itemKey(item)) }));
+		const doneWhen =
+			r.canonicalDelivery?.doneWhen ?? r.doneWhen.map((item) => ({ item, met: r.met.has(itemKey(item)) }));
 		return {
-			...(r.kind === "project" && r.outcome !== undefined ? { outcome: r.outcome } : {}),
+			...(r.outcome !== undefined ? { outcome: r.outcome } : {}),
+			...(r.canonicalDelivery ? { taskRefs: r.canonicalDelivery.taskRefs } : {}),
+			...(r.kind === "initiative"
+				? { currentProject: r.canonicalDelivery?.currentProject ?? unavailableCurrentProject() }
+				: {}),
 			...(r.delivery ? { delivery: r.delivery } : {}),
 			id: r.id,
 			name: r.name,
@@ -238,10 +250,19 @@ const mapLike = (x: unknown): x is ReadonlyMap<unknown, unknown> =>
  * workRecordsFrom shows the same log. undefined when it isn't that shape, or holds a record the store could never
  * have written (the log is then read by workRecordsFrom, which skips such a change and says so).
  */
-export function workRecordsFromState(state: unknown): UiWorkRecords | undefined {
+export function workRecordsFromState(
+	state: unknown,
+	deliveryReader: DeliveryReader | undefined = workDeliveryReader(),
+): UiWorkRecords | undefined {
 	if (!state || typeof state !== "object") return undefined;
 	const { initiatives, projects } = state as { initiatives?: unknown; projects?: unknown };
 	if (!mapLike(initiatives) || !mapLike(projects)) return undefined;
+	let delivery: ReturnType<DeliveryReader> | undefined;
+	try {
+		delivery = deliveryReader?.(state);
+	} catch {
+		/* Explicit unavailable, never infer focus or evidence. */
+	}
 	const recs: Rec[] = [];
 	for (const [kind, records] of [
 		["initiative", initiatives],
@@ -263,6 +284,7 @@ export function workRecordsFromState(state: unknown): UiWorkRecords | undefined 
 			}
 			recs.push({
 				kind,
+				canonicalDelivery: delivery?.[kind === "initiative" ? "initiatives" : "projects"].find((r) => r.id === id),
 				...(typeof r.outcome === "string" ? { outcome: r.outcome } : {}),
 				...(kind === "project" && r.phases !== undefined ? { delivery: deliveryFromState(state, id, true) } : {}),
 				id,
@@ -344,12 +366,20 @@ const tooBig = (): UiWorkRecords => ({ initiatives: [], projects: [], problem: "
 
 /** The registry's records, read again only when its log changed. */
 export class WorkRecordsFile {
-	private seen: { mtimeMs: number; size: number; value: UiWorkRecords } | null = null;
+	private seen: {
+		mtimeMs: number;
+		size: number;
+		value: UiWorkRecords;
+		reader: unknown;
+		deliveryReader: unknown;
+	} | null = null;
 
 	constructor(private readonly path: () => string) {}
 
 	async get(): Promise<UiWorkRecords> {
 		const p = this.path();
+		const reader = piQueueReaders()?.readWork;
+		const deliveryReader = workDeliveryReader();
 		let fh: FileHandle;
 		try {
 			// Non-blocking, so a FIFO in the log's place can't stall the Roles look: it is refused below.
@@ -371,11 +401,18 @@ export class WorkRecordsFile {
 				this.seen = null;
 				return tooBig();
 			}
-			if (this.seen && this.seen.mtimeMs === st.mtimeMs && this.seen.size === st.size) return this.seen.value;
+			if (
+				this.seen &&
+				this.seen.mtimeMs === st.mtimeMs &&
+				this.seen.size === st.size &&
+				this.seen.reader === reader &&
+				this.seen.deliveryReader === deliveryReader
+			)
+				return this.seen.value;
 			// pi-queue's readWork reads the log in its folder by that name (pi-queue work-store.ts workFile).
 			const canonical = basename(p) === "events.jsonl" ? canonicalRecords(dirname(p)) : undefined;
 			if (canonical) {
-				this.seen = { mtimeMs: st.mtimeMs, size: st.size, value: canonical };
+				this.seen = { mtimeMs: st.mtimeMs, size: st.size, value: canonical, reader, deliveryReader };
 				return canonical;
 			}
 			const bytes = await readUpTo(fh, WORK_LOG_MAX, READ_CHUNK);
@@ -385,7 +422,7 @@ export class WorkRecordsFile {
 				return tooBig();
 			}
 			const value = workRecordsFrom(bytes.toString("utf8"));
-			this.seen = { mtimeMs: st.mtimeMs, size: st.size, value };
+			this.seen = { mtimeMs: st.mtimeMs, size: st.size, value, reader, deliveryReader };
 			return value;
 		} catch {
 			this.seen = null;
