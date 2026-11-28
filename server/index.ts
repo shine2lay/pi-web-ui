@@ -24,6 +24,7 @@ import "./patch-remote-catalog.js";
 import "./patch-lazy-boundary-context.js";
 import "./patch-jiti-resolve-cache.js";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import type { ThinkingDispatchSession } from "./thinking-control-protocol.js";
 import { stat } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
@@ -1098,7 +1099,7 @@ export interface TerminalManagerLike {
 	runCommand(id: string, command: CommandDef, cols: number, rows: number, fallbackCwd: string): void;
 }
 
-export interface DispatchSession {
+export interface DispatchSession extends ThinkingDispatchSession {
 	cwd: string;
 	/** id: optimistic-send - the window's id for this send, answered with one prompt_ack. */
 	/** opts.cause (telegram-coo): who started the turn; the browser's messages say "browser" so a role's
@@ -1227,13 +1228,7 @@ export interface DispatchSession {
 	/** 全局默认模型（pi 引擎专有；DSH 无此概念，实现缺失时 dispatch 侧 `?.` 忽略）。 */
 	setDefaultModel?(modelId: string): Promise<void>;
 	setModelAllChats?(modelId: string, scope?: unknown): Promise<void>;
-	setThinkingAllChats?(from: unknown, to: unknown, dryRun?: unknown): Promise<unknown>;
-	setThinkingScopeChats?(level: string, scope?: unknown): Promise<void>;
 	clearDefaultModel?(): void;
-	setDefaultThinking?(level: string): void;
-	clearDefaultThinking?(): void;
-	setThinking(level: string): void;
-	leadThinkingControl?(msg: import("./lead-thinking.js").LeadThinkingRequest): void;
 	/** fast-mode and effort-level-button: the chat's Fast and level buttons (pi chats only; DSH has none). */
 	setFastMode?(mode: unknown, conversationId: unknown): void;
 	effortLevel?(msg: import("./effort-level-protocol.js").EffortLevelClientMessage): Promise<void>;

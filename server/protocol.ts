@@ -1132,7 +1132,7 @@ export type FilePreviewMetadata = {
 };
 
 export type ClientCommand =
-	| import("./lead-thinking.js").LeadThinkingRequest
+	| import("./thinking-control-protocol.js").ThinkingClientCommand
 	/** frameHints (mobile-fixes): announce every big message first with `frame_hint`. */
 	| { type: "hello"; clientId: string; protocolVersion?: number; locale?: string; frameHints?: boolean }
 	/** mobile-fixes: "are you there?", answered at once with `pong` carrying the same id (the page came
@@ -1484,18 +1484,11 @@ export type ClientCommand =
 	 *  replies aren't stopped), pi's settings entries on `from` too, and older chats when they next
 	 *  open. dryRun only counts. Answered by thinking_all_chats_result. */
 	| { type: "thinking_all_chats"; from: string; to: string; dryRun?: boolean }
-	/** Bulk-switch thinking/effort level across chats in `scope` (default "all"). */
-	| { type: "set_thinking_all_chats"; level: string; scope?: BulkChatScope }
 	/** 设全局默认模型（"provider/id"）：无项目记忆的新项目回落到它（项目记忆优先）。
 	 *  服务端回 default_model 广播；pi 引擎专有。 */
 	| { type: "set_default_model"; modelId: string }
 	/** 清除全局默认模型（新项目回落到 SDK 默认）。 */
 	| { type: "clear_default_model" }
-	/** Set the default thinking/effort level for new chats and new task workers. */
-	| { type: "set_default_thinking"; level: string }
-	/** Clear the default thinking/effort level (fall back to model default). */
-	| { type: "clear_default_thinking" }
-	| { type: "set_thinking"; level: string }
 	| import("./effort-level-protocol.js").EffortLevelClientMessage
 	| import("./owner-question-protocol.js").OwnerAskClientCommand
 	/** fast-mode: turn the chat's "⚡ Fast" on/off (ChatGPT fast-mode models; pi chats only). */

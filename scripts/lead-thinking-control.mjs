@@ -44,10 +44,11 @@ socket.addEventListener("open", () => {
 });
 socket.addEventListener("message", (event) => {
 	const message = JSON.parse(String(event.data));
-	if (message.type === "lead_thinking_result" && message.requestId === requestId)
-		finish(message.ok ? 0 : 1, message);
+	if (message.type === "lead_thinking_result" && message.requestId === requestId) finish(message.ok ? 0 : 1, message);
 });
-socket.addEventListener("error", () => finish(1, { ok: false, error: "Control connection failed; no request retried." }));
+socket.addEventListener("error", () =>
+	finish(1, { ok: false, error: "Control connection failed; no request retried." }),
+);
 socket.addEventListener("close", () => {
 	if (!finished)
 		finish(1, {
