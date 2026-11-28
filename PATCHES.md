@@ -17,6 +17,11 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 - `server/work-delivery-bridge.ts` consumes pi-queue readers v4; `server/work-records.ts` projects shared DTOs. Cache includes canonical reader identities: failing-first startup test showed unchanged log stats otherwise retain unavailable data after the add-on loads.
 - Tests: `tests/unit/work-delivery-bridge.test.ts`, `tests/unit/work-delivery-cache.test.ts`, existing registry/overview reader tests; paired canonical acceptance in pi-queue `tests/work-delivery.test.ts`. Undo: revert these source/DTO commits and deploy the previous web build; additive registry focus events require the compatible pi-queue reader to remain installed.
 
+## sealed-test-isolation: keep parallel fixture cleanup inside its own test file
+
+- `local` (Ops #1156 gate repair). Even under `PI_SEALED`, `tests/unit/setup-temp-pi-dirs.ts` allocates each test file its own temporary agent/web folders inside the sealed temporary directory. Previously ten workers shared one agent folder and a suite's cleanup could delete another suite's source journal. Worker counts, sealed HOME/network/key protections and assertions are unchanged.
+- Failing-first proof: `tests/unit/sealed-fixture-isolation.test.ts`; unchanged `open-chain-wedge.test.ts` and `session-index.test.ts` exercise transcript preservation under the normal parallel gate. Undo: revert this harness-only patch, not the host safety boundary.
+
 ## lead-native-fence: retain input across fenced native lead compaction
 
 - `local` (Ops #1156, H slice of Ops1154 / Architecture611). One host-owned per-file revision/generation/admission domain covers native manager writes, input, open, reload and disposal. Cached compaction uses the same live SDK manager and public refresh; cold compaction uses an exclusively owned native worker, fsync/reopen and the existing E journal's durable acknowledgement.
