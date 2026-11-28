@@ -10,6 +10,12 @@ Fork of [`xing-shuyin/pi-web-ui`](https://github.com/xing-shuyin/pi-web-ui) (MIT
 
 上游节奏很快（一天两三个版本），不必追每个 tag：按需（想要某个修复/功能时）或每周同步一次即可。
 
+## lead-thinking-default: isolated canonical home effort
+
+- `local` (Ops #1170). Persisted lead-only High default and exact-session owner choices live outside transcripts; canonical homes only, with ambiguous older thinking history protected. Workers, model/provider choices and shared model defaults are unchanged.
+- `server/lead-thinking.ts` owns resolution and validated public-state application. Native `setThinkingLevel({persist:false})` still appends history, so the isolated control deliberately does not use it. The queue host shares the resolver with pi-queue's next-turn routing; `scripts/lead-thinking-control.mjs` returns metadata-only receipts without starting a model turn.
+- New-session initialization is recorded only before SDK creation can expose a picker; existing blank chats are never assumed unchosen. Unsupported levels refuse rather than clamp. Tests: `tests/unit/lead-thinking.test.ts` and pi-queue `tests/model-lead-hook.test.ts`. Undo: disable the persisted default with the control, or revert this patch and deploy the prior web/add-on pair; preserve the external choice file and all history.
+
 ## delivery-proof-focus: canonical proof and explicit current project
 
 - `local` (Ops #1167; Product linked-four-sections brief, Architecture project-delivery-hierarchy contract). Reuses native project acceptance; no nested delivery entity, live focus write or migration.

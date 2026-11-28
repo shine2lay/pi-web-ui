@@ -1233,6 +1233,7 @@ export interface DispatchSession {
 	setDefaultThinking?(level: string): void;
 	clearDefaultThinking?(): void;
 	setThinking(level: string): void;
+	leadThinkingControl?(msg: import("./lead-thinking.js").LeadThinkingRequest): void;
 	/** fast-mode and effort-level-button: the chat's Fast and level buttons (pi chats only; DSH has none). */
 	setFastMode?(mode: unknown, conversationId: unknown): void;
 	effortLevel?(msg: import("./effort-level-protocol.js").EffortLevelClientMessage): Promise<void>;
@@ -3300,6 +3301,9 @@ wss.on("connection", (ws, req) => {
 				break;
 			case "clear_default_thinking":
 				cs.clearDefaultThinking?.();
+				break;
+			case "lead_thinking_control":
+				cs.leadThinkingControl?.(msg);
 				break;
 			case "set_thinking":
 				cs.setThinking(msg.level);

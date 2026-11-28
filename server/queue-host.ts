@@ -99,6 +99,9 @@ export interface ChatState {
 }
 
 export interface QueueHostImpl {
+	/** Canonical lead-only policy; the host owns provenance and non-transcript runtime application. */
+	leadThinking?(sessionId: string): { level?: string; source: string; reason?: string };
+	applyLeadThinking?(sessionId: string, level: string): { level?: string; source: string; reason?: string };
 	/** Trusted live SDK invocation only; absent snapshots fail closed for specialist tools. */
 	validateRawToolInvocation?(
 		sessionId: string,
@@ -490,6 +493,9 @@ export function installQueueHost(impl: QueueHostImpl): () => void {
 		v: 1 as const,
 		profiles: 1 as const,
 		consumeOwnerSetting,
+		...(impl.leadThinking && impl.applyLeadThinking
+			? { leadThinking: impl.leadThinking, applyLeadThinking: impl.applyLeadThinking }
+			: {}),
 		...(impl.commitQuestion && impl.consumeQuestionCommit
 			? {
 					commitQuestion: impl.commitQuestion,

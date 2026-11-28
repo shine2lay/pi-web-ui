@@ -196,6 +196,16 @@ import {
 import { moveThinkingInMemory, moveThinkingInSettingsFile } from "./thinking-level-settings.js";
 import { defaultThinking, prepareLaunch, profileChoices, QueueLaunchRefused } from "./queue-profile.js";
 import { effortLevelDeps, handleEffortLevelMessage } from "./effort-level.js";
+import {
+	configureLeadThinking,
+	leadThinking,
+	applyLeadThinking,
+	leadThinkingControl,
+	initializeLeadThinking,
+	rememberLeadThinkingOwner,
+	rememberLeadThinkingInitialization,
+	type LeadThinkingRequest,
+} from "./lead-thinking.js";
 import type { ThinkingAllChatsResult, UiTaskLaunch } from "./protocol.js";
 import {
 	checkAll as checkAllUpdates,
@@ -6092,6 +6102,8 @@ export class ClientSession {
 				}
 			}
 
+			// Proven before SDK initialization, never inferred from an empty/blank reopened chat.
+			const thinkingUninitialized = sessionManager.getEntries().length === 0;
 			const created = await createAgentSessionFromServices({
 				services,
 				sessionManager,
@@ -6302,6 +6314,7 @@ export class ClientSession {
 			});
 			// 桥接工具归属锚点：SDK 会话对象在本 runtime 生命周期内稳定，过户只搬对话
 			// 不改它（见 ClientSession.findConversationHome）。
+			if (thinkingUninitialized) rememberLeadThinkingInitialization(created.session);
 			bridgeAnchor.session = created.session;
 			installSpecialistRawGuard(created.session);
 			this.sessionPluginMeta.set(created.session, { ownerId, cwd: effectiveCwd });
@@ -7905,6 +7918,7 @@ export class ClientSession {
 			console.warn(`[thinking-all-chats] ${conv.id}: level kept, ${(err as Error).message}`);
 		}
 		await this.restoreChatModelChoice(conv);
+		initializeLeadThinking(conv.session);
 	}
 
 	/** Poll extension widgets so TUI-only overlays (e.g. rpiv-todo) stay live.
@@ -17882,11 +17896,22 @@ export class ClientSession {
 			throw new Error(`Failed to switch model (${modelId}); still on ${curId} — check the model ID and provider key`);
 	}
 
+	/** Isolated lead effort control: no model, shared settings or transcript mutation. */
+	leadThinkingControl(msg: LeadThinkingRequest): void {
+		this.emit(leadThinkingControl(msg));
+	}
+
+	refreshThinkingSession(session: AgentSession): void {
+		for (const conv of this.convs.values())
+			if (conv.session === session) this.refreshChatViewers(conv);
+	}
+
 	/** Set the thinking level for future turns. */
 	setThinking(level: string): void {
 		try {
 			const thinkingLevel = level as Parameters<AgentSession["setThinkingLevel"]>[0];
 			this.session.setThinkingLevel(thinkingLevel, { persist: true });
+			rememberLeadThinkingOwner(this.session, this.session.thinkingLevel);
 			const cur = this.session.model;
 			if (cur) {
 				this.session.settingsManager.setModelThinkingLevel(cur.provider, cur.id, thinkingLevel);
@@ -19544,7 +19569,17 @@ export class AgentService {
 		});
 		ClientSession.admitQuestionAnswer = questions.admitOwnerAnswer;
 		ClientSession.observeUnboundOwnerAnswer = questions.observeUnboundOwnerAnswer;
+		configureLeadThinking({
+			file: join(this.stateStore.dataDir, "lead-thinking.json"),
+			homes: () => identityRegistry().identities,
+			session: (file) => this.queueSessionFor(file),
+			changed: (session) => {
+				for (const client of this.clients.values()) client.refreshThinkingSession(session);
+			},
+		});
 		this.uninstallQueueHost = installQueueHost({
+			leadThinking,
+			applyLeadThinking,
 			validateRawToolInvocation,
 			commitQuestion: questions.commits.commitQuestion,
 			consumeQuestionCommit: questions.commits.consumeQuestionCommit,

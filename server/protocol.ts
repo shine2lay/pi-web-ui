@@ -1132,6 +1132,7 @@ export type FilePreviewMetadata = {
 };
 
 export type ClientCommand =
+	| import("./lead-thinking.js").LeadThinkingRequest
 	/** frameHints (mobile-fixes): announce every big message first with `frame_hint`. */
 	| { type: "hello"; clientId: string; protocolVersion?: number; locale?: string; frameHints?: boolean }
 	/** mobile-fixes: "are you there?", answered at once with `pong` carrying the same id (the page came
@@ -4669,6 +4670,7 @@ export interface UiSettingsState {
 	subagentDefaultTemplates: string[];
 }
 export type ServerMessage =
+	| import("./lead-thinking.js").LeadThinkingResult
 	| CommandDispositionMsg
 	| import("./effort-level-protocol.js").EffortLevelServerMessage
 	| import("./owner-question-protocol.js").OwnerAskServerMessage
