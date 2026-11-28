@@ -16,7 +16,7 @@ export interface LeadThinkingResolution {
 	source: string;
 	reason?: string;
 }
-export interface LeadThinkingResult {
+export type LeadThinkingResult = {
 	type: "lead_thinking_result";
 	requestId: string;
 	ok: boolean;
@@ -28,7 +28,7 @@ export interface LeadThinkingResult {
 	effective?: string;
 	supported?: readonly string[];
 	resolution?: LeadThinkingResolution;
-}
+};
 interface Configuration {
 	file: string;
 	homes: () => readonly { id: string; homeChat: string | null }[];

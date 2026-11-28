@@ -19,7 +19,7 @@ describe("lead-thinking", () => {
 	let entries: unknown[];
 	let levels: string[];
 	let session: AgentSession;
-	let changed: ReturnType<typeof vi.fn>;
+	let changed: ReturnType<typeof vi.fn<(session: AgentSession) => void>>;
 	let homes: { id: string; homeChat: string | null }[];
 	let native: ReturnType<typeof vi.fn>;
 	beforeEach(() => {
@@ -27,7 +27,7 @@ describe("lead-thinking", () => {
 		file = join(dir, "lead-thinking.json");
 		entries = [{ type: "model_change", id: "initial" }];
 		levels = ["off", "low", "medium", "high"];
-		changed = vi.fn();
+		changed = vi.fn<(session: AgentSession) => void>();
 		native = vi.fn(() => {
 			throw new Error("native setter forbidden");
 		});
