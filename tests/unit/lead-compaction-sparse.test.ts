@@ -146,6 +146,8 @@ test("cached sparse apply retains ownership across yields, queues input and refr
 			refreshes++;
 			refresh();
 		};
+		// Real homes often have no usable model usage right after the edits (seen on the real-size run).
+		h.session.getContextUsage = () => undefined;
 		const applying = h.host.tryApply(ticket);
 		await yielded.promise;
 		const file = h.host.admission.file(h.source);
@@ -157,6 +159,8 @@ test("cached sparse apply retains ownership across yields, queues input and refr
 		continueApply.resolve();
 		const result = await applying;
 		expect(result.state).toBe("applied");
+		// No model turn ran after the edits, so the report carries the frozen plan's own after-estimate.
+		expect(Number.isFinite(result.afterEstimate) && result.afterEstimate! > 0).toBe(true);
 		await input;
 		expect(refreshes).toBe(1);
 		expect(h.handledInputs()).toBe(1);

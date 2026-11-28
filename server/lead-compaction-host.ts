@@ -7,7 +7,7 @@ import { fenceSession } from "./lead-compaction-session.js";
 
 export interface LeadSparseHostPorts {
 	validate(verified: VerifiedCommit): void;
-	apply(session: AgentSession, verified: VerifiedCommit): Promise<{ nativeEntryId: string }>;
+	apply(session: AgentSession, verified: VerifiedCommit): Promise<{ nativeEntryId: string; afterEstimate?: number }>;
 	findApplied(session: AgentSession, verified: VerifiedCommit): string | undefined;
 }
 export interface LeadHostPorts {
@@ -173,6 +173,7 @@ export class LeadCompactionHost implements LeadNativeHost {
 						const result = await this.ports.sparse!.apply(session, verified);
 						await syncNativeFile(file.source);
 						session.refreshContext();
+						afterEstimate = result.afterEstimate;
 						return result.nativeEntryId;
 					});
 					this.owed.set(file.source, { verified, nativeEntryId });
@@ -211,7 +212,9 @@ export class LeadCompactionHost implements LeadNativeHost {
 				this.owed.set(file.source, { verified, nativeEntryId });
 				file.revision++;
 			}
-			if (session) {
+			// Sparse edits leave the last model usage describing the context before them, or nothing at all,
+			// so only a prefix cut reads the session's own usage here.
+			if (session && verified.draft.strategy !== "sparse") {
 				try {
 					const tokens = session.getContextUsage()?.tokens;
 					if (typeof tokens === "number" && Number.isFinite(tokens)) afterEstimate = tokens;

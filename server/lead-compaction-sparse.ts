@@ -26,7 +26,11 @@ export function createSparseHostPorts(options: {
 		library.validateSparseApplication(verified.draft.application);
 		if (!library.sparseEqual(library.sparsePrepared(verified.draft.application), verified.prepared))
 			throw new Error("sparse-plan-mismatch");
-		return verified.draft.application as { sessionId: string; binding: { principal: string; source: string } };
+		return verified.draft.application as {
+			sessionId: string;
+			binding: { principal: string; source: string };
+			afterEstimate: number;
+		};
 	}
 	return {
 		validate(verified) {
@@ -55,7 +59,7 @@ export function createSparseHostPorts(options: {
 					throw new Error("sparse-authority-drift");
 			};
 			await authorize();
-			return library.applySparseNative(app, {
+			const applied = await library.applySparseNative(app, {
 				sessionId: () => session.sessionId,
 				branch: () => manager.getBranch(),
 				projection: () => manager.buildSessionProjection().entries,
@@ -92,6 +96,8 @@ export function createSparseHostPorts(options: {
 					options.progress(verified.prepared, cursor, nativeId, options.captureFence(session.sessionId)),
 				yield: () => yieldTurn(),
 			});
+			// The validated, hash-bound plan's own estimate: the same figure E reports while archiving.
+			return { nativeEntryId: applied.nativeEntryId, afterEstimate: app.afterEstimate };
 		},
 	};
 }
